@@ -1,0 +1,288 @@
+:root {
+  --paper: #faf9f6;
+  --ink: #1f1d1a;
+  --muted: #6b675f;
+  --line: #e7e3da;
+  --accent: #8a5a2b;
+  --surface: #ffffff;
+  --info: #2b6cb0;
+  --warn: #b7791f;
+  --success: #2f855a;
+  --danger: #c53030;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.root-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Slim draggable strip standing in for the hidden native title bar.
+   Leaves room on the left for the inset traffic-light buttons. */
+.titlebar {
+  flex: 0 0 34px;
+  -webkit-app-region: drag;
+  background: var(--paper);
+}
+
+/* Interactive controls must opt out of the drag region. */
+button, input, textarea, a, .switch-row, label {
+  -webkit-app-region: no-drag;
+}
+
+.app {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  /* Row fills exactly the available height so panes scroll internally
+     instead of growing the page and pushing the titlebar off-screen. */
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.app.loading, .app.gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gate-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 36px 40px;
+  text-align: center;
+  max-width: 420px;
+}
+
+.gate-card h1 { margin: 0 0 8px; }
+
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 9px;
+  padding: 10px 18px;
+  font-size: 15px;
+  cursor: pointer;
+}
+button.primary:disabled { opacity: 0.6; cursor: default; }
+
+.login-cmd {
+  display: block;
+  margin-top: 16px;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+/* ---- conversation ---- */
+.conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
+.chat { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+
+.messages { flex: 1; overflow-y: auto; padding: 28px 32px 16px; }
+
+.empty { color: var(--muted); margin-top: 18vh; text-align: center; }
+.empty h2 { color: var(--ink); margin-bottom: 6px; }
+
+.message { margin-bottom: 24px; }
+.message-role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.message-user .message-plain { white-space: pre-wrap; }
+.message-plain { white-space: pre-wrap; }
+.message-system { color: var(--danger); }
+
+.composer {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  padding: 16px 24px 22px;
+  border-top: 1px solid var(--line);
+}
+.composer textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 14px;
+  font: inherit;
+  line-height: 1.4;
+  background: var(--surface);
+  min-height: 44px;
+  max-height: 180px;
+  overflow-y: auto;
+  display: block;
+}
+.composer textarea:focus { outline: 2px solid var(--accent); }
+
+.icon-btn {
+  border: none;
+  border-radius: 10px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+}
+.icon-btn:disabled { opacity: 0.4; cursor: default; }
+.icon-btn.stop { background: var(--danger); }
+
+/* ---- MDX content ---- */
+.mdx > :first-child { margin-top: 0; }
+.mdx h1, .mdx h2, .mdx h3 { line-height: 1.3; }
+.mdx p { margin: 0.6em 0; }
+.mdx ul, .mdx ol { padding-left: 1.4em; }
+.mdx table { border-collapse: collapse; margin: 0.8em 0; }
+.mdx td { border: 1px solid var(--line); padding: 6px 10px; }
+.inline-code {
+  background: #f1eee7;
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-family: 'SF Mono', ui-monospace, monospace;
+  font-size: 0.9em;
+}
+.code-block {
+  background: #2b2723;
+  color: #f4efe7;
+  padding: 14px 16px;
+  border-radius: 10px;
+  overflow-x: auto;
+  font-family: 'SF Mono', ui-monospace, monospace;
+  font-size: 13px;
+}
+
+.callout {
+  border-left: 3px solid var(--info);
+  background: #f4f7fb;
+  padding: 10px 14px;
+  border-radius: 0 8px 8px 0;
+  margin: 0.8em 0;
+}
+.callout > :first-child { margin-top: 0; }
+.callout > :last-child { margin-bottom: 0; }
+.callout-info { border-color: var(--info); background: #f1f6fb; }
+.callout-warn { border-color: var(--warn); background: #fbf6ec; }
+.callout-success { border-color: var(--success); background: #eef8f1; }
+.callout-danger { border-color: var(--danger); background: #fbeeee; }
+
+.steps { counter-reset: step; list-style: none; padding-left: 0; }
+.step {
+  position: relative;
+  padding-left: 38px;
+  margin: 0.6em 0;
+}
+.step::before {
+  counter-increment: step;
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.collapsible { border: 1px solid var(--line); border-radius: 8px; margin: 0.8em 0; }
+.collapsible-header {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.collapsible-caret { color: var(--muted); }
+.collapsible-body { padding: 0 12px 12px; }
+
+/* ---- inspector / manage ---- */
+.inspector { background: var(--paper); overflow-y: auto; min-height: 0; }
+.manage-tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--paper); }
+.manage-tabs button {
+  flex: 1;
+  padding: 12px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  color: var(--muted);
+}
+.manage-tabs button.active { color: var(--ink); border-bottom-color: var(--accent); }
+.manage-body { padding: 18px; }
+
+.muted { color: var(--muted); font-size: 13px; }
+.error { color: var(--danger); font-size: 13px; }
+
+.switch-row { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.switch-row span { display: flex; flex-direction: column; }
+.switch-row em { font-style: normal; }
+
+.list-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.list-row span { display: flex; flex-direction: column; }
+
+.mcp-form { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.mcp-form input { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
+.mcp-form button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px; cursor: pointer; }
+.mcp-form button:disabled { opacity: 0.5; }
+
+.fatal-renderer-error { padding: 40px; color: var(--danger); font-family: monospace; }
+
+/* Auto-hiding scrollbars: invisible at rest, fading in only while the user
+   scrolls (or hovers the pane). The track stays transparent throughout. */
+.messages, .inspector { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.messages::-webkit-scrollbar, .inspector::-webkit-scrollbar { width: 10px; }
+.messages::-webkit-scrollbar-track, .inspector::-webkit-scrollbar-track { background: transparent; }
+.messages::-webkit-scrollbar-thumb, .inspector::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+  transition: background-color 0.35s ease;
+}
+.messages.is-scrolling, .inspector.is-scrolling,
+.messages:hover, .inspector:hover { scrollbar-color: rgba(95, 90, 80, 0.4) transparent; }
+.messages.is-scrolling::-webkit-scrollbar-thumb,
+.inspector.is-scrolling::-webkit-scrollbar-thumb,
+.messages:hover::-webkit-scrollbar-thumb,
+.inspector:hover::-webkit-scrollbar-thumb {
+  background: rgba(95, 90, 80, 0.32);
+  background-clip: content-box;
+}
