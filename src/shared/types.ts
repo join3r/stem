@@ -115,16 +115,41 @@ export interface SkillSummary {
 
 // ---- MCP servers ----
 
+/** stdio = local `command` + `args`; http = remote streamable-HTTP `url`. */
+export type McpTransport = 'stdio' | 'http';
+
 export interface McpServerSummary {
   name: string;
+  transport: McpTransport;
+  /** stdio only (empty string for http). */
   command: string;
+  /** stdio only. */
   args: string[];
+  /** http only (empty string for stdio). */
+  url: string;
+  /** Raw `auth_status` from `codex mcp list --json`, when reported (e.g. 'o_auth'). */
+  authStatus?: string;
 }
 
 export interface McpServerInput {
   name: string;
-  command: string;
+  transport: McpTransport;
+  /** Required for stdio. */
+  command?: string;
   args?: string[];
+  /** Required for http. */
+  url?: string;
+}
+
+export interface McpLoginResult {
+  ok: boolean;
+  error?: string;
+}
+
+/** `mcp/login/url` — the OAuth authorize URL, streamed mid-login as a fallback link. */
+export interface McpLoginUrlParams {
+  name: string;
+  url: string;
 }
 
 // ---- Memory ----
@@ -150,6 +175,8 @@ export interface StemApi {
   listMcpServers(): Promise<McpServerSummary[]>;
   addMcpServer(input: McpServerInput): Promise<McpServerSummary[]>;
   removeMcpServer(name: string): Promise<McpServerSummary[]>;
+  loginMcpServer(name: string): Promise<McpLoginResult>;
+  restartRuntime(): Promise<RuntimeStatus>;
 
   getMemorySettings(): Promise<MemorySettings>;
   setMemoryEnabled(enabled: boolean): Promise<MemorySettings>;

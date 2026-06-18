@@ -260,8 +260,37 @@ button.primary:disabled { opacity: 0.6; cursor: default; }
 
 .mcp-form { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 .mcp-form input { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
-.mcp-form button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px; cursor: pointer; }
-.mcp-form button:disabled { opacity: 0.5; }
+.mcp-form > button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px; cursor: pointer; }
+.mcp-form > button:disabled { opacity: 0.5; }
+
+/* Segmented transport selector (Remote / Local). */
+.mcp-transport { display: flex; gap: 6px; }
+.mcp-transport button {
+  flex: 1;
+  padding: 7px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.mcp-transport button.active { color: #fff; background: var(--accent); border-color: var(--accent); }
+
+.mcp-row-actions { flex-direction: row !important; align-items: center; gap: 8px; }
+.mcp-signin {
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  padding: 6px 10px;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+.mcp-signin:disabled { opacity: 0.5; cursor: default; }
 
 .fatal-renderer-error { padding: 40px; color: var(--danger); font-family: monospace; }
 

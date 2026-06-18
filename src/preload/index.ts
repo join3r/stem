@@ -23,6 +23,8 @@ const api: StemApi = {
   listMcpServers: () => ipcRenderer.invoke('mcp:list'),
   addMcpServer: (input: McpServerInput) => ipcRenderer.invoke('mcp:add', input),
   removeMcpServer: (name: string) => ipcRenderer.invoke('mcp:remove', name),
+  loginMcpServer: (name: string) => ipcRenderer.invoke('mcp:login', name),
+  restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
 
   getMemorySettings: () => ipcRenderer.invoke('memory:get'),
   setMemoryEnabled: (enabled: boolean) => ipcRenderer.invoke('memory:setEnabled', enabled)

@@ -3,6 +3,7 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child
 import { createInterface } from 'node:readline';
 import type {
   CodexEventEnvelope,
+  McpLoginResult,
   RuntimeStatus,
   StartTurnInput,
   StartTurnResult
@@ -97,6 +98,76 @@ export class CodexRuntime extends EventEmitter {
       child.on('error', () => resolve());
     });
     return this.status();
+  }
+
+  /**
+   * Drive `codex mcp login <name>` (OAuth) against the isolated home. Codex
+   * opens the browser itself; we also stream the authorize URL out as an
+   * `mcp/login/url` event so the UI can show a click/copy fallback.
+   */
+  async mcpLogin(name: string): Promise<McpLoginResult> {
+    // Defense-in-depth: names are validated on add, but guard here too since
+    // this reaches argv — a leading-dash name could otherwise smuggle flags.
+    if (!/^[A-Za-z0-9_.-]+$/.test(name) || name.startsWith('-')) {
+      return { ok: false, error: 'Invalid MCP server name.' };
+    }
+    const codexPath = await findCodexPath();
+    if (!codexPath) {
+      return { ok: false, error: 'codex was not found on PATH.' };
+    }
+    return new Promise<McpLoginResult>((resolve) => {
+      const child = spawn(codexPath, ['mcp', 'login', '--', name], {
+        env: this.sanitizedEnv(),
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      let urlEmitted = false;
+      let output = '';
+      const scan = (chunk: Buffer): void => {
+        const text = chunk.toString('utf8');
+        output += text;
+        if (!urlEmitted) {
+          const match = text.match(/https?:\/\/\S+/);
+          if (match) {
+            urlEmitted = true;
+            this.emitEvent('mcp/login/url', { name, url: match[0] });
+          }
+        }
+      };
+      child.stdout.on('data', scan);
+      child.stderr.on('data', scan);
+
+      const timer = setTimeout(() => {
+        child.kill();
+        resolve({ ok: false, error: 'Timed out waiting for browser authorization.' });
+      }, 180_000);
+
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        resolve({ ok: false, error: error.message });
+      });
+      child.on('exit', (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolve({ ok: true });
+        else resolve({ ok: false, error: output.trim() || `codex mcp login exited with code ${code ?? 'null'}.` });
+      });
+    });
+  }
+
+  /**
+   * Restart the app-server so config.toml changes and new MCP OAuth tokens take
+   * effect in place (no app quit). Waits for the old process to fully exit
+   * before respawning so the old exit handler can't null out the new process.
+   */
+  async restart(): Promise<void> {
+    const old = this.proc;
+    if (old) {
+      await new Promise<void>((resolve) => {
+        old.once('exit', () => resolve());
+        this.dispose();
+      });
+    }
+    this.activeThreadId = null;
+    await this.ensureStarted();
   }
 
   async startTurn(input: StartTurnInput): Promise<StartTurnResult> {

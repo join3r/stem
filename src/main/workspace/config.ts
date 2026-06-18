@@ -8,7 +8,7 @@ import { codexConfigPath } from './paths';
 export type CodexConfig = Record<string, unknown> & {
   features?: { memories?: boolean };
   memories?: { use_memories?: boolean; generate_memories?: boolean };
-  mcp_servers?: Record<string, { command?: string; args?: string[] }>;
+  mcp_servers?: Record<string, { command?: string; args?: string[]; url?: string }>;
 };
 
 export async function readConfig(): Promise<CodexConfig> {

@@ -57,6 +57,11 @@ function registerIpc(): void {
   ipcMain.handle('mcp:list', () => listMcpServers());
   ipcMain.handle('mcp:add', (_e, input: McpServerInput) => addMcpServer(input));
   ipcMain.handle('mcp:remove', (_e, name: string) => removeMcpServer(name));
+  ipcMain.handle('mcp:login', (_e, name: string) => runtime!.mcpLogin(name));
+  ipcMain.handle('runtime:restart', async () => {
+    await runtime!.restart();
+    return runtime!.status();
+  });
 
   ipcMain.handle('memory:get', () => getMemorySettings());
   ipcMain.handle('memory:setEnabled', (_e, enabled: boolean) => setMemoryEnabled(enabled));
