@@ -29,7 +29,10 @@ export function ChatView({ messages, running, streamingId, onSend, onInterrupt }
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_HEIGHT)}px`;
+    const needed = el.scrollHeight;
+    el.style.height = `${Math.min(needed, MAX_COMPOSER_HEIGHT)}px`;
+    // Only show a scrollbar once content exceeds the max height.
+    el.style.overflowY = needed > MAX_COMPOSER_HEIGHT ? 'auto' : 'hidden';
   }, []);
 
   useEffect(() => {

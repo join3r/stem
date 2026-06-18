@@ -128,7 +128,7 @@ button.primary:disabled { opacity: 0.6; cursor: default; }
   background: var(--surface);
   min-height: 44px;
   max-height: 180px;
-  overflow-y: auto;
+  overflow-y: hidden;
   display: block;
 }
 .composer textarea:focus { outline: 2px solid var(--accent); }
