@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   CodexEventEnvelope,
   ItemEventParams,
+  ModelSummary,
   RuntimeStatus
 } from '../shared/types';
 import { agentMessageText } from '../shared/types';
@@ -24,6 +25,15 @@ export default function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [chatList, setChatList] = useState<ChatListResult>({ chats: [], folders: [] });
   const inspectorRef = useAutoHideScroll<HTMLElement>();
+
+  // Model / effort / speed — per-turn overrides, remembered across launches.
+  const [models, setModels] = useState<ModelSummary[]>([]);
+  const [modelId, setModelId] = useState<string | null>(() => localStorage.getItem('stem.modelId'));
+  const [effort, setEffort] = useState<string | null>(() => localStorage.getItem('stem.effort'));
+  const [serviceTier, setServiceTier] = useState<string | null>(
+    () => localStorage.getItem('stem.serviceTier')
+  );
+  const selectedModel = models.find((m) => m.id === modelId) ?? null;
 
   const [bridgeError, setBridgeError] = useState<string | null>(null);
 
@@ -48,6 +58,50 @@ export default function App() {
   useEffect(() => {
     if (status?.ok) refreshChats();
   }, [status?.ok, refreshChats]);
+
+  // Fetch the model catalog once the runtime is ready; seed defaults from codex
+  // (the `isDefault` model + its default effort) when nothing is remembered yet.
+  useEffect(() => {
+    if (!status?.ok) return;
+    window.stem.listModels().then((list) => {
+      setModels(list);
+      setModelId((cur) => {
+        if (cur && list.some((m) => m.id === cur)) return cur;
+        const fallback = list.find((m) => m.isDefault) ?? list[0];
+        if (fallback) {
+          setEffort((e) => e ?? fallback.defaultEffort);
+          return fallback.id;
+        }
+        return cur;
+      });
+    });
+  }, [status?.ok]);
+
+  // Persist the remembered selections.
+  useEffect(() => {
+    if (modelId) localStorage.setItem('stem.modelId', modelId);
+  }, [modelId]);
+  useEffect(() => {
+    if (effort) localStorage.setItem('stem.effort', effort);
+  }, [effort]);
+  useEffect(() => {
+    if (serviceTier) localStorage.setItem('stem.serviceTier', serviceTier);
+    else localStorage.removeItem('stem.serviceTier');
+  }, [serviceTier]);
+
+  // Switching models: clamp effort to what the new model supports, and drop a
+  // Fast selection when the new model has no priority (Fast) tier.
+  const onSelectModel = useCallback(
+    (id: string) => {
+      const m = models.find((x) => x.id === id);
+      setModelId(id);
+      if (m) {
+        setEffort((e) => (e && m.supportedEfforts.includes(e) ? e : m.defaultEffort));
+        if (!m.serviceTiers.some((t) => t.id === 'priority')) setServiceTier(null);
+      }
+    },
+    [models]
+  );
 
   useEffect(() => {
     return window.stem.onCodexEvent((event: CodexEventEnvelope) => {
@@ -101,7 +155,13 @@ export default function App() {
       setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', content: text }]);
       setRunning(true);
       try {
-        const result = await window.stem.startTurn({ input: text, threadId: activeThreadId ?? undefined });
+        const result = await window.stem.startTurn({
+          input: text,
+          threadId: activeThreadId ?? undefined,
+          model: modelId ?? undefined,
+          effort: effort ?? undefined,
+          serviceTier
+        });
         if (result.handled) {
           if (result.assistantMessage) {
             setMessages((prev) => [
@@ -128,7 +188,7 @@ export default function App() {
         ]);
       }
     },
-    [activeThreadId, refreshChats]
+    [activeThreadId, refreshChats, modelId, effort, serviceTier]
   );
 
   const onInterrupt = useCallback(async () => {
@@ -260,6 +320,11 @@ export default function App() {
           streamingId={streamingId}
           onSend={onSend}
           onInterrupt={onInterrupt}
+          model={selectedModel}
+          effort={effort}
+          serviceTier={serviceTier}
+          onChangeEffort={setEffort}
+          onChangeSpeed={setServiceTier}
         />
       </main>
       {showInspector && (
@@ -267,6 +332,9 @@ export default function App() {
           <ManagePanel
             data={chatList}
             activeThreadId={activeThreadId}
+            models={models}
+            modelId={modelId}
+            onSelectModel={onSelectModel}
             onOpen={openChat}
             onCreateFolder={onCreateFolder}
             onRenameFolder={onRenameFolder}

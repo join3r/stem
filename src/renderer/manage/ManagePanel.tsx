@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare } from 'lucide-react';
+import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Cpu } from 'lucide-react';
 import type {
   CodexEventEnvelope,
   McpLoginUrlParams,
@@ -7,21 +7,31 @@ import type {
   McpTransport,
   MemoryContents,
   MemorySettings,
+  ModelSummary,
   SkillSummary
 } from '../../shared/types';
 import { MdxView } from '../chat/MdxView';
 import { ChatList, type ChatListProps } from '../chats/ChatList';
 
-type Tab = 'chats' | 'memory' | 'skills' | 'mcp';
+type Tab = 'chats' | 'model' | 'memory' | 'skills' | 'mcp';
 
 const TABS: { id: Tab; label: string; icon: typeof Brain }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
+  { id: 'model', label: 'Model', icon: Cpu },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'skills', label: 'Skills', icon: Sparkles },
   { id: 'mcp', label: 'MCP', icon: Plug }
 ];
 
-export function ManagePanel(chatProps: ChatListProps) {
+interface ModelTabProps {
+  models: ModelSummary[];
+  modelId: string | null;
+  onSelectModel: (id: string) => void;
+}
+
+export type ManagePanelProps = ChatListProps & ModelTabProps;
+
+export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: ManagePanelProps) {
   const [tab, setTab] = useState<Tab>('chats');
   return (
     <div className="manage">
@@ -42,9 +52,39 @@ export function ManagePanel(chatProps: ChatListProps) {
       </div>
       <div className="manage-body">
         {tab === 'chats' && <ChatList {...chatProps} />}
+        {tab === 'model' && <ModelTab models={models} modelId={modelId} onSelectModel={onSelectModel} />}
         {tab === 'memory' && <MemoryTab />}
         {tab === 'skills' && <SkillsTab />}
         {tab === 'mcp' && <McpTab />}
+      </div>
+    </div>
+  );
+}
+
+function ModelTab({ models, modelId, onSelectModel }: ModelTabProps) {
+  const selected = models.find((m) => m.id === modelId) ?? null;
+  return (
+    <div>
+      <div className="grp-head">Model</div>
+      <div className="formgroup">
+        {models.length === 0 ? (
+          <p className="muted">Loading models…</p>
+        ) : (
+          <>
+            <select
+              className="ifield"
+              value={modelId ?? ''}
+              onChange={(e) => onSelectModel(e.target.value)}
+            >
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.displayName}
+                </option>
+              ))}
+            </select>
+            {selected?.description && <p className="muted">{selected.description}</p>}
+          </>
+        )}
       </div>
     </div>
   );

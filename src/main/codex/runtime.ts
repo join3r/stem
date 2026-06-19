@@ -7,6 +7,7 @@ import type {
   CodexEventEnvelope,
   CodexItem,
   McpLoginResult,
+  ModelSummary,
   RuntimeStatus,
   StartTurnInput,
   StartTurnResult
@@ -38,6 +39,18 @@ interface RawThread {
   createdAt?: number;
   updatedAt?: number;
   turns?: { items?: CodexItem[] }[];
+}
+
+/** A codex model as returned by `model/list` (subset we use). */
+interface RawModel {
+  id: string;
+  displayName?: string;
+  description?: string;
+  hidden?: boolean;
+  supportedReasoningEfforts?: { reasoningEffort: string; description?: string }[];
+  defaultReasoningEffort?: string;
+  serviceTiers?: { id: string; name: string; description: string }[];
+  isDefault?: boolean;
 }
 
 /**
@@ -232,12 +245,42 @@ export class CodexRuntime extends EventEmitter {
       threadId,
       cwd: this.options.workspaceRoot,
       input: [{ type: 'text', text: input.input }],
+      // Per-turn overrides ("for this turn and subsequent turns"). Only send keys
+      // the UI actually set so unspecified values keep codex's defaults.
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.effort ? { effort: input.effort } : {}),
+      ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
       ...(memoryContext
         ? { additionalContext: { 'stem-memory-notes': { value: memoryContext, kind: 'application' } } }
         : {})
     })) as { turn?: { id?: string } };
 
     return { threadId, turnId: result?.turn?.id };
+  }
+
+  /** Codex's selectable model catalog (`model/list`), shaped for the UI. */
+  async listModels(): Promise<ModelSummary[]> {
+    await this.ensureStarted();
+    const result = (await this.request('model/list', { includeHidden: false })) as {
+      data?: RawModel[];
+    };
+    return (result?.data ?? [])
+      .filter((m) => !m.hidden)
+      .map((m) => ({
+        id: m.id,
+        displayName: m.displayName ?? m.id,
+        description: m.description ?? '',
+        supportedEfforts: (m.supportedReasoningEfforts ?? [])
+          .map((e) => e.reasoningEffort)
+          .filter((e): e is string => typeof e === 'string'),
+        defaultEffort: m.defaultReasoningEffort ?? 'medium',
+        serviceTiers: (m.serviceTiers ?? []).map((t) => ({
+          id: t.id,
+          name: t.name,
+          description: t.description
+        })),
+        isDefault: !!m.isDefault
+      }));
   }
 
   async interruptTurn(turnId: string): Promise<void> {

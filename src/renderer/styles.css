@@ -237,6 +237,12 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .icon-btn:disabled { opacity: 0.4; cursor: default; box-shadow: none; }
 .icon-btn.stop { background: var(--danger); }
 
+/* effort + speed controls above the field */
+.composer-controls { display: flex; gap: 8px; margin: 0 2px 8px; }
+.seg-ctl.compact { padding: 2px; align-self: flex-start; }
+.seg-ctl.compact button { flex: 0 0 auto; padding: 3px 9px; font-size: 11px; }
+.seg-ctl button:disabled { opacity: 0.5; cursor: default; }
+
 /* ---- MDX content ---- */
 .mdx > :first-child { margin-top: 0; }
 .mdx > :last-child { margin-bottom: 0; }

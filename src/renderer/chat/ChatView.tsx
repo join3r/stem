@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Square, ArrowUp, Paperclip, User, Sparkles, AlertTriangle } from 'lucide-react';
-import type { ChatMessage } from '../../shared/types';
+import type { ChatMessage, ModelSummary } from '../../shared/types';
 import { MdxView } from './MdxView';
 import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
 
@@ -18,9 +18,32 @@ interface ChatViewProps {
   streamingId: string | null;
   onSend: (text: string) => void;
   onInterrupt: () => void;
+  model: ModelSummary | null;
+  effort: string | null;
+  serviceTier: string | null;
+  onChangeEffort: (effort: string) => void;
+  onChangeSpeed: (serviceTier: string | null) => void;
 }
 
-export function ChatView({ messages, running, streamingId, onSend, onInterrupt }: ChatViewProps) {
+const EFFORT_LABELS: Record<string, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'X-High'
+};
+
+export function ChatView({
+  messages,
+  running,
+  streamingId,
+  onSend,
+  onInterrupt,
+  model,
+  effort,
+  serviceTier,
+  onChangeEffort,
+  onChangeSpeed
+}: ChatViewProps) {
   const [draft, setDraft] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -52,6 +75,8 @@ export function ChatView({ messages, running, streamingId, onSend, onInterrupt }
     setDraft('');
   }
 
+  const hasFast = !!model?.serviceTiers.some((t) => t.id === 'priority');
+
   return (
     <div className="chat">
       <div className="messages" ref={messagesRef}>
@@ -81,6 +106,46 @@ export function ChatView({ messages, running, streamingId, onSend, onInterrupt }
       </div>
 
       <div className="composer">
+        {model && (model.supportedEfforts.length > 0 || hasFast) && (
+          <div className="composer-controls">
+            {model.supportedEfforts.length > 0 && (
+              <div className="seg-ctl compact" role="group" aria-label="Reasoning effort">
+                {model.supportedEfforts.map((e) => (
+                  <button
+                    key={e}
+                    type="button"
+                    className={effort === e ? 'active' : ''}
+                    onClick={() => onChangeEffort(e)}
+                    disabled={running}
+                  >
+                    {EFFORT_LABELS[e] ?? e}
+                  </button>
+                ))}
+              </div>
+            )}
+            {hasFast && (
+              <div className="seg-ctl compact" role="group" aria-label="Speed">
+                <button
+                  type="button"
+                  className={serviceTier === 'priority' ? '' : 'active'}
+                  onClick={() => onChangeSpeed(null)}
+                  disabled={running}
+                >
+                  Standard
+                </button>
+                <button
+                  type="button"
+                  className={serviceTier === 'priority' ? 'active' : ''}
+                  onClick={() => onChangeSpeed('priority')}
+                  disabled={running}
+                  title="1.5× speed, increased usage"
+                >
+                  Fast
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         <div className="composer-field">
           <button type="button" className="composer-attach" title="Attach" tabIndex={-1}>
             <Paperclip size={17} />

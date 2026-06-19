@@ -27,6 +27,31 @@ export interface StartTurnInput {
   input: string;
   threadId?: string;
   model?: string;
+  /** Reasoning effort override (low/medium/high/xhigh). */
+  effort?: string;
+  /** Service tier override: 'priority' = Fast; null = Standard. */
+  serviceTier?: string | null;
+}
+
+// ---- Models (codex catalog) ----
+
+export interface ModelServiceTier {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/** A selectable model from codex's catalog (`model/list`), shaped for the UI. */
+export interface ModelSummary {
+  id: string;
+  displayName: string;
+  description: string;
+  /** e.g. ['low','medium','high','xhigh']. */
+  supportedEfforts: string[];
+  defaultEffort: string;
+  /** Empty => model has no Fast (priority) tier; hide the speed control. */
+  serviceTiers: ModelServiceTier[];
+  isDefault: boolean;
 }
 
 export interface StartTurnResult {
@@ -235,6 +260,8 @@ export interface StemApi {
   interruptTurn(turnId: string): Promise<void>;
   newConversation(): Promise<void>;
   onCodexEvent(listener: (event: CodexEventEnvelope) => void): () => void;
+
+  listModels(): Promise<ModelSummary[]>;
 
   listSkills(): Promise<SkillSummary[]>;
   setSkillEnabled(slug: string, enabled: boolean): Promise<SkillSummary[]>;

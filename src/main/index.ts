@@ -74,6 +74,7 @@ function registerIpc(): void {
   ipcMain.handle('codex:startTurn', (_e, input: StartTurnInput) => runtime!.startTurn(input));
   ipcMain.handle('codex:interruptTurn', (_e, turnId: string) => runtime!.interruptTurn(turnId));
   ipcMain.handle('codex:newConversation', () => runtime!.newConversation());
+  ipcMain.handle('codex:listModels', () => runtime!.listModels());
 
   ipcMain.handle('skills:list', () => listSkills());
   ipcMain.handle('skills:setEnabled', (_e, slug: string, enabled: boolean) => setSkillEnabled(slug, enabled));

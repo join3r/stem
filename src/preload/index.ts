@@ -12,6 +12,7 @@ const api: StemApi = {
   startTurn: (input: StartTurnInput) => ipcRenderer.invoke('codex:startTurn', input),
   interruptTurn: (turnId: string) => ipcRenderer.invoke('codex:interruptTurn', turnId),
   newConversation: () => ipcRenderer.invoke('codex:newConversation'),
+  listModels: () => ipcRenderer.invoke('codex:listModels'),
   onCodexEvent: (listener: (event: CodexEventEnvelope) => void) => {
     const handler = (_e: unknown, event: CodexEventEnvelope) => listener(event);
     ipcRenderer.on('codex:event', handler);
