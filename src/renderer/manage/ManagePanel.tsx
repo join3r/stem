@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight } from 'lucide-react';
+import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare } from 'lucide-react';
 import type {
   CodexEventEnvelope,
   McpLoginUrlParams,
@@ -10,17 +10,19 @@ import type {
   SkillSummary
 } from '../../shared/types';
 import { MdxView } from '../chat/MdxView';
+import { ChatList, type ChatListProps } from '../chats/ChatList';
 
-type Tab = 'memory' | 'skills' | 'mcp';
+type Tab = 'chats' | 'memory' | 'skills' | 'mcp';
 
 const TABS: { id: Tab; label: string; icon: typeof Brain }[] = [
+  { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'skills', label: 'Skills', icon: Sparkles },
   { id: 'mcp', label: 'MCP', icon: Plug }
 ];
 
-export function ManagePanel() {
-  const [tab, setTab] = useState<Tab>('memory');
+export function ManagePanel(chatProps: ChatListProps) {
+  const [tab, setTab] = useState<Tab>('chats');
   return (
     <div className="manage">
       <div className="insp-tabs">
@@ -39,6 +41,7 @@ export function ManagePanel() {
         </div>
       </div>
       <div className="manage-body">
+        {tab === 'chats' && <ChatList {...chatProps} />}
         {tab === 'memory' && <MemoryTab />}
         {tab === 'skills' && <SkillsTab />}
         {tab === 'mcp' && <McpTab />}

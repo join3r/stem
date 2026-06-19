@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { SquarePen, PanelRight, PanelLeft } from 'lucide-react';
+import { SquarePen, PanelRight } from 'lucide-react';
 import type {
   AgentMessageDeltaParams,
   ChatListResult,
@@ -10,7 +10,6 @@ import type {
 } from '../shared/types';
 import { agentMessageText } from '../shared/types';
 import { ChatView } from './chat/ChatView';
-import { ChatList } from './chats/ChatList';
 import { ManagePanel } from './manage/ManagePanel';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
 
@@ -22,7 +21,6 @@ export default function App() {
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const [showInspector, setShowInspector] = useState(true);
-  const [showChats, setShowChats] = useState(true);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [chatList, setChatList] = useState<ChatListResult>({ chats: [], folders: [] });
   const inspectorRef = useAutoHideScroll<HTMLElement>();
@@ -254,10 +252,19 @@ export default function App() {
   }
 
   return shell(
-    <div className={`app${showChats ? '' : ' no-chats'}${showInspector ? '' : ' no-inspector'}`}>
-      {showChats && (
-        <aside className="chat-sidebar">
-          <ChatList
+    <div className={`app${showInspector ? '' : ' no-inspector'}`}>
+      <main className="conversation">
+        <ChatView
+          messages={messages}
+          running={running}
+          streamingId={streamingId}
+          onSend={onSend}
+          onInterrupt={onInterrupt}
+        />
+      </main>
+      {showInspector && (
+        <aside className="inspector" ref={inspectorRef}>
+          <ManagePanel
             data={chatList}
             activeThreadId={activeThreadId}
             onOpen={openChat}
@@ -271,29 +278,8 @@ export default function App() {
           />
         </aside>
       )}
-      <main className="conversation">
-        <ChatView
-          messages={messages}
-          running={running}
-          streamingId={streamingId}
-          onSend={onSend}
-          onInterrupt={onInterrupt}
-        />
-      </main>
-      {showInspector && (
-        <aside className="inspector" ref={inspectorRef}>
-          <ManagePanel />
-        </aside>
-      )}
     </div>,
     <>
-      <button
-        className={`tbtn${showChats ? ' active' : ''}`}
-        title="Toggle chats"
-        onClick={() => setShowChats((v) => !v)}
-      >
-        <PanelLeft size={17} />
-      </button>
       <button
         className="tbtn"
         title="New conversation"

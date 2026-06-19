@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import type { ChatListResult, ChatSummary, Folder } from '../../shared/types';
 
-interface ChatListProps {
+export interface ChatListProps {
   data: ChatListResult;
   activeThreadId: string | null;
   onOpen: (threadId: string) => void;

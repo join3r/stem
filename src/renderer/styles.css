@@ -104,12 +104,10 @@ button, input, textarea, a, label, .switch, .insp-seg, .seg-ctl { -webkit-app-re
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 240px 1fr 320px;
+  grid-template-columns: 1fr 320px;
   grid-template-rows: minmax(0, 1fr);
 }
-.app.no-inspector { grid-template-columns: 240px 1fr; }
-.app.no-chats { grid-template-columns: 1fr 320px; }
-.app.no-chats.no-inspector { grid-template-columns: 1fr; }
+.app.no-inspector { grid-template-columns: 1fr; }
 
 .app.loading, .app.gate {
   display: flex;
@@ -383,14 +381,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .gutter button:disabled { opacity: 0.4; cursor: default; }
 .gutter button + button { border-left: 0.5px solid var(--line); }
 
-/* ---- chat sidebar (left) ---- */
-.chat-sidebar {
-  background: var(--panel);
-  border-right: 0.5px solid var(--line);
-  overflow-y: auto;
-  min-height: 0;
-  padding: 14px 12px;
-}
+/* ---- chat list (inspector tab) ---- */
 .chats-panel .group-row { cursor: pointer; user-select: none; }
 .chats-panel .row-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chats-panel .row-icon { width: 22px; height: 22px; box-shadow: none; }
