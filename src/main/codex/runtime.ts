@@ -8,9 +8,12 @@ import type {
   StartTurnInput,
   StartTurnResult
 } from '../../shared/types';
+import { STEM_ASSISTANT_INSTRUCTIONS } from '../workspace/bootstrap';
+import { buildMemoryContext, captureMemoryFromUserInput } from '../workspace/memory';
 import { findCodexPath } from './locate';
 
 const RPC_TIMEOUT_MS = 60_000;
+type JsonRpcId = number | string;
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -155,30 +158,69 @@ export class CodexRuntime extends EventEmitter {
 
   /**
    * Restart the app-server so config.toml changes and new MCP OAuth tokens take
-   * effect in place (no app quit). Waits for the old process to fully exit
-   * before respawning so the old exit handler can't null out the new process.
+   * effect in place (no app quit). Shuts the old process down gracefully and
+   * waits for it to fully exit before respawning, so the old exit handler can't
+   * null out the new process.
    */
   async restart(): Promise<void> {
-    const old = this.proc;
-    if (old) {
-      await new Promise<void>((resolve) => {
-        old.once('exit', () => resolve());
-        this.dispose();
-      });
-    }
+    await this.shutdown();
     this.activeThreadId = null;
     await this.ensureStarted();
   }
 
+  async newConversation(): Promise<void> {
+    await this.unsubscribeActiveThread();
+    this.activeThreadId = null;
+  }
+
+  /**
+   * Gracefully stop the app-server: send SIGTERM so Codex can drain its
+   * background jobs — crucially the memory ingestion/consolidation worker — and
+   * await its exit. A hard SIGKILL backstop guarantees quit/restart never hangs
+   * if Codex's own drain wedges.
+   *
+   * This matters: Codex guards each memory job with a ~1h lease for crash
+   * safety. Killing the process without letting it drain orphans that lease, so
+   * no later worker resumes consolidation and the human-readable memory files
+   * silently stop updating. SIGTERM gives Codex the window to release/finish.
+   */
+  async shutdown(timeoutMs = 12_000): Promise<void> {
+    const proc = this.proc;
+    if (!proc) return;
+    await this.unsubscribeActiveThread(1500);
+    this.initialized = false;
+    await new Promise<void>((resolve) => {
+      const backstop = setTimeout(() => proc.kill('SIGKILL'), timeoutMs);
+      proc.once('exit', () => {
+        clearTimeout(backstop);
+        resolve();
+      });
+      proc.kill('SIGTERM');
+    });
+  }
+
   async startTurn(input: StartTurnInput): Promise<StartTurnResult> {
+    const memory = await captureMemoryFromUserInput(input.input);
+    if (memory.shouldAcknowledge) {
+      return {
+        handled: true,
+        assistantMessage: "I'll remember that.",
+        rememberedPath: memory.path
+      };
+    }
+
     await this.ensureStarted();
     const threadId = input.threadId ?? this.activeThreadId ?? (await this.startThread(input.model));
     this.activeThreadId = threadId;
 
+    const memoryContext = await buildMemoryContext();
     const result = (await this.request('turn/start', {
       threadId,
       cwd: this.options.workspaceRoot,
-      input: [{ type: 'text', text: input.input }]
+      input: [{ type: 'text', text: input.input }],
+      ...(memoryContext
+        ? { additionalContext: { 'stem-memory-notes': { value: memoryContext, kind: 'application' } } }
+        : {})
     })) as { turn?: { id?: string } };
 
     return { threadId, turnId: result?.turn?.id };
@@ -189,27 +231,33 @@ export class CodexRuntime extends EventEmitter {
     await this.request('turn/interrupt', { turnId });
   }
 
-  /** Kill the child process. Called on app quit so we never orphan it. */
-  dispose(): void {
-    if (this.proc) {
-      this.proc.kill();
-      this.proc = null;
-    }
-    this.initialized = false;
-  }
-
   // ---- internals ----
 
   private async startThread(model?: string): Promise<string> {
     const result = (await this.request('thread/start', {
       model,
-      cwd: this.options.workspaceRoot
+      cwd: this.options.workspaceRoot,
+      baseInstructions: STEM_ASSISTANT_INSTRUCTIONS
     })) as { thread?: { id?: string } };
     const threadId = result?.thread?.id;
     if (!threadId) {
       throw new Error('Codex did not return a thread id.');
     }
     return threadId;
+  }
+
+  private async unsubscribeActiveThread(timeoutMs = 5000): Promise<void> {
+    const threadId = this.activeThreadId;
+    if (!threadId || !this.proc || !this.initialized) return;
+
+    const unsubscribe = this.request('thread/unsubscribe', { threadId }).catch((error) => {
+      this.emitEvent('process/stderr', { text: `thread/unsubscribe failed: ${error.message}` });
+    });
+
+    await Promise.race([
+      unsubscribe,
+      new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))
+    ]);
   }
 
   private ensureStarted(): Promise<void> {
@@ -273,6 +321,11 @@ export class CodexRuntime extends EventEmitter {
       return;
     }
 
+    if ((typeof message.id === 'number' || typeof message.id === 'string') && typeof message.method === 'string') {
+      this.handleServerRequest(message.id, message.method, message.params);
+      return;
+    }
+
     if (typeof message.id === 'number') {
       const pending = this.pending.get(message.id);
       if (!pending) return;
@@ -290,6 +343,37 @@ export class CodexRuntime extends EventEmitter {
       // Forward every notification, known or not. The UI decides what matters;
       // unknown methods are simply ignored downstream rather than crashing.
       this.emitEvent(message.method, message.params);
+    }
+  }
+
+  private handleServerRequest(id: JsonRpcId, method: string, params: unknown): void {
+    this.emitEvent(method, params);
+
+    switch (method) {
+      case 'item/commandExecution/requestApproval':
+        this.respond(id, { decision: 'decline' });
+        return;
+      case 'item/fileChange/requestApproval':
+        this.respond(id, { decision: 'decline' });
+        return;
+      case 'execCommandApproval':
+      case 'applyPatchApproval':
+        this.respond(id, { decision: 'denied' });
+        return;
+      case 'mcpServer/elicitation/request':
+        this.respond(id, { action: 'decline', content: null, _meta: null });
+        return;
+      case 'item/tool/requestUserInput':
+        this.respond(id, { answers: {} });
+        return;
+      case 'item/tool/call':
+        this.respond(id, {
+          success: false,
+          contentItems: [{ type: 'inputText', text: 'Stem does not support this client-side tool yet.' }]
+        });
+        return;
+      default:
+        this.respondError(id, -32601, `Stem does not support app-server request "${method}".`);
     }
   }
 
@@ -311,6 +395,14 @@ export class CodexRuntime extends EventEmitter {
 
   private notify(method: string, params: unknown): void {
     this.proc?.stdin.write(`${JSON.stringify({ method, params })}\n`);
+  }
+
+  private respond(id: JsonRpcId, result: unknown): void {
+    this.proc?.stdin.write(`${JSON.stringify({ id, result })}\n`);
+  }
+
+  private respondError(id: JsonRpcId, code: number, message: string): void {
+    this.proc?.stdin.write(`${JSON.stringify({ id, error: { code, message } })}\n`);
   }
 
   private emitEvent(method: string, params?: unknown): void {

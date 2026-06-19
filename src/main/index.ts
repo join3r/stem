@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme, session } from 'electron';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CodexRuntime } from './codex/runtime';
@@ -6,7 +6,7 @@ import { ensureWorkspace } from './workspace/bootstrap';
 import { codexHome, workspaceRoot } from './workspace/paths';
 import { listSkills, setSkillEnabled } from './workspace/skills';
 import { addMcpServer, listMcpServers, removeMcpServer } from './workspace/mcp';
-import { getMemorySettings, setMemoryEnabled } from './workspace/memory';
+import { getMemorySettings, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
 import type { McpServerInput, StartTurnInput } from '../shared/types';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -24,7 +24,11 @@ function createWindow(): void {
     width: 1200,
     height: 820,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#faf9f6',
+    // Vertically center the inset traffic lights within the 52px toolbar.
+    trafficLightPosition: { x: 19, y: 20 },
+    // Match the toolbar/chrome color so first paint doesn't flash; follows
+    // the system appearance (the renderer adapts via prefers-color-scheme).
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1916' : '#efece5',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
@@ -50,6 +54,7 @@ function registerIpc(): void {
   ipcMain.handle('runtime:login', () => runtime!.login());
   ipcMain.handle('codex:startTurn', (_e, input: StartTurnInput) => runtime!.startTurn(input));
   ipcMain.handle('codex:interruptTurn', (_e, turnId: string) => runtime!.interruptTurn(turnId));
+  ipcMain.handle('codex:newConversation', () => runtime!.newConversation());
 
   ipcMain.handle('skills:list', () => listSkills());
   ipcMain.handle('skills:setEnabled', (_e, slug: string, enabled: boolean) => setSkillEnabled(slug, enabled));
@@ -64,7 +69,12 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('memory:get', () => getMemorySettings());
-  ipcMain.handle('memory:setEnabled', (_e, enabled: boolean) => setMemoryEnabled(enabled));
+  ipcMain.handle('memory:setEnabled', async (_e, enabled: boolean) => {
+    const settings = await setMemoryEnabled(enabled);
+    await runtime!.restart();
+    return settings;
+  });
+  ipcMain.handle('memory:read', () => readMemoryFiles());
 }
 
 app.whenReady().then(async () => {
@@ -95,8 +105,16 @@ app.whenReady().then(async () => {
   app.quit();
 });
 
-app.on('before-quit', () => {
-  runtime?.dispose();
+// Shut the app-server down gracefully before quitting. Codex drains its
+// background memory jobs on SIGTERM; an abrupt kill orphans their leases and
+// silently stalls memory generation. preventDefault + await gives it that
+// window, then we exit for real (shutdown has its own SIGKILL backstop).
+let quitting = false;
+app.on('before-quit', (event) => {
+  if (quitting || !runtime) return;
+  event.preventDefault();
+  quitting = true;
+  runtime.shutdown().finally(() => app.exit(0));
 });
 
 app.on('window-all-closed', () => {

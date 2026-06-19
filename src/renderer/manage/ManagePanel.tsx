@@ -1,24 +1,42 @@
-import { useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight } from 'lucide-react';
 import type {
   CodexEventEnvelope,
   McpLoginUrlParams,
   McpServerSummary,
   McpTransport,
+  MemoryContents,
   MemorySettings,
   SkillSummary
 } from '../../shared/types';
+import { MdxView } from '../chat/MdxView';
 
 type Tab = 'memory' | 'skills' | 'mcp';
+
+const TABS: { id: Tab; label: string; icon: typeof Brain }[] = [
+  { id: 'memory', label: 'Memory', icon: Brain },
+  { id: 'skills', label: 'Skills', icon: Sparkles },
+  { id: 'mcp', label: 'MCP', icon: Plug }
+];
 
 export function ManagePanel() {
   const [tab, setTab] = useState<Tab>('memory');
   return (
     <div className="manage">
-      <div className="manage-tabs">
-        <button className={tab === 'memory' ? 'active' : ''} onClick={() => setTab('memory')}>Memory</button>
-        <button className={tab === 'skills' ? 'active' : ''} onClick={() => setTab('skills')}>Skills</button>
-        <button className={tab === 'mcp' ? 'active' : ''} onClick={() => setTab('mcp')}>MCP</button>
+      <div className="insp-tabs">
+        <div className="insp-seg">
+          {TABS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              className={tab === id ? 'active' : ''}
+              title={label}
+              aria-label={label}
+              onClick={() => setTab(id)}
+            >
+              <Icon size={16} />
+            </button>
+          ))}
+        </div>
       </div>
       <div className="manage-body">
         {tab === 'memory' && <MemoryTab />}
@@ -31,8 +49,16 @@ export function ManagePanel() {
 
 function MemoryTab() {
   const [settings, setSettings] = useState<MemorySettings | null>(null);
+  const [contents, setContents] = useState<MemoryContents | null>(null);
+  const [showTech, setShowTech] = useState(false);
+
+  function loadContents() {
+    window.stem.readMemory().then(setContents);
+  }
+
   useEffect(() => {
     window.stem.getMemorySettings().then(setSettings);
+    loadContents();
   }, []);
 
   async function toggle() {
@@ -41,13 +67,67 @@ function MemoryTab() {
   }
 
   if (!settings) return <p className="muted">Loading…</p>;
+
+  const notes = contents?.files.filter((f) => f.kind === 'note' && f.content.trim()) ?? [];
+  const techFiles = contents?.files.filter((f) => f.kind === 'native' && f.exists && f.content.trim()) ?? [];
+
   return (
     <div>
-      <label className="switch-row">
-        <input type="checkbox" checked={settings.enabled} onChange={toggle} />
-        <span>Native memory {settings.enabled ? 'on' : 'off'}</span>
-      </label>
-      <p className="muted">When on, Stem remembers across conversations. Stored in its isolated home.</p>
+      <div className="grp-head">Memory</div>
+      <div className="group">
+        <div className="group-row">
+          <span className="row-main">
+            <strong>Native memory</strong>
+            <em>Remember across conversations</em>
+          </span>
+          <button
+            className={`switch${settings.enabled ? ' on' : ''}`}
+            role="switch"
+            aria-checked={settings.enabled}
+            aria-label="Native memory"
+            onClick={toggle}
+          />
+        </div>
+      </div>
+
+      <div className="memory-view">
+        <div className="memory-view-head">
+          <strong>Stored memory</strong>
+          <button className="link-btn" onClick={loadContents}>Refresh</button>
+        </div>
+        {!contents && <p className="muted">Loading…</p>}
+        {contents && notes.length === 0 && (
+          <p className="muted">No memories stored yet — Stem builds these as you chat.</p>
+        )}
+        {notes.map((f) => (
+          <div key={f.name} className="memory-note">
+            {f.statement ? <p className="statement">{f.statement}</p> : <MdxView text={f.content} />}
+            {f.source && <span className="chip">{f.source}</span>}
+          </div>
+        ))}
+
+        {techFiles.length > 0 && (
+          <div className="memory-tech">
+            <button
+              className="memory-tech-head"
+              aria-expanded={showTech}
+              onClick={() => setShowTech((v) => !v)}
+            >
+              <ChevronRight size={14} className={showTech ? 'open' : ''} />
+              <span>Technical details ({techFiles.length})</span>
+            </button>
+            {showTech &&
+              techFiles.map((f) => (
+                <div key={f.name} className="memory-doc">
+                  <h4>{f.label}</h4>
+                  <MdxView text={f.content} />
+                </div>
+              ))}
+          </div>
+        )}
+
+        {contents && <p className="muted memory-path">{contents.dir}</p>}
+      </div>
     </div>
   );
 }
@@ -62,20 +142,30 @@ function SkillsTab() {
     setSkills(await window.stem.setSkillEnabled(slug, enabled));
   }
 
+  if (skills.length === 0) {
+    return <p className="muted">No skills yet. Drop a SKILL.md folder into the skills directory.</p>;
+  }
+
   return (
     <div>
-      {skills.length === 0 && <p className="muted">No skills yet. Drop a SKILL.md folder into the skills directory.</p>}
-      {skills.map((s) => (
-        <div key={s.slug} className="list-row">
-          <label className="switch-row">
-            <input type="checkbox" checked={s.enabled} onChange={() => toggle(s.slug, !s.enabled)} />
-            <span>
+      <div className="grp-head">Skills</div>
+      <div className="group">
+        {skills.map((s) => (
+          <div key={s.slug} className="group-row">
+            <span className="row-main">
               <strong>{s.name}</strong>
-              <em className="muted">{s.description}</em>
+              <em>{s.description}</em>
             </span>
-          </label>
-        </div>
-      ))}
+            <button
+              className={`switch${s.enabled ? ' on' : ''}`}
+              role="switch"
+              aria-checked={s.enabled}
+              aria-label={s.name}
+              onClick={() => toggle(s.slug, !s.enabled)}
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -92,6 +182,8 @@ function McpTab() {
   const [loginName, setLoginName] = useState<string | null>(null);
   const [loginUrl, setLoginUrl] = useState<McpLoginUrlParams | null>(null);
   const [signedIn, setSignedIn] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<string | null>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
 
   async function refresh() {
     setServers(await window.stem.listMcpServers());
@@ -145,6 +237,7 @@ function McpTab() {
   async function remove(serverName: string) {
     setError(null);
     setServers(await window.stem.removeMcpServer(serverName));
+    setSelected((cur) => (cur === serverName ? null : cur));
     setSignedIn((prev) => {
       const next = new Set(prev);
       next.delete(serverName);
@@ -173,35 +266,71 @@ function McpTab() {
   }
 
   function signInLabel(serverName: string): string {
-    if (loginName === serverName) return 'Waiting for browser…';
-    if (signedIn.has(serverName)) return 'Signed in ✓';
+    if (loginName === serverName) return 'Waiting…';
+    if (signedIn.has(serverName)) return 'Signed in';
     return 'Sign in';
   }
 
   return (
     <div>
-      {servers.map((s) => (
-        <div key={s.name} className="list-row">
-          <span>
-            <strong>{s.name}</strong>
-            <em className="muted">{s.transport === 'http' ? s.url : `${s.command} ${s.args.join(' ')}`.trim()}</em>
-          </span>
-          <span className="mcp-row-actions">
-            {s.transport === 'http' && (
-              <button
-                className="mcp-signin"
-                onClick={() => signIn(s.name)}
-                disabled={!!loginName || !!busy || signedIn.has(s.name)}
-              >
-                {signInLabel(s.name)}
-              </button>
-            )}
-            <button className="icon-btn" onClick={() => remove(s.name)} title="Remove" disabled={!!busy || !!loginName}>
-              <Trash2 size={16} />
-            </button>
-          </span>
+      <div className="grp-head">MCP Servers</div>
+      {servers.length === 0 ? (
+        <div className="group">
+          <div className="group-row">
+            <span className="row-main">
+              <em>No servers yet. Add one below.</em>
+            </span>
+          </div>
         </div>
-      ))}
+      ) : (
+        <div className="group">
+          {servers.map((s) => {
+            const remote = s.transport === 'http';
+            const isSignedIn = signedIn.has(s.name);
+            return (
+              <div
+                key={s.name}
+                className={`group-row${selected === s.name ? ' selected' : ''}`}
+                onClick={() => setSelected(s.name)}
+              >
+                <span className={`row-icon ${remote ? 'remote' : 'local'}`}>
+                  {remote ? <Globe size={14} /> : <HardDrive size={14} />}
+                </span>
+                <span className="row-main">
+                  <strong>{s.name}</strong>
+                  <em>{remote ? s.url : `${s.command} ${s.args.join(' ')}`.trim()}</em>
+                </span>
+                {remote && !isSignedIn ? (
+                  <button
+                    className="push"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      signIn(s.name);
+                    }}
+                    disabled={!!loginName || !!busy}
+                  >
+                    {signInLabel(s.name)}
+                  </button>
+                ) : (
+                  <span className={`pill ${remote ? 'ok' : 'off'}`}>{remote ? 'Signed in' : 'Local'}</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="gutter">
+        <button title="Add server" onClick={() => nameRef.current?.focus()}>
+          <Plus size={15} />
+        </button>
+        <button
+          title="Remove selected"
+          onClick={() => selected && remove(selected)}
+          disabled={!selected || !!busy || !!loginName}
+        >
+          <Minus size={15} />
+        </button>
+      </div>
 
       {loginName && loginUrl?.name === loginName && (
         <p className="muted">
@@ -211,27 +340,30 @@ function McpTab() {
       )}
       {busy && <p className="muted">{busy}</p>}
 
-      <div className="mcp-form">
-        <div className="mcp-transport">
+      <div className="grp-head">Add Server</div>
+      <div className="formgroup">
+        <div className="seg-ctl">
           <button className={transport === 'http' ? 'active' : ''} onClick={() => setTransport('http')}>
-            Remote (URL)
+            Remote
           </button>
           <button className={transport === 'stdio' ? 'active' : ''} onClick={() => setTransport('stdio')}>
-            Local (command)
+            Local
           </button>
         </div>
-        <input placeholder="name" value={name} onChange={(e) => setName(e.target.value)} />
+        <input ref={nameRef} className="ifield" placeholder="Name (e.g. fastmail)" value={name} onChange={(e) => setName(e.target.value)} />
         {transport === 'http' ? (
-          <input placeholder="url (e.g. https://api.fastmail.com/mcp)" value={url} onChange={(e) => setUrl(e.target.value)} />
+          <input className="ifield" placeholder="https://api.fastmail.com/mcp" value={url} onChange={(e) => setUrl(e.target.value)} />
         ) : (
           <>
-            <input placeholder="command (e.g. npx)" value={command} onChange={(e) => setCommand(e.target.value)} />
-            <input placeholder="args (space-separated)" value={args} onChange={(e) => setArgs(e.target.value)} />
+            <input className="ifield" placeholder="command (e.g. npx)" value={command} onChange={(e) => setCommand(e.target.value)} />
+            <input className="ifield" placeholder="args (space-separated)" value={args} onChange={(e) => setArgs(e.target.value)} />
           </>
         )}
-        <button onClick={add} disabled={!canAdd}>Add server</button>
+        <div className="push-row">
+          <button className="push default" onClick={add} disabled={!canAdd}>Add Server</button>
+        </div>
         {transport === 'http' && (
-          <p className="muted">Remote servers are added unauthenticated — use “Sign in” above to authorize via OAuth.</p>
+          <p className="muted">Remote servers are added unauthenticated — use “Sign in” to authorize via OAuth.</p>
         )}
         {error && <p className="error">{error}</p>}
       </div>

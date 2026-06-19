@@ -22,6 +22,11 @@ export function skillsRoot(): string {
   return join(codexHome(), 'skills');
 }
 
+/** Where Codex stores its native cross-conversation memory (markdown + SQLite). */
+export function memoriesRoot(): string {
+  return join(codexHome(), 'memories');
+}
+
 /** The controlled cwd we spawn `codex app-server` in — empty/app-owned. */
 export function workspaceRoot(): string {
   return join(userDataRoot(), 'workspace');

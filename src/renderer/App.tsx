@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { SquarePen, PanelRight } from 'lucide-react';
 import type {
   AgentMessageDeltaParams,
   ChatMessage,
@@ -18,6 +19,7 @@ export default function App() {
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
+  const [showInspector, setShowInspector] = useState(true);
   const inspectorRef = useAutoHideScroll<HTMLElement>();
 
   const [bridgeError, setBridgeError] = useState<string | null>(null);
@@ -86,6 +88,17 @@ export default function App() {
     setRunning(true);
     try {
       const result = await window.stem.startTurn({ input: text });
+      if (result.handled) {
+        if (result.assistantMessage) {
+          setMessages((prev) => [
+            ...prev,
+            { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }
+          ]);
+        }
+        setRunning(false);
+        setActiveTurnId(null);
+        return;
+      }
       setActiveTurnId(result.turnId ?? null);
     } catch (e) {
       setRunning(false);
@@ -111,10 +124,23 @@ export default function App() {
     }
   }
 
-  // Slim draggable titlebar wraps every view (window has no native title bar).
-  const shell = (inner: ReactNode) => (
+  const newConversation = useCallback(async () => {
+    await window.stem.newConversation();
+    setMessages([]);
+    setStreamingId(null);
+    setActiveTurnId(null);
+  }, []);
+
+  // Unified draggable toolbar wraps every view (window has no native title bar).
+  // `toolbar` lets each view supply its own controls; gate/loading show just the title.
+  const titleOnly = (
+    <div className="toolbar-title">
+      <strong>Stem</strong>
+    </div>
+  );
+  const shell = (inner: ReactNode, toolbar: ReactNode = titleOnly) => (
     <div className="root-shell">
-      <div className="titlebar" />
+      <div className="toolbar">{toolbar}</div>
       {inner}
     </div>
   );
@@ -150,7 +176,7 @@ export default function App() {
           ) : (
             <>
               <p className="error">{status.error}</p>
-              <button onClick={refreshStatus}>Retry</button>
+              <button className="push" onClick={refreshStatus}>Retry</button>
             </>
           )}
         </div>
@@ -159,7 +185,7 @@ export default function App() {
   }
 
   return shell(
-    <div className="app">
+    <div className={`app${showInspector ? '' : ' no-inspector'}`}>
       <main className="conversation">
         <ChatView
           messages={messages}
@@ -169,9 +195,33 @@ export default function App() {
           onInterrupt={onInterrupt}
         />
       </main>
-      <aside className="inspector" ref={inspectorRef}>
-        <ManagePanel />
-      </aside>
-    </div>
+      {showInspector && (
+        <aside className="inspector" ref={inspectorRef}>
+          <ManagePanel />
+        </aside>
+      )}
+    </div>,
+    <>
+      <button
+        className="tbtn"
+        title="New conversation"
+        onClick={newConversation}
+        disabled={running || messages.length === 0}
+      >
+        <SquarePen size={17} />
+      </button>
+      <div className="toolbar-title">
+        <strong>Stem</strong>
+        <span>ChatGPT subscription</span>
+      </div>
+      <div className="toolbar-spacer" />
+      <button
+        className={`tbtn${showInspector ? ' active' : ''}`}
+        title="Toggle inspector"
+        onClick={() => setShowInspector((v) => !v)}
+      >
+        <PanelRight size={17} />
+      </button>
+    </>
   );
 }

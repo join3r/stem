@@ -1,8 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Square, ArrowUp } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Square, ArrowUp, Paperclip, User, Sparkles, AlertTriangle } from 'lucide-react';
 import type { ChatMessage } from '../../shared/types';
 import { MdxView } from './MdxView';
 import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
+
+const AVATAR: Record<ChatMessage['role'], { cls: string; icon: ReactNode; label: string }> = {
+  user: { cls: 'you', icon: <User size={15} />, label: 'You' },
+  assistant: { cls: 'stem', icon: <Sparkles size={15} />, label: 'Stem' },
+  system: { cls: 'sys', icon: <AlertTriangle size={15} />, label: 'Error' }
+};
 
 const MAX_COMPOSER_HEIGHT = 180;
 
@@ -55,42 +61,53 @@ export function ChatView({ messages, running, streamingId, onSend, onInterrupt }
             <p>Ask me to explain something. I can use callouts, steps, and collapsible details.</p>
           </div>
         )}
-        {messages.map((m) => (
-          <div key={m.id} className={`message message-${m.role}`}>
-            <div className="message-role">{m.role}</div>
-            {m.role === 'assistant' && m.id !== streamingId ? (
-              <MdxView text={m.content} />
-            ) : (
-              <div className="message-plain">{m.content || (running ? '…' : '')}</div>
-            )}
-          </div>
-        ))}
+        {messages.map((m) => {
+          const a = AVATAR[m.role];
+          return (
+            <div key={m.id} className={`message message-${m.role}`}>
+              <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
+              <div className="message-body">
+                <div className="message-who">{a.label}</div>
+                {m.role === 'assistant' && m.id !== streamingId ? (
+                  <MdxView text={m.content} />
+                ) : (
+                  <div className="message-plain">{m.content || (running ? '…' : '')}</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
         <div ref={endRef} />
       </div>
 
       <div className="composer">
-        <textarea
-          ref={textareaRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          placeholder="Ask Stem…"
-          rows={1}
-        />
-        {running ? (
-          <button type="button" className="icon-btn stop" onClick={onInterrupt} title="Stop">
-            <Square size={18} />
+        <div className="composer-field">
+          <button type="button" className="composer-attach" title="Attach" tabIndex={-1}>
+            <Paperclip size={17} />
           </button>
-        ) : (
-          <button type="button" className="icon-btn send" onClick={submit} disabled={!draft.trim()} title="Send">
-            <ArrowUp size={18} />
-          </button>
-        )}
+          <textarea
+            ref={textareaRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            placeholder="Ask Stem…"
+            rows={1}
+          />
+          {running ? (
+            <button type="button" className="icon-btn stop" onClick={onInterrupt} title="Stop">
+              <Square size={16} />
+            </button>
+          ) : (
+            <button type="button" className="icon-btn send" onClick={submit} disabled={!draft.trim()} title="Send">
+              <ArrowUp size={16} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

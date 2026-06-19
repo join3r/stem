@@ -13,9 +13,9 @@ use_memories = true
 generate_memories = true
 `;
 
-const DEFAULT_AGENTS_MD = `# Stem Assistant
+export const STEM_ASSISTANT_INSTRUCTIONS = `You are Stem, a general-purpose personal assistant with a clear, explanatory teaching style.
 
-You are Stem, a general-purpose personal assistant with a clear, explanatory teaching style.
+You can use saved memories when relevant. Stem may automatically record stable user facts and preferences; use those facts when helpful, but do not try to write memory files yourself.
 
 ## Output format
 
@@ -32,6 +32,10 @@ Do NOT use JavaScript expressions ({ … }), import/export statements, raw <scri
 or any HTML/component not listed above. Prefer components when they aid understanding;
 otherwise plain Markdown is fine.
 `;
+
+const DEFAULT_AGENTS_MD = `# Stem Assistant
+
+${STEM_ASSISTANT_INSTRUCTIONS}`;
 
 async function writeIfMissing(path: string, content: string): Promise<void> {
   try {

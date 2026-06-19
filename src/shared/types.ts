@@ -30,8 +30,11 @@ export interface StartTurnInput {
 }
 
 export interface StartTurnResult {
-  threadId: string;
+  threadId?: string;
   turnId?: string;
+  handled?: boolean;
+  assistantMessage?: string;
+  rememberedPath?: string;
 }
 
 // ---- Codex app-server events (verified against codex-cli 0.141.0) ----
@@ -160,6 +163,30 @@ export interface MemorySettings {
   generateMemories: boolean;
 }
 
+/** `note` is a user-provided memory; `native` is a Codex-generated technical file. */
+export type MemoryFileKind = 'note' | 'native';
+
+/** One on-disk memory markdown file; `exists:false` when not yet written. */
+export interface MemoryFile {
+  name: string;
+  label: string;
+  content: string;
+  exists: boolean;
+  kind: MemoryFileKind;
+  /** Notes only: the cleaned fact (boilerplate/blockquote stripped). */
+  statement?: string;
+  /** Notes only: short human chip for how it was captured. */
+  source?: string;
+}
+
+export interface MemoryContents {
+  /** Absolute path to the memories directory on disk. */
+  dir: string;
+  files: MemoryFile[];
+  /** True when no file has any non-whitespace content. */
+  isEmpty: boolean;
+}
+
 // ---- Preload API surface exposed on window.stem ----
 
 export interface StemApi {
@@ -167,6 +194,7 @@ export interface StemApi {
   login(): Promise<RuntimeStatus>;
   startTurn(input: StartTurnInput): Promise<StartTurnResult>;
   interruptTurn(turnId: string): Promise<void>;
+  newConversation(): Promise<void>;
   onCodexEvent(listener: (event: CodexEventEnvelope) => void): () => void;
 
   listSkills(): Promise<SkillSummary[]>;
@@ -180,4 +208,5 @@ export interface StemApi {
 
   getMemorySettings(): Promise<MemorySettings>;
   setMemoryEnabled(enabled: boolean): Promise<MemorySettings>;
+  readMemory(): Promise<MemoryContents>;
 }
