@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, session } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, session } from 'electron';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CodexRuntime } from './codex/runtime';
@@ -21,6 +21,14 @@ import type { ChatListResult, McpServerInput, StartTurnInput } from '../shared/t
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
+// Brand the app rather than inheriting Electron's defaults. setName fixes the
+// app/process name and userData path; appIcon drives the dock (and, off macOS,
+// the window) icon. Note: in dev the macOS menu-bar title still reads
+// "Electron" — that comes from the Electron.app bundle and only changes when
+// the app is packaged.
+app.setName('Stem');
+const appIcon = nativeImage.createFromPath(join(app.getAppPath(), 'build', 'icon.png'));
+
 // In dev, expose a CDP port so tooling (agent-browser) can attach to the UI.
 if (process.env.ELECTRON_RENDERER_URL) {
   app.commandLine.appendSwitch('remote-debugging-port', '9222');
@@ -34,6 +42,7 @@ function createWindow(): void {
     width: 1200,
     height: 820,
     titleBarStyle: 'hiddenInset',
+    icon: appIcon,
     // Vertically center the inset traffic lights within the 52px toolbar.
     trafficLightPosition: { x: 19, y: 20 },
     // Match the toolbar/chrome color so first paint doesn't flash; follows
@@ -153,6 +162,10 @@ app.whenReady().then(async () => {
         }
       });
     });
+  }
+
+  if (process.platform === 'darwin' && !appIcon.isEmpty()) {
+    app.dock?.setIcon(appIcon);
   }
 
   registerIpc();
