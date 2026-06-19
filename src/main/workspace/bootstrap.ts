@@ -33,6 +33,16 @@ or any HTML/component not listed above. Prefer components when they aid understa
 otherwise plain Markdown is fine.
 `;
 
+/**
+ * Per-turn directive injected when the user picks plain-Markdown (.md) output.
+ * Overrides the component allowance in STEM_ASSISTANT_INSTRUCTIONS for this reply only.
+ */
+export const PLAIN_MD_DIRECTIVE = `For THIS response only, output standard plain Markdown (.md).
+Do NOT use any components or HTML — no <Callout>, <Steps>/<Step>, <Collapsible>, no JSX/HTML tags,
+and no JavaScript expressions ({ … }). Use only standard Markdown: headings, lists, links,
+fenced code blocks, tables, blockquotes, and emphasis. This overrides the component allowance
+in the base instructions for this turn.`;
+
 const DEFAULT_AGENTS_MD = `# Stem Assistant
 
 ${STEM_ASSISTANT_INSTRUCTIONS}`;

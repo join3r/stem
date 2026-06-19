@@ -13,7 +13,7 @@ import type {
   StartTurnResult
 } from '../../shared/types';
 import { agentMessageText } from '../../shared/types';
-import { STEM_ASSISTANT_INSTRUCTIONS } from '../workspace/bootstrap';
+import { PLAIN_MD_DIRECTIVE, STEM_ASSISTANT_INSTRUCTIONS } from '../workspace/bootstrap';
 import { buildMemoryContext, captureMemoryFromUserInput } from '../workspace/memory';
 import { findCodexPath } from './locate';
 
@@ -241,6 +241,15 @@ export class CodexRuntime extends EventEmitter {
     this.activeThreadId = threadId;
 
     const memoryContext = await buildMemoryContext();
+    // Assemble per-turn additional context: memory notes (when present) plus a
+    // plain-Markdown directive when the user picked .md for this prompt.
+    const additionalContext: Record<string, { value: string; kind: string }> = {};
+    if (memoryContext) {
+      additionalContext['stem-memory-notes'] = { value: memoryContext, kind: 'application' };
+    }
+    if (input.format === 'md') {
+      additionalContext['stem-format'] = { value: PLAIN_MD_DIRECTIVE, kind: 'application' };
+    }
     const result = (await this.request('turn/start', {
       threadId,
       cwd: this.options.workspaceRoot,
@@ -250,9 +259,7 @@ export class CodexRuntime extends EventEmitter {
       ...(input.model ? { model: input.model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
       ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
-      ...(memoryContext
-        ? { additionalContext: { 'stem-memory-notes': { value: memoryContext, kind: 'application' } } }
-        : {})
+      ...(Object.keys(additionalContext).length > 0 ? { additionalContext } : {})
     })) as { turn?: { id?: string } };
 
     return { threadId, turnId: result?.turn?.id };

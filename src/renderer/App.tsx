@@ -33,6 +33,10 @@ export default function App() {
   const [serviceTier, setServiceTier] = useState<string | null>(
     () => localStorage.getItem('stem.serviceTier')
   );
+  // Output format for the AI's reply — 'mdx' (rich components, default) or 'md' (plain Markdown).
+  const [format, setFormat] = useState<'md' | 'mdx'>(
+    () => (localStorage.getItem('stem.format') === 'md' ? 'md' : 'mdx')
+  );
   const selectedModel = models.find((m) => m.id === modelId) ?? null;
 
   const [bridgeError, setBridgeError] = useState<string | null>(null);
@@ -88,6 +92,9 @@ export default function App() {
     if (serviceTier) localStorage.setItem('stem.serviceTier', serviceTier);
     else localStorage.removeItem('stem.serviceTier');
   }, [serviceTier]);
+  useEffect(() => {
+    localStorage.setItem('stem.format', format);
+  }, [format]);
 
   // Switching models: clamp effort to what the new model supports, and drop a
   // Fast selection when the new model has no priority (Fast) tier.
@@ -160,7 +167,8 @@ export default function App() {
           threadId: activeThreadId ?? undefined,
           model: modelId ?? undefined,
           effort: effort ?? undefined,
-          serviceTier
+          serviceTier,
+          format
         });
         if (result.handled) {
           if (result.assistantMessage) {
@@ -188,7 +196,7 @@ export default function App() {
         ]);
       }
     },
-    [activeThreadId, refreshChats, modelId, effort, serviceTier]
+    [activeThreadId, refreshChats, modelId, effort, serviceTier, format]
   );
 
   const onInterrupt = useCallback(async () => {
@@ -323,8 +331,10 @@ export default function App() {
           model={selectedModel}
           effort={effort}
           serviceTier={serviceTier}
+          format={format}
           onChangeEffort={setEffort}
           onChangeSpeed={setServiceTier}
+          onChangeFormat={setFormat}
         />
       </main>
       {showInspector && (

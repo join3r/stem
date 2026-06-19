@@ -21,8 +21,10 @@ interface ChatViewProps {
   model: ModelSummary | null;
   effort: string | null;
   serviceTier: string | null;
+  format: 'md' | 'mdx';
   onChangeEffort: (effort: string) => void;
   onChangeSpeed: (serviceTier: string | null) => void;
+  onChangeFormat: (format: 'md' | 'mdx') => void;
 }
 
 const EFFORT_LABELS: Record<string, string> = {
@@ -41,8 +43,10 @@ export function ChatView({
   model,
   effort,
   serviceTier,
+  format,
   onChangeEffort,
-  onChangeSpeed
+  onChangeSpeed,
+  onChangeFormat
 }: ChatViewProps) {
   const [draft, setDraft] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
@@ -88,12 +92,19 @@ export function ChatView({
         )}
         {messages.map((m) => {
           const a = AVATAR[m.role];
+          // Render finalized assistant replies via the MDX renderer. Plain Markdown
+          // (.md) is safe to render live while streaming — it has no JSX to break
+          // mid-tag — so we render it progressively too (once there's content to show).
+          // MDX stays plain-text until complete to avoid flickering half-written tags.
+          const isStreaming = m.id === streamingId;
+          const renderRich =
+            m.role === 'assistant' && (!isStreaming || (format === 'md' && !!m.content));
           return (
             <div key={m.id} className={`message message-${m.role}`}>
               <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
               <div className="message-body">
                 <div className="message-who">{a.label}</div>
-                {m.role === 'assistant' && m.id !== streamingId ? (
+                {renderRich ? (
                   <MdxView text={m.content} />
                 ) : (
                   <div className="message-plain">{m.content || (running ? '…' : '')}</div>
@@ -106,46 +117,64 @@ export function ChatView({
       </div>
 
       <div className="composer">
-        {model && (model.supportedEfforts.length > 0 || hasFast) && (
-          <div className="composer-controls">
-            {model.supportedEfforts.length > 0 && (
-              <div className="seg-ctl compact" role="group" aria-label="Reasoning effort">
-                {model.supportedEfforts.map((e) => (
-                  <button
-                    key={e}
-                    type="button"
-                    className={effort === e ? 'active' : ''}
-                    onClick={() => onChangeEffort(e)}
-                    disabled={running}
-                  >
-                    {EFFORT_LABELS[e] ?? e}
-                  </button>
-                ))}
-              </div>
-            )}
-            {hasFast && (
-              <div className="seg-ctl compact" role="group" aria-label="Speed">
+        <div className="composer-controls">
+          {model && model.supportedEfforts.length > 0 && (
+            <div className="seg-ctl compact" role="group" aria-label="Reasoning effort">
+              {model.supportedEfforts.map((e) => (
                 <button
+                  key={e}
                   type="button"
-                  className={serviceTier === 'priority' ? '' : 'active'}
-                  onClick={() => onChangeSpeed(null)}
+                  className={effort === e ? 'active' : ''}
+                  onClick={() => onChangeEffort(e)}
                   disabled={running}
                 >
-                  Standard
+                  {EFFORT_LABELS[e] ?? e}
                 </button>
-                <button
-                  type="button"
-                  className={serviceTier === 'priority' ? 'active' : ''}
-                  onClick={() => onChangeSpeed('priority')}
-                  disabled={running}
-                  title="1.5× speed, increased usage"
-                >
-                  Fast
-                </button>
-              </div>
-            )}
+              ))}
+            </div>
+          )}
+          {hasFast && (
+            <div className="seg-ctl compact" role="group" aria-label="Speed">
+              <button
+                type="button"
+                className={serviceTier === 'priority' ? '' : 'active'}
+                onClick={() => onChangeSpeed(null)}
+                disabled={running}
+              >
+                Standard
+              </button>
+              <button
+                type="button"
+                className={serviceTier === 'priority' ? 'active' : ''}
+                onClick={() => onChangeSpeed('priority')}
+                disabled={running}
+                title="1.5× speed, increased usage"
+              >
+                Fast
+              </button>
+            </div>
+          )}
+          <div className="seg-ctl compact" role="group" aria-label="Output format">
+            <button
+              type="button"
+              className={format === 'mdx' ? 'active' : ''}
+              onClick={() => onChangeFormat('mdx')}
+              disabled={running}
+              title="Rich components (callouts, steps, collapsibles)"
+            >
+              MDX
+            </button>
+            <button
+              type="button"
+              className={format === 'md' ? 'active' : ''}
+              onClick={() => onChangeFormat('md')}
+              disabled={running}
+              title="Plain Markdown only"
+            >
+              MD
+            </button>
           </div>
-        )}
+        </div>
         <div className="composer-field">
           <button type="button" className="composer-attach" title="Attach" tabIndex={-1}>
             <Paperclip size={17} />

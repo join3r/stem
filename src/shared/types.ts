@@ -31,6 +31,8 @@ export interface StartTurnInput {
   effort?: string;
   /** Service tier override: 'priority' = Fast; null = Standard. */
   serviceTier?: string | null;
+  /** Output format for this turn: 'mdx' = rich components (default); 'md' = plain Markdown. */
+  format?: 'md' | 'mdx';
 }
 
 // ---- Models (codex catalog) ----
