@@ -5,6 +5,7 @@
   "main": "dist/main/index.js",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/brand-electron-dev.mjs",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "preview": "electron-vite preview",
