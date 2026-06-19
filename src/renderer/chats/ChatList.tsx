@@ -1,12 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ChevronRight,
   Folder as FolderIcon,
   FolderOpen,
   FolderPlus,
-  MessageSquare,
-  Minus,
-  Plus
+  MessageSquare
 } from 'lucide-react';
 import type { ChatListResult, ChatSummary, Folder } from '../../shared/types';
 
@@ -41,9 +39,25 @@ export function ChatList(props: ChatListProps) {
   const [editing, setEditing] = useState<Editing | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [dropTarget, setDropTarget] = useState<string | 'root' | null>(null);
 
   const closeMenu = useCallback(() => setMenu(null), []);
+
+  // Keep the context menu inside the window — without this it can open past the
+  // bottom/right edge (e.g. right-clicking a chat low in the list) and clip.
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) {
+      setMenuPos(null);
+      return;
+    }
+    const rect = menuRef.current.getBoundingClientRect();
+    const pad = 8;
+    const x = Math.max(pad, Math.min(menu.x, window.innerWidth - rect.width - pad));
+    const y = Math.max(pad, Math.min(menu.y, window.innerHeight - rect.height - pad));
+    setMenuPos({ x, y });
+  }, [menu]);
   useEffect(() => {
     if (!menu) return;
     const close = () => closeMenu();
@@ -220,7 +234,16 @@ export function ChatList(props: ChatListProps) {
 
   return (
     <div className="chats-panel">
-      <div className="grp-head">Chats</div>
+      <div className="grp-head chats-head">
+        <span>Chats</span>
+        <button
+          className="grp-head-add"
+          title="New folder"
+          onClick={() => setCreating({ parentId: null, value: '' })}
+        >
+          <FolderPlus size={14} />
+        </button>
+      </div>
       <div
         className={`group chats-group${dropTarget === 'root' ? ' drop-target' : ''}`}
         onDragOver={allowDrop('root')}
@@ -238,21 +261,13 @@ export function ChatList(props: ChatListProps) {
         {folderChats(null).map((c) => renderChat(c, 0))}
         {creating && creating.parentId === null && renderCreateRow(0)}
       </div>
-      <div className="gutter">
-        <button title="New folder" onClick={() => setCreating({ parentId: null, value: '' })}>
-          <Plus size={15} />
-        </button>
-        <button
-          title="Delete selected folder"
-          onClick={() => selectedFolder && (props.onDeleteFolder(selectedFolder), setSelectedFolder(null))}
-          disabled={!selectedFolder}
-        >
-          <Minus size={15} />
-        </button>
-      </div>
-
       {menu && (
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+        <div
+          ref={menuRef}
+          className="ctx-menu"
+          style={{ left: menuPos?.x ?? menu.x, top: menuPos?.y ?? menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
           {menu.kind === 'folder' && (
             <button
               onClick={() => {

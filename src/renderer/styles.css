@@ -382,6 +382,9 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .gutter button + button { border-left: 0.5px solid var(--line); }
 
 /* ---- chat list (inspector tab) ---- */
+.chats-panel .grp-head { display: flex; align-items: center; justify-content: space-between; }
+.grp-head-add { border: none; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; display: inline-flex; align-items: center; }
+.grp-head-add:hover { color: var(--ink); }
 .chats-panel .group-row { cursor: pointer; user-select: none; }
 .chats-panel .row-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chats-panel .row-icon { width: 22px; height: 22px; box-shadow: none; }
