@@ -7,7 +7,8 @@ import type {
   CodexEventEnvelope,
   ItemEventParams,
   ModelSummary,
-  RuntimeStatus
+  RuntimeStatus,
+  TurnAttachment
 } from '../shared/types';
 import { agentMessageText } from '../shared/types';
 import { ChatView } from './chat/ChatView';
@@ -158,8 +159,11 @@ export default function App() {
   }, []);
 
   const onSend = useCallback(
-    async (text: string) => {
-      setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', content: text }]);
+    async (text: string, attachments: TurnAttachment[] = []) => {
+      const bubble = attachments.length
+        ? `${text}${text ? '\n\n' : ''}📎 ${attachments.map((a) => a.name).join(', ')}`
+        : text;
+      setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', content: bubble }]);
       setRunning(true);
       try {
         const result = await window.stem.startTurn({
@@ -168,7 +172,8 @@ export default function App() {
           model: modelId ?? undefined,
           effort: effort ?? undefined,
           serviceTier,
-          format
+          format,
+          attachments: attachments.length ? attachments : undefined
         });
         if (result.handled) {
           if (result.assistantMessage) {

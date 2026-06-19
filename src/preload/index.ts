@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   CodexEventEnvelope,
   McpServerInput,
@@ -12,6 +12,8 @@ const api: StemApi = {
   startTurn: (input: StartTurnInput) => ipcRenderer.invoke('codex:startTurn', input),
   interruptTurn: (turnId: string) => ipcRenderer.invoke('codex:interruptTurn', turnId),
   newConversation: () => ipcRenderer.invoke('codex:newConversation'),
+  openFiles: () => ipcRenderer.invoke('dialog:openFiles'),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   listModels: () => ipcRenderer.invoke('codex:listModels'),
   onCodexEvent: (listener: (event: CodexEventEnvelope) => void) => {
     const handler = (_e: unknown, event: CodexEventEnvelope) => listener(event);

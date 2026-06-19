@@ -186,8 +186,8 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 }
 .composer-field {
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   background: var(--field);
   border: 1px solid var(--line);
   border-radius: 11px;
@@ -195,6 +195,29 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 .composer-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--sel); }
+.composer-field.drag-over { border-color: var(--accent); box-shadow: 0 0 0 3px var(--sel); }
+.composer-row { display: flex; align-items: flex-end; gap: 8px; }
+
+/* attachment chips strip above the input row */
+.composer-attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 2px 0; }
+.attachment-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  max-width: 220px;
+  padding: 3px 4px 3px 7px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px; color: var(--ink);
+}
+.attachment-chip > svg { flex: none; color: var(--muted); }
+.attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-remove {
+  flex: none; border: none; background: none; cursor: pointer;
+  color: var(--muted); border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 2px;
+}
+.attachment-remove:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink); }
 .composer-field textarea {
   flex: 1;
   resize: none;

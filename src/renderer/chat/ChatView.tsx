@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Square, ArrowUp, Paperclip, User, Sparkles, AlertTriangle } from 'lucide-react';
-import type { ChatMessage, ModelSummary } from '../../shared/types';
+import { Square, ArrowUp, Paperclip, User, Sparkles, AlertTriangle, File, X } from 'lucide-react';
+import type { ChatMessage, ModelSummary, TurnAttachment } from '../../shared/types';
 import { MdxView } from './MdxView';
 import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
 
@@ -16,7 +16,7 @@ interface ChatViewProps {
   messages: ChatMessage[];
   running: boolean;
   streamingId: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments: TurnAttachment[]) => void;
   onInterrupt: () => void;
   model: ModelSummary | null;
   effort: string | null;
@@ -49,6 +49,8 @@ export function ChatView({
   onChangeFormat
 }: ChatViewProps) {
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState<TurnAttachment[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesRef = useAutoHideScroll<HTMLDivElement>();
@@ -74,9 +76,61 @@ export function ChatView({
 
   function submit() {
     const text = draft.trim();
-    if (!text || running) return;
-    onSend(text);
+    if ((!text && attachments.length === 0) || running) return;
+    onSend(text, attachments);
     setDraft('');
+    setAttachments([]);
+  }
+
+  const removeAttachment = useCallback((idx: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
+  // Pick files via the native dialog (paperclip button).
+  const pickFiles = useCallback(async () => {
+    const paths = await window.stem.openFiles();
+    if (!paths.length) return;
+    setAttachments((prev) => [
+      ...prev,
+      ...paths.map((p) => ({ name: p.split('/').pop() || p, path: p }))
+    ]);
+  }, []);
+
+  // Read a File's bytes into a base64 TurnAttachment (for clipboard/dropped data
+  // with no on-disk path).
+  function fileToAttachment(file: File): Promise<TurnAttachment> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error);
+      reader.onload = () => {
+        const result = reader.result as string; // data:<mime>;base64,<data>
+        resolve({ name: file.name, dataBase64: result.split(',')[1] ?? '', mime: file.type });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData.files);
+    const images = files.filter((f) => f.type.startsWith('image/'));
+    if (!images.length) return; // let plain-text paste through untouched
+    e.preventDefault();
+    const next = await Promise.all(images.map(fileToAttachment));
+    setAttachments((prev) => [...prev, ...next]);
+  }
+
+  async function onDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (!files.length) return;
+    const next = await Promise.all(
+      files.map(async (f) => {
+        const path = window.stem.getPathForFile(f);
+        return path ? { name: f.name, path } : await fileToAttachment(f);
+      })
+    );
+    setAttachments((prev) => [...prev, ...next]);
   }
 
   const hasFast = !!model?.serviceTiers.some((t) => t.id === 'priority');
@@ -175,32 +229,67 @@ export function ChatView({
             </button>
           </div>
         </div>
-        <div className="composer-field">
-          <button type="button" className="composer-attach" title="Attach" tabIndex={-1}>
-            <Paperclip size={17} />
-          </button>
-          <textarea
-            ref={textareaRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-            placeholder="Ask Stem…"
-            rows={1}
-          />
-          {running ? (
-            <button type="button" className="icon-btn stop" onClick={onInterrupt} title="Stop">
-              <Square size={16} />
-            </button>
-          ) : (
-            <button type="button" className="icon-btn send" onClick={submit} disabled={!draft.trim()} title="Send">
-              <ArrowUp size={16} />
-            </button>
+        <div
+          className={`composer-field${dragOver ? ' drag-over' : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+        >
+          {attachments.length > 0 && (
+            <div className="composer-attachments">
+              {attachments.map((att, i) => (
+                <span className="attachment-chip" key={`${att.name}-${i}`}>
+                  <File size={13} />
+                  <span className="attachment-name">{att.name}</span>
+                  <button
+                    type="button"
+                    className="attachment-remove"
+                    title="Remove"
+                    onClick={() => removeAttachment(i)}
+                  >
+                    <X size={13} />
+                  </button>
+                </span>
+              ))}
+            </div>
           )}
+          <div className="composer-row">
+            <button type="button" className="composer-attach" title="Attach" onClick={pickFiles}>
+              <Paperclip size={17} />
+            </button>
+            <textarea
+              ref={textareaRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onPaste={onPaste}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+              placeholder="Ask Stem…"
+              rows={1}
+            />
+            {running ? (
+              <button type="button" className="icon-btn stop" onClick={onInterrupt} title="Stop">
+                <Square size={16} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="icon-btn send"
+                onClick={submit}
+                disabled={!draft.trim() && attachments.length === 0}
+                title="Send"
+              >
+                <ArrowUp size={16} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

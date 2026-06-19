@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, session } from 'electron';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CodexRuntime } from './codex/runtime';
@@ -74,6 +74,11 @@ function registerIpc(): void {
   ipcMain.handle('codex:startTurn', (_e, input: StartTurnInput) => runtime!.startTurn(input));
   ipcMain.handle('codex:interruptTurn', (_e, turnId: string) => runtime!.interruptTurn(turnId));
   ipcMain.handle('codex:newConversation', () => runtime!.newConversation());
+  ipcMain.handle('dialog:openFiles', () =>
+    dialog
+      .showOpenDialog(mainWindow!, { properties: ['openFile', 'multiSelections'] })
+      .then((r) => (r.canceled ? [] : r.filePaths))
+  );
   ipcMain.handle('codex:listModels', () => runtime!.listModels());
 
   ipcMain.handle('skills:list', () => listSkills());

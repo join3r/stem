@@ -23,6 +23,22 @@ export interface RuntimeStatus {
 
 // ---- Turn lifecycle ----
 
+/**
+ * A file/image the user attached to a turn. Carries either an on-disk `path`
+ * (native dialog pick or dropped file) or raw `dataBase64` bytes (clipboard
+ * paste, which has no path). The main process ingests these at send time.
+ */
+export interface TurnAttachment {
+  /** Basename — used for display and as the on-disk filename when staging. */
+  name: string;
+  /** Source path when the file already exists on disk. */
+  path?: string;
+  /** Base64-encoded bytes for pasted data with no path. */
+  dataBase64?: string;
+  /** MIME type when known (esp. for pasted images). */
+  mime?: string;
+}
+
 export interface StartTurnInput {
   input: string;
   threadId?: string;
@@ -33,6 +49,8 @@ export interface StartTurnInput {
   serviceTier?: string | null;
   /** Output format for this turn: 'mdx' = rich components (default); 'md' = plain Markdown. */
   format?: 'md' | 'mdx';
+  /** Files/images attached to this turn. */
+  attachments?: TurnAttachment[];
 }
 
 // ---- Models (codex catalog) ----
@@ -262,6 +280,11 @@ export interface StemApi {
   interruptTurn(turnId: string): Promise<void>;
   newConversation(): Promise<void>;
   onCodexEvent(listener: (event: CodexEventEnvelope) => void): () => void;
+
+  /** Open a native file picker; returns chosen absolute paths ([] if canceled). */
+  openFiles(): Promise<string[]>;
+  /** Resolve the on-disk path of a dropped File (empty string if unavailable). */
+  getPathForFile(file: File): string;
 
   listModels(): Promise<ModelSummary[]>;
 

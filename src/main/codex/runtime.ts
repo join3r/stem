@@ -15,6 +15,7 @@ import type {
 import { agentMessageText } from '../../shared/types';
 import { PLAIN_MD_DIRECTIVE, STEM_ASSISTANT_INSTRUCTIONS } from '../workspace/bootstrap';
 import { buildMemoryContext, captureMemoryFromUserInput } from '../workspace/memory';
+import { ingestAttachments } from '../workspace/attachments';
 import { findCodexPath } from './locate';
 
 const RPC_TIMEOUT_MS = 60_000;
@@ -250,10 +251,15 @@ export class CodexRuntime extends EventEmitter {
     if (input.format === 'md') {
       additionalContext['stem-format'] = { value: PLAIN_MD_DIRECTIVE, kind: 'application' };
     }
+    // Attached images become localImage items the model sees directly; non-image
+    // files are copied into the workspace and noted in the text for the agent.
+    const { imageItems, textNote } = input.attachments?.length
+      ? await ingestAttachments(input.attachments, this.options.workspaceRoot)
+      : { imageItems: [], textNote: '' };
     const result = (await this.request('turn/start', {
       threadId,
       cwd: this.options.workspaceRoot,
-      input: [{ type: 'text', text: input.input }],
+      input: [{ type: 'text', text: input.input + textNote }, ...imageItems],
       // Per-turn overrides ("for this turn and subsequent turns"). Only send keys
       // the UI actually set so unspecified values keep codex's defaults.
       ...(input.model ? { model: input.model } : {}),
