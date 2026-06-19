@@ -187,6 +187,45 @@ export interface MemoryContents {
   isEmpty: boolean;
 }
 
+// ---- Chats (codex-backed) + Folders (Stem-owned organization) ----
+//
+// A "chat" is a codex thread (codex persists threads on disk under CODEX_HOME).
+// Folders are a pure-organization layer Stem owns: codex has no folder concept,
+// so the folder tree and the chat->folder assignment live in a Stem JSON store.
+
+/** A user-managed folder. `parentId: null` = top level; nesting via `parentId`. */
+export interface Folder {
+  id: string;
+  name: string;
+  parentId: string | null;
+  /** Sort order among siblings. */
+  order: number;
+}
+
+/** A chat row in the sidebar — a codex thread merged with its folder assignment. */
+export interface ChatSummary {
+  threadId: string;
+  /** Computed main-side as `name ?? preview ?? 'New chat'`. */
+  title: string;
+  folderId: string | null;
+  /** Unix seconds. */
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Full chat contents for replay when a chat is opened. */
+export interface ChatHistory {
+  threadId: string;
+  title: string;
+  messages: ChatMessage[];
+}
+
+/** The complete sidebar payload: chats + the folder tree, fetched together. */
+export interface ChatListResult {
+  chats: ChatSummary[];
+  folders: Folder[];
+}
+
 // ---- Preload API surface exposed on window.stem ----
 
 export interface StemApi {
@@ -209,4 +248,16 @@ export interface StemApi {
   getMemorySettings(): Promise<MemorySettings>;
   setMemoryEnabled(enabled: boolean): Promise<MemorySettings>;
   readMemory(): Promise<MemoryContents>;
+
+  // Chats + folders. Folder mutations return the fresh list (like addMcpServer);
+  // chat rename/delete return void and the renderer re-fetches.
+  listChats(): Promise<ChatListResult>;
+  openChat(threadId: string): Promise<ChatHistory>;
+  renameChat(threadId: string, name: string): Promise<void>;
+  deleteChat(threadId: string): Promise<void>;
+  createFolder(name: string, parentId: string | null): Promise<ChatListResult>;
+  renameFolder(folderId: string, name: string): Promise<ChatListResult>;
+  deleteFolder(folderId: string): Promise<ChatListResult>;
+  moveFolder(folderId: string, parentId: string | null): Promise<ChatListResult>;
+  setChatFolder(threadId: string, folderId: string | null): Promise<ChatListResult>;
 }

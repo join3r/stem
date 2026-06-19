@@ -29,7 +29,18 @@ const api: StemApi = {
 
   getMemorySettings: () => ipcRenderer.invoke('memory:get'),
   setMemoryEnabled: (enabled: boolean) => ipcRenderer.invoke('memory:setEnabled', enabled),
-  readMemory: () => ipcRenderer.invoke('memory:read')
+  readMemory: () => ipcRenderer.invoke('memory:read'),
+
+  listChats: () => ipcRenderer.invoke('chats:list'),
+  openChat: (threadId: string) => ipcRenderer.invoke('chats:open', threadId),
+  renameChat: (threadId: string, name: string) => ipcRenderer.invoke('chats:rename', threadId, name),
+  deleteChat: (threadId: string) => ipcRenderer.invoke('chats:delete', threadId),
+  createFolder: (name: string, parentId: string | null) => ipcRenderer.invoke('folders:create', name, parentId),
+  renameFolder: (folderId: string, name: string) => ipcRenderer.invoke('folders:rename', folderId, name),
+  deleteFolder: (folderId: string) => ipcRenderer.invoke('folders:delete', folderId),
+  moveFolder: (folderId: string, parentId: string | null) => ipcRenderer.invoke('folders:move', folderId, parentId),
+  setChatFolder: (threadId: string, folderId: string | null) =>
+    ipcRenderer.invoke('chats:setFolder', threadId, folderId)
 };
 
 contextBridge.exposeInMainWorld('stem', api);

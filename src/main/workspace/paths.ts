@@ -35,3 +35,12 @@ export function workspaceRoot(): string {
 export function agentsMdPath(): string {
   return join(workspaceRoot(), 'AGENTS.md');
 }
+
+/**
+ * Stem-owned chat-organization store: the user's folder tree and the
+ * chat->folder assignments. Chats themselves are codex threads on disk; this
+ * file only holds the organization layer codex has no concept of.
+ */
+export function chatStorePath(): string {
+  return join(userDataRoot(), 'folders.json');
+}

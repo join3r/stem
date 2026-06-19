@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { SquarePen, PanelRight } from 'lucide-react';
+import { SquarePen, PanelRight, PanelLeft } from 'lucide-react';
 import type {
   AgentMessageDeltaParams,
+  ChatListResult,
   ChatMessage,
   CodexEventEnvelope,
   ItemEventParams,
@@ -9,6 +10,7 @@ import type {
 } from '../shared/types';
 import { agentMessageText } from '../shared/types';
 import { ChatView } from './chat/ChatView';
+import { ChatList } from './chats/ChatList';
 import { ManagePanel } from './manage/ManagePanel';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
 
@@ -20,6 +22,9 @@ export default function App() {
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const [showInspector, setShowInspector] = useState(true);
+  const [showChats, setShowChats] = useState(true);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [chatList, setChatList] = useState<ChatListResult>({ chats: [], folders: [] });
   const inspectorRef = useAutoHideScroll<HTMLElement>();
 
   const [bridgeError, setBridgeError] = useState<string | null>(null);
@@ -32,9 +37,19 @@ export default function App() {
     setStatus(await window.stem.runtimeStatus());
   }, []);
 
+  const refreshChats = useCallback(async () => {
+    if (!window.stem) return;
+    setChatList(await window.stem.listChats());
+  }, []);
+
   useEffect(() => {
     refreshStatus();
   }, [refreshStatus]);
+
+  // Load the chat list once the runtime is ready (thread/list needs the server up).
+  useEffect(() => {
+    if (status?.ok) refreshChats();
+  }, [status?.ok, refreshChats]);
 
   useEffect(() => {
     return window.stem.onCodexEvent((event: CodexEventEnvelope) => {
@@ -83,31 +98,40 @@ export default function App() {
     });
   }, []);
 
-  const onSend = useCallback(async (text: string) => {
-    setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', content: text }]);
-    setRunning(true);
-    try {
-      const result = await window.stem.startTurn({ input: text });
-      if (result.handled) {
-        if (result.assistantMessage) {
-          setMessages((prev) => [
-            ...prev,
-            { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }
-          ]);
+  const onSend = useCallback(
+    async (text: string) => {
+      setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', content: text }]);
+      setRunning(true);
+      try {
+        const result = await window.stem.startTurn({ input: text, threadId: activeThreadId ?? undefined });
+        if (result.handled) {
+          if (result.assistantMessage) {
+            setMessages((prev) => [
+              ...prev,
+              { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }
+            ]);
+          }
+          setRunning(false);
+          setActiveTurnId(null);
+          return;
         }
+        setActiveTurnId(result.turnId ?? null);
+        // First turn of a new chat creates the codex thread — adopt its id and
+        // surface the freshly-created chat (with its preview title) in the list.
+        if (result.threadId && result.threadId !== activeThreadId) {
+          setActiveThreadId(result.threadId);
+          refreshChats();
+        }
+      } catch (e) {
         setRunning(false);
-        setActiveTurnId(null);
-        return;
+        setMessages((prev) => [
+          ...prev,
+          { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
+        ]);
       }
-      setActiveTurnId(result.turnId ?? null);
-    } catch (e) {
-      setRunning(false);
-      setMessages((prev) => [
-        ...prev,
-        { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
-      ]);
-    }
-  }, []);
+    },
+    [activeThreadId, refreshChats]
+  );
 
   const onInterrupt = useCallback(async () => {
     if (activeTurnId) await window.stem.interruptTurn(activeTurnId);
@@ -129,7 +153,52 @@ export default function App() {
     setMessages([]);
     setStreamingId(null);
     setActiveTurnId(null);
+    setActiveThreadId(null);
   }, []);
+
+  const openChat = useCallback(async (threadId: string) => {
+    const history = await window.stem.openChat(threadId);
+    setMessages(history.messages);
+    setActiveThreadId(history.threadId);
+    setStreamingId(null);
+    setActiveTurnId(null);
+    setRunning(false);
+  }, []);
+
+  // Folder mutations return the fresh list; apply it directly.
+  const onCreateFolder = useCallback((name: string, parentId: string | null) => {
+    window.stem.createFolder(name, parentId).then(setChatList);
+  }, []);
+  const onRenameFolder = useCallback((folderId: string, name: string) => {
+    window.stem.renameFolder(folderId, name).then(setChatList);
+  }, []);
+  const onDeleteFolder = useCallback((folderId: string) => {
+    window.stem.deleteFolder(folderId).then(setChatList);
+  }, []);
+  const onMoveFolder = useCallback((folderId: string, parentId: string | null) => {
+    window.stem.moveFolder(folderId, parentId).then(setChatList);
+  }, []);
+  const onMoveChat = useCallback((threadId: string, folderId: string | null) => {
+    window.stem.setChatFolder(threadId, folderId).then(setChatList);
+  }, []);
+  const onRenameChat = useCallback(
+    async (threadId: string, name: string) => {
+      await window.stem.renameChat(threadId, name);
+      refreshChats();
+    },
+    [refreshChats]
+  );
+  const onDeleteChat = useCallback(
+    async (threadId: string) => {
+      await window.stem.deleteChat(threadId);
+      if (threadId === activeThreadId) {
+        setActiveThreadId(null);
+        setMessages([]);
+      }
+      refreshChats();
+    },
+    [activeThreadId, refreshChats]
+  );
 
   // Unified draggable toolbar wraps every view (window has no native title bar).
   // `toolbar` lets each view supply its own controls; gate/loading show just the title.
@@ -185,7 +254,23 @@ export default function App() {
   }
 
   return shell(
-    <div className={`app${showInspector ? '' : ' no-inspector'}`}>
+    <div className={`app${showChats ? '' : ' no-chats'}${showInspector ? '' : ' no-inspector'}`}>
+      {showChats && (
+        <aside className="chat-sidebar">
+          <ChatList
+            data={chatList}
+            activeThreadId={activeThreadId}
+            onOpen={openChat}
+            onCreateFolder={onCreateFolder}
+            onRenameFolder={onRenameFolder}
+            onDeleteFolder={onDeleteFolder}
+            onMoveFolder={onMoveFolder}
+            onRenameChat={onRenameChat}
+            onDeleteChat={onDeleteChat}
+            onMoveChat={onMoveChat}
+          />
+        </aside>
+      )}
       <main className="conversation">
         <ChatView
           messages={messages}
@@ -202,6 +287,13 @@ export default function App() {
       )}
     </div>,
     <>
+      <button
+        className={`tbtn${showChats ? ' active' : ''}`}
+        title="Toggle chats"
+        onClick={() => setShowChats((v) => !v)}
+      >
+        <PanelLeft size={17} />
+      </button>
       <button
         className="tbtn"
         title="New conversation"

@@ -2,12 +2,16 @@ import { EventEmitter } from 'node:events';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type {
+  ChatMessage,
+  ChatSummary,
   CodexEventEnvelope,
+  CodexItem,
   McpLoginResult,
   RuntimeStatus,
   StartTurnInput,
   StartTurnResult
 } from '../../shared/types';
+import { agentMessageText } from '../../shared/types';
 import { STEM_ASSISTANT_INSTRUCTIONS } from '../workspace/bootstrap';
 import { buildMemoryContext, captureMemoryFromUserInput } from '../workspace/memory';
 import { findCodexPath } from './locate';
@@ -24,6 +28,16 @@ interface PendingRequest {
 interface RuntimeOptions {
   codexHome: string;
   workspaceRoot: string;
+}
+
+/** A codex thread as returned by `thread/list` / `thread/read` (subset we use). */
+interface RawThread {
+  id: string;
+  name?: string | null;
+  preview?: string | null;
+  createdAt?: number;
+  updatedAt?: number;
+  turns?: { items?: CodexItem[] }[];
 }
 
 /**
@@ -229,6 +243,91 @@ export class CodexRuntime extends EventEmitter {
   async interruptTurn(turnId: string): Promise<void> {
     if (!this.proc) return;
     await this.request('turn/interrupt', { turnId });
+  }
+
+  // ---- chats (codex thread store) ----
+  //
+  // Codex persists every thread on disk under CODEX_HOME, so these survive app
+  // restarts. We scope to Stem's chats by the app-owned workspace cwd (the
+  // `source` field reports 'vscode' for app-server threads, so filtering by
+  // sourceKinds would wrongly exclude them — cwd is the reliable filter).
+
+  /** List Stem's chats, newest-updated first. Folder assignment is merged in by the caller. */
+  async listThreads(): Promise<ChatSummary[]> {
+    await this.ensureStarted();
+    const result = (await this.request('thread/list', {
+      cwd: this.options.workspaceRoot,
+      sortKey: 'updated_at',
+      sortDirection: 'desc',
+      limit: 200
+    })) as { data?: RawThread[]; threads?: RawThread[] };
+    const threads = result?.data ?? result?.threads ?? [];
+    return threads.map((t) => ({
+      threadId: t.id,
+      title: (t.name || t.preview || 'New chat').trim() || 'New chat',
+      folderId: null,
+      createdAt: t.createdAt ?? 0,
+      updatedAt: t.updatedAt ?? t.createdAt ?? 0
+    }));
+  }
+
+  /** Read a chat's full history and flatten it into renderer messages. */
+  async readThread(threadId: string): Promise<{ title: string; messages: ChatMessage[] }> {
+    await this.ensureStarted();
+    const result = (await this.request('thread/read', { threadId, includeTurns: true })) as {
+      thread?: RawThread;
+    };
+    const thread = result?.thread;
+    const title = (thread?.name || thread?.preview || 'New chat').trim() || 'New chat';
+    return { title, messages: this.threadToMessages(thread) };
+  }
+
+  /** Resume a saved thread so the next turn continues it with full context. */
+  async resumeThread(threadId: string): Promise<void> {
+    await this.ensureStarted();
+    await this.request('thread/resume', {
+      threadId,
+      cwd: this.options.workspaceRoot,
+      baseInstructions: STEM_ASSISTANT_INSTRUCTIONS
+    });
+    this.activeThreadId = threadId;
+  }
+
+  async renameThread(threadId: string, name: string): Promise<void> {
+    await this.ensureStarted();
+    await this.request('thread/name/set', { threadId, name });
+  }
+
+  async deleteThread(threadId: string): Promise<void> {
+    await this.ensureStarted();
+    await this.request('thread/delete', { threadId });
+    if (this.activeThreadId === threadId) this.activeThreadId = null;
+  }
+
+  getActiveThreadId(): string | null {
+    return this.activeThreadId;
+  }
+
+  /** Flatten codex turns/items into the renderer's flat user/assistant message list. */
+  private threadToMessages(thread: RawThread | undefined): ChatMessage[] {
+    const messages: ChatMessage[] = [];
+    for (const turn of thread?.turns ?? []) {
+      for (const item of turn.items ?? []) {
+        if (item.type === 'userMessage') {
+          const text = (item.content ?? [])
+            .filter((p) => typeof p.text === 'string')
+            .map((p) => p.text as string)
+            .join('');
+          if (text.trim()) messages.push({ id: `user-${item.id}`, role: 'user', content: text });
+        } else if (item.type === 'agentMessage') {
+          const text = agentMessageText(item);
+          if (text.trim()) messages.push({ id: `assistant-${item.id}`, role: 'assistant', content: text });
+        }
+        // Other item types (reasoning, webSearch, commandExecution, mcpToolCall…)
+        // aren't rendered in the conversation and are intentionally skipped.
+      }
+    }
+    return messages;
   }
 
   // ---- internals ----

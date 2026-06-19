@@ -7,7 +7,17 @@ import { codexHome, workspaceRoot } from './workspace/paths';
 import { listSkills, setSkillEnabled } from './workspace/skills';
 import { addMcpServer, listMcpServers, removeMcpServer } from './workspace/mcp';
 import { getMemorySettings, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
-import type { McpServerInput, StartTurnInput } from '../shared/types';
+import {
+  createFolder,
+  deleteFolder,
+  getAssignments,
+  listFolders,
+  moveFolder,
+  removeChat,
+  renameFolder,
+  setChatFolder
+} from './workspace/chats';
+import type { ChatListResult, McpServerInput, StartTurnInput } from '../shared/types';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -75,6 +85,57 @@ function registerIpc(): void {
     return settings;
   });
   ipcMain.handle('memory:read', () => readMemoryFiles());
+
+  // ---- chats + folders ----
+  // Chats come from codex's thread store; folders/assignments from the Stem
+  // store. We merge them here so the runtime stays codex-only and the store
+  // stays codex-unaware.
+  const chatList = async (): Promise<ChatListResult> => {
+    const [chats, folders, assignments] = await Promise.all([
+      runtime!.listThreads(),
+      listFolders(),
+      getAssignments()
+    ]);
+    const valid = new Set(folders.map((f) => f.id));
+    for (const chat of chats) {
+      const folderId = assignments[chat.threadId];
+      chat.folderId = folderId && valid.has(folderId) ? folderId : null;
+    }
+    return { chats, folders };
+  };
+
+  ipcMain.handle('chats:list', () => chatList());
+  ipcMain.handle('chats:open', async (_e, threadId: string) => {
+    await runtime!.resumeThread(threadId);
+    const { title, messages } = await runtime!.readThread(threadId);
+    return { threadId, title, messages };
+  });
+  ipcMain.handle('chats:rename', (_e, threadId: string, name: string) => runtime!.renameThread(threadId, name));
+  ipcMain.handle('chats:delete', async (_e, threadId: string) => {
+    await runtime!.deleteThread(threadId);
+    await removeChat(threadId);
+  });
+  ipcMain.handle('chats:setFolder', async (_e, threadId: string, folderId: string | null) => {
+    await setChatFolder(threadId, folderId);
+    return chatList();
+  });
+
+  ipcMain.handle('folders:create', async (_e, name: string, parentId: string | null) => {
+    await createFolder(name, parentId);
+    return chatList();
+  });
+  ipcMain.handle('folders:rename', async (_e, folderId: string, name: string) => {
+    await renameFolder(folderId, name);
+    return chatList();
+  });
+  ipcMain.handle('folders:delete', async (_e, folderId: string) => {
+    await deleteFolder(folderId);
+    return chatList();
+  });
+  ipcMain.handle('folders:move', async (_e, folderId: string, parentId: string | null) => {
+    await moveFolder(folderId, parentId);
+    return chatList();
+  });
 }
 
 app.whenReady().then(async () => {
