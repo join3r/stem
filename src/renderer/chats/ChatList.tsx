@@ -4,7 +4,8 @@ import {
   Folder as FolderIcon,
   FolderOpen,
   FolderPlus,
-  MessageSquare
+  MessageSquare,
+  SquarePen
 } from 'lucide-react';
 import type { ChatListResult, ChatSummary, Folder, ThreadStatus } from '../../shared/types';
 
@@ -14,6 +15,8 @@ export interface ChatListProps {
   /** Per-thread run state → drives the status dot on each row. */
   statuses: Record<string, ThreadStatus>;
   onOpen: (threadId: string) => void;
+  /** Open a fresh draft targeted at this folder (null = root). */
+  onNewChat: (folderId: string | null) => void;
   onCreateFolder: (name: string, parentId: string | null) => void;
   onRenameFolder: (folderId: string, name: string) => void;
   onDeleteFolder: (folderId: string) => void;
@@ -44,7 +47,6 @@ type Menu =
 export function ChatList(props: ChatListProps) {
   const { data, activeThreadId, onOpen } = props;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -151,9 +153,7 @@ export function ChatList(props: ChatListProps) {
     return (
       <div key={folder.id}>
         <div
-          className={`group-row folder-row${selectedFolder === folder.id ? ' selected' : ''}${
-            dropTarget === folder.id ? ' drop-target' : ''
-          }`}
+          className={`group-row folder-row${dropTarget === folder.id ? ' drop-target' : ''}`}
           style={{ paddingLeft: 12 + depth * 14 }}
           draggable={!isEditing}
           onDragStart={(e) => {
@@ -163,10 +163,7 @@ export function ChatList(props: ChatListProps) {
           onDragOver={allowDrop(folder.id)}
           onDragLeave={() => setDropTarget((t) => (t === folder.id ? null : t))}
           onDrop={onDrop(folder.id)}
-          onClick={() => {
-            setSelectedFolder(folder.id);
-            toggle(folder.id);
-          }}
+          onClick={() => toggle(folder.id)}
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -182,6 +179,17 @@ export function ChatList(props: ChatListProps) {
               <strong>{folder.name}</strong>
             )}
           </span>
+          <button
+            className="row-action"
+            title="New chat in folder"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded((prev) => new Set(prev).add(folder.id));
+              props.onNewChat(folder.id);
+            }}
+          >
+            <SquarePen size={13} />
+          </button>
         </div>
         {open && (
           <>

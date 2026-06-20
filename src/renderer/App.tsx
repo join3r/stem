@@ -4,6 +4,7 @@ import type {
   AgentMessageDeltaParams,
   ChatListResult,
   ChatMessage,
+  ChatSummary,
   CodexEventEnvelope,
   ItemEventParams,
   MessageMeta,
@@ -90,6 +91,10 @@ export default function App() {
   const [showInspector, setShowInspector] = useState(true);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [chatList, setChatList] = useState<ChatListResult>({ chats: [], folders: [] });
+  // Optimistic rows for chats created this session that codex's thread/list hasn't
+  // returned yet (a brand-new thread isn't listed until its first turn persists).
+  // Keyed by threadId; dropped once the real list includes them.
+  const [pendingChats, setPendingChats] = useState<Record<string, ChatSummary>>({});
   const inspectorRef = useAutoHideScroll<HTMLElement>();
   // turnId -> which model/effort/speed produced that turn's reply (for the
   // avatar tooltip). Populated at send time; read when the message is built.
@@ -102,6 +107,14 @@ export default function App() {
   threadStatesRef.current = threadStates;
   const activeThreadIdRef = useRef(activeThreadId);
   activeThreadIdRef.current = activeThreadId;
+  // Bumped every time the DRAFT slice is reset (New chat / Quick Chat). Captured
+  // at send time so a turn that resolves late only adopts its real thread id when
+  // the draft it was sent for is still the current one — otherwise the user has
+  // moved on to a fresh draft and we must not steal focus into the old thread.
+  const draftSeqRef = useRef(0);
+  // Folder a pending new draft should land in once its real thread is created
+  // (set by the per-folder New-chat button; null for a root-level new chat).
+  const pendingDraftFolderRef = useRef<string | null>(null);
   // Threads deleted this session — late codex events for them are ignored so a
   // dying turn can't resurrect a removed chat's slice.
   const deletedThreadsRef = useRef(new Set<string>());
@@ -130,6 +143,29 @@ export default function App() {
     }
     return out;
   }, [threadStates]);
+
+  // Once codex's list includes an optimistic chat, drop our stand-in for it so the
+  // authoritative title/folder takes over (and we don't render a duplicate).
+  useEffect(() => {
+    setPendingChats((prev) => {
+      const known = new Set(chatList.chats.map((c) => c.threadId));
+      let changed = false;
+      const next: Record<string, ChatSummary> = {};
+      for (const [id, summary] of Object.entries(prev)) {
+        if (known.has(id)) changed = true;
+        else next[id] = summary;
+      }
+      return changed ? next : prev;
+    });
+  }, [chatList]);
+
+  // Sidebar data: codex's chats plus any session-created chats it hasn't listed yet,
+  // so a brand-new chat has a row (and stays selectable) the moment it's created.
+  const displayList = useMemo<ChatListResult>(() => {
+    const known = new Set(chatList.chats.map((c) => c.threadId));
+    const extras = Object.values(pendingChats).filter((c) => !known.has(c.threadId));
+    return extras.length ? { chats: [...extras, ...chatList.chats], folders: chatList.folders } : chatList;
+  }, [chatList, pendingChats]);
 
   // Model / effort / speed — per-turn overrides, remembered across launches.
   const [models, setModels] = useState<ModelSummary[]>([]);
@@ -307,6 +343,10 @@ export default function App() {
         : text;
       // Where this turn's state lives: the open thread, or DRAFT for a new chat.
       const sendKey = activeThreadId ?? DRAFT;
+      // Snapshot the draft identity + folder target so a late resolution can tell
+      // whether this draft is still the one the user is looking at.
+      const sendSeq = draftSeqRef.current;
+      const sendFolder = pendingDraftFolderRef.current;
       setThread(sendKey, (s) => ({
         messages: [...s.messages, { id: `user-${Date.now()}`, role: 'user', content: bubble }],
         running: true,
@@ -338,20 +378,52 @@ export default function App() {
           turnMetaRef.current.set(result.turnId, { model: modelId ?? undefined, effort: effort ?? undefined, serviceTier });
         }
         if (sendKey === DRAFT && result.threadId) {
-          // First turn of a new chat: migrate the DRAFT slice onto the real id,
-          // merging any deltas that already arrived under it, then adopt the id.
+          // First turn of a new chat. Adopt the real id only if this draft is
+          // still the current one — i.e. the user hasn't opened another chat and
+          // hasn't pressed New chat again since we sent.
           const realId = result.threadId;
+          const stillMine = draftSeqRef.current === sendSeq && activeThreadIdRef.current === null;
           setThreadStates((prev) => {
-            const draft = prev[DRAFT] ?? EMPTY_STATE;
-            const merged = mergeDraftIntoReal(draft, prev[realId]);
             const next = { ...prev };
-            delete next[DRAFT];
-            next[realId] = { ...merged, running: true, activeTurnId: result.turnId ?? null, status: 'running' };
+            if (stillMine) {
+              // Migrate the DRAFT slice onto the real id, merging any deltas that
+              // already arrived under it, then adopt the id below.
+              const merged = mergeDraftIntoReal(prev[DRAFT] ?? EMPTY_STATE, prev[realId]);
+              delete next[DRAFT];
+              next[realId] = { ...merged, running: true, activeTurnId: result.turnId ?? null, status: 'running' };
+            } else {
+              // The draft was replaced; keep this turn streaming under its real id
+              // in the background without disturbing the user's current draft.
+              next[realId] = {
+                ...(prev[realId] ?? EMPTY_STATE),
+                running: true,
+                activeTurnId: result.turnId ?? null,
+                status: 'running'
+              };
+            }
             return next;
           });
-          // Don't steal focus if the user already switched to another chat.
-          if (activeThreadIdRef.current === null) setActiveThreadId(realId);
-          refreshChats();
+          if (stillMine) {
+            setActiveThreadId(realId);
+            pendingDraftFolderRef.current = null;
+          }
+          // Show a sidebar row immediately — codex won't list this thread until its
+          // first turn persists, so without this the chat (and its highlight) is
+          // invisible mid-turn and the user can't switch back to it.
+          setPendingChats((p) => ({
+            ...p,
+            [realId]: {
+              threadId: realId,
+              title: text.trim() || 'New chat',
+              folderId: sendFolder ?? null,
+              createdAt: Date.now(),
+              updatedAt: Date.now()
+            }
+          }));
+          // Persist the folder assignment (if any) so it survives once codex lists
+          // the thread; otherwise just refresh the list.
+          if (sendFolder) window.stem.setChatFolder(realId, sendFolder).then(setChatList);
+          else refreshChats();
         } else {
           setThread(sendKey, () => ({ activeTurnId: result.turnId ?? null }));
         }
@@ -377,6 +449,9 @@ export default function App() {
     return window.stem.onQuickChatPrompt(async ({ input, model: qModel, effort: qEffort, serviceTier: qTier }) => {
       // Quick Chat always starts a fresh conversation. If a chat is already
       // running it keeps going in the background; this new draft becomes active.
+      draftSeqRef.current += 1;
+      pendingDraftFolderRef.current = null;
+      const sendSeq = draftSeqRef.current;
       setThreadStates((prev) => ({
         ...prev,
         [DRAFT]: { ...EMPTY_STATE, messages: [{ id: `user-${Date.now()}`, role: 'user', content: input }], running: true, status: 'running' }
@@ -420,15 +495,30 @@ export default function App() {
         }
         if (result.threadId) {
           const realId = result.threadId;
+          const stillMine = draftSeqRef.current === sendSeq && activeThreadIdRef.current === null;
           setThreadStates((prev) => {
-            const draft = prev[DRAFT] ?? EMPTY_STATE;
-            const merged = mergeDraftIntoReal(draft, prev[realId]);
             const next = { ...prev };
-            delete next[DRAFT];
-            next[realId] = { ...merged, running: true, activeTurnId: result.turnId ?? null, status: 'running' };
+            if (stillMine) {
+              const merged = mergeDraftIntoReal(prev[DRAFT] ?? EMPTY_STATE, prev[realId]);
+              delete next[DRAFT];
+              next[realId] = { ...merged, running: true, activeTurnId: result.turnId ?? null, status: 'running' };
+            } else {
+              next[realId] = {
+                ...(prev[realId] ?? EMPTY_STATE),
+                running: true,
+                activeTurnId: result.turnId ?? null,
+                status: 'running'
+              };
+            }
             return next;
           });
-          if (activeThreadIdRef.current === null) setActiveThreadId(realId);
+          if (stillMine) setActiveThreadId(realId);
+          // Optimistic sidebar row so the chat is visible/selectable before codex
+          // lists it (Quick Chat always starts a root-level chat).
+          setPendingChats((p) => ({
+            ...p,
+            [realId]: { threadId: realId, title: input.trim() || 'New chat', folderId: null, createdAt: Date.now(), updatedAt: Date.now() }
+          }));
           refreshChats();
         }
       } catch (e) {
@@ -462,9 +552,12 @@ export default function App() {
     }
   }
 
-  const newConversation = useCallback(async () => {
+  const newConversation = useCallback(async (folderId: string | null = null) => {
     // Reset only the draft slice and switch to it — any chats running in the
-    // background are left untouched and keep streaming.
+    // background are left untouched and keep streaming. Bumping the draft seq
+    // marks any in-flight draft turn as no-longer-current so it can't steal focus.
+    draftSeqRef.current += 1;
+    pendingDraftFolderRef.current = folderId;
     setThreadStates((prev) => ({ ...prev, [DRAFT]: EMPTY_STATE }));
     setActiveThreadId(null);
   }, []);
@@ -519,6 +612,12 @@ export default function App() {
       deletedThreadsRef.current.add(threadId);
       await window.stem.deleteChat(threadId);
       setThreadStates((prev) => {
+        const next = { ...prev };
+        delete next[threadId];
+        return next;
+      });
+      setPendingChats((prev) => {
+        if (!prev[threadId]) return prev;
         const next = { ...prev };
         delete next[threadId];
         return next;
@@ -606,13 +705,14 @@ export default function App() {
       {showInspector && (
         <aside className="inspector" ref={inspectorRef}>
           <ManagePanel
-            data={chatList}
+            data={displayList}
             activeThreadId={activeThreadId}
             statuses={threadStatuses}
             models={models}
             modelId={modelId}
             onSelectModel={onSelectModel}
             onOpen={openChat}
+            onNewChat={(folderId) => newConversation(folderId)}
             onCreateFolder={onCreateFolder}
             onRenameFolder={onRenameFolder}
             onDeleteFolder={onDeleteFolder}
@@ -628,7 +728,7 @@ export default function App() {
       <button
         className="tbtn"
         title="New conversation"
-        onClick={newConversation}
+        onClick={() => newConversation()}
         // Allow a new chat even while another runs in the background. Only block
         // when the visible chat is empty, or its first turn hasn't yet produced a
         // thread id (DRAFT still running) — switching away would orphan it.
