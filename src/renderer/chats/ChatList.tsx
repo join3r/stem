@@ -6,11 +6,13 @@ import {
   FolderPlus,
   MessageSquare
 } from 'lucide-react';
-import type { ChatListResult, ChatSummary, Folder } from '../../shared/types';
+import type { ChatListResult, ChatSummary, Folder, ThreadStatus } from '../../shared/types';
 
 export interface ChatListProps {
   data: ChatListResult;
   activeThreadId: string | null;
+  /** Per-thread run state → drives the status dot on each row. */
+  statuses: Record<string, ThreadStatus>;
   onOpen: (threadId: string) => void;
   onCreateFolder: (name: string, parentId: string | null) => void;
   onRenameFolder: (folderId: string, name: string) => void;
@@ -25,6 +27,13 @@ export interface ChatListProps {
 // chat (→ assign folder) or another folder (→ reparent, cycle-guarded main-side).
 const CHAT_MIME = 'application/x-stem-chat';
 const FOLDER_MIME = 'application/x-stem-folder';
+
+const STATUS_LABEL: Record<ThreadStatus, string> = {
+  idle: '',
+  running: 'Generating…',
+  done: 'New reply',
+  error: 'Failed'
+};
 
 type Editing = { kind: 'chat' | 'folder'; id: string; value: string };
 type Creating = { parentId: string | null; value: string };
@@ -187,6 +196,7 @@ export function ChatList(props: ChatListProps) {
 
   const renderChat = (chat: ChatSummary, depth: number) => {
     const isEditing = editing?.kind === 'chat' && editing.id === chat.threadId;
+    const status = props.statuses[chat.threadId] ?? 'idle';
     return (
       <div
         key={chat.threadId}
@@ -205,7 +215,11 @@ export function ChatList(props: ChatListProps) {
         }}
       >
         <span className="row-icon chat">
-          <MessageSquare size={13} />
+          {status === 'idle' ? (
+            <MessageSquare size={13} />
+          ) : (
+            <span className={`chat-status ${status}`} title={STATUS_LABEL[status]} aria-label={STATUS_LABEL[status]} />
+          )}
         </span>
         <span className="row-main">
           {isEditing ? (

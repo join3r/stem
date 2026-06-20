@@ -259,6 +259,15 @@ export interface Folder {
   order: number;
 }
 
+/**
+ * Per-thread run state shown as a status dot on each chat row.
+ * - `idle`    nothing in flight (no dot)
+ * - `running` a turn is generating (pulsing dot)
+ * - `done`    finished while you were viewing another chat — unread (solid dot, cleared on open)
+ * - `error`   the last turn failed (red dot)
+ */
+export type ThreadStatus = 'idle' | 'running' | 'done' | 'error';
+
 /** A chat row in the sidebar — a codex thread merged with its folder assignment. */
 export interface ChatSummary {
   threadId: string;

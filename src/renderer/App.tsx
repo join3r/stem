@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { SquarePen, PanelRight } from 'lucide-react';
 import type {
   AgentMessageDeltaParams,
@@ -9,7 +9,9 @@ import type {
   MessageMeta,
   ModelSummary,
   RuntimeStatus,
-  TurnAttachment
+  ThreadStatus,
+  TurnAttachment,
+  TurnCompletedParams
 } from '../shared/types';
 import { agentMessageText } from '../shared/types';
 import { ChatView } from './chat/ChatView';
@@ -41,15 +43,49 @@ function activityLabel(type: string): string {
   }
 }
 
+// Sentinel key for a brand-new chat that has no codex thread id yet. Its slice is
+// migrated to the real thread id once the first turn returns one.
+const DRAFT = '__draft__';
+
+// Everything about one chat's in-flight/visible state. Stored per thread id (plus
+// the DRAFT slice) so multiple chats can run and stream at the same time.
+interface ThreadState {
+  messages: ChatMessage[];
+  running: boolean;
+  streamingId: string | null;
+  /** Label of the in-flight activity (tool/reasoning); null once text streams. */
+  activity: string | null;
+  activeTurnId: string | null;
+  /** Drives the status dot on the chat row. */
+  status: ThreadStatus;
+}
+
+const EMPTY_STATE: ThreadState = {
+  messages: [],
+  running: false,
+  streamingId: null,
+  activity: null,
+  activeTurnId: null,
+  status: 'idle'
+};
+
+// Merge a DRAFT slice into the (possibly already-created) real-thread slice when a
+// new chat's first turn returns its id. The draft holds the user bubble; the live
+// slice may already hold assistant deltas that arrived before startTurn resolved.
+// Keep the user bubble first, then any assistant messages not already present.
+function mergeDraftIntoReal(draft: ThreadState, live: ThreadState | undefined): ThreadState {
+  if (!live) return draft;
+  const ids = new Set(draft.messages.map((m) => m.id));
+  const extra = live.messages.filter((m) => !ids.has(m.id));
+  return { ...live, messages: [...draft.messages, ...extra] };
+}
+
 export default function App() {
   const [status, setStatus] = useState<RuntimeStatus | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [running, setRunning] = useState(false);
-  const [streamingId, setStreamingId] = useState<string | null>(null);
-  // Label of the in-flight activity (tool call / reasoning) shown by the working
-  // indicator. Null when nothing is running or once answer text starts streaming.
-  const [activity, setActivity] = useState<string | null>(null);
-  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
+  // Per-thread run/conversation state, keyed by thread id (or DRAFT for a new,
+  // uncreated chat). This is what lets several chats run concurrently — each has
+  // its own messages/running/streaming slice that events route into by threadId.
+  const [threadStates, setThreadStates] = useState<Record<string, ThreadState>>({});
   const [signingIn, setSigningIn] = useState(false);
   const [showInspector, setShowInspector] = useState(true);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -57,7 +93,43 @@ export default function App() {
   const inspectorRef = useAutoHideScroll<HTMLElement>();
   // turnId -> which model/effort/speed produced that turn's reply (for the
   // avatar tooltip). Populated at send time; read when the message is built.
+  // Global on purpose: turn ids are unique across threads.
   const turnMetaRef = useRef(new Map<string, MessageMeta>());
+
+  // Ref mirrors so async callbacks (startTurn resolution, openChat, events) read
+  // the latest values without being re-created on every state change.
+  const threadStatesRef = useRef(threadStates);
+  threadStatesRef.current = threadStates;
+  const activeThreadIdRef = useRef(activeThreadId);
+  activeThreadIdRef.current = activeThreadId;
+  // Threads deleted this session — late codex events for them are ignored so a
+  // dying turn can't resurrect a removed chat's slice.
+  const deletedThreadsRef = useRef(new Set<string>());
+
+  // The currently visible slice. DRAFT when no real thread is open yet.
+  const activeKey = activeThreadId ?? DRAFT;
+  const cur = threadStates[activeKey] ?? EMPTY_STATE;
+
+  // Patch one thread's slice (functional, so concurrent updates never clobber).
+  const setThread = useCallback(
+    (key: string, patch: (s: ThreadState) => Partial<ThreadState>) => {
+      setThreadStates((prev) => {
+        const base = prev[key] ?? EMPTY_STATE;
+        return { ...prev, [key]: { ...base, ...patch(base) } };
+      });
+    },
+    []
+  );
+
+  // Status-dot map for the chat rows, derived from the per-thread slices.
+  const threadStatuses = useMemo(() => {
+    const out: Record<string, ThreadStatus> = {};
+    for (const [tid, s] of Object.entries(threadStates)) {
+      if (tid === DRAFT) continue;
+      out[tid] = s.status;
+    }
+    return out;
+  }, [threadStates]);
 
   // Model / effort / speed — per-turn overrides, remembered across launches.
   const [models, setModels] = useState<ModelSummary[]>([]);
@@ -144,20 +216,25 @@ export default function App() {
   );
 
   useEffect(() => {
+    // Apply a slice update for one thread, lazily creating its entry. Late events
+    // for a deleted thread are dropped so they can't resurrect it.
+    const applyTo = (threadId: string | undefined, fn: (s: ThreadState) => ThreadState) => {
+      if (!threadId || deletedThreadsRef.current.has(threadId)) return;
+      setThreadStates((prev) => ({ ...prev, [threadId]: fn(prev[threadId] ?? EMPTY_STATE) }));
+    };
     return window.stem.onCodexEvent((event: CodexEventEnvelope) => {
       switch (event.method) {
         case 'item/agentMessage/delta': {
           const p = event.params as AgentMessageDeltaParams;
           const id = `assistant-${p.turnId}`;
-          setStreamingId(id);
-          setActivity(null);
-          setMessages((prev) => {
-            const idx = prev.findIndex((m) => m.id === id);
+          applyTo(p.threadId, (s) => {
+            const idx = s.messages.findIndex((m) => m.id === id);
             const meta = turnMetaRef.current.get(p.turnId);
-            if (idx === -1) return [...prev, { id, role: 'assistant', content: p.delta, meta }];
-            const next = [...prev];
-            next[idx] = { ...next[idx], content: next[idx].content + p.delta };
-            return next;
+            const messages =
+              idx === -1
+                ? [...s.messages, { id, role: 'assistant', content: p.delta, meta } as ChatMessage]
+                : s.messages.map((m, i) => (i === idx ? { ...m, content: m.content + p.delta } : m));
+            return { ...s, messages, running: true, streamingId: id, activity: null, status: 'running' };
           });
           break;
         }
@@ -166,7 +243,7 @@ export default function App() {
           const type = p.item?.type;
           // A non-message item (reasoning, web search, command, MCP tool…) is
           // running. Surface it as the activity label until text starts streaming.
-          if (type && type !== 'agentMessage') setActivity(activityLabel(type));
+          if (type && type !== 'agentMessage') applyTo(p.threadId, (s) => ({ ...s, activity: activityLabel(type) }));
           break;
         }
         case 'item/completed': {
@@ -174,27 +251,47 @@ export default function App() {
           if (p.item?.type !== 'agentMessage') break;
           const id = `assistant-${p.turnId}`;
           const text = agentMessageText(p.item);
-          const meta = turnMetaRef.current.get(p.turnId);
-          setMessages((prev) => {
-            const idx = prev.findIndex((m) => m.id === id);
-            if (idx === -1) return [...prev, { id, role: 'assistant', content: text, meta }];
-            const next = [...prev];
-            // Prefer authoritative text; keep streamed deltas if it's empty.
-            next[idx] = { ...next[idx], content: text || next[idx].content, meta: next[idx].meta ?? meta };
-            return next;
+          applyTo(p.threadId, (s) => {
+            const meta = turnMetaRef.current.get(p.turnId);
+            const idx = s.messages.findIndex((m) => m.id === id);
+            const messages =
+              idx === -1
+                ? [...s.messages, { id, role: 'assistant', content: text, meta } as ChatMessage]
+                // Prefer authoritative text; keep streamed deltas if it's empty.
+                : s.messages.map((m, i) => (i === idx ? { ...m, content: text || m.content, meta: m.meta ?? meta } : m));
+            return { ...s, messages, streamingId: null };
           });
-          setStreamingId(null);
           break;
         }
-        case 'turn/completed':
-          setRunning(false);
-          setStreamingId(null);
-          setActivity(null);
+        case 'turn/completed': {
+          const p = event.params as TurnCompletedParams;
+          applyTo(p.threadId, (s) => ({
+            ...s,
+            running: false,
+            streamingId: null,
+            activity: null,
+            activeTurnId: null,
+            // Mark unread (a solid dot) if it finished while another chat was open.
+            status: p.threadId === activeThreadIdRef.current ? 'idle' : 'done'
+          }));
           break;
+        }
         case 'process/exit':
-          setRunning(false);
-          setStreamingId(null);
-          setActivity(null);
+          // No threadId — the server died, so clear every thread's run state.
+          setThreadStates((prev) => {
+            const next: Record<string, ThreadState> = {};
+            for (const [tid, s] of Object.entries(prev)) {
+              next[tid] = {
+                ...s,
+                running: false,
+                streamingId: null,
+                activity: null,
+                activeTurnId: null,
+                status: s.status === 'running' ? 'idle' : s.status
+              };
+            }
+            return next;
+          });
           break;
         default:
           // Unknown / unhandled events are ignored on purpose.
@@ -208,9 +305,14 @@ export default function App() {
       const bubble = attachments.length
         ? `${text}${text ? '\n\n' : ''}📎 ${attachments.map((a) => a.name).join(', ')}`
         : text;
-      setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', content: bubble }]);
-      setRunning(true);
-      setActivity(null);
+      // Where this turn's state lives: the open thread, or DRAFT for a new chat.
+      const sendKey = activeThreadId ?? DRAFT;
+      setThread(sendKey, (s) => ({
+        messages: [...s.messages, { id: `user-${Date.now()}`, role: 'user', content: bubble }],
+        running: true,
+        activity: null,
+        status: 'running'
+      }));
       try {
         const result = await window.stem.startTurn({
           input: text,
@@ -222,35 +324,50 @@ export default function App() {
           attachments: attachments.length ? attachments : undefined
         });
         if (result.handled) {
-          if (result.assistantMessage) {
-            setMessages((prev) => [
-              ...prev,
-              { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }
-            ]);
-          }
-          setRunning(false);
-          setActiveTurnId(null);
+          setThread(sendKey, (s) => ({
+            messages: result.assistantMessage
+              ? [...s.messages, { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }]
+              : s.messages,
+            running: false,
+            activeTurnId: null,
+            status: 'idle'
+          }));
           return;
         }
-        setActiveTurnId(result.turnId ?? null);
         if (result.turnId) {
           turnMetaRef.current.set(result.turnId, { model: modelId ?? undefined, effort: effort ?? undefined, serviceTier });
         }
-        // First turn of a new chat creates the codex thread — adopt its id and
-        // surface the freshly-created chat (with its preview title) in the list.
-        if (result.threadId && result.threadId !== activeThreadId) {
-          setActiveThreadId(result.threadId);
+        if (sendKey === DRAFT && result.threadId) {
+          // First turn of a new chat: migrate the DRAFT slice onto the real id,
+          // merging any deltas that already arrived under it, then adopt the id.
+          const realId = result.threadId;
+          setThreadStates((prev) => {
+            const draft = prev[DRAFT] ?? EMPTY_STATE;
+            const merged = mergeDraftIntoReal(draft, prev[realId]);
+            const next = { ...prev };
+            delete next[DRAFT];
+            next[realId] = { ...merged, running: true, activeTurnId: result.turnId ?? null, status: 'running' };
+            return next;
+          });
+          // Don't steal focus if the user already switched to another chat.
+          if (activeThreadIdRef.current === null) setActiveThreadId(realId);
           refreshChats();
+        } else {
+          setThread(sendKey, () => ({ activeTurnId: result.turnId ?? null }));
         }
       } catch (e) {
-        setRunning(false);
-        setMessages((prev) => [
-          ...prev,
-          { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
-        ]);
+        setThread(sendKey, (s) => ({
+          messages: [
+            ...s.messages,
+            { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
+          ],
+          running: false,
+          activeTurnId: null,
+          status: 'error'
+        }));
       }
     },
-    [activeThreadId, refreshChats, modelId, effort, serviceTier, format]
+    [activeThreadId, refreshChats, modelId, effort, serviceTier, format, setThread]
   );
 
   // Quick Chat overlay → main window: run the relayed prompt as a fresh
@@ -258,9 +375,13 @@ export default function App() {
   // current model). Mirrors onSend's streaming/threading flow.
   useEffect(() => {
     return window.stem.onQuickChatPrompt(async ({ input, model: qModel, effort: qEffort, serviceTier: qTier }) => {
-      await window.stem.newConversation();
+      // Quick Chat always starts a fresh conversation. If a chat is already
+      // running it keeps going in the background; this new draft becomes active.
+      setThreadStates((prev) => ({
+        ...prev,
+        [DRAFT]: { ...EMPTY_STATE, messages: [{ id: `user-${Date.now()}`, role: 'user', content: input }], running: true, status: 'running' }
+      }));
       setActiveThreadId(null);
-      setActiveTurnId(null);
 
       // Adopt the overlay's model/effort/speed for THIS turn only, clamped to
       // what the model supports. We deliberately do NOT call setModelId/setEffort/
@@ -275,9 +396,6 @@ export default function App() {
         if (!useModel.serviceTiers.some((t) => t.id === 'priority')) useTier = null;
       }
 
-      setMessages([{ id: `user-${Date.now()}`, role: 'user', content: input }]);
-      setRunning(true);
-      setActivity(null);
       try {
         const result = await window.stem.startTurn({
           input,
@@ -287,39 +405,53 @@ export default function App() {
           format
         });
         if (result.handled) {
-          if (result.assistantMessage) {
-            setMessages((prev) => [
-              ...prev,
-              { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }
-            ]);
-          }
-          setRunning(false);
+          setThread(DRAFT, (s) => ({
+            messages: result.assistantMessage
+              ? [...s.messages, { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }]
+              : s.messages,
+            running: false,
+            activeTurnId: null,
+            status: 'idle'
+          }));
           return;
         }
-        setActiveTurnId(result.turnId ?? null);
         if (result.turnId) {
           turnMetaRef.current.set(result.turnId, { model: useModelId ?? undefined, effort: useEffort, serviceTier: useTier });
         }
         if (result.threadId) {
-          setActiveThreadId(result.threadId);
+          const realId = result.threadId;
+          setThreadStates((prev) => {
+            const draft = prev[DRAFT] ?? EMPTY_STATE;
+            const merged = mergeDraftIntoReal(draft, prev[realId]);
+            const next = { ...prev };
+            delete next[DRAFT];
+            next[realId] = { ...merged, running: true, activeTurnId: result.turnId ?? null, status: 'running' };
+            return next;
+          });
+          if (activeThreadIdRef.current === null) setActiveThreadId(realId);
           refreshChats();
         }
       } catch (e) {
-        setRunning(false);
-        setMessages((prev) => [
-          ...prev,
-          { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
-        ]);
+        setThread(DRAFT, (s) => ({
+          messages: [
+            ...s.messages,
+            { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
+          ],
+          running: false,
+          activeTurnId: null,
+          status: 'error'
+        }));
       }
     });
-  }, [models, selectedModel, modelId, effort, format, refreshChats]);
+  }, [models, selectedModel, modelId, effort, format, refreshChats, setThread]);
 
   const onInterrupt = useCallback(async () => {
-    if (activeTurnId) await window.stem.interruptTurn(activeTurnId);
-    setRunning(false);
-    setStreamingId(null);
-    setActivity(null);
-  }, [activeTurnId]);
+    // Stops only the chat you're viewing; background chats keep running.
+    const key = activeThreadIdRef.current ?? DRAFT;
+    const turnId = threadStatesRef.current[key]?.activeTurnId;
+    if (turnId) await window.stem.interruptTurn(turnId);
+    setThread(key, () => ({ running: false, streamingId: null, activity: null, activeTurnId: null, status: 'idle' }));
+  }, [setThread]);
 
   async function signIn() {
     setSigningIn(true);
@@ -331,21 +463,32 @@ export default function App() {
   }
 
   const newConversation = useCallback(async () => {
-    await window.stem.newConversation();
-    setMessages([]);
-    setStreamingId(null);
-    setActiveTurnId(null);
+    // Reset only the draft slice and switch to it — any chats running in the
+    // background are left untouched and keep streaming.
+    setThreadStates((prev) => ({ ...prev, [DRAFT]: EMPTY_STATE }));
     setActiveThreadId(null);
   }, []);
 
-  const openChat = useCallback(async (threadId: string) => {
-    const history = await window.stem.openChat(threadId);
-    setMessages(history.messages);
-    setActiveThreadId(history.threadId);
-    setStreamingId(null);
-    setActiveTurnId(null);
-    setRunning(false);
-  }, []);
+  const openChat = useCallback(
+    async (threadId: string) => {
+      const existing = threadStatesRef.current[threadId];
+      // If we already hold a live or hydrated slice (e.g. a chat that ran in the
+      // background), just switch to it — reloading from disk would clobber the
+      // in-flight stream. Opening clears the unread (done) dot.
+      if (existing && (existing.running || existing.messages.length > 0)) {
+        setActiveThreadId(threadId);
+        setThread(threadId, (s) => ({ status: s.status === 'done' ? 'idle' : s.status }));
+        return;
+      }
+      const history = await window.stem.openChat(threadId);
+      setThreadStates((prev) => ({
+        ...prev,
+        [history.threadId]: { ...EMPTY_STATE, messages: history.messages }
+      }));
+      setActiveThreadId(history.threadId);
+    },
+    [setThread]
+  );
 
   // Folder mutations return the fresh list; apply it directly.
   const onCreateFolder = useCallback((name: string, parentId: string | null) => {
@@ -372,14 +515,18 @@ export default function App() {
   );
   const onDeleteChat = useCallback(
     async (threadId: string) => {
+      // Guard against late events from this thread's in-flight turn resurrecting it.
+      deletedThreadsRef.current.add(threadId);
       await window.stem.deleteChat(threadId);
-      if (threadId === activeThreadId) {
-        setActiveThreadId(null);
-        setMessages([]);
-      }
+      setThreadStates((prev) => {
+        const next = { ...prev };
+        delete next[threadId];
+        return next;
+      });
+      if (threadId === activeThreadIdRef.current) setActiveThreadId(null);
       refreshChats();
     },
-    [activeThreadId, refreshChats]
+    [refreshChats]
   );
 
   // Unified draggable toolbar wraps every view (window has no native title bar).
@@ -439,10 +586,11 @@ export default function App() {
     <div className={`app${showInspector ? '' : ' no-inspector'}`}>
       <main className="conversation">
         <ChatView
-          messages={messages}
-          running={running}
-          streamingId={streamingId}
-          activity={activity}
+          key={activeKey}
+          messages={cur.messages}
+          running={cur.running}
+          streamingId={cur.streamingId}
+          activity={cur.activity}
           onSend={onSend}
           onInterrupt={onInterrupt}
           models={models}
@@ -460,6 +608,7 @@ export default function App() {
           <ManagePanel
             data={chatList}
             activeThreadId={activeThreadId}
+            statuses={threadStatuses}
             models={models}
             modelId={modelId}
             onSelectModel={onSelectModel}
@@ -480,7 +629,10 @@ export default function App() {
         className="tbtn"
         title="New conversation"
         onClick={newConversation}
-        disabled={running || messages.length === 0}
+        // Allow a new chat even while another runs in the background. Only block
+        // when the visible chat is empty, or its first turn hasn't yet produced a
+        // thread id (DRAFT still running) — switching away would orphan it.
+        disabled={cur.messages.length === 0 || (activeThreadId === null && cur.running)}
       >
         <SquarePen size={17} />
       </button>

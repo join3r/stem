@@ -210,6 +210,26 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   .activity-dot { animation: none; opacity: 0.6; }
 }
 
+/* Per-chat status dot on a sidebar row: pulsing while a turn runs, solid when a
+   background chat has an unread reply, red on error. */
+.chat-status {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.chat-status.running { animation: stem-dot-pulse 1.2s ease-in-out infinite; }
+.chat-status.done { background: var(--accent); }
+.chat-status.error { background: var(--danger); }
+@keyframes stem-dot-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-status.running { animation: none; opacity: 0.8; }
+}
+
 /* ---- composer: inset field, single-line auto-grow, controls anchored ---- */
 .composer {
   padding: 12px 24px 18px;

@@ -85,7 +85,11 @@ export class CodexRuntime extends EventEmitter {
   private pending = new Map<number, PendingRequest>();
   private initialized = false;
   private starting: Promise<void> | null = null;
-  private activeThreadId: string | null = null;
+  // Threads with a live codex subscription. Multiple threads can stream turns at
+  // once, so we track them as a set rather than a single "active" id — this is
+  // what makes concurrent runs across chats possible. Cleared/unsubscribed only
+  // on shutdown (for graceful memory-drain) and process exit.
+  private subscribed = new Set<string>();
   private startupError: string | null = null;
 
   constructor(private readonly options: RuntimeOptions) {
@@ -212,13 +216,15 @@ export class CodexRuntime extends EventEmitter {
    */
   async restart(): Promise<void> {
     await this.shutdown();
-    this.activeThreadId = null;
     await this.ensureStarted();
   }
 
+  // A fresh conversation needs no server-side action: the next turn creates its
+  // own thread lazily (startTurn with no threadId). We deliberately do NOT
+  // unsubscribe anything here — doing so would tear down the event stream of any
+  // chat still answering in the background.
   async newConversation(): Promise<void> {
-    await this.unsubscribeActiveThread();
-    this.activeThreadId = null;
+    // no-op
   }
 
   /**
@@ -235,7 +241,7 @@ export class CodexRuntime extends EventEmitter {
   async shutdown(timeoutMs = 12_000): Promise<void> {
     const proc = this.proc;
     if (!proc) return;
-    await this.unsubscribeActiveThread(1500);
+    await this.unsubscribeAll(1500);
     this.initialized = false;
     await new Promise<void>((resolve) => {
       const backstop = setTimeout(() => proc.kill('SIGKILL'), timeoutMs);
@@ -258,8 +264,8 @@ export class CodexRuntime extends EventEmitter {
     }
 
     await this.ensureStarted();
-    const threadId = input.threadId ?? this.activeThreadId ?? (await this.startThread(input.model));
-    this.activeThreadId = threadId;
+    const threadId = input.threadId ?? (await this.startThread(input.model));
+    this.subscribed.add(threadId);
 
     const memoryContext = await buildMemoryContext();
     // Assemble per-turn additional context: memory notes (when present) plus a
@@ -402,7 +408,7 @@ export class CodexRuntime extends EventEmitter {
       cwd: this.options.workspaceRoot,
       baseInstructions: STEM_ASSISTANT_INSTRUCTIONS
     });
-    this.activeThreadId = threadId;
+    this.subscribed.add(threadId);
   }
 
   async renameThread(threadId: string, name: string): Promise<void> {
@@ -413,11 +419,7 @@ export class CodexRuntime extends EventEmitter {
   async deleteThread(threadId: string): Promise<void> {
     await this.ensureStarted();
     await this.request('thread/delete', { threadId });
-    if (this.activeThreadId === threadId) this.activeThreadId = null;
-  }
-
-  getActiveThreadId(): string | null {
-    return this.activeThreadId;
+    this.subscribed.delete(threadId);
   }
 
   /** Flatten codex turns/items into the renderer's flat user/assistant message list. */
@@ -459,13 +461,23 @@ export class CodexRuntime extends EventEmitter {
     return threadId;
   }
 
-  private async unsubscribeActiveThread(timeoutMs = 5000): Promise<void> {
-    const threadId = this.activeThreadId;
-    if (!threadId || !this.proc || !this.initialized) return;
+  /**
+   * Unsubscribe every live thread (used on shutdown/restart). This lets codex
+   * drain its background jobs — crucially the memory consolidation worker —
+   * before we SIGTERM. Raced against a timeout so quit never hangs.
+   */
+  private async unsubscribeAll(timeoutMs = 5000): Promise<void> {
+    const threadIds = [...this.subscribed];
+    this.subscribed.clear();
+    if (!threadIds.length || !this.proc || !this.initialized) return;
 
-    const unsubscribe = this.request('thread/unsubscribe', { threadId }).catch((error) => {
-      this.emitEvent('process/stderr', { text: `thread/unsubscribe failed: ${error.message}` });
-    });
+    const unsubscribe = Promise.all(
+      threadIds.map((threadId) =>
+        this.request('thread/unsubscribe', { threadId }).catch((error) => {
+          this.emitEvent('process/stderr', { text: `thread/unsubscribe failed: ${error.message}` });
+        })
+      )
+    );
 
     await Promise.race([
       unsubscribe,
@@ -505,7 +517,7 @@ export class CodexRuntime extends EventEmitter {
     proc.on('exit', (code, signal) => {
       this.initialized = false;
       this.proc = null;
-      this.activeThreadId = null;
+      this.subscribed.clear();
       this.emitEvent('process/exit', { code, signal });
       this.rejectAll(new Error(`codex app-server exited (code ${code ?? 'null'}, signal ${signal ?? 'null'}).`));
     });
