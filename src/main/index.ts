@@ -16,7 +16,10 @@ import { ensureWorkspace } from './workspace/bootstrap';
 import { codexHome, workspaceRoot } from './workspace/paths';
 import { listSkills, setSkillEnabled } from './workspace/skills';
 import { addMcpServer, listMcpServers, removeMcpServer } from './workspace/mcp';
-import { getMemorySettings, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
+import { getMemorySettings, isRecallEnabled, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
+import { backfillOnce, captureFromEvent } from './recall/capture';
+import { distillNewMessages } from './recall/distill';
+import type { LlmClient } from './recall/llm';
 import { readSettings, updateQuickChat } from './workspace/settings';
 import {
   createFolder,
@@ -350,11 +353,46 @@ app.whenReady().then(async () => {
   await ensureWorkspace();
   runtime = new CodexRuntime({ codexHome: codexHome(), workspaceRoot: workspaceRoot() });
 
+  // Stem Recall: distill durable facts via a hidden codex turn (the swappable
+  // LlmClient seam). Debounced so it runs ~after the user goes idle, and once
+  // after the initial backfill.
+  const recallLlm: LlmClient = { complete: (prompt) => runtime!.complete(prompt) };
+  let distilling = false;
+  let distillTimer: NodeJS.Timeout | null = null;
+  const scheduleDistill = (delayMs = 15_000): void => {
+    if (!isRecallEnabled()) return;
+    if (distillTimer) clearTimeout(distillTimer);
+    distillTimer = setTimeout(async () => {
+      if (distilling) return;
+      distilling = true;
+      try {
+        await distillNewMessages(recallLlm);
+      } catch {
+        // non-fatal
+      } finally {
+        distilling = false;
+      }
+    }, delayMs);
+  };
+
   // Forward codex events to the main window. Registered once (not per-window) so
   // recreating the window can't double-subscribe.
   runtime.on('event', (event) => {
+    const threadId = (event.params as { threadId?: string } | undefined)?.threadId;
+    // Hidden internal threads (distillation) are neither shown nor captured.
+    if (threadId && runtime!.isInternalThread(threadId)) return;
     mainWindow?.webContents.send('codex:event', event);
+    if (isRecallEnabled()) {
+      captureFromEvent(event); // tap assistant replies into Stem Recall
+      if (event.method === 'turn/completed') scheduleDistill();
+    }
   });
+
+  // Seed Stem Recall from existing codex rollouts once, in the background, so
+  // chats from before Recall existed are immediately searchable; then distill.
+  backfillOnce()
+    .catch(() => 0)
+    .then(() => scheduleDistill(20_000));
 
   // Strict CSP for the renderer in production: only self, no remote/inline
   // script. Skipped in dev so the Vite dev server / HMR can run.

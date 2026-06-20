@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type {
   ChatMessage,
@@ -16,7 +17,10 @@ import type {
 } from '../../shared/types';
 import { agentMessageText } from '../../shared/types';
 import { PLAIN_MD_DIRECTIVE, STEM_ASSISTANT_INSTRUCTIONS } from '../workspace/bootstrap';
-import { buildMemoryContext, captureMemoryFromUserInput } from '../workspace/memory';
+import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
+import { buildRecallContext } from '../recall/inject';
+import { captureUserMessage } from '../recall/capture';
+import { RECALL_MCP_NAME } from '../recall/register-mcp';
 import { ingestAttachments } from '../workspace/attachments';
 import { findCodexPath } from './locate';
 
@@ -90,6 +94,10 @@ export class CodexRuntime extends EventEmitter {
   // what makes concurrent runs across chats possible. Cleared/unsubscribed only
   // on shutdown (for graceful memory-drain) and process exit.
   private subscribed = new Set<string>();
+  // Threads Stem creates for its own internal LLM work (Level-1 distillation).
+  // Their events are neither forwarded to the UI nor captured into recall, and
+  // they use a distinct cwd so they never appear in the chat list.
+  private internalThreads = new Set<string>();
   private startupError: string | null = null;
 
   constructor(private readonly options: RuntimeOptions) {
@@ -267,12 +275,13 @@ export class CodexRuntime extends EventEmitter {
     const threadId = input.threadId ?? (await this.startThread(input.model));
     this.subscribed.add(threadId);
 
-    const memoryContext = await buildMemoryContext();
-    // Assemble per-turn additional context: memory notes (when present) plus a
+    const recallEnabled = isRecallEnabled();
+    const recallContext = recallEnabled ? buildRecallContext(input.input, { currentThreadId: threadId }) : null;
+    // Assemble per-turn additional context: recalled memory (when present) plus a
     // plain-Markdown directive when the user picked .md for this prompt.
     const additionalContext: Record<string, { value: string; kind: string }> = {};
-    if (memoryContext) {
-      additionalContext['stem-memory-notes'] = { value: memoryContext, kind: 'application' };
+    if (recallContext) {
+      additionalContext['stem-recall'] = { value: recallContext, kind: 'application' };
     }
     if (input.format === 'md') {
       additionalContext['stem-format'] = { value: PLAIN_MD_DIRECTIVE, kind: 'application' };
@@ -294,7 +303,14 @@ export class CodexRuntime extends EventEmitter {
       ...(Object.keys(additionalContext).length > 0 ? { additionalContext } : {})
     })) as { turn?: { id?: string } };
 
-    return { threadId, turnId: result?.turn?.id };
+    const turnId = result?.turn?.id;
+    // Capture the user message into Stem Recall now that the turn ids are known
+    // (assistant replies are captured from item/completed in index.ts).
+    if (recallEnabled) {
+      captureUserMessage({ threadId, turnId, text: input.input, cwd: this.options.workspaceRoot });
+    }
+
+    return { threadId, turnId };
   }
 
   /** Codex's selectable model catalog (`model/list`), shaped for the UI. */
@@ -325,6 +341,64 @@ export class CodexRuntime extends EventEmitter {
   async interruptTurn(turnId: string): Promise<void> {
     if (!this.proc) return;
     await this.request('turn/interrupt', { turnId });
+  }
+
+  /** True for hidden internal threads (distillation) — used to suppress UI + capture. */
+  isInternalThread(threadId: string): boolean {
+    return this.internalThreads.has(threadId);
+  }
+
+  /**
+   * One-shot prompt → completion via a hidden app-server turn. Backs the
+   * LlmClient seam (Level-1 distillation). The thread uses a distinct cwd so it
+   * never shows in the cwd-filtered chat list, is flagged internal so its events
+   * are suppressed (index.ts) instead of rendered/captured, and is deleted after.
+   */
+  async complete(prompt: string, timeoutMs = 120_000): Promise<string> {
+    await this.ensureStarted();
+    const cwd = join(this.options.workspaceRoot, '.stem-internal');
+    const startRes = (await this.request('thread/start', {
+      cwd,
+      baseInstructions:
+        'You are a precise extraction engine. Follow the instructions exactly and output only what is requested.'
+    })) as { thread?: { id?: string } };
+    const threadId = startRes?.thread?.id;
+    if (!threadId) throw new Error('Codex did not return a thread id for completion.');
+    this.internalThreads.add(threadId);
+
+    try {
+      let text = '';
+      const done = new Promise<void>((resolve, reject) => {
+        const onEvent = (env: CodexEventEnvelope): void => {
+          const p = env.params as { threadId?: string; item?: CodexItem } | undefined;
+          if (!p || p.threadId !== threadId) return;
+          if (env.method === 'item/completed' && p.item?.type === 'agentMessage') {
+            text = agentMessageText(p.item) || text;
+          } else if (env.method === 'turn/completed') {
+            cleanup();
+            resolve();
+          } else if (env.method === 'turn/failed' || env.method === 'turn/aborted') {
+            cleanup();
+            reject(new Error(`Completion turn ${env.method}.`));
+          }
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('Completion timed out.'));
+        }, timeoutMs);
+        const cleanup = (): void => {
+          clearTimeout(timer);
+          this.off('event', onEvent);
+        };
+        this.on('event', onEvent);
+      });
+      await this.request('turn/start', { threadId, cwd, input: [{ type: 'text', text: prompt }] });
+      await done;
+      return text;
+    } finally {
+      this.internalThreads.delete(threadId);
+      void this.request('thread/delete', { threadId }).catch(() => {});
+    }
   }
 
   // ---- chats (codex thread store) ----
@@ -632,9 +706,17 @@ export class CodexRuntime extends EventEmitter {
       case 'applyPatchApproval':
         this.respond(id, { decision: 'denied' });
         return;
-      case 'mcpServer/elicitation/request':
-        this.respond(id, { action: 'decline', content: null, _meta: null });
+      case 'mcpServer/elicitation/request': {
+        // codex routes MCP tool-call approvals through elicitation. Auto-approve
+        // calls to Stem's own trusted, read-only recall server (search_past_chats)
+        // so memory lookups never get silently rejected; decline everything else
+        // (Stem has no UI to surface interactive elicitation/approvals).
+        const p = params as { serverName?: string; _meta?: { codex_approval_kind?: string } } | null;
+        const isTrustedRecallApproval =
+          p?.serverName === RECALL_MCP_NAME && p?._meta?.codex_approval_kind === 'mcp_tool_call';
+        this.respond(id, { action: isTrustedRecallApproval ? 'accept' : 'decline', content: null, _meta: null });
         return;
+      }
       case 'item/tool/requestUserInput':
         this.respond(id, { answers: {} });
         return;

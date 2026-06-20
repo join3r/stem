@@ -53,3 +53,14 @@ export function chatStorePath(): string {
 export function settingsStorePath(): string {
   return join(userDataRoot(), 'settings.json');
 }
+
+/**
+ * Stem-owned recall database (the custom memory layer): every user+assistant
+ * message (Level 2, FTS5-searchable) plus distilled durable facts (Level 1).
+ * Stem owns this end-to-end so memory is decoupled from the chat backend.
+ */
+export function recallDbPath(): string {
+  // STEM_RECALL_DB lets probe/verification scripts point at a throwaway database
+  // (and avoids touching Electron's `app` when run outside the app).
+  return process.env.STEM_RECALL_DB ?? join(userDataRoot(), 'recall.sqlite');
+}

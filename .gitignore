@@ -4,3 +4,6 @@ out/
 *.log
 .DS_Store
 .vite/
+
+# Stem Recall verification probe build output
+.recall-build/

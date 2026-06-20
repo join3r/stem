@@ -4,6 +4,7 @@ import { findCodexPath } from '../codex/locate';
 import { codexEnv, runCodexJson } from '../codex/exec';
 import { readConfig, updateConfig } from './config';
 import { codexHome } from './paths';
+import { RECALL_MCP_NAME } from '../recall/register-mcp';
 
 // Shape of an entry from `codex mcp list --json` (codex-cli 0.141.0).
 interface CodexMcpListEntry {
@@ -20,7 +21,9 @@ interface CodexMcpListEntry {
 export async function listMcpServers(): Promise<McpServerSummary[]> {
   try {
     const entries = await runCodexJson<CodexMcpListEntry[]>(['mcp', 'list', '--json'], codexHome());
-    return entries.map((entry) => {
+    return entries
+      .filter((entry) => entry.name !== RECALL_MCP_NAME) // hide Stem's internal recall server
+      .map((entry) => {
       const t = entry.transport ?? {};
       const isHttp = t.type === 'streamable_http';
       return {
@@ -41,7 +44,9 @@ export async function listMcpServers(): Promise<McpServerSummary[]> {
 async function listFromConfig(): Promise<McpServerSummary[]> {
   const config = await readConfig();
   const servers = config.mcp_servers ?? {};
-  return Object.entries(servers).map(([name, def]) => {
+  return Object.entries(servers)
+    .filter(([name]) => name !== RECALL_MCP_NAME) // hide Stem's internal recall server
+    .map(([name, def]) => {
     const url = def?.url ?? '';
     return {
       name,

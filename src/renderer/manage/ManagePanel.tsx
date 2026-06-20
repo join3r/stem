@@ -101,14 +101,14 @@ function MemoryTab() {
       <div className="group">
         <div className="group-row">
           <span className="row-main">
-            <strong>Native memory</strong>
+            <strong>Memory</strong>
             <em>Remember across conversations</em>
           </span>
           <button
             className={`switch${settings.enabled ? ' on' : ''}`}
             role="switch"
             aria-checked={settings.enabled}
-            aria-label="Native memory"
+            aria-label="Memory"
             onClick={toggle}
           />
         </div>
