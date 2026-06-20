@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import type {
   ChatMessage,
@@ -7,6 +8,7 @@ import type {
   CodexEventEnvelope,
   CodexItem,
   McpLoginResult,
+  MessageMeta,
   ModelSummary,
   RuntimeStatus,
   StartTurnInput,
@@ -39,7 +41,25 @@ interface RawThread {
   preview?: string | null;
   createdAt?: number;
   updatedAt?: number;
-  turns?: { items?: CodexItem[] }[];
+  /**
+   * Absolute path to the on-disk rollout JSONL. `thread/read` does NOT expose
+   * per-turn model/effort, but the rollout's `turn_context` records do — we read
+   * them from here and join by turn id (see readTurnMeta / threadToMessages).
+   */
+  path?: string;
+  turns?: RawTurn[];
+}
+
+/** A turn within a thread. `id` matches the rollout's `turn_context.turn_id`. */
+interface RawTurn {
+  id?: string;
+  items?: CodexItem[];
+}
+
+/** One JSON line of a codex rollout file (only the turn_context shape we need). */
+interface RolloutLine {
+  type?: string;
+  payload?: { type?: string; turn_id?: string; model?: string; effort?: string | null };
 }
 
 /** A codex model as returned by `model/list` (subset we use). */
@@ -335,7 +355,43 @@ export class CodexRuntime extends EventEmitter {
     };
     const thread = result?.thread;
     const title = (thread?.name || thread?.preview || 'New chat').trim() || 'New chat';
-    return { title, messages: this.threadToMessages(thread) };
+    const turnMeta = await this.readTurnMeta(thread?.path);
+    return { title, messages: this.threadToMessages(thread, turnMeta) };
+  }
+
+  /**
+   * Parse a rollout JSONL for per-turn model/effort. codex records these in
+   * `turn_context` lines keyed by `turn_id` (service tier is NOT persisted). A
+   * missing/unreadable file yields an empty map — history then shows no tooltip.
+   */
+  private async readTurnMeta(path: string | undefined): Promise<Map<string, MessageMeta>> {
+    const map = new Map<string, MessageMeta>();
+    if (!path) return map;
+    let text: string;
+    try {
+      text = await readFile(path, 'utf8');
+    } catch {
+      return map;
+    }
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let parsed: RolloutLine;
+      try {
+        parsed = JSON.parse(line) as RolloutLine;
+      } catch {
+        continue;
+      }
+      const type = parsed.type ?? parsed.payload?.type;
+      if (type !== 'turn_context') continue;
+      const p = parsed.payload;
+      const turnId = p?.turn_id;
+      if (!p || typeof turnId !== 'string') continue;
+      map.set(turnId, {
+        model: typeof p.model === 'string' ? p.model : undefined,
+        effort: typeof p.effort === 'string' ? p.effort : undefined
+      });
+    }
+    return map;
   }
 
   /** Resume a saved thread so the next turn continues it with full context. */
@@ -365,9 +421,11 @@ export class CodexRuntime extends EventEmitter {
   }
 
   /** Flatten codex turns/items into the renderer's flat user/assistant message list. */
-  private threadToMessages(thread: RawThread | undefined): ChatMessage[] {
+  private threadToMessages(thread: RawThread | undefined, turnMeta: Map<string, MessageMeta>): ChatMessage[] {
     const messages: ChatMessage[] = [];
     for (const turn of thread?.turns ?? []) {
+      // Which model/effort produced this turn's reply (service tier unavailable).
+      const meta = turn.id ? turnMeta.get(turn.id) : undefined;
       for (const item of turn.items ?? []) {
         if (item.type === 'userMessage') {
           const text = (item.content ?? [])
@@ -377,7 +435,7 @@ export class CodexRuntime extends EventEmitter {
           if (text.trim()) messages.push({ id: `user-${item.id}`, role: 'user', content: text });
         } else if (item.type === 'agentMessage') {
           const text = agentMessageText(item);
-          if (text.trim()) messages.push({ id: `assistant-${item.id}`, role: 'assistant', content: text });
+          if (text.trim()) messages.push({ id: `assistant-${item.id}`, role: 'assistant', content: text, meta });
         }
         // Other item types (reasoning, webSearch, commandExecution, mcpToolCall…)
         // aren't rendered in the conversation and are intentionally skipped.

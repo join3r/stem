@@ -174,10 +174,41 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .msg-avatar.stem { background: var(--accent); color: var(--accent-ink); }
 .msg-avatar.sys { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
 .message-body { min-width: 0; flex: 1; padding-top: 2px; }
-.message-who { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+.message-who { display: flex; align-items: baseline; gap: 7px; font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+/* Which model/effort/speed produced an assistant reply — muted, inline, on the
+   same line as the "Stem" label. Revealed only while hovering the message. */
+.message-meta {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.message:hover .message-meta { opacity: 1; }
 .message-plain { white-space: pre-wrap; margin: 0; }
 .message-system .message-who { color: var(--danger); }
 .message-system .message-plain { color: var(--danger); }
+
+/* working indicator: pulsing dots + a label naming the current activity,
+   shown while the turn runs before answer text starts streaming */
+.activity { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.activity-dots { display: inline-flex; gap: 4px; }
+.activity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: stem-pulse 1.2s ease-in-out infinite;
+}
+.activity-dot:nth-child(2) { animation-delay: 0.2s; }
+.activity-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes stem-pulse {
+  0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+  30%           { opacity: 1;  transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-dot { animation: none; opacity: 0.6; }
+}
 
 /* ---- composer: inset field, single-line auto-grow, controls anchored ---- */
 .composer {
@@ -594,4 +625,105 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .inspector:hover::-webkit-scrollbar-thumb {
   background: rgba(95, 90, 80, 0.32);
   background-clip: content-box;
+}
+
+/* ---- Settings tab (Quick Chat) ---- */
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.set-label { display: flex; flex-direction: column; }
+.set-label strong { font-size: 13px; font-weight: 600; }
+.set-label em { font-size: 11px; color: var(--muted); font-style: normal; }
+.set-block { display: flex; flex-direction: column; gap: 6px; }
+.set-sub { font-size: 11px; color: var(--muted); }
+.recorder {
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 10px;
+  background: var(--field);
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 96px;
+  justify-content: center;
+}
+.recorder.recording { border-color: var(--accent); box-shadow: 0 0 0 3px var(--sel); color: var(--accent); }
+.accel { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; }
+.accel-hyper { color: var(--accent); font-size: 14px; line-height: 1; }
+.recorder-clear { display: inline-flex; color: var(--muted); border-radius: 4px; }
+.recorder-clear:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+/* ---- Quick Chat overlay (own frameless, transparent window) ---- */
+body.qc-body { background: transparent; }
+.qc-root {
+  height: 100vh;
+  /* Padding leaves room for the card's drop shadow inside the transparent window. */
+  padding: 16px 22px 26px;
+  overflow: hidden;
+}
+.qc-card {
+  /* Frosted panel: backdrop-filter blurs the desktop behind the transparent window. */
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(34px) saturate(150%);
+  backdrop-filter: blur(34px) saturate(150%);
+  border: 0.5px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.42);
+  overflow: hidden;
+  -webkit-app-region: drag; /* the whole panel is a drag handle */
+}
+.qc-row { display: flex; align-items: center; gap: 12px; padding: 16px 18px; }
+.qc-mark { color: var(--accent); flex: none; }
+.qc-input {
+  flex: 1;
+  border: none;
+  background: none;
+  outline: none;
+  font: inherit;
+  font-size: 18px;
+  color: var(--ink);
+  padding: 2px 0;
+}
+.qc-input::placeholder { color: var(--muted); }
+.qc-esc {
+  font-size: 11px;
+  color: var(--muted);
+  border: 0.5px solid var(--line);
+  border-radius: 5px;
+  padding: 2px 7px;
+  -webkit-app-region: no-drag;
+}
+.qc-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-top: 0.5px solid var(--hair);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+}
+.qc-model {
+  -webkit-app-region: no-drag;
+  font: inherit;
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--field);
+  border: 0.5px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  max-width: 150px;
+  cursor: pointer;
+}
+.qc-spacer { flex: 1; }
+.qc-hint { font-size: 11px; color: var(--muted); }
+.qc-hint kbd {
+  font-family: inherit;
+  border: 0.5px solid var(--line);
+  border-bottom-width: 1.5px;
+  border-radius: 4px;
+  padding: 0 5px;
+  background: var(--field);
+  color: var(--ink);
+  font-size: 10px;
 }

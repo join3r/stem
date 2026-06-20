@@ -16,8 +16,10 @@ interface ChatViewProps {
   messages: ChatMessage[];
   running: boolean;
   streamingId: string | null;
+  activity: string | null;
   onSend: (text: string, attachments: TurnAttachment[]) => void;
   onInterrupt: () => void;
+  models: ModelSummary[];
   model: ModelSummary | null;
   effort: string | null;
   serviceTier: string | null;
@@ -34,12 +36,27 @@ const EFFORT_LABELS: Record<string, string> = {
   xhigh: 'X-High'
 };
 
+// Build the inline meta label: "GPT-5 Codex · High · Fast". Resolves the model id
+// to its catalog display name; effort/speed are appended only when known (history
+// has no speed, some models have no effort).
+function metaTooltip(meta: ChatMessage['meta'], models: ModelSummary[]): string | undefined {
+  if (!meta) return undefined;
+  const parts: string[] = [];
+  if (meta.model) parts.push(models.find((m) => m.id === meta.model)?.displayName ?? meta.model);
+  if (meta.effort) parts.push(EFFORT_LABELS[meta.effort] ?? meta.effort);
+  if (meta.serviceTier === 'priority') parts.push('Fast');
+  else if (meta.serviceTier === null) parts.push('Standard');
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
 export function ChatView({
   messages,
   running,
   streamingId,
+  activity,
   onSend,
   onInterrupt,
+  models,
   model,
   effort,
   serviceTier,
@@ -135,6 +152,12 @@ export function ChatView({
 
   const hasFast = !!model?.serviceTiers.some((t) => t.id === 'priority');
 
+  // Show the working indicator while a turn runs and no answer text is streaming
+  // yet (reasoning / tool calls happen before the first token, when no assistant
+  // bubble exists). It's replaced by the streamed reply once content arrives.
+  const streamingMsg = messages.find((m) => m.id === streamingId);
+  const showActivity = running && !(streamingMsg && streamingMsg.content);
+
   return (
     <div className="chat">
       <div className="messages" ref={messagesRef}>
@@ -153,20 +176,39 @@ export function ChatView({
           const isStreaming = m.id === streamingId;
           const renderRich =
             m.role === 'assistant' && (!isStreaming || (format === 'md' && !!m.content));
+          const metaText = m.role === 'assistant' ? metaTooltip(m.meta, models) : undefined;
           return (
             <div key={m.id} className={`message message-${m.role}`}>
               <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
               <div className="message-body">
-                <div className="message-who">{a.label}</div>
+                <div className="message-who">
+                  {a.label}
+                  {metaText && <span className="message-meta">{metaText}</span>}
+                </div>
                 {renderRich ? (
                   <MdxView text={m.content} />
                 ) : (
-                  <div className="message-plain">{m.content || (running ? '…' : '')}</div>
+                  <div className="message-plain">{m.content}</div>
                 )}
               </div>
             </div>
           );
         })}
+        {showActivity && (
+          <div className="message message-assistant activity-row" role="status" aria-live="polite">
+            <div className="msg-avatar stem">{AVATAR.assistant.icon}</div>
+            <div className="message-body">
+              <div className="activity">
+                <span className="activity-dots" aria-hidden="true">
+                  <span className="activity-dot" />
+                  <span className="activity-dot" />
+                  <span className="activity-dot" />
+                </span>
+                <span className="activity-label">{activity ?? 'Working…'}</span>
+              </div>
+            </div>
+          </div>
+        )}
         <div ref={endRef} />
       </div>
 

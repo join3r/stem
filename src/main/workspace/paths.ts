@@ -44,3 +44,12 @@ export function agentsMdPath(): string {
 export function chatStorePath(): string {
   return join(userDataRoot(), 'folders.json');
 }
+
+/**
+ * Stem-owned app settings (e.g. the global Quick Chat shortcut + its defaults).
+ * Held in the main process because some of it — the global accelerator — can
+ * only be registered from main, not the renderer.
+ */
+export function settingsStorePath(): string {
+  return join(userDataRoot(), 'settings.json');
+}

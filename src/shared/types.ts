@@ -2,10 +2,22 @@
 
 export type Role = 'user' | 'assistant' | 'system';
 
+/** How an assistant reply was generated, for the avatar tooltip. */
+export interface MessageMeta {
+  /** Model id (resolved to a display name by the renderer via the catalog). */
+  model?: string;
+  /** Reasoning effort (low/medium/high/xhigh); absent when the model has none. */
+  effort?: string;
+  /** 'priority' = Fast; null = Standard; undefined = unknown (e.g. history). */
+  serviceTier?: string | null;
+}
+
 export interface ChatMessage {
   id: string;
   role: Role;
   content: string;
+  /** Assistant messages only: which model/effort/speed produced the reply. */
+  meta?: MessageMeta;
 }
 
 // ---- Runtime status (staged: binary -> health -> auth -> ready) ----
@@ -271,6 +283,39 @@ export interface ChatListResult {
   folders: Folder[];
 }
 
+// ---- App settings (Stem-owned, persisted by the main process) ----
+//
+// Renderer per-turn picks (model/effort/format) still live in localStorage; this
+// store holds settings the main process itself needs — notably the global
+// Quick Chat shortcut, which can only be registered from main.
+
+/** Configuration for the global Quick Chat overlay. */
+export interface QuickChatSettings {
+  /** Electron global accelerator (e.g. 'Alt+Space'); null = shortcut disabled. */
+  shortcut: string | null;
+  /** Model the overlay opens with; null = follow the app's default model. */
+  defaultModel: string | null;
+  /** Reasoning effort the overlay opens with (low/medium/high/xhigh). */
+  defaultEffort: string;
+  /** Service tier the overlay opens with: 'priority' = Fast; null = Standard. */
+  defaultServiceTier: string | null;
+  /** Float the overlay across every Space and on whichever display is active. */
+  showOnAllDisplays: boolean;
+}
+
+export interface AppSettings {
+  quickChat: QuickChatSettings;
+}
+
+/** A prompt relayed from the overlay to the main window to run as a fresh turn. */
+export interface QuickChatPrompt {
+  input: string;
+  /** Model chosen in the overlay; null = use the main window's current model. */
+  model: string | null;
+  effort: string | null;
+  serviceTier: string | null;
+}
+
 // ---- Preload API surface exposed on window.stem ----
 
 export interface StemApi {
@@ -312,4 +357,16 @@ export interface StemApi {
   deleteFolder(folderId: string): Promise<ChatListResult>;
   moveFolder(folderId: string, parentId: string | null): Promise<ChatListResult>;
   setChatFolder(threadId: string, folderId: string | null): Promise<ChatListResult>;
+
+  // App settings + Quick Chat overlay.
+  getSettings(): Promise<AppSettings>;
+  updateQuickChat(patch: Partial<QuickChatSettings>): Promise<AppSettings>;
+  /** Overlay → main: relay a prompt, reveal the main window, hide the overlay. */
+  submitQuickChat(prompt: QuickChatPrompt): Promise<void>;
+  /** Hide the overlay (Escape from within it). */
+  hideQuickChat(): Promise<void>;
+  /** Overlay: fired each time the overlay is summoned (refocus + reset). */
+  onQuickChatFocus(listener: () => void): () => void;
+  /** Main window: fired when the overlay submits a prompt to run. */
+  onQuickChatPrompt(listener: (prompt: QuickChatPrompt) => void): () => void;
 }

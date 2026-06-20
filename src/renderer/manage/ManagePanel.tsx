@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Cpu } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X } from 'lucide-react';
 import type {
   CodexEventEnvelope,
   McpLoginUrlParams,
@@ -8,20 +8,28 @@ import type {
   MemoryContents,
   MemorySettings,
   ModelSummary,
+  QuickChatSettings,
   SkillSummary
 } from '../../shared/types';
 import { MdxView } from '../chat/MdxView';
 import { ChatList, type ChatListProps } from '../chats/ChatList';
 
-type Tab = 'chats' | 'model' | 'memory' | 'skills' | 'mcp';
+type Tab = 'chats' | 'memory' | 'skills' | 'mcp' | 'settings';
 
 const TABS: { id: Tab; label: string; icon: typeof Brain }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
-  { id: 'model', label: 'Model', icon: Cpu },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'skills', label: 'Skills', icon: Sparkles },
-  { id: 'mcp', label: 'MCP', icon: Plug }
+  { id: 'mcp', label: 'MCP', icon: Plug },
+  { id: 'settings', label: 'Settings', icon: Settings }
 ];
+
+const EFFORT_LABELS: Record<string, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'X-High'
+};
 
 interface ModelTabProps {
   models: ModelSummary[];
@@ -52,38 +60,11 @@ export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: Ma
       </div>
       <div className="manage-body">
         {tab === 'chats' && <ChatList {...chatProps} />}
-        {tab === 'model' && <ModelTab models={models} modelId={modelId} onSelectModel={onSelectModel} />}
         {tab === 'memory' && <MemoryTab />}
         {tab === 'skills' && <SkillsTab />}
         {tab === 'mcp' && <McpTab />}
-      </div>
-    </div>
-  );
-}
-
-function ModelTab({ models, modelId, onSelectModel }: ModelTabProps) {
-  const selected = models.find((m) => m.id === modelId) ?? null;
-  return (
-    <div>
-      <div className="grp-head">Model</div>
-      <div className="formgroup">
-        {models.length === 0 ? (
-          <p className="muted">Loading models…</p>
-        ) : (
-          <>
-            <select
-              className="ifield"
-              value={modelId ?? ''}
-              onChange={(e) => onSelectModel(e.target.value)}
-            >
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.displayName}
-                </option>
-              ))}
-            </select>
-            {selected?.description && <p className="muted">{selected.description}</p>}
-          </>
+        {tab === 'settings' && (
+          <SettingsTab models={models} modelId={modelId} onSelectModel={onSelectModel} />
         )}
       </div>
     </div>
@@ -209,6 +190,245 @@ function SkillsTab() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ---- Settings tab: Quick Chat overlay configuration ----
+
+// macOS canonical modifier order (⌃⌥⇧⌘) and their glyphs.
+const MOD_ORDER = ['Control', 'Alt', 'Shift', 'Command'];
+const MOD_GLYPH: Record<string, string> = { Control: '⌃', Alt: '⌥', Shift: '⇧', Command: '⌘' };
+// The hyperkey fires all four modifiers at once; we collapse them to one icon.
+const HYPER_MODS = ['Command', 'Control', 'Alt', 'Shift'];
+
+/**
+ * Map a physical `KeyboardEvent.code` to an Electron accelerator key token.
+ * Using `code` (not `key`) is essential: with Option held, macOS composes
+ * `key` into a non-ASCII glyph (Option+J → "∆"), which Electron's accelerator
+ * parser rejects. `code` is layout- and modifier-independent. Returns null for
+ * unsupported/pure-modifier keys.
+ */
+function codeToAccelerator(code: string): string | null {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3); // KeyJ -> J
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5); // Digit1 -> 1
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code; // F1..F24
+  if (/^Numpad[0-9]$/.test(code)) return `num${code.slice(6)}`;
+  const NUMPAD: Record<string, string> = {
+    NumpadDecimal: 'numdec',
+    NumpadAdd: 'numadd',
+    NumpadSubtract: 'numsub',
+    NumpadMultiply: 'nummult',
+    NumpadDivide: 'numdiv',
+    NumpadEnter: 'Return'
+  };
+  if (code in NUMPAD) return NUMPAD[code];
+  const MAP: Record<string, string> = {
+    Space: 'Space',
+    Enter: 'Return',
+    Tab: 'Tab',
+    Backspace: 'Backspace',
+    Delete: 'Delete',
+    Insert: 'Insert',
+    Home: 'Home',
+    End: 'End',
+    PageUp: 'PageUp',
+    PageDown: 'PageDown',
+    ArrowUp: 'Up',
+    ArrowDown: 'Down',
+    ArrowLeft: 'Left',
+    ArrowRight: 'Right',
+    Minus: '-',
+    Equal: '=',
+    BracketLeft: '[',
+    BracketRight: ']',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    Comma: ',',
+    Period: '.',
+    Slash: '/',
+    Backquote: '`'
+  };
+  return MAP[code] ?? null;
+}
+
+/** Render an Electron accelerator ('Control+Alt+J') as mac glyphs, collapsing a
+ *  full four-modifier hyperkey into a single hyper icon. */
+function renderAccelerator(accel: string): ReactNode {
+  const parts = accel.split('+');
+  const mods = parts.filter((p) => HYPER_MODS.includes(p)).sort((a, b) => MOD_ORDER.indexOf(a) - MOD_ORDER.indexOf(b));
+  const keys = parts.filter((p) => !HYPER_MODS.includes(p));
+  const isHyper = HYPER_MODS.every((m) => mods.includes(m));
+  return (
+    <span className="accel">
+      {isHyper ? (
+        <span className="accel-hyper" aria-label="Hyper">✦</span>
+      ) : (
+        mods.map((m) => MOD_GLYPH[m] ?? m).join('')
+      )}
+      {keys.join('')}
+    </span>
+  );
+}
+
+function ShortcutRecorder({
+  value,
+  onChange
+}: {
+  value: string | null;
+  onChange: (accel: string | null) => void;
+}) {
+  const [recording, setRecording] = useState(false);
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    e.preventDefault();
+    if (e.code === 'Escape') {
+      setRecording(false);
+      return;
+    }
+    const main = codeToAccelerator(e.code);
+    if (!main) return; // waiting for a non-modifier / supported key
+    const mods: string[] = [];
+    if (e.metaKey) mods.push('Command');
+    if (e.ctrlKey) mods.push('Control');
+    if (e.altKey) mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    if (mods.length === 0) return; // a global shortcut needs a modifier
+    onChange([...mods, main].join('+'));
+    setRecording(false);
+  }
+
+  return (
+    <button
+      className={`recorder${recording ? ' recording' : ''}`}
+      onClick={() => setRecording(true)}
+      onBlur={() => setRecording(false)}
+      onKeyDown={recording ? onKeyDown : undefined}
+    >
+      <span>{recording ? 'Press keys…' : value ? renderAccelerator(value) : 'Click to record'}</span>
+      {value && !recording && (
+        <span
+          className="recorder-clear"
+          title="Clear shortcut"
+          onClick={(e) => {
+            e.stopPropagation();
+            onChange(null);
+          }}
+        >
+          <X size={12} />
+        </span>
+      )}
+    </button>
+  );
+}
+
+function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
+  const [qc, setQc] = useState<QuickChatSettings | null>(null);
+  const selectedModel = models.find((m) => m.id === modelId) ?? null;
+
+  useEffect(() => {
+    window.stem.getSettings().then((s) => setQc(s.quickChat));
+  }, []);
+
+  function update(patch: Partial<QuickChatSettings>) {
+    window.stem.updateQuickChat(patch).then((s) => setQc(s.quickChat));
+  }
+
+  if (!qc) return <p className="muted">Loading…</p>;
+
+  return (
+    <div>
+      <div className="grp-head">Model</div>
+      <div className="formgroup">
+        {models.length === 0 ? (
+          <p className="muted">Loading models…</p>
+        ) : (
+          <>
+            <select className="ifield" value={modelId ?? ''} onChange={(e) => onSelectModel(e.target.value)}>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.displayName}
+                </option>
+              ))}
+            </select>
+            {selectedModel?.description && <p className="muted">{selectedModel.description}</p>}
+          </>
+        )}
+      </div>
+
+      <div className="grp-head">Quick Chat</div>
+      <div className="formgroup">
+        <div className="set-row">
+          <span className="set-label">
+            <strong>Global shortcut</strong>
+            <em>Summon the quick-chat overlay from anywhere</em>
+          </span>
+          <ShortcutRecorder value={qc.shortcut} onChange={(accel) => update({ shortcut: accel })} />
+        </div>
+
+        <div className="set-block">
+          <span className="set-sub">Default model</span>
+          <select
+            className="ifield"
+            value={qc.defaultModel ?? ''}
+            onChange={(e) => update({ defaultModel: e.target.value || null })}
+          >
+            <option value="">Same as main</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.displayName}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="set-block">
+          <span className="set-sub">Default effort</span>
+          <div className="seg-ctl">
+            {(['low', 'medium', 'high', 'xhigh'] as const).map((e) => (
+              <button key={e} className={qc.defaultEffort === e ? 'active' : ''} onClick={() => update({ defaultEffort: e })}>
+                {EFFORT_LABELS[e]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="set-block">
+          <span className="set-sub">Default speed</span>
+          <div className="seg-ctl">
+            <button
+              className={qc.defaultServiceTier === 'priority' ? '' : 'active'}
+              onClick={() => update({ defaultServiceTier: null })}
+            >
+              Standard
+            </button>
+            <button
+              className={qc.defaultServiceTier === 'priority' ? 'active' : ''}
+              onClick={() => update({ defaultServiceTier: 'priority' })}
+            >
+              Fast
+            </button>
+          </div>
+        </div>
+
+        <div className="set-row">
+          <span className="set-label">
+            <strong>Show on all displays</strong>
+            <em>Float above every Space &amp; the active display</em>
+          </span>
+          <button
+            className={`switch${qc.showOnAllDisplays ? ' on' : ''}`}
+            role="switch"
+            aria-checked={qc.showOnAllDisplays}
+            aria-label="Show on all displays"
+            onClick={() => update({ showOnAllDisplays: !qc.showOnAllDisplays })}
+          />
+        </div>
+      </div>
+      <p className="muted" style={{ marginTop: 10 }}>
+        Press the shortcut to open the overlay; Escape or the shortcut again hides it.
+      </p>
     </div>
   );
 }

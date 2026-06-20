@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { SquarePen, PanelRight } from 'lucide-react';
 import type {
   AgentMessageDeltaParams,
@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   CodexEventEnvelope,
   ItemEventParams,
+  MessageMeta,
   ModelSummary,
   RuntimeStatus,
   TurnAttachment
@@ -15,17 +16,48 @@ import { ChatView } from './chat/ChatView';
 import { ManagePanel } from './manage/ManagePanel';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
 
+// Friendly label for the "working" indicator, derived from the active Codex
+// item type. Both camelCase and snake_case are handled defensively since the
+// runtime forwards item.type verbatim; anything unmapped falls back to "Working…".
+function activityLabel(type: string): string {
+  switch (type) {
+    case 'reasoning':
+      return 'Thinking…';
+    case 'webSearch':
+    case 'web_search':
+      return 'Searching the web…';
+    case 'commandExecution':
+    case 'command_execution':
+    case 'exec':
+      return 'Running a command…';
+    case 'mcpToolCall':
+    case 'mcp_tool_call':
+      return 'Using a tool…';
+    case 'fileChange':
+    case 'file_change':
+      return 'Editing files…';
+    default:
+      return 'Working…';
+  }
+}
+
 export default function App() {
   const [status, setStatus] = useState<RuntimeStatus | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [running, setRunning] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
+  // Label of the in-flight activity (tool call / reasoning) shown by the working
+  // indicator. Null when nothing is running or once answer text starts streaming.
+  const [activity, setActivity] = useState<string | null>(null);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const [showInspector, setShowInspector] = useState(true);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [chatList, setChatList] = useState<ChatListResult>({ chats: [], folders: [] });
   const inspectorRef = useAutoHideScroll<HTMLElement>();
+  // turnId -> which model/effort/speed produced that turn's reply (for the
+  // avatar tooltip). Populated at send time; read when the message is built.
+  const turnMetaRef = useRef(new Map<string, MessageMeta>());
 
   // Model / effort / speed — per-turn overrides, remembered across launches.
   const [models, setModels] = useState<ModelSummary[]>([]);
@@ -118,13 +150,23 @@ export default function App() {
           const p = event.params as AgentMessageDeltaParams;
           const id = `assistant-${p.turnId}`;
           setStreamingId(id);
+          setActivity(null);
           setMessages((prev) => {
             const idx = prev.findIndex((m) => m.id === id);
-            if (idx === -1) return [...prev, { id, role: 'assistant', content: p.delta }];
+            const meta = turnMetaRef.current.get(p.turnId);
+            if (idx === -1) return [...prev, { id, role: 'assistant', content: p.delta, meta }];
             const next = [...prev];
             next[idx] = { ...next[idx], content: next[idx].content + p.delta };
             return next;
           });
+          break;
+        }
+        case 'item/started': {
+          const p = event.params as ItemEventParams;
+          const type = p.item?.type;
+          // A non-message item (reasoning, web search, command, MCP tool…) is
+          // running. Surface it as the activity label until text starts streaming.
+          if (type && type !== 'agentMessage') setActivity(activityLabel(type));
           break;
         }
         case 'item/completed': {
@@ -132,12 +174,13 @@ export default function App() {
           if (p.item?.type !== 'agentMessage') break;
           const id = `assistant-${p.turnId}`;
           const text = agentMessageText(p.item);
+          const meta = turnMetaRef.current.get(p.turnId);
           setMessages((prev) => {
             const idx = prev.findIndex((m) => m.id === id);
-            if (idx === -1) return [...prev, { id, role: 'assistant', content: text }];
+            if (idx === -1) return [...prev, { id, role: 'assistant', content: text, meta }];
             const next = [...prev];
             // Prefer authoritative text; keep streamed deltas if it's empty.
-            next[idx] = { ...next[idx], content: text || next[idx].content };
+            next[idx] = { ...next[idx], content: text || next[idx].content, meta: next[idx].meta ?? meta };
             return next;
           });
           setStreamingId(null);
@@ -146,10 +189,12 @@ export default function App() {
         case 'turn/completed':
           setRunning(false);
           setStreamingId(null);
+          setActivity(null);
           break;
         case 'process/exit':
           setRunning(false);
           setStreamingId(null);
+          setActivity(null);
           break;
         default:
           // Unknown / unhandled events are ignored on purpose.
@@ -165,6 +210,7 @@ export default function App() {
         : text;
       setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', content: bubble }]);
       setRunning(true);
+      setActivity(null);
       try {
         const result = await window.stem.startTurn({
           input: text,
@@ -187,6 +233,9 @@ export default function App() {
           return;
         }
         setActiveTurnId(result.turnId ?? null);
+        if (result.turnId) {
+          turnMetaRef.current.set(result.turnId, { model: modelId ?? undefined, effort: effort ?? undefined, serviceTier });
+        }
         // First turn of a new chat creates the codex thread — adopt its id and
         // surface the freshly-created chat (with its preview title) in the list.
         if (result.threadId && result.threadId !== activeThreadId) {
@@ -204,10 +253,72 @@ export default function App() {
     [activeThreadId, refreshChats, modelId, effort, serviceTier, format]
   );
 
+  // Quick Chat overlay → main window: run the relayed prompt as a fresh
+  // conversation, honoring the overlay's ad-hoc effort/speed (clamped to the
+  // current model). Mirrors onSend's streaming/threading flow.
+  useEffect(() => {
+    return window.stem.onQuickChatPrompt(async ({ input, model: qModel, effort: qEffort, serviceTier: qTier }) => {
+      await window.stem.newConversation();
+      setActiveThreadId(null);
+      setActiveTurnId(null);
+
+      // Adopt the overlay's model/effort/speed for THIS turn only, clamped to
+      // what the model supports. We deliberately do NOT call setModelId/setEffort/
+      // setServiceTier here — the overlay's ad-hoc picks must not overwrite the
+      // main app's persisted model/effort/speed (Settings + composer).
+      const useModelId = qModel ?? modelId;
+      const useModel = models.find((m) => m.id === useModelId) ?? selectedModel;
+      let useEffort = qEffort ?? effort ?? undefined;
+      let useTier = qTier;
+      if (useModel) {
+        if (useEffort && !useModel.supportedEfforts.includes(useEffort)) useEffort = useModel.defaultEffort;
+        if (!useModel.serviceTiers.some((t) => t.id === 'priority')) useTier = null;
+      }
+
+      setMessages([{ id: `user-${Date.now()}`, role: 'user', content: input }]);
+      setRunning(true);
+      setActivity(null);
+      try {
+        const result = await window.stem.startTurn({
+          input,
+          model: useModelId ?? undefined,
+          effort: useEffort,
+          serviceTier: useTier,
+          format
+        });
+        if (result.handled) {
+          if (result.assistantMessage) {
+            setMessages((prev) => [
+              ...prev,
+              { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }
+            ]);
+          }
+          setRunning(false);
+          return;
+        }
+        setActiveTurnId(result.turnId ?? null);
+        if (result.turnId) {
+          turnMetaRef.current.set(result.turnId, { model: useModelId ?? undefined, effort: useEffort, serviceTier: useTier });
+        }
+        if (result.threadId) {
+          setActiveThreadId(result.threadId);
+          refreshChats();
+        }
+      } catch (e) {
+        setRunning(false);
+        setMessages((prev) => [
+          ...prev,
+          { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
+        ]);
+      }
+    });
+  }, [models, selectedModel, modelId, effort, format, refreshChats]);
+
   const onInterrupt = useCallback(async () => {
     if (activeTurnId) await window.stem.interruptTurn(activeTurnId);
     setRunning(false);
     setStreamingId(null);
+    setActivity(null);
   }, [activeTurnId]);
 
   async function signIn() {
@@ -331,8 +442,10 @@ export default function App() {
           messages={messages}
           running={running}
           streamingId={streamingId}
+          activity={activity}
           onSend={onSend}
           onInterrupt={onInterrupt}
+          models={models}
           model={selectedModel}
           effort={effort}
           serviceTier={serviceTier}

@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   CodexEventEnvelope,
   McpServerInput,
+  QuickChatPrompt,
+  QuickChatSettings,
   StartTurnInput,
   StemApi
 } from '../shared/types';
@@ -43,7 +45,22 @@ const api: StemApi = {
   deleteFolder: (folderId: string) => ipcRenderer.invoke('folders:delete', folderId),
   moveFolder: (folderId: string, parentId: string | null) => ipcRenderer.invoke('folders:move', folderId, parentId),
   setChatFolder: (threadId: string, folderId: string | null) =>
-    ipcRenderer.invoke('chats:setFolder', threadId, folderId)
+    ipcRenderer.invoke('chats:setFolder', threadId, folderId),
+
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  updateQuickChat: (patch: Partial<QuickChatSettings>) => ipcRenderer.invoke('settings:updateQuickChat', patch),
+  submitQuickChat: (prompt: QuickChatPrompt) => ipcRenderer.invoke('quickchat:submit', prompt),
+  hideQuickChat: () => ipcRenderer.invoke('quickchat:hide'),
+  onQuickChatFocus: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on('quickchat:focus', handler);
+    return () => ipcRenderer.removeListener('quickchat:focus', handler);
+  },
+  onQuickChatPrompt: (listener: (prompt: QuickChatPrompt) => void) => {
+    const handler = (_e: unknown, prompt: QuickChatPrompt) => listener(prompt);
+    ipcRenderer.on('quickchat:prompt', handler);
+    return () => ipcRenderer.removeListener('quickchat:prompt', handler);
+  }
 };
 
 contextBridge.exposeInMainWorld('stem', api);
