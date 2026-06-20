@@ -332,6 +332,9 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   font-family: 'SF Mono', ui-monospace, monospace;
   font-size: 0.86em;
 }
+.code-block-wrap {
+  position: relative;
+}
 .code-block {
   background: var(--code-bg);
   color: var(--code-ink);
@@ -340,6 +343,28 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   overflow-x: auto;
   font-family: 'SF Mono', ui-monospace, monospace;
   font-size: 12.5px;
+}
+.code-copy {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--code-ink);
+  background: color-mix(in srgb, var(--code-ink) 12%, transparent);
+  border: 0.5px solid color-mix(in srgb, var(--code-ink) 22%, transparent);
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.code-block-wrap:hover .code-copy,
+.code-copy:focus-visible {
+  opacity: 1;
+}
+.code-copy:hover {
+  background: color-mix(in srgb, var(--code-ink) 20%, transparent);
 }
 
 .callout {

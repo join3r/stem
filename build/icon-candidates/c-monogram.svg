@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="tileC" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a96a33"/>
+      <stop offset="1" stop-color="#834f22"/>
+    </linearGradient>
+  </defs>
+  <rect x="60" y="60" width="904" height="904" rx="208" fill="url(#tileC)"/>
+  <path d="M676 388 C 676 322 606 296 512 296 C 414 296 360 344 360 410 C 360 478 432 506 512 524 C 596 544 664 574 664 642 C 664 716 600 744 512 744 C 420 744 358 716 348 648"
+        fill="none" stroke="#f5f2eb" stroke-width="112" stroke-linecap="round"/>
+  <circle cx="664" cy="642" r="22" fill="#f0e0cb"/>
+</svg>

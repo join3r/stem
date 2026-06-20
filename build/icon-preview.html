@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Stem — icon candidates</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 15px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    background: #1d1b18; color: #e9e4d8; padding: 40px;
+  }
+  h1 { font-weight: 600; font-size: 22px; margin: 0 0 6px; }
+  .sub { color: #a8a092; margin: 0 0 32px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 24px; }
+  .card {
+    background: #2a2723; border: 1px solid #3a352e; border-radius: 16px; padding: 20px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 4px; font-weight: 600; }
+  .card .id { color: #8f877a; font-size: 13px; margin: 0 0 16px; }
+  .row { display: flex; align-items: center; gap: 18px; padding: 14px; border-radius: 12px; }
+  .row.light { background: #efece5; }
+  .row.dark  { background: #161412; }
+  .sizes { display: flex; align-items: flex-end; gap: 16px; }
+  .sizes figure { margin: 0; text-align: center; }
+  .sizes img { display: block; image-rendering: -webkit-optimize-contrast; }
+  .sizes figcaption { font-size: 10px; color: #9a9285; margin-top: 6px; }
+  .row.dark figcaption { color: #6f685d; }
+  .dock {
+    margin-top: 14px; display: flex; align-items: flex-end; gap: 10px; justify-content: center;
+    padding: 10px 18px; border-radius: 18px;
+    background: rgba(120,120,120,0.28); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.18);
+  }
+  .dock img { width: 56px; height: 56px; }
+  .dock .ghost { width: 46px; height: 46px; border-radius: 11px; background: rgba(255,255,255,0.14); }
+  .full { margin-top:14px; text-align:center; }
+  .full img { width: 200px; height: 200px; }
+</style>
+</head>
+<body>
+  <h1>Stem — pick an app icon</h1>
+  <p class="sub">Six candidates, shown at real dock/menu sizes on light &amp; dark, plus a 1024px master. Tell me the letter you want (a–f).</p>
+  <div class="grid" id="grid"></div>
+<script>
+  const items = [
+    ["a", "Sprout", "Two-leaf seedling on a stem — literal, friendly", "a-sprout.svg"],
+    ["b", "Leaf + node", "Single leaf, stem, and a node dot — calm, minimal", "b-leaf-node.svg"],
+    ["c", "S monogram", "Geometric “S” on sage — bold lettermark", "c-monogram.svg"],
+    ["d", "Spark", "Stem with a glowing tip on dark — the AI accent", "d-spark.svg"],
+    ["e", "Branch", "Ascending branch with nodes — growth / network", "e-branch.svg"],
+    ["f", "Negative", "Sienna tile, cream sprout — high contrast", "f-negative.svg"],
+    ["g", "Sparkle", "Cream sparkle on sienna — matches the chat avatar", "g-sparkle.svg"],
+  ];
+  const sizes = [16, 32, 64, 128];
+  const grid = document.getElementById("grid");
+  for (const [id, name, desc, file] of items) {
+    const src = "icon-candidates/" + file;
+    const sizeRow = (cls) => `
+      <div class="row ${cls}">
+        <div class="sizes">
+          ${sizes.map(s => `<figure><img src="${src}" width="${s}" height="${s}"/><figcaption>${s}px</figcaption></figure>`).join("")}
+        </div>
+      </div>`;
+    grid.insertAdjacentHTML("beforeend", `
+      <div class="card">
+        <h2>${name} <span style="color:#8f877a;font-weight:400">— ${id}</span></h2>
+        <p class="id">${desc}</p>
+        ${sizeRow("light")}
+        <div style="height:10px"></div>
+        ${sizeRow("dark")}
+        <div class="dock">
+          <span class="ghost"></span><span class="ghost"></span>
+          <img src="${src}"/>
+          <span class="ghost"></span><span class="ghost"></span>
+        </div>
+        <div class="full"><img src="${src}"/></div>
+      </div>`);
+  }
+</script>
+</body>
+</html>

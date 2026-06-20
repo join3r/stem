@@ -71,9 +71,14 @@ export function ChatView({
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesRef = useAutoHideScroll<HTMLDivElement>();
+  // ChatView is keyed by the active chat, so it remounts on every switch. Jump
+  // instantly to the bottom on that first paint (no scrolling through history);
+  // only smooth-scroll for subsequent updates within the same chat (streaming).
+  const didInitialScroll = useRef(false);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    endRef.current?.scrollIntoView({ behavior: didInitialScroll.current ? 'smooth' : 'auto' });
+    didInitialScroll.current = true;
   }, [messages, running]);
 
   // Auto-grow the composer from one line up to a max, then scroll internally.

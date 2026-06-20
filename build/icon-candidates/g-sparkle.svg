@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="tileG" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a96a33"/>
+      <stop offset="1" stop-color="#834f22"/>
+    </linearGradient>
+  </defs>
+  <rect x="60" y="60" width="904" height="904" rx="208" fill="url(#tileG)"/>
+  <!-- main 4-point sparkle (mirrors the chat avatar's Sparkles glyph) -->
+  <path d="M470 300 C 482 452 512 482 664 494 C 512 506 482 536 470 688 C 458 536 428 506 276 494 C 428 482 458 452 470 300 Z" fill="#f5f2eb"/>
+  <!-- small accent sparkle -->
+  <path d="M708 312 C 714 388 728 402 804 408 C 728 414 714 428 708 504 C 702 428 688 414 612 408 C 688 402 702 388 708 312 Z" fill="#f0e0cb"/>
+</svg>

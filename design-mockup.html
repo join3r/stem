@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stem — design directions</title>
+<style>
+  :root {
+    --page-bg: #d9d9de;
+    --page-text: #1d1d1f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+    background: var(--page-bg);
+    color: var(--page-text);
+    padding: 28px 24px 60px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- page controls ---------- */
+  .controls {
+    max-width: 980px;
+    margin: 0 auto 22px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .controls h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  .controls .spacer { flex: 1; }
+  .seg { display: inline-flex; background: rgba(0,0,0,0.06); border: 1px solid rgba(0,0,0,0.08); border-radius: 8px; padding: 2px; }
+  .seg button {
+    border: none; background: none; font: inherit; font-size: 13px; color: #333;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  }
+  .seg button.active { background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.12); font-weight: 500; }
+  .caption { max-width: 980px; margin: 0 auto 18px; font-size: 13px; line-height: 1.5; color: #44444a; }
+  .caption b { color: #1d1d1f; }
+
+  /* ---------- window frame ---------- */
+  .stage { max-width: 980px; margin: 0 auto; display: flex; justify-content: center; }
+  .window {
+    width: 980px;
+    height: 640px;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 22px 60px rgba(0,0,0,0.32), 0 0 0 0.5px rgba(0,0,0,0.18);
+    display: flex;
+    flex-direction: column;
+    background: var(--paper);
+    color: var(--ink);
+    font-size: var(--font);
+    line-height: 1.55;
+  }
+
+  /* ============ THEME TOKENS ============ */
+  /* defaults overridden per direction/mode below */
+  .window {
+    --paper:#faf9f6; --ink:#1f1d1a; --muted:#6b675f; --line:#e7e3da;
+    --accent:#8a5a2b; --accent-ink:#fff; --surface:#fff; --field:#fff;
+    --panel:#faf9f6; --content:#faf9f6; --sel:rgba(138,90,43,0.12);
+    --danger:#c53030; --info:#2b6cb0; --warn:#b7791f; --success:#2f855a;
+    --code-bg:#2b2723; --code-ink:#f4efe7; --inline-bg:#f1eee7;
+    --font:15px; --radius:9px; --btn-pad:10px 18px; --btn-font:15px;
+    --control-bg:var(--accent); --control-border:transparent; --control-ink:#fff;
+    --titlebar:var(--paper);
+  }
+
+  /* ---- CURRENT (baseline) ---- light ---- */
+  .window[data-dir="current"] { /* uses defaults above */ }
+  .window[data-dir="current"][data-mode="dark"] {
+    --paper:#211f1c; --ink:#f3efe8; --muted:#a7a097; --line:#3a352f;
+    --accent:#c08a52; --surface:#2a2723; --field:#2a2723; --panel:#211f1c;
+    --content:#211f1c; --sel:rgba(192,138,82,0.18); --inline-bg:#2e2a25;
+    --titlebar:#211f1c;
+  }
+
+  /* ---- WARM-NATIVE ---- keeps Stem identity, native controls ---- */
+  .window[data-dir="warm"] {
+    --paper:#f6f4ef; --ink:#23211d; --muted:#7c766c; --line:#e3ded4;
+    --accent:#9a6230; --accent-ink:#fff; --surface:#fffdf9; --field:#fffdf9;
+    --panel:#efece5; --content:#faf8f3; --sel:rgba(154,98,48,0.13);
+    --inline-bg:#efeae0;
+    --font:13px; --radius:6px;
+    /* native default push button: compact, accent fill */
+    --btn-pad:5px 14px; --btn-font:13px;
+    --control-bg:var(--accent); --control-border:transparent; --control-ink:#fff;
+    --titlebar:#efece5;
+  }
+  .window[data-dir="warm"][data-mode="dark"] {
+    --paper:#211f1b; --ink:#f0ece4; --muted:#9b948a; --line:#35312b;
+    --accent:#c79257; --accent-ink:#22150a; --surface:#2a2722; --field:#2a2722;
+    --panel:#1b1916; --content:#211f1b; --sel:rgba(199,146,87,0.16);
+    --inline-bg:#2f2b25; --titlebar:#1b1916;
+  }
+
+  /* ---- SYSTEM ---- stock macOS gray + system blue ---- */
+  .window[data-dir="system"] {
+    --paper:#ffffff; --ink:#1d1d1f; --muted:#86868b; --line:#e3e3e6;
+    --accent:#0a6cff; --accent-ink:#fff; --surface:#ffffff; --field:#ffffff;
+    --panel:#f4f4f6; --content:#ffffff; --sel:rgba(10,108,255,0.12);
+    --inline-bg:#f0f0f2; --code-bg:#1d1d1f; --code-ink:#f5f5f7;
+    --font:13px; --radius:6px;
+    --btn-pad:5px 14px; --btn-font:13px;
+    --control-bg:var(--accent); --control-border:transparent; --control-ink:#fff;
+    --titlebar:#f4f4f6;
+  }
+  .window[data-dir="system"][data-mode="dark"] {
+    --paper:#1e1e1e; --ink:#f5f5f7; --muted:#8e8e93; --line:#333336;
+    --accent:#0a84ff; --surface:#2c2c2e; --field:#2c2c2e; --panel:#262628;
+    --content:#1e1e1e; --sel:rgba(10,132,255,0.22); --inline-bg:#2c2c2e;
+    --code-bg:#000; --code-ink:#f5f5f7; --titlebar:#262628;
+  }
+
+  /* ---- LIQUID GLASS ---- macOS 26 (Tahoe): floating glass layer over content ---- */
+  .window[data-dir="glass"] {
+    --ink:#241f19; --muted:#6f6557; --line:rgba(120,96,60,0.22);
+    --accent:#a8642e; --accent-ink:#fff; --surface:rgba(255,255,255,0.62); --field:rgba(255,255,255,0.5);
+    --sel:rgba(168,100,46,0.16); --inline-bg:rgba(255,255,255,0.55);
+    --font:13px; --radius:13px;
+    --btn-pad:6px 16px; --btn-font:13px;
+    /* reusable glass material (per Apple WWDC25 + the provided recipe) */
+    --glass: color-mix(in srgb, white 58%, transparent);
+    --glass-strong: color-mix(in srgb, white 72%, transparent);
+    --glass-blur: blur(24px) saturate(180%) contrast(1.06);
+    --glass-border: rgb(255 255 255 / 0.42);
+    --glass-shadow: 0 18px 50px rgb(0 0 0 / 0.18), inset 0 1px 0 rgb(255 255 255 / 0.65), inset 0 -1px 0 rgb(255 255 255 / 0.18);
+    --content:transparent; --panel:transparent; --titlebar:transparent;
+    /* calm, readable backdrop the floating glass lenses over */
+    background:
+      radial-gradient(130% 100% at 8% 0%, #ffe7cb 0%, rgba(255,231,203,0) 42%),
+      radial-gradient(120% 110% at 100% 8%, #d3deff 0%, rgba(211,222,255,0) 46%),
+      radial-gradient(150% 120% at 92% 100%, #ffd9d4 0%, rgba(255,217,212,0) 48%),
+      radial-gradient(130% 120% at 20% 100%, #dcf1e4 0%, rgba(220,241,228,0) 46%),
+      linear-gradient(135deg, #fcf6ee, #f5f0f8);
+  }
+  .window[data-dir="glass"][data-mode="dark"] {
+    --ink:#f3ede4; --muted:#a59a8c; --line:rgba(255,235,205,0.16);
+    --accent:#e0a063; --accent-ink:#241405; --surface:rgba(60,54,48,0.55); --field:rgba(60,54,48,0.45);
+    --sel:rgba(224,160,99,0.22); --inline-bg:rgba(255,255,255,0.10);
+    --glass: color-mix(in srgb, #2c2824 56%, transparent);
+    --glass-strong: color-mix(in srgb, #36322d 70%, transparent);
+    --glass-blur: blur(26px) saturate(160%) contrast(1.04);
+    --glass-border: rgb(255 255 255 / 0.16);
+    --glass-shadow: 0 22px 60px rgb(0 0 0 / 0.46), inset 0 1px 0 rgb(255 255 255 / 0.16), inset 0 -1px 0 rgb(0 0 0 / 0.25);
+    background:
+      radial-gradient(130% 100% at 8% 0%, #5a3b1f 0%, rgba(90,59,31,0) 42%),
+      radial-gradient(120% 110% at 100% 8%, #283a66 0%, rgba(40,58,102,0) 46%),
+      radial-gradient(150% 120% at 92% 100%, #5c2f2c 0%, rgba(92,47,44,0) 48%),
+      radial-gradient(130% 120% at 20% 100%, #1f3d31 0%, rgba(31,61,49,0) 46%),
+      linear-gradient(135deg, #211c17, #17151f);
+  }
+
+  /* reusable glass class — used by every floating element in the glass direction */
+  .window[data-dir="glass"] .glass {
+    background: var(--glass);
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+  }
+  /* accessibility: respect reduced-transparency by falling back to opaque surfaces */
+  @media (prefers-reduced-transparency: reduce) {
+    .window[data-dir="glass"] .glass,
+    .window[data-dir="glass"] .titlebar,
+    .window[data-dir="glass"] .inspector,
+    .window[data-dir="glass"] .composer,
+    .window[data-dir="glass"] .btn-primary,
+    .window[data-dir="glass"] .btn-secondary,
+    .window[data-dir="glass"] .icon-btn,
+    .window[data-dir="glass"] .seg-ctl {
+      backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+      background: color-mix(in srgb, var(--surface) 96%, var(--ink)) !important;
+    }
+  }
+
+  /* ============ COMPONENTS (token-driven) ============ */
+  .titlebar {
+    flex: 0 0 38px;
+    background: var(--titlebar);
+    border-bottom: 0.5px solid var(--line);
+    display: flex; align-items: center; padding: 0 14px; gap: 8px;
+  }
+  .lights { display: flex; gap: 8px; }
+  .lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .lights .r { background: #ff5f57; } .lights .y { background: #febc2e; } .lights .g { background: #28c840; }
+  .titlebar .wtitle { font-size: 12px; color: var(--muted); margin-left: 6px; font-weight: 500; }
+
+  .app { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 320px; }
+
+  /* conversation */
+  .conversation { display: flex; flex-direction: column; min-width: 0; border-right: 0.5px solid var(--line); background: var(--content); }
+  .messages { flex: 1; overflow-y: auto; padding: 24px 30px 12px; }
+  .message { margin-bottom: 22px; }
+  .message-role { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
+  .message-plain { white-space: pre-wrap; margin: 0; }
+  .mdx p { margin: 0.55em 0; } .mdx > :first-child { margin-top: 0; }
+
+  .callout { border-left: 3px solid var(--info); background: color-mix(in srgb, var(--info) 8%, var(--surface)); padding: 9px 13px; border-radius: 0 6px 6px 0; margin: 0.7em 0; }
+  .callout > :first-child { margin-top: 0; } .callout > :last-child { margin-bottom: 0; }
+  .callout-title { font-weight: 600; font-size: 0.92em; }
+
+  .steps { counter-reset: step; list-style: none; padding-left: 0; margin: 0.6em 0; }
+  .step { position: relative; padding-left: 34px; margin: 0.5em 0; }
+  .step::before {
+    counter-increment: step; content: counter(step);
+    position: absolute; left: 0; top: 0; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600;
+  }
+  .inline-code { background: var(--inline-bg); padding: 1px 5px; border-radius: 4px; font-family: 'SF Mono', ui-monospace, monospace; font-size: 0.86em; }
+
+  /* composer */
+  .composer { display: flex; gap: 9px; align-items: flex-end; padding: 14px 20px 18px; border-top: 0.5px solid var(--line); }
+  .composer textarea {
+    flex: 1; resize: none; border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 9px 13px; font: inherit; line-height: 1.4; background: var(--field); color: var(--ink);
+    min-height: 38px; height: 38px;
+  }
+  .composer textarea::placeholder { color: var(--muted); }
+
+  /* the SEND button — this is the key "web vs native" tell */
+  .icon-btn {
+    border: none; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    background: var(--control-bg); color: var(--control-ink);
+    border-radius: 10px; width: 40px; height: 40px;
+  }
+  /* native directions: smaller, tighter send control */
+  .window[data-dir="warm"] .icon-btn,
+  .window[data-dir="system"] .icon-btn {
+    width: 30px; height: 30px; border-radius: var(--radius);
+    box-shadow: 0 1px 1px rgba(0,0,0,0.10);
+  }
+  .icon-btn svg { width: 18px; height: 18px; }
+  .window[data-dir="warm"] .icon-btn svg, .window[data-dir="system"] .icon-btn svg { width: 14px; height: 14px; }
+
+  /* inspector / manage */
+  .inspector { background: var(--panel); overflow-y: auto; }
+  .manage-tabs { display: flex; border-bottom: 0.5px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+  .manage-tabs button { flex: 1; padding: 11px; background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; font: inherit; font-size: 12px; color: var(--muted); }
+  .manage-tabs button.active { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  .manage-body { padding: 16px; }
+  .manage-body h3 { margin: 0 0 4px; font-size: 13px; }
+  .muted { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+
+  .list-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 0.5px solid var(--line); }
+  .list-row .nm { display: flex; flex-direction: column; }
+  .list-row .nm strong { font-weight: 600; font-size: 13px; }
+  .list-row .nm em { font-style: normal; color: var(--muted); font-size: 11px; }
+
+  /* ---- BUTTONS: the heart of the comparison ---- */
+  /* default / primary action */
+  .btn-primary {
+    font: inherit; font-size: var(--btn-font); cursor: pointer;
+    background: var(--accent); color: var(--accent-ink);
+    border: none; border-radius: var(--radius); padding: var(--btn-pad);
+  }
+  .window[data-dir="warm"] .btn-primary, .window[data-dir="system"] .btn-primary { box-shadow: 0 1px 1px rgba(0,0,0,0.10); font-weight: 500; }
+
+  /* secondary / neutral push button — native look in warm+system, accent-outline in current */
+  .btn-secondary {
+    font: inherit; font-size: var(--btn-font); cursor: pointer;
+    background: var(--surface); color: var(--accent);
+    border: 1px solid var(--accent); border-radius: var(--radius); padding: var(--btn-pad);
+  }
+  .window[data-dir="warm"] .btn-secondary, .window[data-dir="system"] .btn-secondary {
+    color: var(--ink); border: 0.5px solid var(--line); padding: 5px 12px;
+    background: color-mix(in srgb, var(--ink) 4%, var(--surface));
+    box-shadow: 0 1px 1px rgba(0,0,0,0.06);
+  }
+
+  /* segmented (Remote / Local) */
+  .seg-ctl { display: inline-flex; gap: 6px; }
+  .seg-ctl button { flex: 1; padding: 6px 10px; font: inherit; font-size: 12px; cursor: pointer; background: var(--surface); color: var(--muted); border: 1px solid var(--line); border-radius: var(--radius); }
+  .seg-ctl button.active { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  /* native: true segmented pill */
+  .window[data-dir="warm"] .seg-ctl, .window[data-dir="system"] .seg-ctl {
+    gap: 0; background: color-mix(in srgb, var(--ink) 7%, var(--panel)); border-radius: var(--radius); padding: 2px;
+  }
+  .window[data-dir="warm"] .seg-ctl button, .window[data-dir="system"] .seg-ctl button {
+    border: none; background: none; border-radius: calc(var(--radius) - 2px); padding: 4px 12px;
+  }
+  .window[data-dir="warm"] .seg-ctl button.active, .window[data-dir="system"] .seg-ctl button.active {
+    background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.14);
+  }
+
+  .field { border: 1px solid var(--line); border-radius: var(--radius); padding: 7px 10px; font: inherit; font-size: 13px; background: var(--field); color: var(--ink); width: 100%; }
+  .field::placeholder { color: var(--muted); }
+  .mcp-form { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+
+  /* ============ LIQUID GLASS: floating layer over full-bleed content ============ */
+  /* Content fills the whole window; glass chrome floats above it and the
+     content scrolls UNDERNEATH the floating bars/card (that's the lensing). */
+  .window[data-dir="glass"] .app { display: block; position: relative; }
+
+  .window[data-dir="glass"] .conversation { position: absolute; inset: 0; background: transparent; border: none; }
+  .window[data-dir="glass"] .messages {
+    position: absolute; inset: 0; overflow-y: auto;
+    /* clear the floating toolbar / sidebar card / composer pill */
+    padding: 64px 340px 92px 44px;
+    scroll-padding-top: 64px;
+  }
+  /* keep the reading column legible over the gradient with a soft scrim */
+  .window[data-dir="glass"] .message-assistant .mdx,
+  .window[data-dir="glass"] .message-user .message-plain { text-shadow: 0 1px 0 rgba(255,255,255,0.25); }
+
+  /* floating glass toolbar — content scrolls under it */
+  .window[data-dir="glass"] .titlebar {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 6; height: 48px;
+    background: var(--glass); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    border: none; border-bottom: 1px solid var(--glass-border);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 0.10);
+  }
+  .window[data-dir="glass"] .titlebar .wtitle { color: var(--ink); }
+
+  /* floating inset sidebar card */
+  .window[data-dir="glass"] .inspector {
+    position: absolute; top: 60px; right: 16px; bottom: 84px; width: 300px; z-index: 5;
+    border-radius: 20px; overflow: auto;
+    background: var(--glass); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border); box-shadow: var(--glass-shadow);
+  }
+  .window[data-dir="glass"] .manage-tabs {
+    background: transparent; border-bottom: 1px solid var(--glass-border);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  }
+
+  /* floating composer pill */
+  .window[data-dir="glass"] .composer {
+    position: absolute; left: 44px; right: 332px; bottom: 20px; z-index: 6;
+    padding: 9px 9px 9px 6px; border: 1px solid var(--glass-border);
+    border-radius: 26px; background: var(--glass);
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    box-shadow: var(--glass-shadow); align-items: center;
+  }
+  .window[data-dir="glass"] .composer textarea {
+    background: transparent; border: none; box-shadow: none; border-radius: 0;
+    padding: 6px 12px; min-height: 22px; height: 22px;
+  }
+  .window[data-dir="glass"] .composer textarea:focus { outline: none; }
+
+  /* capsule glass controls with specular top edge */
+  .window[data-dir="glass"] .btn-primary,
+  .window[data-dir="glass"] .btn-secondary,
+  .window[data-dir="glass"] .icon-btn,
+  .window[data-dir="glass"] .seg-ctl button { border-radius: 999px; }
+  .window[data-dir="glass"] .btn-primary {
+    background: color-mix(in srgb, var(--accent) 82%, transparent);
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border); color: var(--accent-ink);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5), 0 2px 10px rgb(0 0 0 / 0.16);
+  }
+  .window[data-dir="glass"] .btn-secondary {
+    background: var(--glass-strong); color: var(--ink);
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5), 0 1px 5px rgb(0 0 0 / 0.10);
+  }
+  .window[data-dir="glass"] .icon-btn {
+    width: 36px; height: 36px; border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 84%, transparent);
+    border: 1px solid var(--glass-border);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.55), 0 2px 10px rgb(0 0 0 / 0.18);
+  }
+  .window[data-dir="glass"] .icon-btn svg { width: 16px; height: 16px; }
+  .window[data-dir="glass"] .seg-ctl {
+    gap: 2px; padding: 3px; border-radius: 999px;
+    background: var(--glass); border: 1px solid var(--glass-border);
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  }
+  .window[data-dir="glass"] .seg-ctl button { border: none; background: none; color: var(--muted); padding: 5px 14px; }
+  .window[data-dir="glass"] .seg-ctl button.active {
+    background: var(--glass-strong); color: var(--ink);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.6), 0 1px 3px rgb(0 0 0 / 0.12);
+  }
+  .window[data-dir="glass"] .field {
+    background: var(--field); border: 1px solid var(--glass-border); border-radius: 12px;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  }
+
+  /* assistant bubbles get a faint glass tray so text floats above the gradient */
+  .window[data-dir="glass"] .callout {
+    background: color-mix(in srgb, var(--info) 14%, var(--glass));
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+    border-left: 3px solid var(--info); border-radius: 4px 16px 16px 4px;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.35), 0 6px 18px rgb(0 0 0 / 0.08);
+  }
+  .window[data-dir="glass"] .step::before {
+    background: color-mix(in srgb, var(--accent) 85%, transparent);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.45), 0 1px 3px rgb(0 0 0 / 0.2);
+  }
+  .window[data-dir="glass"] .list-row { border-bottom: 1px solid var(--glass-border); }
+
+  /* ============================================================
+     WARM · NATIVE — dedicated, structurally-native macOS window
+     (unified toolbar, inspector w/ segmented switcher, inset-grouped
+      lists, table-footer +/-, macOS switches, bezeled push buttons)
+     ============================================================ */
+  .window-warm {
+    --paper:#f6f4ef; --ink:#23211d; --muted:#7c766c; --line:#e3ded4;
+    --accent:#9a6230; --accent-ink:#fff; --surface:#fffdf9; --field:#fffdf9;
+    --panel:#efece5; --content:#faf8f3; --sel:rgba(154,98,48,0.16);
+    --inline-bg:#efeae0; --success:#3a7d4f; --info:#2b6cb0;
+    --hair: color-mix(in srgb, var(--ink) 12%, transparent);
+    --font:13px;
+    background: var(--content); color: var(--ink); font-size: 13px;
+  }
+  .window-warm[data-mode="dark"] {
+    --paper:#211f1b; --ink:#f0ece4; --muted:#9b948a; --line:#35312b;
+    --accent:#c79257; --accent-ink:#22150a; --surface:#2a2722; --field:#2a2722;
+    --panel:#1b1916; --content:#211f1b; --sel:rgba(199,146,87,0.2);
+    --inline-bg:#2f2b25; --success:#5fae74; --hair: color-mix(in srgb, var(--ink) 16%, transparent);
+  }
+
+  /* ---- unified toolbar (the biggest native tell) ---- */
+  .window-warm .toolbar {
+    flex: 0 0 52px; display: flex; align-items: center; gap: 4px; padding: 0 12px;
+    background: var(--panel); border-bottom: 0.5px solid var(--line);
+  }
+  .window-warm .toolbar .lights { display: flex; gap: 8px; margin-right: 10px; }
+  .window-warm .toolbar .lights i { width: 12px; height: 12px; border-radius: 50%; }
+  .window-warm .lights .r { background:#ff5f57; } .window-warm .lights .y { background:#febc2e; } .window-warm .lights .g { background:#28c840; }
+  .window-warm .tbtn {
+    width: 30px; height: 28px; border-radius: 6px; border: none; background: none;
+    color: var(--muted); display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .window-warm .tbtn:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
+  .window-warm .tbtn svg { width: 17px; height: 17px; }
+  .window-warm .tb-title { display: flex; flex-direction: column; line-height: 1.15; margin-left: 6px; }
+  .window-warm .tb-title strong { font-size: 13px; font-weight: 600; }
+  .window-warm .tb-title span { font-size: 11px; color: var(--muted); }
+  .window-warm .tb-spacer { flex: 1; }
+
+  /* ---- split ---- */
+  .window-warm .app { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 308px; }
+  .window-warm .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--content); border-right: 0.5px solid var(--line); }
+  .window-warm .messages { flex: 1; overflow-y: auto; padding: 22px 28px 12px; }
+
+  /* ---- messages with avatar gutter ---- */
+  .window-warm .msg { display: flex; gap: 11px; margin-bottom: 20px; }
+  .window-warm .avatar { width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; }
+  .window-warm .avatar svg { width: 15px; height: 15px; }
+  .window-warm .avatar.you { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--muted); }
+  .window-warm .avatar.stem { background: var(--accent); color: var(--accent-ink); }
+  .window-warm .msg .body { min-width: 0; padding-top: 1px; }
+  .window-warm .msg .who { font-size: 12px; font-weight: 600; margin-bottom: 2px; }
+  .window-warm .msg .body p { margin: .25em 0; }
+  .window-warm .inline-code { background: var(--inline-bg); padding: 1px 5px; border-radius: 4px; font-family: 'SF Mono', ui-monospace, monospace; font-size: 0.86em; }
+  .window-warm .callout { border-left: 3px solid var(--info); background: color-mix(in srgb, var(--info) 9%, var(--surface)); padding: 8px 12px; border-radius: 0 6px 6px 0; margin: .5em 0; }
+  .window-warm .callout .ct { font-weight: 600; font-size: .92em; }
+  .window-warm .steps { counter-reset: s; list-style: none; padding: 0; margin: .5em 0; }
+  .window-warm .steps li { position: relative; padding-left: 28px; margin: .4em 0; }
+  .window-warm .steps li::before { counter-increment: s; content: counter(s); position: absolute; left: 0; top: 0; width: 19px; height: 19px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; }
+
+  /* ---- composer: inset rounded field + circular send ---- */
+  .window-warm .composer { padding: 12px 16px 16px; border-top: 0.5px solid var(--line); }
+  .window-warm .field-wrap {
+    display: flex; align-items: flex-end; gap: 8px; background: var(--field);
+    border: 1px solid var(--line); border-radius: 11px; padding: 8px;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .window-warm .field-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--sel); }
+  .window-warm .field-wrap .attach { width: 30px; height: 30px; flex: none; border: none; background: none; color: var(--muted); border-radius: 7px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .window-warm .field-wrap .attach:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+  .window-warm .field-wrap textarea {
+    flex: 1; border: none; background: none; outline: none; resize: none;
+    font: inherit; font-size: 14px; line-height: 1.5; color: var(--ink);
+    min-height: 64px; max-height: 160px; padding: 6px 2px; align-self: stretch;
+  }
+  .window-warm .field-wrap textarea::placeholder { color: var(--muted); }
+  .window-warm .send { width: 32px; height: 32px; flex: none; border-radius: 8px; border: none; background: var(--accent); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 1px 1px rgba(0,0,0,.15); }
+  .window-warm .send svg { width: 16px; height: 16px; }
+
+  /* ---- inspector ---- */
+  .window-warm .inspector { background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+  .window-warm .insp-tabs { display: flex; justify-content: center; padding: 9px; border-bottom: 0.5px solid var(--line); }
+  .window-warm .insp-seg { display: inline-flex; background: color-mix(in srgb, var(--ink) 7%, var(--panel)); border-radius: 7px; padding: 2px; gap: 2px; }
+  .window-warm .insp-seg button { width: 50px; height: 26px; border: none; background: none; border-radius: 5px; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .window-warm .insp-seg button svg { width: 16px; height: 16px; }
+  .window-warm .insp-seg button.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.16); }
+  .window-warm .insp-body { padding: 14px; overflow-y: auto; }
+
+  /* ---- inset-grouped list (System Settings style) ---- */
+  .window-warm .grp-head { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 4px 4px 7px; }
+  .window-warm .group { background: var(--surface); border: 0.5px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .window-warm .row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; }
+  .window-warm .row + .row { border-top: 0.5px solid var(--hair); }
+  .window-warm .ricon { width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; flex: none; box-shadow: inset 0 1px 0 rgba(255,255,255,.25); }
+  .window-warm .ricon svg { width: 15px; height: 15px; }
+  .window-warm .ricon.mail { background: #2b6cb0; }
+  .window-warm .ricon.docs { background: #9a6230; }
+  .window-warm .ricon.fs   { background: #3a7d4f; }
+  .window-warm .rmain { flex: 1; min-width: 0; }
+  .window-warm .rmain strong { display: block; font-size: 13px; font-weight: 500; }
+  .window-warm .rmain em { font-style: normal; font-size: 11px; color: var(--muted); }
+  .window-warm .pill { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .window-warm .pill.ok  { background: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
+  .window-warm .pill.off { background: color-mix(in srgb, var(--muted) 22%, transparent); color: var(--muted); }
+
+  /* table-footer +/- gutter (iconic macOS) */
+  .window-warm .gutter { display: inline-flex; margin-top: 7px; border: 0.5px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); box-shadow: 0 1px 1px rgba(0,0,0,.05); }
+  .window-warm .gutter button { width: 28px; height: 22px; border: none; background: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+  .window-warm .gutter button:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
+  .window-warm .gutter button + button { border-left: 0.5px solid var(--line); }
+
+  /* macOS toggle switch */
+  .window-warm .switch { width: 36px; height: 21px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 45%, transparent); position: relative; flex: none; transition: background .15s; }
+  .window-warm .switch.on { background: var(--accent); }
+  .window-warm .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.35); transition: left .15s; }
+  .window-warm .switch.on::after { left: 17px; }
+
+  /* native bezeled push buttons + popup + fields in the add-server card */
+  .window-warm .formgroup { background: var(--surface); border: 0.5px solid var(--line); border-radius: 9px; padding: 11px; display: flex; flex-direction: column; gap: 9px; }
+  .window-warm .wseg { display: flex; background: color-mix(in srgb, var(--ink) 7%, var(--surface)); border-radius: 7px; padding: 2px; }
+  .window-warm .wseg button { flex: 1; border: none; background: none; border-radius: 5px; padding: 4px; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .window-warm .wseg button.active { background: var(--field); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.14); }
+  .window-warm .ifield { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; font: inherit; font-size: 13px; background: var(--field); color: var(--ink); }
+  .window-warm .ifield::placeholder { color: var(--muted); }
+  .window-warm .ifield:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--sel); }
+  .window-warm .pushrow { display: flex; justify-content: flex-end; }
+  .window-warm .push { font: inherit; font-size: 13px; padding: 5px 16px; border-radius: 6px; border: 0.5px solid var(--line); cursor: pointer; background: linear-gradient(var(--surface), color-mix(in srgb, var(--ink) 6%, var(--surface))); color: var(--ink); box-shadow: 0 1px 1px rgba(0,0,0,.06); }
+  .window-warm .push.default { background: linear-gradient(color-mix(in srgb, var(--accent) 86%, white), var(--accent)); color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 55%, black); box-shadow: inset 0 1px 0 rgba(255,255,255,.3), 0 1px 1px rgba(0,0,0,.12); font-weight: 500; }
+
+  /* scrollbars hint */
+  .messages, .inspector { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+  .messages:hover, .inspector:hover { scrollbar-color: color-mix(in srgb, var(--ink) 30%, transparent) transparent; }
+
+  .legend { max-width: 980px; margin: 22px auto 0; font-size: 12.5px; color: #44444a; line-height: 1.6; }
+  .legend code { background: rgba(0,0,0,0.07); padding: 1px 6px; border-radius: 4px; font-family: 'SF Mono', ui-monospace, monospace; font-size: 0.9em; }
+</style>
+</head>
+<body>
+  <div class="controls">
+    <h1>Stem — design directions</h1>
+    <div class="spacer"></div>
+    <div class="seg" id="dirSeg">
+      <button data-dir="current" class="active">Current</button>
+      <button data-dir="warm">Native · Warm</button>
+      <button data-dir="system">Native · System</button>
+      <button data-dir="glass">Liquid Glass</button>
+    </div>
+    <div class="seg" id="modeSeg">
+      <button data-mode="light" class="active">Light</button>
+      <button data-mode="dark">Dark</button>
+    </div>
+  </div>
+
+  <p class="caption" id="caption"></p>
+
+  <div class="stage">
+    <div class="window" id="win" data-dir="current" data-mode="light">
+      <div class="titlebar">
+        <div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+        <span class="wtitle">Stem</span>
+      </div>
+      <div class="app">
+        <!-- conversation -->
+        <div class="conversation">
+          <div class="messages">
+            <div class="message message-user">
+              <div class="message-role">You</div>
+              <p class="message-plain">How do I connect Fastmail as an MCP server?</p>
+            </div>
+            <div class="message message-assistant">
+              <div class="message-role">Stem</div>
+              <div class="mdx">
+                <p>You can add it from the <span class="inline-code">Manage → MCP</span> tab. Fastmail is a remote server, so it authenticates over OAuth:</p>
+                <ol class="steps">
+                  <li class="step">Choose <strong>Remote</strong> and paste <span class="inline-code">https://api.fastmail.com/mcp</span>.</li>
+                  <li class="step">Click <strong>Add server</strong>, then <strong>Sign in</strong> to open the browser flow.</li>
+                  <li class="step">Stem restarts the Codex runtime so the server loads.</li>
+                </ol>
+                <div class="callout callout-info">
+                  <div class="callout-title">Note</div>
+                  <p style="margin:.3em 0 0">The chat assistant is sandboxed and can't edit its own config — MCP setup is app-UI only, by design.</p>
+                </div>
+              </div>
+            </div>
+            <div class="message message-user">
+              <div class="message-role">You</div>
+              <p class="message-plain">Will I have to sign in again every time?</p>
+            </div>
+            <div class="message message-assistant">
+              <div class="message-role">Stem</div>
+              <div class="mdx">
+                <p>No — the OAuth token is stored in Stem's isolated <span class="inline-code">CODEX_HOME</span> and reused across launches. You'll only re-authenticate if the token is revoked or expires.</p>
+                <p>If a server stops responding, open <span class="inline-code">Manage → MCP</span> and check its status badge; a quick <strong>Sign in</strong> refreshes the connection.</p>
+              </div>
+            </div>
+            <div class="message message-user">
+              <div class="message-role">You</div>
+              <p class="message-plain">Great. Can you also read my latest unread email?</p>
+            </div>
+            <div class="message message-assistant">
+              <div class="message-role">Stem</div>
+              <div class="mdx">
+                <p>Once Fastmail is connected I can — scroll down and try the composer below.</p>
+              </div>
+            </div>
+          </div>
+          <div class="composer">
+            <textarea placeholder="Message Stem…"></textarea>
+            <button class="icon-btn" title="Send">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+        </div>
+        <!-- inspector -->
+        <aside class="inspector">
+          <div class="manage-tabs">
+            <button>Memory</button>
+            <button>Skills</button>
+            <button class="active">MCP</button>
+          </div>
+          <div class="manage-body">
+            <h3>MCP servers</h3>
+            <p class="muted">Connect external tools the assistant can call.</p>
+
+            <div class="list-row">
+              <span class="nm"><strong>fastmail</strong><em>remote · signed in</em></span>
+              <button class="btn-secondary">Sign in</button>
+            </div>
+            <div class="list-row">
+              <span class="nm"><strong>context7</strong><em>local · stdio</em></span>
+              <button class="btn-secondary">Remove</button>
+            </div>
+
+            <div class="mcp-form">
+              <div class="seg-ctl">
+                <button class="active">Remote</button>
+                <button>Local</button>
+              </div>
+              <input class="field" placeholder="Name (e.g. fastmail)" />
+              <input class="field" placeholder="https://api.fastmail.com/mcp" />
+              <button class="btn-primary">Add server</button>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+    <!-- ============ WARM · NATIVE dedicated window ============ -->
+    <div class="window window-warm" id="winWarm" data-mode="light" style="display:none">
+      <div class="toolbar">
+        <div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+        <button class="tbtn" title="Toggle sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+        </button>
+        <button class="tbtn" title="New conversation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </button>
+        <div class="tb-title"><strong>Stem</strong><span>GPT‑5 · ChatGPT subscription</span></div>
+        <div class="tb-spacer"></div>
+        <button class="tbtn" title="Inspector">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="8" cy="17" r="2" fill="currentColor" stroke="none"/></svg>
+        </button>
+      </div>
+      <div class="app">
+        <!-- conversation -->
+        <div class="conversation">
+          <div class="messages">
+            <div class="msg">
+              <div class="avatar you"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></div>
+              <div class="body"><div class="who">You</div><p>How do I connect Fastmail as an MCP server?</p></div>
+            </div>
+            <div class="msg">
+              <div class="avatar stem"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l1.8 4.7L18.5 8l-4.7 1.3L12 14l-1.8-4.7L5.5 8l4.7-1.3z"/></svg></div>
+              <div class="body">
+                <div class="who">Stem</div>
+                <p>Add it from the <span class="inline-code">Inspector → MCP</span> tab. Fastmail is a remote server, so it authenticates over OAuth:</p>
+                <ol class="steps">
+                  <li>Choose <strong>Remote</strong> and paste <span class="inline-code">https://api.fastmail.com/mcp</span>.</li>
+                  <li>Click <strong>Add</strong>, then <strong>Sign in</strong> to open the browser flow.</li>
+                  <li>Stem restarts the Codex runtime so the server loads.</li>
+                </ol>
+                <div class="callout"><div class="ct">Note</div><p style="margin:.3em 0 0">The assistant is sandboxed and can't edit its own config — MCP setup is app-UI only, by design.</p></div>
+              </div>
+            </div>
+            <div class="msg">
+              <div class="avatar you"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></div>
+              <div class="body"><div class="who">You</div><p>Will I have to sign in again every time?</p></div>
+            </div>
+            <div class="msg">
+              <div class="avatar stem"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l1.8 4.7L18.5 8l-4.7 1.3L12 14l-1.8-4.7L5.5 8l4.7-1.3z"/></svg></div>
+              <div class="body"><div class="who">Stem</div><p>No — the token lives in Stem's isolated <span class="inline-code">CODEX_HOME</span> and is reused across launches. You'll only re-auth if it's revoked or expires.</p></div>
+            </div>
+          </div>
+          <div class="composer">
+            <div class="field-wrap">
+              <button class="attach" title="Attach">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.25 20.2a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 0 1 4.24 4.24l-9.2 9.19a1 1 0 0 1-1.41-1.41l8.48-8.49"/></svg>
+              </button>
+              <textarea placeholder="Message Stem…" rows="3"></textarea>
+              <button class="send" title="Send">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <!-- inspector -->
+        <aside class="inspector">
+          <div class="insp-tabs">
+            <div class="insp-seg">
+              <button title="Memory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg></button>
+              <button title="Skills"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l1.6 4.4L18 8l-4.4 1.6L12 14l-1.6-4.4L6 8l4.4-1.6z"/><path d="M18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8z"/></svg></button>
+              <button class="active" title="MCP"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 2v6M15 2v6M7 8h10v3a5 5 0 0 1-10 0z"/><path d="M12 16v6"/></svg></button>
+            </div>
+          </div>
+          <div class="insp-body">
+            <div class="grp-head">MCP Servers</div>
+            <div class="group">
+              <div class="row">
+                <span class="ricon mail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span>
+                <span class="rmain"><strong>fastmail</strong><em>remote · oauth</em></span>
+                <span class="pill ok">Signed in</span>
+              </div>
+              <div class="row">
+                <span class="ricon docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h10l6 6v10H4z"/><path d="M14 4v6h6"/></svg></span>
+                <span class="rmain"><strong>context7</strong><em>local · stdio</em></span>
+                <span class="pill off">Local</span>
+              </div>
+              <div class="row">
+                <span class="ricon fs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z"/></svg></span>
+                <span class="rmain"><strong>filesystem</strong><em>local · stdio</em></span>
+                <span class="pill off">Local</span>
+              </div>
+            </div>
+            <div class="gutter"><button title="Add">+</button><button title="Remove">−</button></div>
+
+            <div class="grp-head" style="margin-top:18px">Permissions</div>
+            <div class="group">
+              <div class="row"><span class="rmain"><strong>Allow tool calls</strong><em>Let the assistant invoke MCP tools</em></span><span class="switch on"></span></div>
+              <div class="row"><span class="rmain"><strong>Confirm each call</strong><em>Ask before running</em></span><span class="switch"></span></div>
+            </div>
+
+            <div class="grp-head" style="margin-top:18px">Add Server</div>
+            <div class="formgroup">
+              <div class="wseg"><button class="active">Remote</button><button>Local</button></div>
+              <input class="ifield" placeholder="Name (e.g. fastmail)" />
+              <input class="ifield" placeholder="https://api.fastmail.com/mcp" />
+              <div class="pushrow"><button class="push default">Add Server</button></div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+
+<script>
+  const captions = {
+    current: '<b>Current.</b> Warm “paper” palette with large, solid warm-brown buttons (15px text, 9–10px radius, roomy padding). Reads as a branded web app.',
+    warm: '<b>Native · Warm (redesigned).</b> A structurally native macOS app, not a restyled web page: a unified <b>toolbar</b> with traffic lights + toolbar icons and a title/subtitle; an <b>inspector</b> with a segmented icon switcher (Memory / Skills / MCP); <b>inset-grouped lists</b> with SF-Symbol-style row icons, status pills, and the iconic <b>table-footer +/−</b> control; real <b>macOS toggle switches</b>; a <b>bezeled default push button</b>; and an inset composer field with a circular send. Keeps Stem’s warm cream + sienna identity throughout.',
+    system: '<b>Native · System.</b> Stock macOS look — cool neutral grays, system-blue accent, frosted-style sidebar tone. Unmistakably native, but loses the warm Stem character.',
+    glass: '<b>Liquid Glass.</b> Apple’s macOS 26 (Tahoe) material: translucent, refractive chrome that blurs and saturates what’s behind it, capsule controls with specular edge highlights, and a soft gradient backdrop the glass plays against. The sidebar, titlebar, composer and buttons all float as glass; the reading area stays legible. Browser approximation via <code>backdrop-filter</code> — the real app gets native <code>vibrancy</code> for true refraction.'
+  };
+  const legend = `Compare the <b>Send</b> button, the <b>Add server</b> / <b>Sign in</b> buttons, the <b>Remote/Local</b> segmented control, and the overall density. Toggle <code>Light/Dark</code> to check both appearances. Pick a direction (and say if you want frosted sidebar vibrancy + auto dark mode in the real app).`;
+  const win = document.getElementById('win');
+  const winWarm = document.getElementById('winWarm');
+  const cap = document.getElementById('caption');
+  let curDir = 'current';
+  const showDir = (dir) => {
+    curDir = dir;
+    const warm = dir === 'warm';
+    win.style.display = warm ? 'none' : 'flex';
+    winWarm.style.display = warm ? 'flex' : 'none';
+    if (!warm) win.dataset.dir = dir;
+    cap.innerHTML = captions[dir];
+  };
+  document.getElementById('legend').innerHTML = legend;
+  document.getElementById('dirSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if(!b) return;
+    [...e.currentTarget.children].forEach(c => c.classList.toggle('active', c===b));
+    showDir(b.dataset.dir);
+  });
+  document.getElementById('modeSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if(!b) return;
+    win.dataset.mode = b.dataset.mode;
+    winWarm.dataset.mode = b.dataset.mode;
+    [...e.currentTarget.children].forEach(c => c.classList.toggle('active', c===b));
+  });
+  showDir('warm');
+  [...document.getElementById('dirSeg').children].forEach(c => c.classList.toggle('active', c.dataset.dir === 'warm'));
+</script>
+</body>
+</html>

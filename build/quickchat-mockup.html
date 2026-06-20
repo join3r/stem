@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Stem — Quick Chat overlay mockup</title>
+<style>
+  /* Palette lifted verbatim from src/renderer/styles.css */
+  :root {
+    --paper: #f6f4ef; --content: #faf8f3; --panel: #efece5;
+    --ink: #23211d; --muted: #7c766c; --line: #e0dccf;
+    --hair: rgba(35,33,29,.10); --accent: #9a6230; --accent-ink: #fff;
+    --surface: #fffdf9; --field: #fffdf9; --sel: rgba(154,98,48,.16);
+    --radius: 6px;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  }
+  .dark {
+    --paper:#1d1b18; --content:#211f1b; --panel:#1b1916;
+    --ink:#f0ece4; --muted:#9b948a; --line:#35312b; --hair:rgba(240,236,228,.12);
+    --accent:#c79257; --accent-ink:#22150a; --surface:#2a2722; --field:#2a2722;
+    --sel:rgba(199,146,87,.22);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0d0c0b; color:var(--ink); font-size:13px; line-height:1.5; }
+
+  .stage {
+    display:grid; grid-template-columns:1fr 1fr; gap:0;
+  }
+  .pane { padding:54px 40px 60px; position:relative; min-height:760px; display:flex; flex-direction:column; align-items:center; gap:38px; }
+  /* faux desktop wallpaper behind the floating panel */
+  .pane.light { background:
+      radial-gradient(120% 90% at 70% 0%, #c9b89a 0%, #a98b63 42%, #6f5436 100%); }
+  .pane.dark  { background:
+      radial-gradient(120% 90% at 70% 0%, #3a3530 0%, #211d18 45%, #0e0c0a 100%); }
+
+  .label { color:#fff; opacity:.85; font-size:12px; letter-spacing:.06em; text-transform:uppercase; font-weight:600; text-shadow:0 1px 2px rgba(0,0,0,.4); }
+
+  /* faux menubar + windows behind, to convey "floats on top of everything / all spaces" */
+  .behind { position:absolute; inset:0; overflow:hidden; pointer-events:none; }
+  .menubar { position:absolute; top:0; left:0; right:0; height:26px; background:rgba(255,255,255,.18); backdrop-filter:blur(6px); display:flex; align-items:center; gap:16px; padding:0 14px; color:#fff; font-size:11px; }
+  .dark .menubar { background:rgba(0,0,0,.35); }
+  .winghost { position:absolute; border-radius:12px; background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.14); }
+  .winghost.a { width:300px; height:200px; left:24px; top:120px; transform:rotate(-2deg); }
+  .winghost.b { width:260px; height:300px; right:18px; bottom:60px; transform:rotate(2deg); }
+
+  /* ---- the Quick Chat overlay itself ---- */
+  .qc {
+    position:relative; z-index:2; width:560px; max-width:100%;
+    background:color-mix(in srgb, var(--surface) 88%, transparent);
+    -webkit-backdrop-filter:blur(30px) saturate(140%);
+    backdrop-filter:blur(30px) saturate(140%);
+    border:0.5px solid var(--line);
+    border-radius:16px;
+    box-shadow:0 24px 70px rgba(0,0,0,.45), 0 2px 0 rgba(255,255,255,.25) inset;
+    overflow:hidden;
+  }
+  .qc-row { display:flex; align-items:center; gap:12px; padding:18px 20px; }
+  .qc-mark { width:26px; height:26px; flex:none; color:var(--accent); }
+  .qc-input { flex:1; border:none; background:none; outline:none; font:inherit; font-size:19px; color:var(--ink); padding:2px 0; }
+  .qc-input::placeholder { color:var(--muted); }
+  .qc-esc { font-size:11px; color:var(--muted); border:0.5px solid var(--line); border-radius:5px; padding:2px 7px; background:color-mix(in srgb, var(--ink) 4%, transparent); }
+
+  .qc-foot { display:flex; align-items:center; gap:10px; padding:10px 16px; border-top:0.5px solid var(--hair); background:color-mix(in srgb, var(--ink) 3%, transparent); }
+  .pill { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); border:0.5px solid var(--line); border-radius:999px; padding:3px 10px; background:var(--field); }
+  .pill b { color:var(--ink); font-weight:600; }
+  .pill .dot { width:6px; height:6px; border-radius:50%; background:var(--accent); }
+  .foot-spacer { flex:1; }
+  .hint { font-size:11px; color:var(--muted); }
+  .hint kbd { font-family:inherit; border:0.5px solid var(--line); border-bottom-width:1.5px; border-radius:4px; padding:0 5px; background:var(--field); color:var(--ink); font-size:10px; }
+
+  /* typed-state variant */
+  .typed .qc-input { color:var(--ink); }
+
+  .caption { color:#fff; opacity:.78; font-size:11px; max-width:560px; text-align:center; text-shadow:0 1px 2px rgba(0,0,0,.4); }
+
+  /* ---- Settings tab inset (shortcut recorder) ---- */
+  .settings { width:300px; background:var(--panel); border:0.5px solid var(--line); border-radius:12px; padding:14px; box-shadow:0 16px 50px rgba(0,0,0,.4); position:relative; z-index:2; }
+  .grp-head { font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); margin:0 0 8px; }
+  .formgroup { background:var(--surface); border:0.5px solid var(--line); border-radius:9px; padding:11px; display:flex; flex-direction:column; gap:11px; }
+  .frow { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .frow .lbl { font-size:13px; }
+  .frow .sub { font-size:11px; color:var(--muted); }
+  .recorder { font-size:12px; border:1px solid var(--accent); border-radius:6px; padding:5px 10px; background:var(--field); color:var(--ink); box-shadow:0 0 0 3px var(--sel); display:inline-flex; gap:4px; }
+  .recorder kbd { font-family:inherit; font-weight:600; }
+  .seg-ctl { display:flex; background:color-mix(in srgb, var(--ink) 7%, var(--surface)); border-radius:7px; padding:2px; }
+  .seg-ctl button { flex:1; border:none; background:none; border-radius:5px; padding:4px 8px; font:inherit; font-size:12px; color:var(--muted); cursor:default; }
+  .seg-ctl button.active { background:var(--field); color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.14); }
+  .switch { width:36px; height:21px; border-radius:999px; background:var(--accent); position:relative; flex:none; }
+  .switch::after { content:''; position:absolute; top:2px; left:17px; width:17px; height:17px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.35); }
+</style>
+</head>
+<body>
+<div class="stage">
+  <!-- ============ LIGHT ============ -->
+  <div class="pane light">
+    <div class="behind">
+      <div class="menubar"><b style="font-weight:600">Stem</b><span>File</span><span>Edit</span><span>View</span><span style="margin-left:auto">􀙇  􀊫  100%  Fri 14:32</span></div>
+      <div class="winghost a"></div><div class="winghost b"></div>
+    </div>
+
+    <div class="label">Summoned — empty</div>
+    <div class="qc">
+      <div class="qc-row">
+        <svg class="qc-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z"/></svg>
+        <input class="qc-input" placeholder="Ask Stem anything…" />
+        <span class="qc-esc">esc</span>
+      </div>
+      <div class="qc-foot">
+        <span class="pill"><span class="dot"></span> Effort <b>Medium</b></span>
+        <span class="pill"><span class="dot"></span> Speed <b>Fast</b></span>
+        <span class="foot-spacer"></span>
+        <span class="hint"><kbd>⏎</kbd> send &nbsp; <kbd>esc</kbd> dismiss</span>
+      </div>
+    </div>
+
+    <div class="label">After typing</div>
+    <div class="qc typed">
+      <div class="qc-row">
+        <svg class="qc-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z"/></svg>
+        <input class="qc-input" value="Summarize the diff on my feature branch" />
+        <span class="qc-esc">esc</span>
+      </div>
+      <div class="qc-foot">
+        <span class="pill"><span class="dot"></span> Effort <b>Medium</b></span>
+        <span class="pill"><span class="dot"></span> Speed <b>Fast</b></span>
+        <span class="foot-spacer"></span>
+        <span class="hint"><kbd>⏎</kbd> send &nbsp; <kbd>esc</kbd> dismiss</span>
+      </div>
+    </div>
+
+    <div class="caption">Frameless, always-on-top, visible on every Space &amp; display. No sidebar.<br/>Press the global shortcut or <b>esc</b> to hide (the window is hidden, not closed).</div>
+  </div>
+
+  <!-- ============ DARK ============ -->
+  <div class="pane dark">
+    <div class="dark" style="display:contents">
+    <div class="behind">
+      <div class="menubar"><b style="font-weight:600">Stem</b><span>File</span><span>Edit</span><span>View</span><span style="margin-left:auto">􀙇  􀊫  100%  Fri 14:32</span></div>
+      <div class="winghost a"></div><div class="winghost b"></div>
+    </div>
+
+    <div class="label">Dark mode</div>
+    <div class="qc">
+      <div class="qc-row">
+        <svg class="qc-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z"/></svg>
+        <input class="qc-input" placeholder="Ask Stem anything…" />
+        <span class="qc-esc">esc</span>
+      </div>
+      <div class="qc-foot">
+        <span class="pill"><span class="dot"></span> Effort <b>Medium</b></span>
+        <span class="pill"><span class="dot"></span> Speed <b>Fast</b></span>
+        <span class="foot-spacer"></span>
+        <span class="hint"><kbd>⏎</kbd> send &nbsp; <kbd>esc</kbd> dismiss</span>
+      </div>
+    </div>
+
+    <div class="label">Settings ▸ Quick Chat</div>
+    <div class="settings">
+      <p class="grp-head">Quick Chat</p>
+      <div class="formgroup">
+        <div class="frow">
+          <div><div class="lbl">Global shortcut</div><div class="sub">Press keys to record…</div></div>
+          <span class="recorder"><kbd>⌥</kbd><kbd>Space</kbd></span>
+        </div>
+        <div>
+          <div class="sub" style="margin-bottom:6px">Default effort</div>
+          <div class="seg-ctl"><button>Low</button><button class="active">Medium</button><button>High</button><button>X-High</button></div>
+        </div>
+        <div>
+          <div class="sub" style="margin-bottom:6px">Default speed</div>
+          <div class="seg-ctl"><button>Standard</button><button class="active">Fast</button></div>
+        </div>
+        <div class="frow">
+          <div><div class="lbl">Show on all displays</div><div class="sub">Float above every Space</div></div>
+          <span class="switch"></span>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="tileA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f5f2eb"/>
+      <stop offset="1" stop-color="#e7e1d4"/>
+    </linearGradient>
+    <linearGradient id="leafA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#aa6a30"/>
+      <stop offset="1" stop-color="#834f22"/>
+    </linearGradient>
+  </defs>
+  <rect x="60" y="60" width="904" height="904" rx="208" fill="url(#tileA)"/>
+  <g fill="none" stroke="#834f22" stroke-width="46" stroke-linecap="round">
+    <path d="M512 800 C 504 690 504 600 512 470"/>
+  </g>
+  <path d="M512 600 C 432 596 372 548 360 452 C 452 452 506 512 512 596 Z" fill="url(#leafA)"/>
+  <path d="M512 600 C 592 596 652 548 664 452 C 572 452 518 512 512 596 Z" fill="url(#leafA)"/>
+  <path d="M512 470 C 470 466 444 436 442 392 C 488 396 512 426 512 466 Z" fill="url(#leafA)"/>
+  <path d="M512 470 C 554 466 580 436 582 392 C 536 396 512 426 512 466 Z" fill="url(#leafA)"/>
+</svg>

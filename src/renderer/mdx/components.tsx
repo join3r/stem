@@ -36,10 +36,29 @@ export function Collapsible({ title, children }: { title?: string; children?: Re
 }
 
 export function CodeBlock({ lang, value }: { lang?: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    void navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
   return (
-    <pre className="code-block" data-lang={lang ?? ''}>
-      <code>{value}</code>
-    </pre>
+    <div className="code-block-wrap">
+      <button
+        type="button"
+        className="code-copy"
+        onClick={copy}
+        aria-label={copied ? 'Copied' : 'Copy code'}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+      <pre className="code-block" data-lang={lang ?? ''}>
+        <code>{value}</code>
+      </pre>
+    </div>
   );
 }
 
