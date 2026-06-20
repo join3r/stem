@@ -15,7 +15,9 @@ const DEFAULTS: AppSettings = {
     defaultModel: null,
     defaultEffort: 'medium',
     defaultServiceTier: 'priority',
-    showOnAllDisplays: true
+    showOnAllDisplays: true,
+    // After 5 minutes idle, re-summoning the overlay starts a fresh thread.
+    newThreadTimeoutMs: 5 * 60_000
   }
 };
 
@@ -30,7 +32,11 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
       // 'priority' (Fast) or explicit null (Standard); anything else → default.
       defaultServiceTier:
         qc.defaultServiceTier === 'priority' ? 'priority' : qc.defaultServiceTier === null ? null : d.defaultServiceTier,
-      showOnAllDisplays: typeof qc.showOnAllDisplays === 'boolean' ? qc.showOnAllDisplays : d.showOnAllDisplays
+      showOnAllDisplays: typeof qc.showOnAllDisplays === 'boolean' ? qc.showOnAllDisplays : d.showOnAllDisplays,
+      newThreadTimeoutMs:
+        typeof qc.newThreadTimeoutMs === 'number' && qc.newThreadTimeoutMs >= 0
+          ? qc.newThreadTimeoutMs
+          : d.newThreadTimeoutMs
     }
   };
 }

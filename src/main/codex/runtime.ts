@@ -261,6 +261,16 @@ export class CodexRuntime extends EventEmitter {
     });
   }
 
+  /**
+   * Create an empty thread and return its id, without running a turn. Lets the
+   * Quick Chat overlay pre-create its thread so the main process knows the
+   * thread id (for event routing) before any events flow.
+   */
+  async createThread(model?: string): Promise<string> {
+    await this.ensureStarted();
+    return this.startThread(model);
+  }
+
   async startTurn(input: StartTurnInput): Promise<StartTurnResult> {
     const memory = await captureMemoryFromUserInput(input.input);
     if (memory.shouldAcknowledge) {

@@ -31,12 +31,17 @@ import {
   renameFolder,
   setChatFolder
 } from './workspace/chats';
+import { activityLabel } from '../shared/activity';
 import type {
   ChatListResult,
+  ItemEventParams,
   McpServerInput,
+  QuickChatHandoff,
   QuickChatPrompt,
   QuickChatSettings,
-  StartTurnInput
+  QuickChatStatus,
+  StartTurnInput,
+  StartTurnResult
 } from '../shared/types';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -56,11 +61,31 @@ if (process.env.ELECTRON_RENDERER_URL) {
 
 let mainWindow: BrowserWindow | null = null;
 let quickChatWindow: BrowserWindow | null = null;
+/** Bottom-left status pill shown while the overlay is hidden and a turn runs. */
+let hudWindow: BrowserWindow | null = null;
 let runtime: CodexRuntime | null = null;
 /** The currently-registered global accelerator, so we can unregister on change. */
 let currentShortcut: string | null = null;
 /** Cached "show overlay on all Spaces" setting, applied once per overlay window. */
 let overlayOnAllDisplays = true;
+/** Cached inactivity timeout (ms) after which a summon starts a fresh thread. */
+let newThreadTimeoutMs = 5 * 60_000;
+
+// ---- Quick Chat session ownership ----
+//
+// The overlay owns one live conversation at a time. While it owns a thread, that
+// thread's codex events route to the overlay (not the main window) and drive the
+// status HUD. Hand-off (button, or opening the thread from the sidebar) flips
+// `overlayHandedOff` so events route to the main window from then on.
+let overlayThreadId: string | null = null;
+let overlayHandedOff = false;
+/** Updated on each turn start/finish; drives the new-thread inactivity timeout. */
+let overlayLastActivityAt = 0;
+/** Whether the overlay's current turn is still running (so an idle-timeout summon
+ *  never orphans a mid-stream thread by resetting ownership out from under it). */
+let overlayTurnRunning = false;
+/** Whether the in-flight overlay turn has started streaming text (HUD phase). */
+let hudTextSeen = false;
 /**
  * Whether Stem's main window was the frontmost window the instant the overlay was
  * summoned. Drives dismissal: when the overlay was summoned from *another* app we
@@ -76,11 +101,13 @@ let mainFocusedBeforeOverlay = false;
 // this exactly once per window (at creation) and on settings change, never per
 // show, so summoning the overlay never disturbs the main window or dock.
 function applyOverlayWorkspaceVisibility(): void {
-  if (quickChatWindow && !quickChatWindow.isDestroyed()) {
-    quickChatWindow.setVisibleOnAllWorkspaces(overlayOnAllDisplays, {
-      visibleOnFullScreen: true,
-      skipTransformProcessType: true
-    });
+  for (const win of [quickChatWindow, hudWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.setVisibleOnAllWorkspaces(overlayOnAllDisplays, {
+        visibleOnFullScreen: true,
+        skipTransformProcessType: true
+      });
+    }
   }
 }
 
@@ -122,7 +149,14 @@ function createWindow(): void {
 // so summoning it is instant and never loses the user's draft mid-stream.
 
 const QUICK_CHAT_WIDTH = 640;
+// Compact spotlight bar (fresh session) vs. expanded conversation panel (resuming
+// a session with messages). The overlay window is resized between the two on show.
 const QUICK_CHAT_HEIGHT = 150;
+const QUICK_CHAT_PANEL_HEIGHT = 560;
+
+// Bottom-left status HUD pill.
+const HUD_WIDTH = 320;
+const HUD_HEIGHT = 46;
 
 function createQuickChatWindow(): void {
   quickChatWindow = new BrowserWindow({
@@ -154,10 +188,9 @@ function createQuickChatWindow(): void {
   quickChatWindow.on('closed', () => {
     quickChatWindow = null;
   });
-  // Spotlight-style: dismiss as soon as focus leaves the overlay.
-  quickChatWindow.on('blur', () => {
-    if (quickChatWindow?.isVisible()) quickChatWindow.hide();
-  });
+  // No blur→hide: the overlay now persists a conversation the user re-summons to
+  // read, so auto-hiding on focus loss would discard the answer they just opened.
+  // Dismissal is explicit only (Escape / shortcut / submit / hand-off).
 
   const devUrl = process.env.ELECTRON_RENDERER_URL;
   if (devUrl) {
@@ -167,9 +200,112 @@ function createQuickChatWindow(): void {
   }
 }
 
-function showQuickChat(): void {
+// The status HUD: a tiny, non-focusable, always-on-top pill in the bottom-left.
+// `focusable: false` is critical — showing it must never steal focus from the app
+// the user is working in. Created once and reused like the overlay.
+function createHudWindow(): void {
+  hudWindow = new BrowserWindow({
+    width: HUD_WIDTH,
+    height: HUD_HEIGHT,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    focusable: false,
+    skipTaskbar: true,
+    show: false,
+    hasShadow: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  hudWindow.setAlwaysOnTop(true, 'screen-saver');
+  hudWindow.on('closed', () => {
+    hudWindow = null;
+  });
+
+  const devUrl = process.env.ELECTRON_RENDERER_URL;
+  if (devUrl) {
+    hudWindow.loadURL(`${devUrl}/?hud`);
+  } else {
+    hudWindow.loadFile(join(__dirname, '../renderer/index.html'), { search: 'hud' });
+  }
+}
+
+/** Show the HUD pill (bottom-left of the display under the cursor) and push status. */
+function showHud(status: QuickChatStatus): void {
+  if (!hudWindow || hudWindow.isDestroyed()) createHudWindow();
+  const win = hudWindow!;
+  if (!win.isVisible()) {
+    const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    win.setBounds({
+      x: Math.round(workArea.x + 16),
+      y: Math.round(workArea.y + workArea.height - HUD_HEIGHT - 16),
+      width: HUD_WIDTH,
+      height: HUD_HEIGHT
+    });
+    win.showInactive(); // show without stealing focus
+  }
+  win.webContents.send('quickchat:status', status);
+}
+
+function hideHud(): void {
+  if (hudWindow && !hudWindow.isDestroyed() && hudWindow.isVisible()) hudWindow.hide();
+}
+
+/**
+ * HUD state machine, driven by the overlay-owned thread's event stream. Only runs
+ * while the overlay is hidden (when it's visible the user is reading, no HUD):
+ *   working  -> "Thinking…" / "Searching the web…" / "Using a tool…"
+ *   answering -> once the first answer text streams
+ *   finished  -> once the turn completes
+ */
+function driveHud(event: { method: string; params: unknown }): void {
+  if (quickChatWindow?.isVisible()) return;
+  switch (event.method) {
+    case 'item/started': {
+      const type = (event.params as ItemEventParams)?.item?.type;
+      if (type && type !== 'agentMessage' && !hudTextSeen) showHud({ phase: 'working', label: activityLabel(type) });
+      break;
+    }
+    case 'item/agentMessage/delta': {
+      if (!hudTextSeen) {
+        hudTextSeen = true;
+        showHud({ phase: 'answering', label: 'Answering…' });
+      }
+      break;
+    }
+    case 'turn/completed':
+    case 'turn/failed':
+    case 'turn/aborted': {
+      overlayTurnRunning = false;
+      overlayLastActivityAt = Date.now();
+      showHud({ phase: 'finished', label: 'Answer ready' });
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+/**
+ * Show the overlay. `reset` true => start a fresh session (compact spotlight bar);
+ * false => resume the existing session (expanded conversation panel, showing the
+ * answer the user re-summoned to read). The overlay's React state persists across
+ * hide/show, so resuming needs no payload beyond the reset flag.
+ */
+function showQuickChat(reset: boolean): void {
   if (!quickChatWindow || quickChatWindow.isDestroyed()) createQuickChatWindow();
   const win = quickChatWindow!;
+  hideHud();
 
   // Remember whether we're summoning from within Stem (main window frontmost) so
   // dismissal knows whether to yield focus back to the previous app.
@@ -177,18 +313,18 @@ function showQuickChat(): void {
     !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused();
 
   // Center horizontally on the display under the cursor, in the upper third.
+  // Compact when starting fresh; expanded to a panel when resuming a session.
   const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const [w, h] = win.getSize();
+  const w = QUICK_CHAT_WIDTH;
+  const h = reset ? QUICK_CHAT_HEIGHT : QUICK_CHAT_PANEL_HEIGHT;
   win.setBounds({
     x: Math.round(workArea.x + (workArea.width - w) / 2),
     y: Math.round(workArea.y + workArea.height * 0.22),
     width: w,
     height: h
   });
-  // show() already makes the window key on macOS; a separate focus() call just
-  // adds activation churn (and can pull the main window forward), so we omit it.
   win.show();
-  win.webContents.send('quickchat:focus');
+  win.webContents.send('quickchat:focus', { reset });
 }
 
 /**
@@ -206,9 +342,32 @@ function dismissQuickChat(): void {
   if (process.platform === 'darwin' && !mainFocusedBeforeOverlay) app.hide();
 }
 
+/** Hide just the overlay window (without app.hide), so the HUD can stay visible. */
+function hideOverlayWindow(): void {
+  if (quickChatWindow && !quickChatWindow.isDestroyed() && quickChatWindow.isVisible()) quickChatWindow.hide();
+}
+
 function toggleQuickChat(): void {
-  if (quickChatWindow && quickChatWindow.isVisible()) dismissQuickChat();
-  else showQuickChat();
+  if (quickChatWindow && quickChatWindow.isVisible()) {
+    dismissQuickChat();
+    return;
+  }
+  // Decide continue-vs-fresh: no live session, already handed off, or idle past
+  // the configured timeout => start a new thread. Clear ownership up front so the
+  // old thread's events stop routing to the (now reset) overlay.
+  const idleMs = Date.now() - overlayLastActivityAt;
+  const reset =
+    !overlayThreadId ||
+    overlayHandedOff ||
+    // Only auto-reset once the previous turn has finished — never orphan a
+    // mid-stream thread by handing its events off to the main window.
+    (!overlayTurnRunning && newThreadTimeoutMs > 0 && idleMs > newThreadTimeoutMs);
+  if (reset) {
+    overlayThreadId = null;
+    overlayHandedOff = false;
+    hudTextSeen = false;
+  }
+  showQuickChat(reset);
 }
 
 /** (Re)register the global accelerator. Returns false when registration fails. */
@@ -224,6 +383,20 @@ function applyQuickChatShortcut(accelerator: string | null): boolean {
     return ok;
   } catch {
     return false;
+  }
+}
+
+/** Send to the main window, deferring until its renderer has loaded (it may have
+ *  just been recreated by revealMainWindow, before the listeners are registered). */
+function sendToMain(channel: string, payload: unknown): void {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', () => {
+      if (!win.isDestroyed()) win.webContents.send(channel, payload);
+    });
+  } else {
+    win.webContents.send(channel, payload);
   }
 }
 
@@ -289,6 +462,15 @@ function registerIpc(): void {
 
   ipcMain.handle('chats:list', () => chatList());
   ipcMain.handle('chats:open', async (_e, threadId: string) => {
+    // Opening the overlay's live thread from the sidebar is an implicit hand-off:
+    // route its events to the main window and drop the overlay/HUD so the two
+    // views don't diverge.
+    if (threadId === overlayThreadId && !overlayHandedOff) {
+      overlayHandedOff = true;
+      overlayTurnRunning = false;
+      hideHud();
+      hideOverlayWindow();
+    }
     await runtime!.resumeThread(threadId);
     const { title, messages } = await runtime!.readThread(threadId);
     return { threadId, title, messages };
@@ -337,13 +519,80 @@ function registerIpc(): void {
       overlayOnAllDisplays = next.quickChat.showOnAllDisplays;
       applyOverlayWorkspaceVisibility();
     }
+    if ('newThreadTimeoutMs' in patch) newThreadTimeoutMs = next.quickChat.newThreadTimeoutMs;
     return next;
   });
-  ipcMain.handle('quickchat:submit', (_e, prompt: QuickChatPrompt) => {
-    quickChatWindow?.hide();
-    revealMainWindow();
-    mainWindow?.webContents.send('quickchat:prompt', prompt);
+  // Run a prompt in the overlay's own thread. For a fresh session we pre-create
+  // the thread (so its events route correctly from the very first event), then
+  // hide the overlay and raise the HUD — the disappear→HUD half of the cycle.
+  ipcMain.handle('quickchat:run', async (_e, prompt: QuickChatPrompt): Promise<StartTurnResult> => {
+    // Start the disappear→HUD half of the cycle immediately — before the (async)
+    // thread creation — so the overlay never flashes the half-laid-out panel.
+    hudTextSeen = false;
+    overlayTurnRunning = true;
+    overlayLastActivityAt = Date.now();
+    // Hide just the overlay (NOT app.hide — that would also hide the HUD we're
+    // about to show). The HUD is non-focusable, so it never steals focus.
+    hideOverlayWindow();
+    showHud({ phase: 'working', label: 'Working…' });
+
+    const continuing = !!prompt.threadId && prompt.threadId === overlayThreadId && !overlayHandedOff;
+    let threadId = continuing ? overlayThreadId! : null;
+    if (!threadId) {
+      threadId = await runtime!.createThread(prompt.model ?? undefined);
+      overlayThreadId = threadId;
+      overlayHandedOff = false;
+      // Optimistic sidebar row so the quickchat thread shows immediately.
+      mainWindow?.webContents.send('quickchat:sessionStarted', {
+        threadId,
+        title: prompt.input.trim() || 'New chat'
+      });
+    }
+
+    const result = await runtime!.startTurn({
+      input: prompt.input,
+      threadId,
+      model: prompt.model ?? undefined,
+      effort: prompt.effort ?? undefined,
+      serviceTier: prompt.serviceTier,
+      format: prompt.format,
+      attachments: prompt.attachments
+    });
+    overlayLastActivityAt = Date.now();
+    // The memory shortcut ("remember that …") completes with no stream — jump the
+    // HUD straight to finished.
+    if (result.handled) {
+      overlayTurnRunning = false;
+      showHud({ phase: 'finished', label: 'Answer ready' });
+    }
+    return result;
   });
+
+  // Forget the current overlay thread so the next prompt opens a fresh one.
+  ipcMain.handle('quickchat:newThread', () => {
+    overlayThreadId = null;
+    overlayHandedOff = false;
+    overlayTurnRunning = false;
+    hudTextSeen = false;
+    hideHud();
+  });
+
+  // Hand the conversation off to the main window: route future events there,
+  // reveal the main window, and have it adopt the thread as the active chat.
+  ipcMain.handle('quickchat:handoff', (_e, payload: QuickChatHandoff) => {
+    overlayHandedOff = true;
+    overlayTurnRunning = false;
+    hideHud();
+    hideOverlayWindow();
+    revealMainWindow();
+    sendToMain('quickchat:adopt', payload);
+  });
+
+  // Re-summon the overlay (HUD click). Same path as the shortcut.
+  ipcMain.handle('quickchat:reveal', () => {
+    if (!quickChatWindow?.isVisible()) toggleQuickChat();
+  });
+
   ipcMain.handle('quickchat:hide', () => {
     dismissQuickChat();
   });
@@ -381,9 +630,23 @@ app.whenReady().then(async () => {
     const threadId = (event.params as { threadId?: string } | undefined)?.threadId;
     // Hidden internal threads (distillation) are neither shown nor captured.
     if (threadId && runtime!.isInternalThread(threadId)) return;
-    mainWindow?.webContents.send('codex:event', event);
+    // The overlay owns its live thread until hand-off: route its events to the
+    // overlay window (which renders the conversation) and the status HUD, NOT the
+    // main window — otherwise the main window would build a phantom user-less slice.
+    const overlayOwned = !!threadId && threadId === overlayThreadId && !overlayHandedOff;
+    if (overlayOwned) {
+      quickChatWindow?.webContents.send('codex:event', event);
+      driveHud(event);
+    } else if (!threadId) {
+      // Process-level events (e.g. process/exit) carry no threadId — let both
+      // windows clear their run state.
+      mainWindow?.webContents.send('codex:event', event);
+      quickChatWindow?.webContents.send('codex:event', event);
+    } else {
+      mainWindow?.webContents.send('codex:event', event);
+    }
     if (isRecallEnabled()) {
-      captureFromEvent(event); // tap assistant replies into Stem Recall
+      captureFromEvent(event); // tap assistant replies into Stem Recall (all threads)
       if (event.method === 'turn/completed') scheduleDistill();
     }
   });
@@ -418,7 +681,9 @@ app.whenReady().then(async () => {
   // flag before creating the overlay so it's applied once, at creation.
   const initialSettings = await readSettings();
   overlayOnAllDisplays = initialSettings.quickChat.showOnAllDisplays;
+  newThreadTimeoutMs = initialSettings.quickChat.newThreadTimeoutMs;
   createQuickChatWindow();
+  createHudWindow();
   applyQuickChatShortcut(initialSettings.quickChat.shortcut);
 
   app.on('activate', () => {

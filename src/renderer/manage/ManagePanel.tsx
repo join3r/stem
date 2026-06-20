@@ -31,6 +31,15 @@ const EFFORT_LABELS: Record<string, string> = {
   xhigh: 'X-High'
 };
 
+// Inactivity presets for starting a fresh Quick Chat thread on re-summon.
+// 0 = never (always continue the current session).
+const NEW_THREAD_PRESETS: { label: string; ms: number }[] = [
+  { label: 'Off', ms: 0 },
+  { label: '1m', ms: 60_000 },
+  { label: '5m', ms: 5 * 60_000 },
+  { label: '15m', ms: 15 * 60_000 }
+];
+
 interface ModelTabProps {
   models: ModelSummary[];
   modelId: string | null;
@@ -424,6 +433,22 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
             aria-label="Show on all displays"
             onClick={() => update({ showOnAllDisplays: !qc.showOnAllDisplays })}
           />
+        </div>
+
+        <div className="set-block">
+          <span className="set-sub">New thread after idle</span>
+          <div className="seg-ctl">
+            {NEW_THREAD_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                className={qc.newThreadTimeoutMs === p.ms ? 'active' : ''}
+                onClick={() => update({ newThreadTimeoutMs: p.ms })}
+                title="Re-summoning the overlay after this idle time starts a fresh thread"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       <p className="muted" style={{ marginTop: 10 }}>

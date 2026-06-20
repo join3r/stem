@@ -316,19 +316,66 @@ export interface QuickChatSettings {
   defaultServiceTier: string | null;
   /** Float the overlay across every Space and on whichever display is active. */
   showOnAllDisplays: boolean;
+  /**
+   * Inactivity window (ms) after which re-summoning the overlay starts a *fresh*
+   * thread instead of continuing the current one. 0 = never auto-reset (always
+   * continue the existing session).
+   */
+  newThreadTimeoutMs: number;
 }
 
 export interface AppSettings {
   quickChat: QuickChatSettings;
 }
 
-/** A prompt relayed from the overlay to the main window to run as a fresh turn. */
+/**
+ * A prompt the overlay runs itself (via `runQuickChat`). The overlay owns its
+ * conversation, so it passes its current `threadId` for follow-up turns; omit it
+ * (or after a New-thread / inactivity reset) to start a fresh thread.
+ */
 export interface QuickChatPrompt {
   input: string;
-  /** Model chosen in the overlay; null = use the main window's current model. */
+  /** Model chosen in the overlay; null = use the overlay's default model. */
   model: string | null;
   effort: string | null;
   serviceTier: string | null;
+  format?: 'md' | 'mdx';
+  /** Continue this thread; absent => main pre-creates a fresh one. */
+  threadId?: string;
+  /** Files/images attached to this turn (ChatView composer). */
+  attachments?: TurnAttachment[];
+}
+
+/** HUD phases for the bottom-left status pill while the overlay is hidden. */
+export type QuickChatStatusPhase = 'working' | 'answering' | 'finished';
+
+/** Main → HUD: the one-line status to display. */
+export interface QuickChatStatus {
+  phase: QuickChatStatusPhase;
+  label: string;
+}
+
+/** Main → overlay: sent on each summon; `reset` starts a fresh session. */
+export interface QuickChatFocus {
+  reset: boolean;
+}
+
+/** Overlay → main: hand the live conversation off to the main window. */
+export interface QuickChatHandoff {
+  threadId: string;
+  messages: ChatMessage[];
+  model: string | null;
+  effort: string | null;
+  serviceTier: string | null;
+}
+
+/** Main → main window: adopt a handed-off conversation as the active chat. */
+export type QuickChatAdopt = QuickChatHandoff;
+
+/** Main → main window: a quickchat thread was created (optimistic sidebar row). */
+export interface QuickChatSessionStarted {
+  threadId: string;
+  title: string;
 }
 
 // ---- Preload API surface exposed on window.stem ----
@@ -380,12 +427,23 @@ export interface StemApi {
   // App settings + Quick Chat overlay.
   getSettings(): Promise<AppSettings>;
   updateQuickChat(patch: Partial<QuickChatSettings>): Promise<AppSettings>;
-  /** Overlay → main: relay a prompt, reveal the main window, hide the overlay. */
-  submitQuickChat(prompt: QuickChatPrompt): Promise<void>;
+  /** Overlay → main: run a prompt in the overlay's own thread (main hides the
+   *  overlay + raises the HUD, pre-creating a thread for a fresh session). */
+  runQuickChat(prompt: QuickChatPrompt): Promise<StartTurnResult>;
+  /** Overlay → main: forget the current overlay thread so the next prompt is fresh. */
+  newQuickChatThread(): Promise<void>;
+  /** Overlay → main: hand the conversation off to the main window. */
+  handoffQuickChat(payload: QuickChatHandoff): Promise<void>;
+  /** Re-summon the overlay (same path as the global shortcut); used by the HUD. */
+  revealQuickChat(): Promise<void>;
   /** Hide the overlay (Escape from within it). */
   hideQuickChat(): Promise<void>;
-  /** Overlay: fired each time the overlay is summoned (refocus + reset). */
-  onQuickChatFocus(listener: () => void): () => void;
-  /** Main window: fired when the overlay submits a prompt to run. */
-  onQuickChatPrompt(listener: (prompt: QuickChatPrompt) => void): () => void;
+  /** Overlay: fired each time the overlay is summoned; `reset` => fresh session. */
+  onQuickChatFocus(listener: (focus: QuickChatFocus) => void): () => void;
+  /** HUD: fired with the current one-line status while the overlay is hidden. */
+  onQuickChatStatus(listener: (status: QuickChatStatus) => void): () => void;
+  /** Main window: fired when the overlay hands a conversation off to adopt it. */
+  onQuickChatAdopt(listener: (payload: QuickChatAdopt) => void): () => void;
+  /** Main window: fired when a quickchat thread is created (optimistic sidebar row). */
+  onQuickChatSessionStarted(listener: (payload: QuickChatSessionStarted) => void): () => void;
 }

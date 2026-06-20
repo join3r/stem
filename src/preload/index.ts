@@ -2,8 +2,13 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   CodexEventEnvelope,
   McpServerInput,
+  QuickChatAdopt,
+  QuickChatFocus,
+  QuickChatHandoff,
   QuickChatPrompt,
   QuickChatSettings,
+  QuickChatSessionStarted,
+  QuickChatStatus,
   StartTurnInput,
   StemApi
 } from '../shared/types';
@@ -52,17 +57,30 @@ const api: StemApi = {
 
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateQuickChat: (patch: Partial<QuickChatSettings>) => ipcRenderer.invoke('settings:updateQuickChat', patch),
-  submitQuickChat: (prompt: QuickChatPrompt) => ipcRenderer.invoke('quickchat:submit', prompt),
+  runQuickChat: (prompt: QuickChatPrompt) => ipcRenderer.invoke('quickchat:run', prompt),
+  newQuickChatThread: () => ipcRenderer.invoke('quickchat:newThread'),
+  handoffQuickChat: (payload: QuickChatHandoff) => ipcRenderer.invoke('quickchat:handoff', payload),
+  revealQuickChat: () => ipcRenderer.invoke('quickchat:reveal'),
   hideQuickChat: () => ipcRenderer.invoke('quickchat:hide'),
-  onQuickChatFocus: (listener: () => void) => {
-    const handler = () => listener();
+  onQuickChatFocus: (listener: (focus: QuickChatFocus) => void) => {
+    const handler = (_e: unknown, focus: QuickChatFocus) => listener(focus);
     ipcRenderer.on('quickchat:focus', handler);
     return () => ipcRenderer.removeListener('quickchat:focus', handler);
   },
-  onQuickChatPrompt: (listener: (prompt: QuickChatPrompt) => void) => {
-    const handler = (_e: unknown, prompt: QuickChatPrompt) => listener(prompt);
-    ipcRenderer.on('quickchat:prompt', handler);
-    return () => ipcRenderer.removeListener('quickchat:prompt', handler);
+  onQuickChatStatus: (listener: (status: QuickChatStatus) => void) => {
+    const handler = (_e: unknown, status: QuickChatStatus) => listener(status);
+    ipcRenderer.on('quickchat:status', handler);
+    return () => ipcRenderer.removeListener('quickchat:status', handler);
+  },
+  onQuickChatAdopt: (listener: (payload: QuickChatAdopt) => void) => {
+    const handler = (_e: unknown, payload: QuickChatAdopt) => listener(payload);
+    ipcRenderer.on('quickchat:adopt', handler);
+    return () => ipcRenderer.removeListener('quickchat:adopt', handler);
+  },
+  onQuickChatSessionStarted: (listener: (payload: QuickChatSessionStarted) => void) => {
+    const handler = (_e: unknown, payload: QuickChatSessionStarted) => listener(payload);
+    ipcRenderer.on('quickchat:sessionStarted', handler);
+    return () => ipcRenderer.removeListener('quickchat:sessionStarted', handler);
   }
 };
 

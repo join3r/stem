@@ -15,34 +15,10 @@ import type {
   TurnCompletedParams
 } from '../shared/types';
 import { agentMessageText } from '../shared/types';
+import { activityLabel } from '../shared/activity';
 import { ChatView } from './chat/ChatView';
 import { ManagePanel } from './manage/ManagePanel';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
-
-// Friendly label for the "working" indicator, derived from the active Codex
-// item type. Both camelCase and snake_case are handled defensively since the
-// runtime forwards item.type verbatim; anything unmapped falls back to "Working…".
-function activityLabel(type: string): string {
-  switch (type) {
-    case 'reasoning':
-      return 'Thinking…';
-    case 'webSearch':
-    case 'web_search':
-      return 'Searching the web…';
-    case 'commandExecution':
-    case 'command_execution':
-    case 'exec':
-      return 'Running a command…';
-    case 'mcpToolCall':
-    case 'mcp_tool_call':
-      return 'Using a tool…';
-    case 'fileChange':
-    case 'file_change':
-      return 'Editing files…';
-    default:
-      return 'Working…';
-  }
-}
 
 // Sentinel key for a brand-new chat that has no codex thread id yet. Its slice is
 // migrated to the real thread id once the first turn returns one.
@@ -454,98 +430,49 @@ export default function App() {
     [activeThreadId, refreshChats, modelId, effort, serviceTier, format, setThread]
   );
 
-  // Quick Chat overlay → main window: run the relayed prompt as a fresh
-  // conversation, honoring the overlay's ad-hoc effort/speed (clamped to the
-  // current model). Mirrors onSend's streaming/threading flow.
+  // Quick Chat hand-off → main window: adopt the overlay's conversation as the
+  // active chat, seeding its slice from the overlay's in-memory messages (so it's
+  // complete with user bubbles even mid-stream). Any still-in-flight turn now
+  // streams here, since the main process re-routes the thread's events to us.
   useEffect(() => {
-    return window.stem.onQuickChatPrompt(async ({ input, model: qModel, effort: qEffort, serviceTier: qTier }) => {
-      // Quick Chat always starts a fresh conversation. If a chat is already
-      // running it keeps going in the background; this new draft becomes active.
-      draftSeqRef.current += 1;
-      pendingDraftFolderRef.current = null;
-      const sendSeq = draftSeqRef.current;
-      setThreadStates((prev) => ({
-        ...prev,
-        [DRAFT]: { ...EMPTY_STATE, messages: [{ id: `user-${Date.now()}`, role: 'user', content: input }], running: true, status: 'running' }
+    return window.stem.onQuickChatAdopt(({ threadId, messages: adopted, model, effort: aEffort, serviceTier: aTier }) => {
+      deletedThreadsRef.current.delete(threadId);
+      const activeId = adopted.find((m) => m.turnId)?.turnId ?? null;
+      if (activeId) turnMetaRef.current.set(activeId, { model: model ?? undefined, effort: aEffort ?? undefined, serviceTier: aTier });
+      setThreadStates((prev) => {
+        const existing = prev[threadId];
+        // Merge: prefer the overlay's messages (they include user bubbles), but
+        // keep any later slice already present. Running state is left as-is; the
+        // turn's own events will settle it.
+        const base = existing ?? EMPTY_STATE;
+        return { ...prev, [threadId]: { ...base, messages: adopted } };
+      });
+      setActiveThreadId(threadId);
+      setPendingChats((p) => ({
+        ...p,
+        [threadId]: {
+          threadId,
+          title: adopted.find((m) => m.role === 'user')?.content.trim() || 'New chat',
+          folderId: null,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        }
       }));
-      setActiveThreadId(null);
-
-      // Adopt the overlay's model/effort/speed for THIS turn only, clamped to
-      // what the model supports. We deliberately do NOT call setModelId/setEffort/
-      // setServiceTier here — the overlay's ad-hoc picks must not overwrite the
-      // main app's persisted model/effort/speed (Settings + composer).
-      const useModelId = qModel ?? modelId;
-      const useModel = models.find((m) => m.id === useModelId) ?? selectedModel;
-      let useEffort = qEffort ?? effort ?? undefined;
-      let useTier = qTier;
-      if (useModel) {
-        if (useEffort && !useModel.supportedEfforts.includes(useEffort)) useEffort = useModel.defaultEffort;
-        if (!useModel.serviceTiers.some((t) => t.id === 'priority')) useTier = null;
-      }
-
-      try {
-        const result = await window.stem.startTurn({
-          input,
-          model: useModelId ?? undefined,
-          effort: useEffort,
-          serviceTier: useTier,
-          format
-        });
-        if (result.handled) {
-          setThread(DRAFT, (s) => ({
-            messages: result.assistantMessage
-              ? [...s.messages, { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }]
-              : s.messages,
-            running: false,
-            activeTurnId: null,
-            status: 'idle'
-          }));
-          return;
-        }
-        if (result.turnId) {
-          turnMetaRef.current.set(result.turnId, { model: useModelId ?? undefined, effort: useEffort, serviceTier: useTier });
-        }
-        if (result.threadId) {
-          const realId = result.threadId;
-          const stillMine = draftSeqRef.current === sendSeq && activeThreadIdRef.current === null;
-          setThreadStates((prev) => {
-            const next = { ...prev };
-            if (stillMine) {
-              const merged = mergeDraftIntoReal(prev[DRAFT] ?? EMPTY_STATE, prev[realId]);
-              delete next[DRAFT];
-              next[realId] = { ...merged, running: true, activeTurnId: result.turnId ?? null, status: 'running' };
-            } else {
-              next[realId] = {
-                ...(prev[realId] ?? EMPTY_STATE),
-                running: true,
-                activeTurnId: result.turnId ?? null,
-                status: 'running'
-              };
-            }
-            return next;
-          });
-          if (stillMine) setActiveThreadId(realId);
-          // Optimistic sidebar row so the chat is visible/selectable before codex
-          // lists it (Quick Chat always starts a root-level chat).
-          setPendingChats((p) => ({
-            ...p,
-            [realId]: { threadId: realId, title: input.trim() || 'New chat', folderId: null, createdAt: Date.now(), updatedAt: Date.now() }
-          }));
-          refreshChats();
-        }
-      } catch (e) {
-        setThread(DRAFT, (s) => ({
-          messages: [
-            ...s.messages,
-            { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
-          ],
-          running: false,
-          activeTurnId: null,
-          status: 'error'
-        }));
-      }
+      refreshChats();
     });
-  }, [models, selectedModel, modelId, effort, format, refreshChats, setThread]);
+  }, [refreshChats]);
+
+  // Quick Chat session started → show the thread in the sidebar immediately
+  // (codex won't list it until its first turn persists), reusing the optimistic
+  // pending-chats mechanism.
+  useEffect(() => {
+    return window.stem.onQuickChatSessionStarted(({ threadId, title }) => {
+      setPendingChats((p) => ({
+        ...p,
+        [threadId]: { threadId, title: title.trim() || 'New chat', folderId: null, createdAt: Date.now(), updatedAt: Date.now() }
+      }));
+    });
+  }, []);
 
   const onInterrupt = useCallback(async () => {
     // Stops only the chat you're viewing; background chats keep running.

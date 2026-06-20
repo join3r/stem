@@ -816,3 +816,85 @@ body.qc-body { background: transparent; }
   color: var(--ink);
   font-size: 10px;
 }
+
+/* Expanded conversation panel: the frosted card fills the window and stacks a
+   draggable header over the reused ChatView. */
+.qc-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  -webkit-app-region: no-drag; /* ChatView is interactive; only the head drags */
+}
+.qc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 0.5px solid var(--hair);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+  -webkit-app-region: drag;
+}
+.qc-head .qc-mark { color: var(--accent); }
+.qc-head .qc-model,
+.qc-head .qc-act,
+.qc-head .qc-esc { -webkit-app-region: no-drag; }
+.qc-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.qc-act:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
+.qc-act:disabled { opacity: 0.4; cursor: default; }
+.qc-head .qc-esc { cursor: pointer; }
+/* ChatView fills the panel below the header. */
+.qc-panel .chat { flex: 1; min-height: 0; }
+
+/* ---- status HUD (bottom-left pill, own frameless window) ---- */
+body.hud-body { background: transparent; }
+.hud-root {
+  height: 100vh;
+  padding: 4px 10px 10px;
+  overflow: hidden;
+}
+.hud-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 100%;
+  padding: 8px 14px;
+  border: 0.5px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
+  backdrop-filter: blur(28px) saturate(150%);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.hud-pill .activity-dots { flex: none; }
+.hud-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hud-check {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent);
+}
+.hud-pill.finished { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.hud-hint {
+  flex: none;
+  margin-left: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}

@@ -2,19 +2,23 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { QuickChat } from './quickchat/QuickChat';
+import { StatusHud } from './quickchat/StatusHud';
 import './styles.css';
 
-// The same renderer bundle serves both windows; `?quickchat` selects the
-// compact overlay instead of the full app (see createQuickChatWindow in main).
-const isQuickChat = new URLSearchParams(window.location.search).has('quickchat');
+// The same renderer bundle serves all three windows; the URL flag selects which:
+// `?quickchat` = the overlay, `?hud` = the bottom-left status pill, else the app.
+const params = new URLSearchParams(window.location.search);
+const isQuickChat = params.has('quickchat');
+const isHud = params.has('hud');
 if (isQuickChat) document.body.classList.add('qc-body');
+if (isHud) document.body.classList.add('hud-body');
+
+const root = isHud ? <StatusHud /> : isQuickChat ? <QuickChat /> : <App />;
 
 const container = document.getElementById('root');
 if (container) {
   try {
-    createRoot(container).render(
-      <StrictMode>{isQuickChat ? <QuickChat /> : <App />}</StrictMode>
-    );
+    createRoot(container).render(<StrictMode>{root}</StrictMode>);
   } catch (error) {
     const panel = document.createElement('div');
     panel.className = 'fatal-renderer-error';
