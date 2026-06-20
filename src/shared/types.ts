@@ -18,6 +18,12 @@ export interface ChatMessage {
   content: string;
   /** Assistant messages only: which model/effort/speed produced the reply. */
   meta?: MessageMeta;
+  /**
+   * The codex turn this message belongs to (user message + its reply share one
+   * turn id). Lets retry/edit/fork map a rendered message back to an authoritative
+   * turn for rollback/fork. Absent on optimistic bubbles until their turn resolves.
+   */
+  turnId?: string;
 }
 
 // ---- Runtime status (staged: binary -> health -> auth -> ready) ----
@@ -359,6 +365,10 @@ export interface StemApi {
   // chat rename/delete return void and the renderer re-fetches.
   listChats(): Promise<ChatListResult>;
   openChat(threadId: string): Promise<ChatHistory>;
+  /** Drop the given turn and every later turn from the thread (retry/edit re-run). */
+  rollbackToTurn(threadId: string, turnId: string): Promise<void>;
+  /** Branch the thread into a new chat, trimmed to end at the given turn. */
+  forkThread(threadId: string, turnId: string): Promise<{ threadId: string }>;
   renameChat(threadId: string, name: string): Promise<void>;
   deleteChat(threadId: string): Promise<void>;
   createFolder(name: string, parentId: string | null): Promise<ChatListResult>;

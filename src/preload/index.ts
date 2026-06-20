@@ -38,6 +38,9 @@ const api: StemApi = {
 
   listChats: () => ipcRenderer.invoke('chats:list'),
   openChat: (threadId: string) => ipcRenderer.invoke('chats:open', threadId),
+  rollbackToTurn: (threadId: string, turnId: string) =>
+    ipcRenderer.invoke('chats:rollbackToTurn', threadId, turnId),
+  forkThread: (threadId: string, turnId: string) => ipcRenderer.invoke('chats:forkThread', threadId, turnId),
   renameChat: (threadId: string, name: string) => ipcRenderer.invoke('chats:rename', threadId, name),
   deleteChat: (threadId: string) => ipcRenderer.invoke('chats:delete', threadId),
   createFolder: (name: string, parentId: string | null) => ipcRenderer.invoke('folders:create', name, parentId),

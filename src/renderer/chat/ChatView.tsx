@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Square, ArrowUp, Paperclip, User, Sparkles, AlertTriangle, File, X } from 'lucide-react';
+import {
+  Square,
+  ArrowUp,
+  Paperclip,
+  User,
+  Sparkles,
+  AlertTriangle,
+  File,
+  X,
+  RotateCcw,
+  Pencil,
+  GitBranch
+} from 'lucide-react';
 import type { ChatMessage, ModelSummary, TurnAttachment } from '../../shared/types';
 import { MdxView } from './MdxView';
 import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
@@ -19,6 +31,12 @@ interface ChatViewProps {
   activity: string | null;
   onSend: (text: string, attachments: TurnAttachment[]) => void;
   onInterrupt: () => void;
+  /** Regenerate the reply for a turn (assistant message). */
+  onRetry: (turnId: string) => void;
+  /** Edit a user message's text and re-run from that turn. */
+  onEdit: (turnId: string, newText: string) => void;
+  /** Branch the conversation into a new chat ending at this turn. */
+  onFork: (turnId: string) => void;
   models: ModelSummary[];
   model: ModelSummary | null;
   effort: string | null;
@@ -56,6 +74,9 @@ export function ChatView({
   activity,
   onSend,
   onInterrupt,
+  onRetry,
+  onEdit,
+  onFork,
   models,
   model,
   effort,
@@ -68,6 +89,9 @@ export function ChatView({
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<TurnAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  // Which user message is being edited inline, and its working text.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesRef = useAutoHideScroll<HTMLDivElement>();
@@ -102,6 +126,21 @@ export function ChatView({
     onSend(text, attachments);
     setDraft('');
     setAttachments([]);
+  }
+
+  function startEdit(m: ChatMessage) {
+    setEditingId(m.id);
+    setEditDraft(m.content);
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setEditDraft('');
+  }
+  function saveEdit(turnId: string | undefined) {
+    if (!turnId || !editDraft.trim()) return;
+    onEdit(turnId, editDraft);
+    setEditingId(null);
+    setEditDraft('');
   }
 
   const removeAttachment = useCallback((idx: number) => {
@@ -182,6 +221,9 @@ export function ChatView({
           const renderRich =
             m.role === 'assistant' && (!isStreaming || (format === 'md' && !!m.content));
           const metaText = m.role === 'assistant' ? metaTooltip(m.meta, models) : undefined;
+          const isEditing = editingId === m.id;
+          // Retry/Edit/Fork need an authoritative turn id and a settled thread.
+          const canAct = !running && !!m.turnId && (m.role === 'user' || m.role === 'assistant');
           return (
             <div key={m.id} className={`message message-${m.role}`}>
               <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
@@ -190,10 +232,73 @@ export function ChatView({
                   {a.label}
                   {metaText && <span className="message-meta">{metaText}</span>}
                 </div>
-                {renderRich ? (
+                {isEditing ? (
+                  <div className="message-edit">
+                    <textarea
+                      autoFocus
+                      value={editDraft}
+                      onChange={(e) => setEditDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          saveEdit(m.turnId);
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault();
+                          cancelEdit();
+                        }
+                      }}
+                      rows={1}
+                    />
+                    <div className="message-edit-actions">
+                      <button type="button" className="push" onClick={cancelEdit}>
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => saveEdit(m.turnId)}
+                        disabled={!editDraft.trim()}
+                      >
+                        Save &amp; run
+                      </button>
+                    </div>
+                  </div>
+                ) : renderRich ? (
                   <MdxView text={m.content} />
                 ) : (
                   <div className="message-plain">{m.content}</div>
+                )}
+                {canAct && !isEditing && (
+                  <div className="message-actions">
+                    {m.role === 'assistant' && (
+                      <button
+                        type="button"
+                        className="message-action"
+                        title="Retry — regenerate this reply"
+                        onClick={() => onRetry(m.turnId!)}
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    )}
+                    {m.role === 'user' && (
+                      <button
+                        type="button"
+                        className="message-action"
+                        title="Edit & re-run"
+                        onClick={() => startEdit(m)}
+                      >
+                        <Pencil size={13} />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="message-action"
+                      title="Fork into a new chat from here"
+                      onClick={() => onFork(m.turnId!)}
+                    >
+                      <GitBranch size={13} />
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

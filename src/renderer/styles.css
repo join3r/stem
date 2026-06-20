@@ -189,6 +189,46 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .message-system .message-who { color: var(--danger); }
 .message-system .message-plain { color: var(--danger); }
 
+/* Per-message hover actions: retry / edit / fork. Muted icon buttons revealed on
+   hover, mirroring the .message-meta reveal so the conversation stays calm. */
+.message-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.message:hover .message-actions { opacity: 1; }
+.message-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0.5px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.message-action:hover { background: var(--sel); border-color: var(--line); color: var(--ink); }
+
+/* Inline editor that replaces a user message's body while editing. */
+.message-edit { display: flex; flex-direction: column; gap: 8px; }
+.message-edit textarea {
+  font: inherit;
+  width: 100%;
+  resize: none;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  min-height: 38px;
+}
+.message-edit textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--sel); }
+.message-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
 /* working indicator: pulsing dots + a label naming the current activity,
    shown while the turn runs before answer text starts streaming */
 .activity { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }

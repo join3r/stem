@@ -268,7 +268,7 @@ export default function App() {
             const meta = turnMetaRef.current.get(p.turnId);
             const messages =
               idx === -1
-                ? [...s.messages, { id, role: 'assistant', content: p.delta, meta } as ChatMessage]
+                ? [...s.messages, { id, role: 'assistant', content: p.delta, meta, turnId: p.turnId } as ChatMessage]
                 : s.messages.map((m, i) => (i === idx ? { ...m, content: m.content + p.delta } : m));
             return { ...s, messages, running: true, streamingId: id, activity: null, status: 'running' };
           });
@@ -292,7 +292,7 @@ export default function App() {
             const idx = s.messages.findIndex((m) => m.id === id);
             const messages =
               idx === -1
-                ? [...s.messages, { id, role: 'assistant', content: text, meta } as ChatMessage]
+                ? [...s.messages, { id, role: 'assistant', content: text, meta, turnId: p.turnId } as ChatMessage]
                 // Prefer authoritative text; keep streamed deltas if it's empty.
                 : s.messages.map((m, i) => (i === idx ? { ...m, content: text || m.content, meta: m.meta ?? meta } : m));
             return { ...s, messages, streamingId: null };
@@ -347,8 +347,11 @@ export default function App() {
       // whether this draft is still the one the user is looking at.
       const sendSeq = draftSeqRef.current;
       const sendFolder = pendingDraftFolderRef.current;
+      // Capture the bubble id so we can stamp its codex turn id once startTurn
+      // resolves — that's what makes Edit/Fork work on a just-sent user message.
+      const userMsgId = `user-${Date.now()}`;
       setThread(sendKey, (s) => ({
-        messages: [...s.messages, { id: `user-${Date.now()}`, role: 'user', content: bubble }],
+        messages: [...s.messages, { id: userMsgId, role: 'user', content: bubble }],
         running: true,
         activity: null,
         status: 'running'
@@ -390,7 +393,10 @@ export default function App() {
               // already arrived under it, then adopt the id below.
               const merged = mergeDraftIntoReal(prev[DRAFT] ?? EMPTY_STATE, prev[realId]);
               delete next[DRAFT];
-              next[realId] = { ...merged, running: true, activeTurnId: result.turnId ?? null, status: 'running' };
+              const messages = merged.messages.map((m) =>
+                m.id === userMsgId ? { ...m, turnId: result.turnId ?? undefined } : m
+              );
+              next[realId] = { ...merged, messages, running: true, activeTurnId: result.turnId ?? null, status: 'running' };
             } else {
               // The draft was replaced; keep this turn streaming under its real id
               // in the background without disturbing the user's current draft.
@@ -425,7 +431,13 @@ export default function App() {
           if (sendFolder) window.stem.setChatFolder(realId, sendFolder).then(setChatList);
           else refreshChats();
         } else {
-          setThread(sendKey, () => ({ activeTurnId: result.turnId ?? null }));
+          // Existing thread: record the turn id and stamp it onto the user bubble.
+          setThread(sendKey, (s) => ({
+            activeTurnId: result.turnId ?? null,
+            messages: s.messages.map((m) =>
+              m.id === userMsgId ? { ...m, turnId: result.turnId ?? undefined } : m
+            )
+          }));
         }
       } catch (e) {
         setThread(sendKey, (s) => ({
@@ -628,6 +640,78 @@ export default function App() {
     [refreshChats]
   );
 
+  // Roll back to (and including) a turn on the backend, drop that turn + everything
+  // after it from the visible slice, then re-send `text` as a fresh turn. Shared by
+  // retry (same text) and edit (new text). No-op while the thread is streaming.
+  const rerunFromTurn = useCallback(
+    async (turnId: string, text: string) => {
+      const threadId = activeThreadIdRef.current;
+      if (!threadId) return;
+      const slice = threadStatesRef.current[threadId];
+      if (!slice || slice.running) return;
+      const userIdx = slice.messages.findIndex((m) => m.turnId === turnId && m.role === 'user');
+      if (userIdx === -1) return;
+      try {
+        await window.stem.rollbackToTurn(threadId, turnId);
+      } catch (e) {
+        setThread(threadId, (s) => ({
+          messages: [
+            ...s.messages,
+            { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
+          ],
+          status: 'error'
+        }));
+        return;
+      }
+      // Truncate to before this turn's user message; onSend re-appends + streams.
+      // Both functional updates compose, so the bubble lands after the slice.
+      setThread(threadId, (s) => ({ messages: s.messages.slice(0, userIdx) }));
+      onSend(text, []);
+    },
+    [onSend, setThread]
+  );
+
+  const onRetry = useCallback(
+    (turnId: string) => {
+      const slice = threadStatesRef.current[activeThreadIdRef.current ?? ''];
+      const userMsg = slice?.messages.find((m) => m.turnId === turnId && m.role === 'user');
+      if (userMsg) rerunFromTurn(turnId, userMsg.content);
+    },
+    [rerunFromTurn]
+  );
+
+  const onEditMessage = useCallback(
+    (turnId: string, newText: string) => {
+      if (newText.trim()) rerunFromTurn(turnId, newText.trim());
+    },
+    [rerunFromTurn]
+  );
+
+  // Branch the conversation into a new chat ending at `turnId`, inheriting the
+  // source chat's folder, then open it. The original is left untouched.
+  const onForkMessage = useCallback(
+    async (turnId: string) => {
+      const threadId = activeThreadIdRef.current;
+      if (!threadId) return;
+      try {
+        const { threadId: newId } = await window.stem.forkThread(threadId, turnId);
+        const sourceFolder = chatList.chats.find((c) => c.threadId === threadId)?.folderId ?? null;
+        if (sourceFolder) await window.stem.setChatFolder(newId, sourceFolder);
+        await refreshChats();
+        await openChat(newId);
+      } catch (e) {
+        setThread(threadId, (s) => ({
+          messages: [
+            ...s.messages,
+            { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
+          ],
+          status: 'error'
+        }));
+      }
+    },
+    [chatList, refreshChats, openChat, setThread]
+  );
+
   // Unified draggable toolbar wraps every view (window has no native title bar).
   // `toolbar` lets each view supply its own controls; gate/loading show just the title.
   const titleOnly = (
@@ -692,6 +776,9 @@ export default function App() {
           activity={cur.activity}
           onSend={onSend}
           onInterrupt={onInterrupt}
+          onRetry={onRetry}
+          onEdit={onEditMessage}
+          onFork={onForkMessage}
           models={models}
           model={selectedModel}
           effort={effort}

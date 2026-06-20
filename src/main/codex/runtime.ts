@@ -422,6 +422,52 @@ export class CodexRuntime extends EventEmitter {
     this.subscribed.delete(threadId);
   }
 
+  /** Read a thread's ordered turn ids (authoritative source for rollback counts). */
+  private async readTurnIds(threadId: string): Promise<string[]> {
+    const result = (await this.request('thread/read', { threadId, includeTurns: true })) as {
+      thread?: RawThread;
+    };
+    return (result?.thread?.turns ?? []).map((t) => t.id ?? '');
+  }
+
+  /**
+   * Drop `turnId` and every turn after it from the thread's history, in place.
+   * Used by retry/edit: the renderer then re-sends the (possibly edited) prompt as
+   * a fresh turn. `thread/rollback` counts turns from the END, so we map the turn
+   * id to its index against the authoritative turn list.
+   */
+  async rollbackToTurn(threadId: string, turnId: string): Promise<void> {
+    await this.ensureStarted();
+    const turnIds = await this.readTurnIds(threadId);
+    const index = turnIds.indexOf(turnId);
+    if (index === -1) throw new Error(`Turn ${turnId} not found in thread ${threadId}.`);
+    const numTurns = turnIds.length - index;
+    if (numTurns < 1) return;
+    await this.request('thread/rollback', { threadId, numTurns });
+  }
+
+  /**
+   * Fork the thread into a new one, trimmed to end at `turnId` (keeps everything up
+   * to and including that turn). Codex's `thread/fork` copies the whole thread, so
+   * we trim the copy with a rollback. Returns the new thread id. The new thread is
+   * persisted on disk and will appear in `thread/list`.
+   */
+  async forkThread(threadId: string, turnId: string): Promise<{ threadId: string }> {
+    await this.ensureStarted();
+    const turnIds = await this.readTurnIds(threadId);
+    const index = turnIds.indexOf(turnId);
+    if (index === -1) throw new Error(`Turn ${turnId} not found in thread ${threadId}.`);
+    const result = (await this.request('thread/fork', { threadId })) as { thread?: { id?: string } };
+    const newId = result?.thread?.id;
+    if (!newId) throw new Error('Codex did not return a forked thread id.');
+    // Forked turns keep their original order; trim everything after the chosen turn.
+    const numToDrop = turnIds.length - 1 - index;
+    if (numToDrop > 0) {
+      await this.request('thread/rollback', { threadId: newId, numTurns: numToDrop });
+    }
+    return { threadId: newId };
+  }
+
   /** Flatten codex turns/items into the renderer's flat user/assistant message list. */
   private threadToMessages(thread: RawThread | undefined, turnMeta: Map<string, MessageMeta>): ChatMessage[] {
     const messages: ChatMessage[] = [];
@@ -434,10 +480,11 @@ export class CodexRuntime extends EventEmitter {
             .filter((p) => typeof p.text === 'string')
             .map((p) => p.text as string)
             .join('');
-          if (text.trim()) messages.push({ id: `user-${item.id}`, role: 'user', content: text });
+          if (text.trim()) messages.push({ id: `user-${item.id}`, role: 'user', content: text, turnId: turn.id });
         } else if (item.type === 'agentMessage') {
           const text = agentMessageText(item);
-          if (text.trim()) messages.push({ id: `assistant-${item.id}`, role: 'assistant', content: text, meta });
+          if (text.trim())
+            messages.push({ id: `assistant-${item.id}`, role: 'assistant', content: text, meta, turnId: turn.id });
         }
         // Other item types (reasoning, webSearch, commandExecution, mcpToolCall…)
         // aren't rendered in the conversation and are intentionally skipped.

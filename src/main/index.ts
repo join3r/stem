@@ -290,6 +290,12 @@ function registerIpc(): void {
     const { title, messages } = await runtime!.readThread(threadId);
     return { threadId, title, messages };
   });
+  ipcMain.handle('chats:rollbackToTurn', (_e, threadId: string, turnId: string) =>
+    runtime!.rollbackToTurn(threadId, turnId)
+  );
+  ipcMain.handle('chats:forkThread', (_e, threadId: string, turnId: string) =>
+    runtime!.forkThread(threadId, turnId)
+  );
   ipcMain.handle('chats:rename', (_e, threadId: string, name: string) => runtime!.renameThread(threadId, name));
   ipcMain.handle('chats:delete', async (_e, threadId: string) => {
     await runtime!.deleteThread(threadId);
