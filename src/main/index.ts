@@ -15,6 +15,7 @@ import { CodexRuntime } from './codex/runtime';
 import { ensureWorkspace } from './workspace/bootstrap';
 import { codexHome, workspaceRoot } from './workspace/paths';
 import { listSkills, setSkillEnabled } from './workspace/skills';
+import { addFiles, listFiles, removeFile, revealFiles } from './files/store';
 import { addMcpServer, listMcpServers, removeMcpServer } from './workspace/mcp';
 import { getMemorySettings, isRecallEnabled, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
 import { backfillOnce, captureFromEvent } from './recall/capture';
@@ -424,6 +425,11 @@ function registerIpc(): void {
 
   ipcMain.handle('skills:list', () => listSkills());
   ipcMain.handle('skills:setEnabled', (_e, slug: string, enabled: boolean) => setSkillEnabled(slug, enabled));
+
+  ipcMain.handle('files:list', () => listFiles());
+  ipcMain.handle('files:add', (_e, paths: string[], subdir?: string) => addFiles(paths, subdir));
+  ipcMain.handle('files:remove', (_e, rel: string) => removeFile(rel));
+  ipcMain.handle('files:reveal', () => revealFiles());
 
   ipcMain.handle('mcp:list', () => listMcpServers());
   ipcMain.handle('mcp:add', (_e, input: McpServerInput) => addMcpServer(input));

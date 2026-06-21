@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X } from 'lucide-react';
+import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, FolderOpen } from 'lucide-react';
 import type {
   CodexEventEnvelope,
   McpLoginUrlParams,
@@ -364,6 +364,24 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
             {selectedModel?.description && <p className="muted">{selectedModel.description}</p>}
           </>
         )}
+      </div>
+
+      <div className="grp-head">Files</div>
+      <div className="formgroup">
+        <div className="set-row">
+          <span className="set-label">
+            <strong>Files folder</strong>
+            <em>Drop files here for Stem to read across chats</em>
+          </span>
+          <button
+            className="icon-action"
+            title="Open in Finder"
+            aria-label="Open Files folder in Finder"
+            onClick={() => window.stem.revealFiles()}
+          >
+            <FolderOpen size={16} />
+          </button>
+        </div>
       </div>
 
       <div className="grp-head">Quick Chat</div>

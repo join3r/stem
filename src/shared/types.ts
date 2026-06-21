@@ -179,6 +179,29 @@ export interface SkillSummary {
   path: string;
 }
 
+// ---- Files (the persistent drop-place the assistant can read) ----
+
+/** One file in the Files folder. `rel` is the path relative to files/ (the id). */
+export interface FileEntry {
+  /** Path relative to files/, e.g. `Recipes/cake.pdf`. Unique id for removal. */
+  rel: string;
+  /** Basename, e.g. `cake.pdf`. */
+  name: string;
+  /** Top-level subfolder it lives in, or '' for the root of files/. */
+  dir: string;
+  /** Bytes on disk, for display. */
+  size: number;
+}
+
+/** The Files folder contents: top-level subfolders (drive the drop bands) + files. */
+export interface FilesListing {
+  /** Absolute on-disk path of the Files folder (for "Open in Finder" + display). */
+  root: string;
+  /** Sorted top-level subfolder names. */
+  dirs: string[];
+  files: FileEntry[];
+}
+
 // ---- MCP servers ----
 
 /** stdio = local `command` + `args`; http = remote streamable-HTTP `url`. */
@@ -397,6 +420,15 @@ export interface StemApi {
 
   listSkills(): Promise<SkillSummary[]>;
   setSkillEnabled(slug: string, enabled: boolean): Promise<SkillSummary[]>;
+
+  // Files: the persistent drop-place. Mutations return the fresh listing.
+  listFiles(): Promise<FilesListing>;
+  /** Copy files into files/<subdir> (subdir '' = root). Returns fresh listing. */
+  addFiles(paths: string[], subdir?: string): Promise<FilesListing>;
+  /** Delete a file by its rel path. Returns fresh listing. */
+  removeFile(rel: string): Promise<FilesListing>;
+  /** Open the Files folder in the OS file manager. */
+  revealFiles(): Promise<void>;
 
   listMcpServers(): Promise<McpServerSummary[]>;
   addMcpServer(input: McpServerInput): Promise<McpServerSummary[]>;

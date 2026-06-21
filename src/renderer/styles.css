@@ -898,3 +898,161 @@ body.hud-body { background: transparent; }
   font-size: 11px;
   color: var(--muted);
 }
+
+/* ---- Drag-to-place overlay (files + this-chat destinations) ---- */
+:root {
+  --drop-chat: var(--accent);   /* "this chat" zone (warm sienna) */
+  --drop-files: #2f8f7d;        /* "Files" zone (complementary teal) */
+}
+@media (prefers-color-scheme: dark) {
+  :root { --drop-files: #4cc0a8; }
+}
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: color-mix(in srgb, var(--content, var(--surface)) 60%, transparent);
+  -webkit-backdrop-filter: blur(7px) saturate(1.1);
+  backdrop-filter: blur(7px) saturate(1.1);
+  animation: drop-fade 0.14s ease;
+}
+@keyframes drop-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.drop-zones { position: absolute; inset: 0; display: flex; }
+
+.drop-zone {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  padding: 20px 16px;
+  transition: background 0.15s ease;
+}
+.drop-zone .dz-eyebrow,
+.drop-band .dz-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.drop-zone h3 { margin: 0; font-size: 19px; font-weight: 680; letter-spacing: -0.01em; color: var(--ink); }
+.drop-zone p, .drop-band p { margin: 0; max-width: 240px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+
+.dz-glyph {
+  width: 84px;
+  height: 84px;
+  border-radius: 22px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  color: var(--drop-chat);
+  transition: transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.3), border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.dz-glyph.sm { width: 62px; height: 62px; border-radius: 18px; color: var(--drop-files); }
+
+.drop-divider {
+  width: 1px;
+  align-self: stretch;
+  background: linear-gradient(var(--line), transparent 12% 88%, var(--line));
+  position: relative;
+}
+.drop-divider::after {
+  content: "or";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--content, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+/* active state — chat zone */
+.drop-zone.chat.active {
+  background: radial-gradient(420px 320px at 50% 46%, color-mix(in srgb, var(--drop-chat) 26%, transparent), transparent 70%);
+}
+.drop-zone.chat.active .dz-glyph {
+  transform: translateY(-6px) scale(1.04);
+  border-color: var(--drop-chat);
+  background: color-mix(in srgb, var(--drop-chat) 14%, var(--surface));
+  box-shadow: 0 18px 50px -12px color-mix(in srgb, var(--drop-chat) 40%, transparent);
+}
+
+/* right region: Files bands stacked horizontally (one per subfolder + root) */
+.drop-files { flex: 1; display: flex; flex-direction: column; align-items: stretch; }
+.drop-band {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  text-align: left;
+  padding: 14px 26px;
+  transition: background 0.15s ease;
+}
+.drop-band + .drop-band { border-top: 1px dashed var(--line); }
+.drop-band .dz-text { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.drop-band h4 { margin: 0; font-size: 16px; font-weight: 660; letter-spacing: -0.01em; color: var(--ink); }
+.drop-band p { max-width: 300px; }
+
+/* single Files zone (no subfolders) — match the chat side's big centered look */
+.drop-files.single .drop-band { flex-direction: column; gap: 12px; text-align: center; padding: 20px 16px; }
+.drop-files.single .drop-band .dz-text { align-items: center; }
+.drop-files.single .drop-band .dz-glyph.sm { width: 84px; height: 84px; border-radius: 22px; }
+.drop-files.single .drop-band h4 { font-size: 19px; font-weight: 680; }
+
+.drop-band.active {
+  background: radial-gradient(360px 300px at 50% 44%, color-mix(in srgb, var(--drop-files) 24%, transparent), transparent 72%);
+}
+.drop-band.active .dz-glyph {
+  transform: translateY(-6px) scale(1.05);
+  border-color: var(--drop-files);
+  background: color-mix(in srgb, var(--drop-files) 15%, var(--surface));
+  box-shadow: 0 16px 44px -12px color-mix(in srgb, var(--drop-files) 38%, transparent);
+}
+
+.drop-foot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.drop-foot kbd {
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 1px 6px;
+  color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drop-overlay, .dz-glyph, .drop-zone, .drop-band { animation: none; transition: none; }
+}
+
+/* ---- Compact icon button (e.g. Settings → Files → Open in Finder) ---- */
+.icon-action {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.icon-action:hover { background: var(--sel); border-color: var(--line); color: var(--ink); }

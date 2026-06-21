@@ -31,6 +31,11 @@ const api: StemApi = {
   listSkills: () => ipcRenderer.invoke('skills:list'),
   setSkillEnabled: (slug: string, enabled: boolean) => ipcRenderer.invoke('skills:setEnabled', slug, enabled),
 
+  listFiles: () => ipcRenderer.invoke('files:list'),
+  addFiles: (paths: string[], subdir?: string) => ipcRenderer.invoke('files:add', paths, subdir),
+  removeFile: (rel: string) => ipcRenderer.invoke('files:remove', rel),
+  revealFiles: () => ipcRenderer.invoke('files:reveal'),
+
   listMcpServers: () => ipcRenderer.invoke('mcp:list'),
   addMcpServer: (input: McpServerInput) => ipcRenderer.invoke('mcp:add', input),
   removeMcpServer: (name: string) => ipcRenderer.invoke('mcp:remove', name),

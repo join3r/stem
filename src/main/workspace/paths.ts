@@ -37,6 +37,17 @@ export function agentsMdPath(): string {
 }
 
 /**
+ * The persistent "Files" place: a user-facing folder inside the codex cwd where
+ * the user drops files (optionally organized into subfolders) that the assistant
+ * can read on demand. Inside workspaceRoot() so the agent's read tools reach it.
+ */
+export function filesRoot(): string {
+  // STEM_FILES_DIR lets probe/verification scripts point at a throwaway folder
+  // (and avoids touching Electron's `app` when run outside the app).
+  return process.env.STEM_FILES_DIR ?? join(workspaceRoot(), 'files');
+}
+
+/**
  * Stem-owned chat-organization store: the user's folder tree and the
  * chat->folder assignments. Chats themselves are codex threads on disk; this
  * file only holds the organization layer codex has no concept of.

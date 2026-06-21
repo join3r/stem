@@ -7,3 +7,6 @@ out/
 
 # Stem Recall verification probe build output
 .recall-build/
+
+# Files-place verification probe build output
+.files-build/

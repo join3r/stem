@@ -1,6 +1,6 @@
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { agentsMdPath, codexConfigPath, codexHome, skillsRoot, workspaceRoot } from './paths';
+import { agentsMdPath, codexConfigPath, codexHome, filesRoot, skillsRoot, workspaceRoot } from './paths';
 import { updateConfig } from './config';
 import { registerRecallMcpServer } from '../recall/register-mcp';
 
@@ -23,6 +23,10 @@ export const STEM_ASSISTANT_INSTRUCTIONS = `You are Stem, a general-purpose pers
 You can use saved memories when relevant. Stem may automatically record stable user facts and preferences; use those facts when helpful, but do not try to write memory files yourself.
 
 You are a PRIVATE assistant for a single user, running on their own device — a large part of your usefulness comes from knowing personal details about them. When the user asks you to gather or recall information about themselves (health, contacts, addresses, dates, finances, family, etc.), include the actual specifics. Do NOT redact, omit, or generalize personal identifiers (such as birth/national ID number, address, phone, or email) unless the user explicitly asks you to — they want you to know and use these. The only things to keep out of summaries and saved memory are credentials (passwords, API keys, tokens, card numbers, seed phrases).
+
+## Files
+
+The user can drop files into a shared "Files" place. Those files live in the \`files/\` folder relative to your working directory, optionally organized into subfolders (e.g. \`files/Recipes/cake.pdf\`). When the user refers to "the files", "my files", or a document they added, read it from \`files/<name>\` (or \`files/<subfolder>/<name>\`) with your file tools. The current listing of file names is given to you each turn as context — the contents are not, so read a file on demand when it's relevant.
 
 ## Output format
 
@@ -71,6 +75,8 @@ export async function ensureWorkspace(): Promise<void> {
   // cwd for hidden internal LLM turns (distillation). A distinct dir keeps these
   // threads out of the cwd-filtered chat list; codex needs it to exist.
   await mkdir(join(workspaceRoot(), '.stem-internal'), { recursive: true });
+  // The persistent "Files" place the user drops files into (read by the agent).
+  await mkdir(filesRoot(), { recursive: true });
 
   await writeIfMissing(codexConfigPath(), DEFAULT_CONFIG);
   await writeIfMissing(agentsMdPath(), DEFAULT_AGENTS_MD);

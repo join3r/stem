@@ -19,6 +19,7 @@ import { agentMessageText } from '../../shared/types';
 import { PLAIN_MD_DIRECTIVE, STEM_ASSISTANT_INSTRUCTIONS } from '../workspace/bootstrap';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
 import { buildRecallContext } from '../recall/inject';
+import { buildFilesContext } from '../files/inject';
 import { captureUserMessage } from '../recall/capture';
 import { RECALL_MCP_NAME } from '../recall/register-mcp';
 import { ingestAttachments } from '../workspace/attachments';
@@ -287,11 +288,18 @@ export class CodexRuntime extends EventEmitter {
 
     const recallEnabled = isRecallEnabled();
     const recallContext = recallEnabled ? buildRecallContext(input.input, { currentThreadId: threadId }) : null;
-    // Assemble per-turn additional context: recalled memory (when present) plus a
-    // plain-Markdown directive when the user picked .md for this prompt.
+    // The current Files-folder listing, so the assistant always knows what the
+    // user has on hand and can read any of them on demand.
+    const filesContext = await buildFilesContext();
+    // Assemble per-turn additional context: recalled memory (when present), the
+    // Files listing (when non-empty), plus a plain-Markdown directive when the
+    // user picked .md for this prompt.
     const additionalContext: Record<string, { value: string; kind: string }> = {};
     if (recallContext) {
       additionalContext['stem-recall'] = { value: recallContext, kind: 'application' };
+    }
+    if (filesContext) {
+      additionalContext['stem-files'] = { value: filesContext, kind: 'application' };
     }
     if (input.format === 'md') {
       additionalContext['stem-format'] = { value: PLAIN_MD_DIRECTIVE, kind: 'application' };

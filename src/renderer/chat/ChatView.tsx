@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react';
 import {
   Square,
   ArrowUp,
@@ -23,6 +31,25 @@ const AVATAR: Record<ChatMessage['role'], { cls: string; icon: ReactNode; label:
 };
 
 const MAX_COMPOSER_HEIGHT = 180;
+
+// Read a File's bytes into a base64 TurnAttachment (for clipboard/dropped data
+// with no on-disk path). Module-level: it depends on nothing in the component.
+function fileToAttachment(file: File): Promise<TurnAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const result = reader.result as string; // data:<mime>;base64,<data>
+      resolve({ name: file.name, dataBase64: result.split(',')[1] ?? '', mime: file.type });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Imperative surface so App can push files into this chat's composer (drop overlay). */
+export interface ChatViewHandle {
+  addAttachments(files: File[]): void;
+}
 
 interface ChatViewProps {
   messages: ChatMessage[];
@@ -67,7 +94,7 @@ function metaTooltip(meta: ChatMessage['meta'], models: ModelSummary[]): string 
   return parts.length ? parts.join(' · ') : undefined;
 }
 
-export function ChatView({
+export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({
   messages,
   running,
   streamingId,
@@ -85,7 +112,7 @@ export function ChatView({
   onChangeEffort,
   onChangeSpeed,
   onChangeFormat
-}: ChatViewProps) {
+}: ChatViewProps, ref) {
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<TurnAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -157,19 +184,23 @@ export function ChatView({
     ]);
   }, []);
 
-  // Read a File's bytes into a base64 TurnAttachment (for clipboard/dropped data
-  // with no on-disk path).
-  function fileToAttachment(file: File): Promise<TurnAttachment> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(reader.error);
-      reader.onload = () => {
-        const result = reader.result as string; // data:<mime>;base64,<data>
-        resolve({ name: file.name, dataBase64: result.split(',')[1] ?? '', mime: file.type });
-      };
-      reader.readAsDataURL(file);
-    });
-  }
+  // Turn dropped/picked Files into composer attachments: prefer the on-disk path,
+  // falling back to base64 bytes for path-less data. Shared by drop + the overlay.
+  const addFilesToComposer = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    const next = await Promise.all(
+      files.map(async (f) => {
+        const path = window.stem.getPathForFile(f);
+        return path ? { name: f.name, path } : await fileToAttachment(f);
+      })
+    );
+    setAttachments((prev) => [...prev, ...next]);
+  }, []);
+
+  // App pushes overlay-dropped files ("Add to this conversation") in here.
+  useImperativeHandle(ref, () => ({ addAttachments: (files) => void addFilesToComposer(files) }), [
+    addFilesToComposer
+  ]);
 
   async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(e.clipboardData.files);
@@ -183,15 +214,7 @@ export function ChatView({
   async function onDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setDragOver(false);
-    const files = Array.from(e.dataTransfer.files);
-    if (!files.length) return;
-    const next = await Promise.all(
-      files.map(async (f) => {
-        const path = window.stem.getPathForFile(f);
-        return path ? { name: f.name, path } : await fileToAttachment(f);
-      })
-    );
-    setAttachments((prev) => [...prev, ...next]);
+    await addFilesToComposer(Array.from(e.dataTransfer.files));
   }
 
   const hasFast = !!model?.serviceTiers.some((t) => t.id === 'priority');
@@ -446,4 +469,4 @@ export function ChatView({
       </div>
     </div>
   );
-}
+});

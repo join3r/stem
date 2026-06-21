@@ -16,8 +16,9 @@ import type {
 } from '../shared/types';
 import { agentMessageText } from '../shared/types';
 import { activityLabel } from '../shared/activity';
-import { ChatView } from './chat/ChatView';
+import { ChatView, type ChatViewHandle } from './chat/ChatView';
 import { ManagePanel } from './manage/ManagePanel';
+import { DropOverlay } from './files/DropOverlay';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
 
 // Sentinel key for a brand-new chat that has no codex thread id yet. Its slice is
@@ -72,6 +73,10 @@ export default function App() {
   // Keyed by threadId; dropped once the real list includes them.
   const [pendingChats, setPendingChats] = useState<Record<string, ChatSummary>>({});
   const inspectorRef = useAutoHideScroll<HTMLElement>();
+  // Imperative handle to the active ChatView so the drop overlay can push files
+  // ("Add to this conversation") into its composer.
+  const chatViewRef = useRef<ChatViewHandle>(null);
+  const onDropToChat = useCallback((files: File[]) => chatViewRef.current?.addAttachments(files), []);
   // turnId -> which model/effort/speed produced that turn's reply (for the
   // avatar tooltip). Populated at send time; read when the message is built.
   // Global on purpose: turn ids are unique across threads.
@@ -697,6 +702,7 @@ export default function App() {
       <main className="conversation">
         <ChatView
           key={activeKey}
+          ref={chatViewRef}
           messages={cur.messages}
           running={cur.running}
           streamingId={cur.streamingId}
@@ -737,6 +743,7 @@ export default function App() {
           />
         </aside>
       )}
+      <DropOverlay onDropToChat={onDropToChat} />
     </div>,
     <>
       <button
