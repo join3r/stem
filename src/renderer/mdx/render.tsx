@@ -104,7 +104,14 @@ function renderNode(node: MdNode, key: string): ReactNode {
       const entry = componentMap[name];
       const children = <Fragment key={`${key}-c`}>{renderChildren(node, key)}</Fragment>;
       if (entry) {
-        return <Fragment key={key}>{entry(stringAttributes(node), children)}</Fragment>;
+        // Data-heavy components (Chart/DataTable) read their payload from a fenced
+        // code child (e.g. ```json …```). We surface its RAW text so the component
+        // can JSON.parse it — this never executes model code, it's just data.
+        const dataChild = (node.children ?? []).find((c) => c.type === 'code');
+        const data = dataChild
+          ? { lang: dataChild.lang ?? undefined, value: dataChild.value ?? '' }
+          : undefined;
+        return <Fragment key={key}>{entry(stringAttributes(node), children, data)}</Fragment>;
       }
       // Unknown component (e.g. <script>): drop the tag, keep children as text.
       return children;

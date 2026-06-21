@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type ReactNode
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 import type { ChatMessage, ModelSummary, TurnAttachment } from '../../shared/types';
 import { MdxView } from './MdxView';
+import { MdxActionContext } from '../mdx/ActionContext';
 import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
 
 const AVATAR: Record<ChatMessage['role'], { cls: string; icon: ReactNode; label: string }> = {
@@ -225,7 +227,15 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   const streamingMsg = messages.find((m) => m.id === streamingId);
   const showActivity = running && !(streamingMsg && streamingMsg.content);
 
+  // Bridge for interactive MDX components (Quiz/Form): submitting routes through the
+  // normal send path, so it appears as a user message just like typing would.
+  const mdxActions = useMemo(
+    () => ({ submit: (text: string) => onSend(text, []), running }),
+    [onSend, running]
+  );
+
   return (
+    <MdxActionContext.Provider value={mdxActions}>
     <div className="chat">
       <div className="messages" ref={messagesRef}>
         {messages.length === 0 && (
@@ -468,5 +478,6 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         </div>
       </div>
     </div>
+    </MdxActionContext.Provider>
   );
 });
