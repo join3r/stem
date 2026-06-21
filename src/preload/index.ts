@@ -3,6 +3,7 @@ import type {
   CodexEventEnvelope,
   McpAdminProposal,
   McpServerInput,
+  McpServerStatus,
   QuickChatAdopt,
   QuickChatFocus,
   QuickChatHandoff,
@@ -38,6 +39,7 @@ const api: StemApi = {
   revealFiles: () => ipcRenderer.invoke('files:reveal'),
 
   listMcpServers: () => ipcRenderer.invoke('mcp:list'),
+  getMcpStatus: () => ipcRenderer.invoke('mcp:status'),
   addMcpServer: (input: McpServerInput) => ipcRenderer.invoke('mcp:add', input),
   removeMcpServer: (name: string) => ipcRenderer.invoke('mcp:remove', name),
   loginMcpServer: (name: string) => ipcRenderer.invoke('mcp:login', name),
@@ -53,6 +55,11 @@ const api: StemApi = {
     const handler = () => listener();
     ipcRenderer.on('mcp:changed', handler);
     return () => ipcRenderer.removeListener('mcp:changed', handler);
+  },
+  onMcpStatus: (listener: (status: Record<string, McpServerStatus>) => void) => {
+    const handler = (_e: unknown, status: Record<string, McpServerStatus>) => listener(status);
+    ipcRenderer.on('mcp:status', handler);
+    return () => ipcRenderer.removeListener('mcp:status', handler);
   },
 
   getMemorySettings: () => ipcRenderer.invoke('memory:get'),

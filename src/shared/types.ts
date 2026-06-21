@@ -220,6 +220,18 @@ export interface McpServerSummary {
   authStatus?: string;
 }
 
+/**
+ * Live connection status of an MCP server in the running app-server, from
+ * `mcpServer/startupStatus/updated` notifications. `ready` = tools available;
+ * `failed` = the server dropped (for remote OAuth servers, usually a rejected
+ * token → needs re-login). Distinct from `authStatus`, which only reflects
+ * whether credentials exist on disk, not whether the connection works.
+ */
+export interface McpServerStatus {
+  status: string;
+  error: string | null;
+}
+
 export interface McpServerInput {
   name: string;
   transport: McpTransport;
@@ -453,6 +465,8 @@ export interface StemApi {
   revealFiles(): Promise<void>;
 
   listMcpServers(): Promise<McpServerSummary[]>;
+  /** Live per-server connection status (keyed by name) from the running app-server. */
+  getMcpStatus(): Promise<Record<string, McpServerStatus>>;
   addMcpServer(input: McpServerInput): Promise<McpServerSummary[]>;
   removeMcpServer(name: string): Promise<McpServerSummary[]>;
   loginMcpServer(name: string): Promise<McpLoginResult>;
@@ -463,6 +477,8 @@ export interface StemApi {
   respondMcpAdminApproval(id: number | string, accept: boolean): Promise<void>;
   /** Fired after an assistant-initiated MCP change is applied + hot-reloaded. */
   onMcpChanged(listener: () => void): () => void;
+  /** Live MCP connection-status updates (keyed by server name). */
+  onMcpStatus(listener: (status: Record<string, McpServerStatus>) => void): () => void;
 
   getMemorySettings(): Promise<MemorySettings>;
   setMemoryEnabled(enabled: boolean): Promise<MemorySettings>;

@@ -681,6 +681,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .row-main { flex: 1; min-width: 0; }
 .row-main strong { display: block; font-size: 13px; font-weight: 500; }
 .row-main em { font-style: normal; font-size: 11px; color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-main em.mcp-failed { color: var(--danger); }
 .pill { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
 .pill.ok { background: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
 .pill.off { background: color-mix(in srgb, var(--muted) 22%, transparent); color: var(--muted); }

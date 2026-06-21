@@ -3,6 +3,7 @@ import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, Mes
 import type {
   CodexEventEnvelope,
   McpLoginUrlParams,
+  McpServerStatus,
   McpServerSummary,
   McpTransport,
   MemoryContents,
@@ -488,18 +489,33 @@ function McpTab() {
   const [busy, setBusy] = useState<string | null>(null);
   const [loginName, setLoginName] = useState<string | null>(null);
   const [loginUrl, setLoginUrl] = useState<McpLoginUrlParams | null>(null);
-  const [signedIn, setSignedIn] = useState<Set<string>>(new Set());
+  // Live per-server connection status from the running app-server. This is the
+  // source of truth for whether a remote server actually works — `authStatus`
+  // only says whether OAuth creds exist on disk, which stays 'o_auth' even when
+  // the token is rejected at connect time and the server exposes no tools.
+  const [statuses, setStatuses] = useState<Record<string, McpServerStatus>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
   async function refresh() {
-    setServers(await window.stem.listMcpServers());
+    const [list, status] = await Promise.all([
+      window.stem.listMcpServers(),
+      window.stem.getMcpStatus()
+    ]);
+    setServers(list);
+    setStatuses(status);
   }
 
   useEffect(() => {
     refresh();
     // The assistant can add/remove servers itself; refresh the list when it does.
-    return window.stem.onMcpChanged(() => refresh());
+    const offChanged = window.stem.onMcpChanged(() => refresh());
+    // Live connection-status updates (e.g. a server goes ready/failed).
+    const offStatus = window.stem.onMcpStatus((s) => setStatuses(s));
+    return () => {
+      offChanged();
+      offStatus();
+    };
   }, []);
 
   // The OAuth authorize URL is streamed mid-login as a fallback link.
@@ -563,9 +579,9 @@ function McpTab() {
     setError(null);
     setServers(await window.stem.removeMcpServer(serverName));
     setSelected((cur) => (cur === serverName ? null : cur));
-    setSignedIn((prev) => {
-      const next = new Set(prev);
-      next.delete(serverName);
+    setStatuses((prev) => {
+      const next = { ...prev };
+      delete next[serverName];
       return next;
     });
     await reconnect();
@@ -578,7 +594,8 @@ function McpTab() {
     try {
       const result = await window.stem.loginMcpServer(serverName);
       if (result.ok) {
-        setSignedIn((prev) => new Set(prev).add(serverName));
+        // reconnect() respawns the app-server, which clears stale statuses and
+        // re-emits fresh ones; refresh() then pulls the new snapshot.
         await reconnect();
         await refresh();
       } else {
@@ -590,10 +607,27 @@ function McpTab() {
     }
   }
 
-  function signInLabel(serverName: string): string {
+  /**
+   * Resolve how a remote (http) server should present. Live connection status
+   * wins; we fall back to `authStatus` only when the app-server hasn't reported
+   * yet (e.g. the panel opened before any thread started this session).
+   *   connected — handshook, tools available
+   *   failed    — dropped at connect time (OAuth token rejected → offer re-login)
+   *   pending   — still starting
+   *   needs-login — remote server with no usable credentials
+   */
+  function remoteState(s: McpServerSummary): 'connected' | 'failed' | 'pending' | 'needs-login' {
+    const live = statuses[s.name]?.status;
+    if (live === 'ready') return 'connected';
+    if (live === 'failed') return 'failed';
+    if (live === 'starting') return 'pending';
+    const hasCreds = s.authStatus === 'o_auth' || s.authStatus === 'bearer_token';
+    return hasCreds ? 'connected' : 'needs-login';
+  }
+
+  function signInLabel(serverName: string, state: 'failed' | 'needs-login'): string {
     if (loginName === serverName) return 'Waiting…';
-    if (signedIn.has(serverName)) return 'Signed in';
-    return 'Sign in';
+    return state === 'failed' ? 'Reconnect' : 'Sign in';
   }
 
   return (
@@ -611,7 +645,9 @@ function McpTab() {
         <div className="group">
           {servers.map((s) => {
             const remote = s.transport === 'http';
-            const isSignedIn = signedIn.has(s.name);
+            const state = remote ? remoteState(s) : null;
+            const needsLogin = state === 'failed' || state === 'needs-login';
+            const error = statuses[s.name]?.error ?? undefined;
             return (
               <div
                 key={s.name}
@@ -623,9 +659,15 @@ function McpTab() {
                 </span>
                 <span className="row-main">
                   <strong>{s.name}</strong>
-                  <em>{remote ? s.url : `${s.command} ${s.args.join(' ')}`.trim()}</em>
+                  <em title={state === 'failed' ? error : undefined} className={state === 'failed' ? 'mcp-failed' : undefined}>
+                    {state === 'failed'
+                      ? 'Connection failed — sign in again.'
+                      : remote
+                        ? s.url
+                        : `${s.command} ${s.args.join(' ')}`.trim()}
+                  </em>
                 </span>
-                {remote && !isSignedIn ? (
+                {remote && needsLogin ? (
                   <button
                     className="push"
                     onClick={(e) => {
@@ -634,10 +676,14 @@ function McpTab() {
                     }}
                     disabled={!!loginName || !!busy}
                   >
-                    {signInLabel(s.name)}
+                    {signInLabel(s.name, state)}
                   </button>
+                ) : remote ? (
+                  <span className={`pill ${state === 'pending' ? 'off' : 'ok'}`}>
+                    {state === 'pending' ? 'Connecting…' : 'Connected'}
+                  </span>
                 ) : (
-                  <span className={`pill ${remote ? 'ok' : 'off'}`}>{remote ? 'Signed in' : 'Local'}</span>
+                  <span className="pill off">Local</span>
                 )}
               </div>
             );

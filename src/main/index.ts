@@ -432,6 +432,7 @@ function registerIpc(): void {
   ipcMain.handle('files:reveal', () => revealFiles());
 
   ipcMain.handle('mcp:list', () => listMcpServers());
+  ipcMain.handle('mcp:status', () => runtime!.getMcpStatus());
   ipcMain.handle('mcp:add', (_e, input: McpServerInput) => addMcpServer(input));
   ipcMain.handle('mcp:remove', (_e, name: string) => removeMcpServer(name));
   ipcMain.handle('mcp:login', (_e, name: string) => runtime!.mcpLogin(name));
@@ -646,6 +647,11 @@ app.whenReady().then(async () => {
     if (event.method === 'mcp/changed') {
       mainWindow?.webContents.send('mcp:changed');
       quickChatWindow?.webContents.send('mcp:changed');
+      return;
+    }
+    if (event.method === 'mcp/status') {
+      mainWindow?.webContents.send('mcp:status', event.params);
+      quickChatWindow?.webContents.send('mcp:status', event.params);
       return;
     }
     const threadId = (event.params as { threadId?: string } | undefined)?.threadId;

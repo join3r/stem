@@ -109,6 +109,15 @@ export class CodexRuntime extends EventEmitter {
   private adminToolArgsByThread = new Map<string, { tool: string; arguments: unknown }>();
   /** Set when an assistant MCP change is approved; triggers a reload on turn end. */
   private pendingMcpReload = false;
+  /**
+   * Latest live connection status per MCP server, from app-server
+   * `mcpServer/startupStatus/updated` notifications. This is the ONLY honest
+   * signal of whether a server actually loaded: `codex mcp list` reports
+   * `auth_status` (whether OAuth creds exist in the keyring), which stays
+   * `o_auth` even when the token is rejected at connect time and the server
+   * exposes zero tools. Cleared on every (re)spawn.
+   */
+  private mcpStatus = new Map<string, { status: string; error: string | null }>();
 
   constructor(private readonly options: RuntimeOptions) {
     super();
@@ -649,6 +658,7 @@ export class CodexRuntime extends EventEmitter {
     }
 
     this.startupError = null;
+    this.mcpStatus.clear(); // statuses belong to this proc's connections
     const proc = spawn(codexPath, ['app-server'], {
       cwd: this.options.workspaceRoot,
       env: this.sanitizedEnv(),
@@ -744,6 +754,30 @@ export class CodexRuntime extends EventEmitter {
         .then(() => this.emitEvent('mcp/changed'))
         .catch(() => {});
     }
+    // Track which MCP servers actually connected (vs. failed, e.g. an expired
+    // OAuth token). Surfaced to the Manage panel so a failed remote server can
+    // prompt re-login instead of falsely showing "Signed in".
+    if (method === 'mcpServer/startupStatus/updated') {
+      const s = params as { name?: string; status?: string; error?: string | null } | undefined;
+      if (s?.name) {
+        const prev = this.mcpStatus.get(s.name);
+        const next = { status: s.status ?? 'unknown', error: s.error ?? null };
+        if (!prev || prev.status !== next.status || prev.error !== next.error) {
+          this.mcpStatus.set(s.name, next);
+          this.emitEvent('mcp/status', this.getMcpStatus());
+        }
+      }
+    }
+  }
+
+  /**
+   * Snapshot of the live MCP connection status per server name. `ready` means
+   * the server handshook and its tools are available; `failed` (with an error)
+   * means it dropped — for a remote OAuth server that almost always means the
+   * stored token was rejected and the user must sign in again.
+   */
+  getMcpStatus(): Record<string, { status: string; error: string | null }> {
+    return Object.fromEntries(this.mcpStatus);
   }
 
   private handleServerRequest(id: JsonRpcId, method: string, params: unknown): void {
