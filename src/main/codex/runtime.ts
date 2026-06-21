@@ -8,7 +8,9 @@ import type {
   ChatSummary,
   CodexEventEnvelope,
   CodexItem,
+  McpAdminProposal,
   McpLoginResult,
+  McpServerInput,
   MessageMeta,
   ModelSummary,
   RuntimeStatus,
@@ -22,6 +24,7 @@ import { buildRecallContext } from '../recall/inject';
 import { buildFilesContext } from '../files/inject';
 import { captureUserMessage } from '../recall/capture';
 import { RECALL_MCP_NAME } from '../recall/register-mcp';
+import { ADMIN_MCP_NAME } from '../admin/register-mcp';
 import { ingestAttachments } from '../workspace/attachments';
 import { findCodexPath } from './locate';
 
@@ -100,6 +103,12 @@ export class CodexRuntime extends EventEmitter {
   // they use a distinct cwd so they never appear in the chat list.
   private internalThreads = new Set<string>();
   private startupError: string | null = null;
+  /** Pending assistant MCP-change approvals, keyed by codex elicitation request id. */
+  private adminApprovals = new Map<JsonRpcId, (accept: boolean) => void>();
+  /** Latest stem-admin mcpToolCall args per thread, to enrich the approval card. */
+  private adminToolArgsByThread = new Map<string, { tool: string; arguments: unknown }>();
+  /** Set when an assistant MCP change is approved; triggers a reload on turn end. */
+  private pendingMcpReload = false;
 
   constructor(private readonly options: RuntimeOptions) {
     super();
@@ -706,7 +715,34 @@ export class CodexRuntime extends EventEmitter {
     if (typeof message.method === 'string') {
       // Forward every notification, known or not. The UI decides what matters;
       // unknown methods are simply ignored downstream rather than crashing.
+      this.observeNotification(message.method, message.params);
       this.emitEvent(message.method, message.params);
+    }
+  }
+
+  /**
+   * Side-effects driven by codex notifications (in addition to forwarding them):
+   * (1) buffer the latest `stem-admin` tool-call args per thread so the approval
+   * card can show what the assistant proposed; (2) after a turn that included an
+   * approved MCP change, hot-reload so the new tools take effect (no thread reset).
+   */
+  private observeNotification(method: string, params: unknown): void {
+    const p = params as
+      | { threadId?: string; item?: { type?: string; server?: string; tool?: string; arguments?: unknown } }
+      | undefined;
+    if (
+      (method === 'item/started' || method === 'item/updated') &&
+      p?.item?.type === 'mcpToolCall' &&
+      p.item.server === ADMIN_MCP_NAME &&
+      p.threadId
+    ) {
+      this.adminToolArgsByThread.set(p.threadId, { tool: p.item.tool ?? '', arguments: p.item.arguments });
+    }
+    if (method === 'turn/completed' && this.pendingMcpReload) {
+      this.pendingMcpReload = false;
+      void this.configMcpServerReload()
+        .then(() => this.emitEvent('mcp/changed'))
+        .catch(() => {});
     }
   }
 
@@ -725,14 +761,25 @@ export class CodexRuntime extends EventEmitter {
         this.respond(id, { decision: 'denied' });
         return;
       case 'mcpServer/elicitation/request': {
-        // codex routes MCP tool-call approvals through elicitation. Auto-approve
-        // calls to Stem's own trusted, read-only recall server (search_past_chats)
-        // so memory lookups never get silently rejected; decline everything else
-        // (Stem has no UI to surface interactive elicitation/approvals).
-        const p = params as { serverName?: string; _meta?: { codex_approval_kind?: string } } | null;
-        const isTrustedRecallApproval =
-          p?.serverName === RECALL_MCP_NAME && p?._meta?.codex_approval_kind === 'mcp_tool_call';
-        this.respond(id, { action: isTrustedRecallApproval ? 'accept' : 'decline', content: null, _meta: null });
+        // codex routes MCP tool-call approvals through elicitation.
+        const p = params as
+          | { serverName?: string; threadId?: string; _meta?: { codex_approval_kind?: string } }
+          | null;
+        const isToolCall = p?._meta?.codex_approval_kind === 'mcp_tool_call';
+        // Stem's own trusted, read-only recall server (search_past_chats): always
+        // accept so memory lookups never get silently rejected.
+        if (p?.serverName === RECALL_MCP_NAME && isToolCall) {
+          this.respond(id, { action: 'accept', content: null, _meta: null });
+          return;
+        }
+        // Stem's self-management server (stem-admin): read-only list is auto-accepted;
+        // add/remove surface an in-app confirm card and wait for the user.
+        if (p?.serverName === ADMIN_MCP_NAME && isToolCall) {
+          this.handleAdminApproval(id, p.threadId ?? '');
+          return;
+        }
+        // No UI to surface arbitrary external elicitation/approvals — decline.
+        this.respond(id, { action: 'decline', content: null, _meta: null });
         return;
       }
       case 'item/tool/requestUserInput':
@@ -780,6 +827,72 @@ export class CodexRuntime extends EventEmitter {
   private emitEvent(method: string, params?: unknown): void {
     const event: CodexEventEnvelope = { method, params, receivedAt: new Date().toISOString() };
     this.emit('event', event);
+  }
+
+  /**
+   * Gate an assistant-initiated `add`/`remove` MCP tool call behind an in-app
+   * confirm card: emit the proposal to the UI and hold the elicitation open until
+   * the user decides (or a timeout declines). On accept, flag a reload for turn end.
+   */
+  private handleAdminApproval(id: JsonRpcId, threadId: string): void {
+    const buffered = this.adminToolArgsByThread.get(threadId);
+    this.adminToolArgsByThread.delete(threadId);
+    const tool = buffered?.tool ?? '';
+    // Read-only listing needs no confirmation.
+    if (tool === 'list_mcp_servers') {
+      this.respond(id, { action: 'accept', content: null, _meta: null });
+      return;
+    }
+    const proposal = this.buildAdminProposal(id, threadId, tool, buffered?.arguments);
+    let settled = false;
+    const finish = (accept: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      this.adminApprovals.delete(id);
+      if (accept) this.pendingMcpReload = true;
+      this.respond(id, { action: accept ? 'accept' : 'decline', content: null, _meta: null });
+    };
+    const timer = setTimeout(() => finish(false), 120_000);
+    this.adminApprovals.set(id, finish);
+    this.emitEvent('mcp/admin/approvalRequest', proposal);
+  }
+
+  private buildAdminProposal(id: JsonRpcId, threadId: string, tool: string, args: unknown): McpAdminProposal {
+    const a = (args ?? {}) as Record<string, unknown>;
+    if (tool === 'remove_mcp_server') {
+      return { id, threadId, action: 'remove', name: typeof a.name === 'string' ? a.name : undefined };
+    }
+    const input: McpServerInput = {
+      name: typeof a.name === 'string' ? a.name : '',
+      transport: a.transport === 'http' ? 'http' : 'stdio',
+      command: typeof a.command === 'string' ? a.command : undefined,
+      args: Array.isArray(a.args) ? a.args.map((x) => String(x)) : undefined,
+      url: typeof a.url === 'string' ? a.url : undefined,
+      env:
+        a.env && typeof a.env === 'object' && !Array.isArray(a.env)
+          ? (a.env as Record<string, string>)
+          : undefined
+    };
+    return { id, threadId, action: 'add', input, name: input.name };
+  }
+
+  /** Approve/decline a pending assistant-proposed MCP change (from the confirm card). */
+  resolveAdminApproval(id: JsonRpcId, accept: boolean): void {
+    this.adminApprovals.get(id)?.(accept);
+  }
+
+  /**
+   * Hot-reload MCP servers from config.toml into the live app-server with no full
+   * restart (so the chat thread is not reset). Falls back to a restart if the
+   * app-server doesn't support the reload RPC.
+   */
+  async configMcpServerReload(): Promise<void> {
+    try {
+      await this.request('config/mcpServer/reload', undefined);
+    } catch {
+      await this.restart();
+    }
   }
 
   private rejectAll(error: Error): void {

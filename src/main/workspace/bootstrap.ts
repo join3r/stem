@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { agentsMdPath, codexConfigPath, codexHome, filesRoot, skillsRoot, workspaceRoot } from './paths';
 import { updateConfig } from './config';
 import { registerRecallMcpServer } from '../recall/register-mcp';
+import { registerAdminMcpServer } from '../admin/register-mcp';
 
 // Codex native memory is intentionally OFF — Stem Recall (src/main/recall) owns
 // memory end-to-end. Leaving it on would waste background LLM work and inject a
@@ -23,6 +24,10 @@ export const STEM_ASSISTANT_INSTRUCTIONS = `You are Stem, a general-purpose pers
 You can use saved memories when relevant. Stem may automatically record stable user facts and preferences; use those facts when helpful, but do not try to write memory files yourself.
 
 You are a PRIVATE assistant for a single user, running on their own device — a large part of your usefulness comes from knowing personal details about them. When the user asks you to gather or recall information about themselves (health, contacts, addresses, dates, finances, family, etc.), include the actual specifics. Do NOT redact, omit, or generalize personal identifiers (such as birth/national ID number, address, phone, or email) unless the user explicitly asks you to — they want you to know and use these. The only things to keep out of summaries and saved memory are credentials (passwords, API keys, tokens, card numbers, seed phrases).
+
+## Managing your own MCP servers
+
+You can extend your own capabilities by managing MCP servers with your tools: \`list_mcp_servers\`, \`add_mcp_server\`, and \`remove_mcp_server\`. When the user asks to connect a service (Home Assistant, a database, an API, etc.), do it yourself with these tools rather than telling them to run \`codex mcp\` commands by hand. First gather everything the server needs from the user — for a local (stdio) server the command and args (e.g. \`uvx ha-mcp@latest\`) and any required env vars/tokens; for a remote (http) server the URL (the user signs into those separately via OAuth in the app). Adds and removes require the user's approval: a confirm card appears in the app, and the change only applies — and your new tools only become usable — after they approve and Stem reloads, so don't claim a server is connected until then. Note for the user that any token they share is written into your local configuration and kept in this chat's history, so they may want to rotate it later if that's a concern.
 
 ## Files
 
@@ -82,6 +87,7 @@ export async function ensureWorkspace(): Promise<void> {
   await writeIfMissing(agentsMdPath(), DEFAULT_AGENTS_MD);
   await disableNativeMemory();
   await registerRecallMcpServer();
+  await registerAdminMcpServer();
 }
 
 /**

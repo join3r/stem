@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   CodexEventEnvelope,
+  McpAdminProposal,
   McpServerInput,
   QuickChatAdopt,
   QuickChatFocus,
@@ -41,6 +42,18 @@ const api: StemApi = {
   removeMcpServer: (name: string) => ipcRenderer.invoke('mcp:remove', name),
   loginMcpServer: (name: string) => ipcRenderer.invoke('mcp:login', name),
   restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
+  onMcpAdminApproval: (listener: (proposal: McpAdminProposal) => void) => {
+    const handler = (_e: unknown, proposal: McpAdminProposal) => listener(proposal);
+    ipcRenderer.on('mcp:adminApproval', handler);
+    return () => ipcRenderer.removeListener('mcp:adminApproval', handler);
+  },
+  respondMcpAdminApproval: (id: number | string, accept: boolean) =>
+    ipcRenderer.invoke('mcp:adminDecision', id, accept),
+  onMcpChanged: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on('mcp:changed', handler);
+    return () => ipcRenderer.removeListener('mcp:changed', handler);
+  },
 
   getMemorySettings: () => ipcRenderer.invoke('memory:get'),
   setMemoryEnabled: (enabled: boolean) => ipcRenderer.invoke('memory:setEnabled', enabled),

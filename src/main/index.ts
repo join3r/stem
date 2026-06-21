@@ -435,6 +435,9 @@ function registerIpc(): void {
   ipcMain.handle('mcp:add', (_e, input: McpServerInput) => addMcpServer(input));
   ipcMain.handle('mcp:remove', (_e, name: string) => removeMcpServer(name));
   ipcMain.handle('mcp:login', (_e, name: string) => runtime!.mcpLogin(name));
+  ipcMain.handle('mcp:adminDecision', (_e, id: number | string, accept: boolean) => {
+    runtime!.resolveAdminApproval(id, accept);
+  });
   ipcMain.handle('runtime:restart', async () => {
     await runtime!.restart();
     return runtime!.status();
@@ -633,6 +636,18 @@ app.whenReady().then(async () => {
   // Forward codex events to the main window. Registered once (not per-window) so
   // recreating the window can't double-subscribe.
   runtime.on('event', (event) => {
+    // Stem-internal MCP self-management signals: deliver to the windows on their
+    // own channels (never as a codex thread event, and never captured into recall).
+    if (event.method === 'mcp/admin/approvalRequest') {
+      mainWindow?.webContents.send('mcp:adminApproval', event.params);
+      quickChatWindow?.webContents.send('mcp:adminApproval', event.params);
+      return;
+    }
+    if (event.method === 'mcp/changed') {
+      mainWindow?.webContents.send('mcp:changed');
+      quickChatWindow?.webContents.send('mcp:changed');
+      return;
+    }
     const threadId = (event.params as { threadId?: string } | undefined)?.threadId;
     // Hidden internal threads (distillation) are neither shown nor captured.
     if (threadId && runtime!.isInternalThread(threadId)) return;

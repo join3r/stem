@@ -18,6 +18,7 @@ import { agentMessageText } from '../shared/types';
 import { activityLabel } from '../shared/activity';
 import { ChatView, type ChatViewHandle } from './chat/ChatView';
 import { ManagePanel } from './manage/ManagePanel';
+import { McpApprovalCard } from './manage/McpApprovalCard';
 import { DropOverlay } from './files/DropOverlay';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
 
@@ -744,6 +745,7 @@ export default function App() {
         </aside>
       )}
       <DropOverlay onDropToChat={onDropToChat} />
+      <McpApprovalCard />
     </div>,
     <>
       <button

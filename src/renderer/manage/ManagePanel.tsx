@@ -483,6 +483,7 @@ function McpTab() {
   const [command, setCommand] = useState('');
   const [args, setArgs] = useState('');
   const [url, setUrl] = useState('');
+  const [envText, setEnvText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [loginName, setLoginName] = useState<string | null>(null);
@@ -497,6 +498,8 @@ function McpTab() {
 
   useEffect(() => {
     refresh();
+    // The assistant can add/remove servers itself; refresh the list when it does.
+    return window.stem.onMcpChanged(() => refresh());
   }, []);
 
   // The OAuth authorize URL is streamed mid-login as a fallback link.
@@ -519,21 +522,37 @@ function McpTab() {
   const canAdd =
     !!name.trim() && (transport === 'http' ? !!url.trim() : !!command.trim()) && !busy;
 
+  // Parse the env textarea ("KEY=value" per line) into a map; blank/`#` lines skipped.
+  function parseEnv(text: string): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq <= 0) continue;
+      env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+    }
+    return env;
+  }
+
   async function add() {
     setError(null);
     try {
+      const env = parseEnv(envText);
       const list = await window.stem.addMcpServer({
         name: name.trim(),
         transport,
         command: command.trim(),
         args: args.trim() ? args.trim().split(/\s+/) : [],
-        url: url.trim()
+        url: url.trim(),
+        ...(Object.keys(env).length > 0 ? { env } : {})
       });
       setServers(list);
       setName('');
       setCommand('');
       setArgs('');
       setUrl('');
+      setEnvText('');
       await reconnect();
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -663,6 +682,13 @@ function McpTab() {
           <>
             <input className="ifield" placeholder="command (e.g. npx)" value={command} onChange={(e) => setCommand(e.target.value)} />
             <input className="ifield" placeholder="args (space-separated)" value={args} onChange={(e) => setArgs(e.target.value)} />
+            <textarea
+              className="ifield"
+              placeholder="env (optional), one KEY=value per line"
+              rows={2}
+              value={envText}
+              onChange={(e) => setEnvText(e.target.value)}
+            />
           </>
         )}
         <div className="push-row">

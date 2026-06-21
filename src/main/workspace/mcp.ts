@@ -5,6 +5,10 @@ import { codexEnv, runCodexJson } from '../codex/exec';
 import { readConfig, updateConfig } from './config';
 import { codexHome } from './paths';
 import { RECALL_MCP_NAME } from '../recall/register-mcp';
+import { ADMIN_MCP_NAME } from '../admin/register-mcp';
+
+/** Internal, Stem-owned servers hidden from the user-facing MCP list. */
+const RESERVED_NAMES = new Set([RECALL_MCP_NAME, ADMIN_MCP_NAME]);
 
 // Shape of an entry from `codex mcp list --json` (codex-cli 0.141.0).
 interface CodexMcpListEntry {
@@ -22,7 +26,7 @@ export async function listMcpServers(): Promise<McpServerSummary[]> {
   try {
     const entries = await runCodexJson<CodexMcpListEntry[]>(['mcp', 'list', '--json'], codexHome());
     return entries
-      .filter((entry) => entry.name !== RECALL_MCP_NAME) // hide Stem's internal recall server
+      .filter((entry) => !RESERVED_NAMES.has(entry.name)) // hide Stem's internal servers
       .map((entry) => {
       const t = entry.transport ?? {};
       const isHttp = t.type === 'streamable_http';
@@ -45,7 +49,7 @@ async function listFromConfig(): Promise<McpServerSummary[]> {
   const config = await readConfig();
   const servers = config.mcp_servers ?? {};
   return Object.entries(servers)
-    .filter(([name]) => name !== RECALL_MCP_NAME) // hide Stem's internal recall server
+    .filter(([name]) => !RESERVED_NAMES.has(name)) // hide Stem's internal servers
     .map(([name, def]) => {
     const url = def?.url ?? '';
     return {
@@ -90,9 +94,11 @@ export async function addMcpServer(input: McpServerInput): Promise<McpServerSumm
     if (!command) {
       throw new Error('A local MCP server requires a command.');
     }
+    // Only attach `env` when non-empty so a plain server stays `{command, args}`.
+    const env = input.env && Object.keys(input.env).length > 0 ? input.env : undefined;
     await updateConfig((config) => {
       config.mcp_servers = config.mcp_servers ?? {};
-      config.mcp_servers[name] = { command, args: input.args ?? [] };
+      config.mcp_servers[name] = { command, args: input.args ?? [], ...(env ? { env } : {}) };
     });
   }
 

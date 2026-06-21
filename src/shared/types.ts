@@ -228,11 +228,33 @@ export interface McpServerInput {
   args?: string[];
   /** Required for http. */
   url?: string;
+  /** Environment variables for the spawned stdio server (e.g. API tokens). */
+  env?: Record<string, string>;
 }
 
 export interface McpLoginResult {
   ok: boolean;
   error?: string;
+}
+
+// ---- Assistant-initiated MCP changes (the `stem-admin` self-management server) ----
+//
+// When the chat assistant calls its add/remove MCP tools, codex gates the call
+// through an approval (`mcpServer/elicitation/request`). Stem surfaces that as an
+// in-app confirm card; only on approval is config.toml written and hot-reloaded.
+
+/**
+ * A pending assistant-proposed MCP change awaiting the user's approval.
+ * `id` is the codex elicitation request id — pass it back to approve/decline.
+ */
+export interface McpAdminProposal {
+  id: number | string;
+  threadId: string;
+  action: 'add' | 'remove';
+  /** Present for `add`: the server the assistant wants to configure. */
+  input?: McpServerInput;
+  /** Present for `remove` (and as a label for `add`): the server name. */
+  name?: string;
 }
 
 /** `mcp/login/url` — the OAuth authorize URL, streamed mid-login as a fallback link. */
@@ -435,6 +457,12 @@ export interface StemApi {
   removeMcpServer(name: string): Promise<McpServerSummary[]>;
   loginMcpServer(name: string): Promise<McpLoginResult>;
   restartRuntime(): Promise<RuntimeStatus>;
+  /** Assistant proposed an MCP change; fired so the UI can show a confirm card. */
+  onMcpAdminApproval(listener: (proposal: McpAdminProposal) => void): () => void;
+  /** Approve/decline an assistant-proposed MCP change by its elicitation id. */
+  respondMcpAdminApproval(id: number | string, accept: boolean): Promise<void>;
+  /** Fired after an assistant-initiated MCP change is applied + hot-reloaded. */
+  onMcpChanged(listener: () => void): () => void;
 
   getMemorySettings(): Promise<MemorySettings>;
   setMemoryEnabled(enabled: boolean): Promise<MemorySettings>;
