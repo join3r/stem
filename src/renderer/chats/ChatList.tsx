@@ -108,6 +108,10 @@ export function ChatList(props: ChatListProps) {
   };
   const allowDrop = (target: string | 'root') => (e: React.DragEvent) => {
     e.preventDefault();
+    // Folder rows nest inside the root group, which is itself a drop zone. Without
+    // stopping propagation the dragover bubbles up and the group overrides the
+    // target to 'root', lighting up the whole list instead of the hovered folder.
+    e.stopPropagation();
     setDropTarget(target);
   };
 
