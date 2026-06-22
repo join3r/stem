@@ -396,7 +396,7 @@ export type BackendKind = 'codex' | 'pi';
 
 export interface AppSettings {
   quickChat: QuickChatSettings;
-  /** Active chat backend; defaults to codex. Overridable via STEM_BACKEND env. */
+  /** Active chat backend; defaults to pi. Overridable via STEM_BACKEND env. */
   backend: BackendKind;
 }
 

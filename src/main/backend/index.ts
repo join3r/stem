@@ -8,12 +8,12 @@ export type { ChatBackend } from './types';
 
 /**
  * Resolve which backend to run. `STEM_BACKEND` (env) wins for dev/spike work;
- * otherwise the persisted `backend` setting, defaulting to codex.
+ * otherwise the persisted `backend` setting, defaulting to pi.
  */
 export function resolveBackendKind(settings: AppSettings): BackendKind {
   const env = process.env.STEM_BACKEND;
   if (env === 'pi' || env === 'codex') return env;
-  return settings.backend === 'pi' ? 'pi' : 'codex';
+  return settings.backend === 'codex' ? 'codex' : 'pi';
 }
 
 /** The isolated home directory for a backend (the CODEX_HOME / PI_CODING_AGENT_DIR analog). */
