@@ -40,6 +40,16 @@ const DEFAULT_MODEL = 'gpt-5.3-codex-spark';
 // stem-mcp-extension.mjs). The message is a JSON McpAdminProposal payload.
 const ADMIN_APPROVAL_TITLE = 'stem-admin-approval';
 
+// Max length for an auto-derived chat title; longer first messages are
+// truncated (the sidebar ellipsizes anyway).
+const MAX_AUTO_TITLE = 80;
+
+/** Derive a chat title from the first user message: its first non-empty line, trimmed and capped. */
+function titleFromInput(input: string): string {
+  const line = input.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
+  return line.length > MAX_AUTO_TITLE ? `${line.slice(0, MAX_AUTO_TITLE - 1).trimEnd()}…` : line;
+}
+
 interface RuntimeOptions {
   piHome: string;
   sessionsDir: string;
@@ -79,6 +89,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private currentModel: string | null = null;
   /** sessionId → on-disk session file, learned from get_state / dir scans. */
   private sessionFiles = new Map<string, string>();
+  /**
+   * Sessions pre-created via createThread (e.g. Quick Chat) that haven't had a
+   * turn yet, so their first turn still gets an auto-derived title — matching the
+   * no-threadId path. Drained on first prompt.
+   */
+  private unnamedThreads = new Set<string>();
   /**
    * Live-turn turnId (a minted uuid) → pi's 8-hex session entry id of that turn's
    * user message. Populated after each turn so fork/rollback can target the right
@@ -157,7 +173,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   async createThread(model?: string): Promise<string> {
     await this.ensureStarted();
     if (model) await this.applyModel(model);
-    return this.newSession();
+    const id = await this.newSession();
+    this.unnamedThreads.add(id);
+    return id;
   }
 
   async startTurn(input: StartTurnInput): Promise<StartTurnResult> {
@@ -171,6 +189,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // in-flight turn to finish before we touch the active session.
     if (this.activeTurnDone) await this.activeTurnDone;
 
+    // First turn of a new chat — either a draft started here (no threadId) or a
+    // session pre-created via createThread (Quick Chat) that hasn't been prompted.
+    const isNewThread = !input.threadId || this.unnamedThreads.has(input.threadId);
     const threadId = input.threadId ? await this.ensureActive(input.threadId) : await this.newSession();
     if (input.model) await this.applyModel(input.model);
     if (input.effort) await this.setThinking(input.effort);
@@ -184,6 +205,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (!res.success) {
       this.finishTurn();
       throw new Error(res.error ?? 'pi rejected the prompt.');
+    }
+
+    // Persist a title for a brand-new chat. pi never auto-names sessions, so
+    // without this the session_info `name` stays empty and the sidebar reverts
+    // to "New chat" the moment the backend lists the thread (on restart, refresh,
+    // or a folder move) — replacing the renderer's optimistic first-message title.
+    this.unnamedThreads.delete(threadId);
+    if (isNewThread) {
+      const name = titleFromInput(input.input);
+      if (name) await this.proc!.request({ type: 'set_session_name', name }).catch(() => undefined);
     }
 
     if (isRecallEnabled()) {
@@ -374,6 +405,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (this.proc) await this.proc.request({ type: 'new_session' }).catch(() => undefined);
     }
     this.sessionFiles.delete(threadId);
+    this.unnamedThreads.delete(threadId);
     if (file) await unlink(file).catch(() => undefined);
   }
 
