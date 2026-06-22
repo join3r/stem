@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { piHome, piMcpConfigPath, recallDbPath } from '../workspace/paths';
 import { RECALL_MCP_NAME, recallMcpServerPath } from '../recall/register-mcp';
@@ -78,11 +78,19 @@ export async function readOAuthTokens(): Promise<Record<string, OAuthToken>> {
  * neither should be group/world-readable. The explicit chmod also tightens a
  * file that already exists with looser perms (the `mode` create-option is
  * ignored when the file is merely truncated).
+ *
+ * The write is atomic: data goes to a sibling temp file that is then renamed over
+ * the target. A crash or force-quit mid-write can therefore only leave a stray
+ * `.tmp` (harmlessly overwritten next time) — never a truncated mcp.json, which
+ * used to read back as corrupt and get reset to an empty server list, silently
+ * dropping every user-added server.
  */
 async function writeSecretFile(path: string, data: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, data, { encoding: 'utf8', mode: 0o600 });
-  await chmod(path, 0o600);
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, data, { encoding: 'utf8', mode: 0o600 });
+  await chmod(tmp, 0o600);
+  await rename(tmp, path); // atomic on the same filesystem (same dir)
 }
 
 export async function saveOAuthToken(name: string, token: OAuthToken): Promise<void> {
@@ -108,14 +116,29 @@ function recallServerEntry(): PiMcpServer {
   };
 }
 
+/**
+ * Read mcp.json, distinguishing a genuinely missing file (legitimate first run →
+ * fresh config) from one that exists but is corrupt/unparseable. The corrupt case
+ * MUST NOT be silently treated as empty: callers that read-modify-write (notably
+ * {@link ensureMcpConfig}) would then persist that emptiness and wipe every
+ * user-added server. Instead we preserve the bytes to a `.corrupt` sibling for
+ * recovery and throw, so the loss is visible and recoverable rather than silent.
+ */
 export async function readMcpConfig(): Promise<PiMcpConfig> {
+  let raw: string;
   try {
-    const parsed = JSON.parse(await readFile(piMcpConfigPath(), 'utf8')) as Partial<PiMcpConfig>;
-    if (parsed && typeof parsed === 'object' && parsed.servers) return { servers: parsed.servers };
+    raw = await readFile(piMcpConfigPath(), 'utf8');
   } catch {
-    // missing/corrupt → fresh
+    return { servers: {} }; // genuinely missing → fresh
   }
-  return { servers: {} };
+  try {
+    const parsed = JSON.parse(raw) as Partial<PiMcpConfig>;
+    if (parsed && typeof parsed === 'object' && parsed.servers) return { servers: parsed.servers };
+    throw new Error('mcp.json has no "servers" object');
+  } catch (e) {
+    await writeFile(`${piMcpConfigPath()}.corrupt`, raw, { encoding: 'utf8', mode: 0o600 }).catch(() => undefined);
+    throw new Error(`mcp.json is corrupt (preserved at ${piMcpConfigPath()}.corrupt): ${String(e)}`);
+  }
 }
 
 export async function writeMcpConfig(config: PiMcpConfig): Promise<void> {
@@ -128,7 +151,15 @@ export async function writeMcpConfig(config: PiMcpConfig): Promise<void> {
  * runs), preserving any user-added servers. Idempotent; called at bootstrap.
  */
 export async function ensureMcpConfig(): Promise<void> {
-  const config = await readMcpConfig();
+  let config: PiMcpConfig;
+  try {
+    config = await readMcpConfig();
+  } catch {
+    // Corrupt mcp.json (already preserved as `.corrupt` by readMcpConfig). Start
+    // fresh so recall and the app keep working; the backup keeps any recoverable
+    // user servers around instead of erasing them without a trace.
+    config = { servers: {} };
+  }
   config.servers[RECALL_MCP_NAME] = recallServerEntry();
   await writeMcpConfig(config);
 }

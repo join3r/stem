@@ -11,7 +11,7 @@
 // spawned from the in-repo path (like recall/mcp-server.mjs).
 
 import { spawn } from 'node:child_process';
-import { chmodSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /**
@@ -19,14 +19,22 @@ import { dirname, join } from 'node:path';
  * headers and mcp-oauth.json holds OAuth tokens; neither should be readable by
  * other users. The explicit chmod also tightens a file that already exists with
  * looser perms (the `mode` create-option is ignored on truncate).
+ *
+ * Atomic: data is written to a sibling temp file and renamed over the target, so
+ * a crash mid-write can only leave a stray `.tmp`, never a truncated file. This
+ * matters because both this bridge and Stem's main process write mcp.json; a
+ * half-written file used to read back as corrupt and get reset to an empty
+ * server list, silently dropping every user-added server.
  */
 function writeSecretSync(path, data) {
-  writeFileSync(path, data, { mode: 0o600 });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, data, { mode: 0o600 });
   try {
-    chmodSync(path, 0o600);
+    chmodSync(tmp, 0o600);
   } catch {
     // best-effort on platforms without POSIX perms
   }
+  renameSync(tmp, path); // atomic on the same filesystem (same dir)
 }
 
 /** Minimal MCP stdio client: newline-delimited JSON-RPC 2.0 over the child's stdio. */
@@ -414,14 +422,29 @@ const ADMIN_RESERVED = new Set(['stem-recall', 'stem-admin']);
 const ADMIN_APPROVAL_TITLE = 'stem-admin-approval';
 const ADMIN_VALID_NAME = /^[A-Za-z0-9_.-]+$/;
 
+// Read mcp.json for the admin tools. A genuinely missing file is a fresh config;
+// a file that exists but is corrupt must NOT be treated as empty — the add/remove
+// tools read-modify-write it, so an empty fallback would persist a wipe of every
+// user server. Preserve the bytes to a `.corrupt` sibling and throw instead.
 function readMcpJson(cfgPath) {
+  let raw;
   try {
-    const parsed = JSON.parse(readFileSync(cfgPath, 'utf8'));
-    if (parsed && parsed.servers) return parsed;
+    raw = readFileSync(cfgPath, 'utf8');
   } catch {
-    // fall through
+    return { servers: {} };
   }
-  return { servers: {} };
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.servers) return parsed;
+    throw new Error('mcp.json has no "servers" object');
+  } catch (e) {
+    try {
+      writeFileSync(`${cfgPath}.corrupt`, raw, { mode: 0o600 });
+    } catch {
+      // best-effort backup
+    }
+    throw new Error(`mcp.json is corrupt (preserved at ${cfgPath}.corrupt): ${(e && e.message) || e}`);
+  }
 }
 
 async function requestAdminApproval(ctx, proposal) {
@@ -473,7 +496,12 @@ function registerAdminTools(pi, cfgPath) {
       "List the MCP servers currently configured for this assistant (excluding Stem's internal servers). Use this to see what is already set up before adding or removing one.",
     parameters: { type: 'object', properties: {} },
     async execute() {
-      const servers = readMcpJson(cfgPath).servers || {};
+      let servers;
+      try {
+        servers = readMcpJson(cfgPath).servers || {};
+      } catch (e) {
+        return { content: [{ type: 'text', text: `Cannot read MCP config: ${e.message}` }], details: {}, isError: true };
+      }
       const lines = Object.entries(servers)
         .filter(([n]) => !ADMIN_RESERVED.has(n))
         .map(([n, def]) =>
@@ -511,7 +539,12 @@ function registerAdminTools(pi, cfgPath) {
       }
       const approved = await requestAdminApproval(ctx, { action: 'add', name: built.name, input: built.input });
       if (!approved) return { content: [{ type: 'text', text: `The user declined adding "${built.name}".` }], details: {} };
-      const config = readMcpJson(cfgPath);
+      let config;
+      try {
+        config = readMcpJson(cfgPath);
+      } catch (e) {
+        return { content: [{ type: 'text', text: `Cannot update MCP config: ${e.message}` }], details: {}, isError: true };
+      }
       config.servers = config.servers || {};
       config.servers[built.name] = built.entry;
       writeSecretSync(cfgPath, JSON.stringify(config, null, 2));
@@ -534,7 +567,12 @@ function registerAdminTools(pi, cfgPath) {
       if (!name) return { content: [{ type: 'text', text: 'Provide the name of the server to remove.' }], details: {}, isError: true };
       if (ADMIN_RESERVED.has(name))
         return { content: [{ type: 'text', text: `"${name}" is a reserved Stem server and cannot be removed.` }], details: {}, isError: true };
-      const config = readMcpJson(cfgPath);
+      let config;
+      try {
+        config = readMcpJson(cfgPath);
+      } catch (e) {
+        return { content: [{ type: 'text', text: `Cannot update MCP config: ${e.message}` }], details: {}, isError: true };
+      }
       if (!config.servers || !(name in config.servers))
         return { content: [{ type: 'text', text: `No MCP server named "${name}" is configured.` }], details: {}, isError: true };
       const approved = await requestAdminApproval(ctx, { action: 'remove', name });
