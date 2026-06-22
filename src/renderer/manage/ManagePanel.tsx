@@ -422,24 +422,6 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
           </div>
         </div>
 
-        <div className="set-block">
-          <span className="set-sub">Default speed</span>
-          <div className="seg-ctl">
-            <button
-              className={qc.defaultServiceTier === 'priority' ? '' : 'active'}
-              onClick={() => update({ defaultServiceTier: null })}
-            >
-              Standard
-            </button>
-            <button
-              className={qc.defaultServiceTier === 'priority' ? 'active' : ''}
-              onClick={() => update({ defaultServiceTier: 'priority' })}
-            >
-              Fast
-            </button>
-          </div>
-        </div>
-
         <div className="set-row">
           <span className="set-label">
             <strong>Show on all displays</strong>

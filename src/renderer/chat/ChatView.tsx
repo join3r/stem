@@ -83,16 +83,14 @@ const EFFORT_LABELS: Record<string, string> = {
   xhigh: 'X-High'
 };
 
-// Build the inline meta label: "GPT-5 Codex · High · Fast". Resolves the model id
-// to its catalog display name; effort/speed are appended only when known (history
-// has no speed, some models have no effort).
+// Build the inline meta label: "Claude Opus · High". Resolves the model id to its
+// catalog display name; effort is appended only when known (some models have no
+// effort). Speed is omitted — the pi backend has no service tier.
 function metaTooltip(meta: ChatMessage['meta'], models: ModelSummary[]): string | undefined {
   if (!meta) return undefined;
   const parts: string[] = [];
   if (meta.model) parts.push(models.find((m) => m.id === meta.model)?.displayName ?? meta.model);
   if (meta.effort) parts.push(EFFORT_LABELS[meta.effort] ?? meta.effort);
-  if (meta.serviceTier === 'priority') parts.push('Fast');
-  else if (meta.serviceTier === null) parts.push('Standard');
   return parts.length ? parts.join(' · ') : undefined;
 }
 
