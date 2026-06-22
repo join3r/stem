@@ -238,8 +238,115 @@ export function getFacts(limit = 100): Fact[] {
   }));
 }
 
+/**
+ * Every fact, uncapped — for the consolidation pass, which must reason over the
+ * whole set to merge/correct/drop. `getFacts` keeps its 100-row cap for inject/UI.
+ */
+export function getAllFacts(): Fact[] {
+  const handle = open();
+  const rows = handle
+    .prepare(`SELECT id, text, source, updated_at AS updatedAt FROM facts ORDER BY id ASC`)
+    .all() as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    id: r.id as number,
+    text: r.text as string,
+    source: r.source as string,
+    updatedAt: r.updatedAt as number
+  }));
+}
+
 export function deleteFact(id: number): void {
   open().prepare(`DELETE FROM facts WHERE id = ?`).run(id);
+}
+
+// ---- consolidation (Level 1 cleanup) ----
+
+/** Merge several facts into one: the survivor's text becomes `text`, the rest are dropped. */
+export interface MergeOp {
+  ids: number[];
+  text: string;
+}
+/** Rewrite a single fact's text in place (a correction). */
+export interface CorrectOp {
+  id: number;
+  text: string;
+}
+export interface ConsolidationOps {
+  merge: MergeOp[];
+  correct: CorrectOp[];
+  drop: number[];
+}
+export interface ConsolidationResult {
+  merged: number;
+  corrected: number;
+  dropped: number;
+}
+
+/**
+ * Apply a batch of consolidation operations in a single transaction. Default
+ * posture is KEEP: only ids named in an op are touched; unknown ids are ignored.
+ *
+ * Order matters for the `norm` UNIQUE constraint: all deletes run first (merge
+ * losers + explicit drops), so a survivor/correction can safely take text whose
+ * norm previously belonged to a now-deleted row. Text writes that would still
+ * collide with another surviving row (two survivors normalizing equal) are
+ * skipped per-row rather than aborting the whole batch.
+ */
+export function applyConsolidation(ops: ConsolidationOps): ConsolidationResult {
+  const handle = open();
+  const existing = new Set(getAllFacts().map((f) => f.id));
+
+  // Resolve text writes (merge survivors + corrections) and the ids each removes.
+  const dropIds = new Set<number>(); // explicit drops
+  const mergeLoserIds = new Set<number>(); // losers folded into a survivor
+  const textWrites: Array<{ id: number; text: string; kind: 'merge' | 'correct' }> = [];
+
+  for (const m of ops.merge) {
+    const present = m.ids.filter((id) => existing.has(id));
+    const text = m.text.trim();
+    if (present.length === 0 || !text) continue;
+    const survivor = Math.min(...present);
+    for (const id of present) if (id !== survivor) mergeLoserIds.add(id);
+    textWrites.push({ id: survivor, text, kind: 'merge' });
+  }
+  for (const c of ops.correct) {
+    const text = c.text.trim();
+    if (existing.has(c.id) && text) textWrites.push({ id: c.id, text, kind: 'correct' });
+  }
+  for (const id of ops.drop) if (existing.has(id)) dropIds.add(id);
+  // A survivor/corrected row must never be deleted by an overlapping op.
+  for (const w of textWrites) {
+    dropIds.delete(w.id);
+    mergeLoserIds.delete(w.id);
+  }
+
+  let merged = 0;
+  let dropped = 0;
+  let corrected = 0;
+  handle.exec('BEGIN');
+  try {
+    // Deletes first so a survivor/correction can reclaim a deleted row's norm.
+    const del = handle.prepare(`DELETE FROM facts WHERE id = ?`);
+    for (const id of mergeLoserIds) merged += del.run(id).changes as number;
+    for (const id of dropIds) dropped += del.run(id).changes as number;
+
+    const upd = handle.prepare(`UPDATE facts SET text = ?, norm = ?, updated_at = ? WHERE id = ?`);
+    for (const w of textWrites) {
+      try {
+        if ((upd.run(w.text, normalizeFact(w.text), nowSeconds(), w.id).changes as number) > 0) {
+          if (w.kind === 'correct') corrected += 1;
+        }
+      } catch {
+        // norm UNIQUE collision with another surviving row — leave this fact as-is.
+      }
+    }
+    handle.exec('COMMIT');
+  } catch (err) {
+    handle.exec('ROLLBACK');
+    throw err;
+  }
+
+  return { merged, corrected, dropped };
 }
 
 export function getMeta(key: string): string | null {

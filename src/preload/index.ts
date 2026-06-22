@@ -65,6 +65,8 @@ const api: StemApi = {
   getMemorySettings: () => ipcRenderer.invoke('memory:get'),
   setMemoryEnabled: (enabled: boolean) => ipcRenderer.invoke('memory:setEnabled', enabled),
   readMemory: () => ipcRenderer.invoke('memory:read'),
+  forgetMemory: (id: number) => ipcRenderer.invoke('memory:forget', id),
+  consolidateMemory: () => ipcRenderer.invoke('memory:consolidate'),
 
   listChats: () => ipcRenderer.invoke('chats:list'),
   openChat: (threadId: string) => ipcRenderer.invoke('chats:open', threadId),

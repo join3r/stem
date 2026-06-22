@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, FolderOpen } from 'lucide-react';
+import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, FolderOpen, Trash2, Wand2 } from 'lucide-react';
 import type {
   BackendEventEnvelope,
   McpLoginUrlParams,
@@ -85,6 +85,8 @@ function MemoryTab() {
   const [settings, setSettings] = useState<MemorySettings | null>(null);
   const [contents, setContents] = useState<MemoryContents | null>(null);
   const [showTech, setShowTech] = useState(false);
+  const [consolidating, setConsolidating] = useState(false);
+  const [consolidateMsg, setConsolidateMsg] = useState<string | null>(null);
 
   function loadContents() {
     window.stem.readMemory().then(setContents);
@@ -98,6 +100,29 @@ function MemoryTab() {
   async function toggle() {
     if (!settings) return;
     setSettings(await window.stem.setMemoryEnabled(!settings.enabled));
+  }
+
+  async function forget(id: number) {
+    setContents(await window.stem.forgetMemory(id));
+  }
+
+  async function consolidate() {
+    setConsolidating(true);
+    setConsolidateMsg(null);
+    try {
+      const r = await window.stem.consolidateMemory();
+      setContents(r.contents);
+      const changed = r.merged + r.corrected + r.dropped;
+      setConsolidateMsg(
+        changed === 0
+          ? 'No duplicates or stale facts found.'
+          : `Merged ${r.merged}, corrected ${r.corrected}, dropped ${r.dropped}.`
+      );
+    } catch {
+      setConsolidateMsg('Consolidation failed — try again.');
+    } finally {
+      setConsolidating(false);
+    }
   }
 
   if (!settings) return <p className="muted">Loading…</p>;
@@ -127,16 +152,39 @@ function MemoryTab() {
       <div className="memory-view">
         <div className="memory-view-head">
           <strong>Stored memory</strong>
-          <button className="link-btn" onClick={loadContents}>Refresh</button>
+          <span className="memory-view-actions">
+            <button
+              className="link-btn"
+              onClick={consolidate}
+              disabled={consolidating || !settings.enabled || notes.length < 2}
+              title="Merge duplicates and drop stale facts now"
+            >
+              <Wand2 size={13} /> {consolidating ? 'Tidying…' : 'Tidy up'}
+            </button>
+            <button className="link-btn" onClick={loadContents}>Refresh</button>
+          </span>
         </div>
+        {consolidateMsg && <p className="muted">{consolidateMsg}</p>}
         {!contents && <p className="muted">Loading…</p>}
         {contents && notes.length === 0 && (
           <p className="muted">No memories stored yet — Stem builds these as you chat.</p>
         )}
         {notes.map((f) => (
           <div key={f.name} className="memory-note">
-            {f.statement ? <p className="statement">{f.statement}</p> : <MdxView text={f.content} />}
-            {f.source && <span className="chip">{f.source}</span>}
+            <div className="memory-note-body">
+              {f.statement ? <p className="statement">{f.statement}</p> : <MdxView text={f.content} />}
+              {f.source && <span className="chip">{f.source}</span>}
+            </div>
+            {f.id != null && (
+              <button
+                className="memory-note-forget"
+                title="Forget this"
+                aria-label="Forget this memory"
+                onClick={() => forget(f.id!)}
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
           </div>
         ))}
 

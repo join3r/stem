@@ -808,7 +808,11 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 /* Read-only viewer for Codex's native memory. */
 .memory-view { margin-top: 18px; border-top: 0.5px solid var(--line); padding-top: 14px; }
 .memory-view-head { display: flex; justify-content: space-between; align-items: baseline; }
+.memory-view-actions { display: inline-flex; align-items: center; gap: 14px; }
 .link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: none;
   color: var(--accent);
@@ -817,18 +821,39 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   cursor: pointer;
   padding: 0;
 }
+.link-btn:disabled { color: var(--muted); cursor: default; }
 .memory-doc { margin-top: 12px; }
 .memory-doc h4 { margin: 0 0 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .memory-path { margin-top: 14px; font-size: 11px; word-break: break-all; opacity: 0.7; }
 
 /* User-provided memory: the prominent, default-visible surface. */
 .memory-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   margin-top: 10px;
   padding: 10px 12px;
   border: 0.5px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2, rgba(127, 127, 127, 0.05));
 }
+.memory-note-body { flex: 1; min-width: 0; }
+.memory-note-forget {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.memory-note:hover .memory-note-forget { opacity: 1; }
+.memory-note-forget:hover { color: var(--danger, #e5484d); background: var(--sel); }
 .memory-note .statement { margin: 0; font-size: 13px; line-height: 1.45; }
 .memory-note .chip {
   display: inline-block;

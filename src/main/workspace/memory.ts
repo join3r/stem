@@ -106,6 +106,7 @@ export async function readMemoryFiles(): Promise<MemoryContents> {
     content: f.text,
     exists: true,
     kind: 'note' as const,
+    id: f.id,
     statement: f.text,
     source: sourceLabel(f.source)
   }));

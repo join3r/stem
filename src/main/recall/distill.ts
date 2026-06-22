@@ -11,6 +11,18 @@ const WATERMARK = 'distill_watermark';
 const MAX_MESSAGES_PER_RUN = 200;
 const MAX_TRANSCRIPT_CHARS = 16000;
 
+// Counts durable facts written since the last consolidation pass — the dirty
+// signal that gates consolidation (see consolidate.ts). Distillation is the only
+// writer of `distilled` facts, so it owns the counter.
+export const PENDING_KEY = 'consolidate_pending';
+// Run consolidation once this many new facts have accumulated.
+const CONSOLIDATE_THRESHOLD = 5;
+
+/** True when enough new facts have piled up to warrant a consolidation pass. */
+export function shouldConsolidate(): boolean {
+  return (Number.parseInt(getMeta(PENDING_KEY) ?? '0', 10) || 0) >= CONSOLIDATE_THRESHOLD;
+}
+
 const INSTRUCTIONS = `You maintain a long-term memory of DURABLE facts about a user, from a chat transcript. This is a PRIVATE personal assistant used by one person on their own device — knowing a lot about the user is the whole point, so capture genuinely personal details that make future help better.
 
 Extract STABLE, reusable facts ABOUT THE USER: their identity, contact details, personal circumstances (address, phone, important dates, health conditions, family/relationships, work), preferences, ongoing situations, projects, constraints, and standing instructions. Phrase each as a short third-person statement ("The user ...").
@@ -94,6 +106,12 @@ export async function distillNewMessages(llm: LlmClient): Promise<number> {
   }
 
   for (const fact of facts) upsertFact(fact, 'distilled');
+
+  // Mark new material for the consolidation pass to clean up later.
+  if (facts.length > 0) {
+    const pending = Number.parseInt(getMeta(PENDING_KEY) ?? '0', 10) || 0;
+    setMeta(PENDING_KEY, String(pending + facts.length));
+  }
 
   // Advance past everything we just considered (even if 0 facts — they had nothing durable).
   const maxId = messages.reduce((max, m) => Math.max(max, m.id), sinceId);

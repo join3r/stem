@@ -16,9 +16,10 @@ import { ensureWorkspace } from './workspace/bootstrap';
 import { listSkills, setSkillEnabled } from './workspace/skills';
 import { addFiles, listFiles, removeFile, revealFiles } from './files/store';
 import * as piMcp from './pi/mcp';
-import { getMemorySettings, isRecallEnabled, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
+import { forgetFact, getMemorySettings, isRecallEnabled, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
 import { captureFromEvent } from './recall/capture';
-import { distillNewMessages } from './recall/distill';
+import { distillNewMessages, shouldConsolidate } from './recall/distill';
+import { consolidateFacts } from './recall/consolidate';
 import type { LlmClient } from './recall/llm';
 import { readSettings, updateQuickChat } from './workspace/settings';
 import {
@@ -450,6 +451,17 @@ function registerIpc(): void {
     return settings;
   });
   ipcMain.handle('memory:read', () => readMemoryFiles());
+  ipcMain.handle('memory:forget', async (_e, id: number) => {
+    await forgetFact(id);
+    return readMemoryFiles();
+  });
+  ipcMain.handle('memory:consolidate', async () => {
+    // Same hidden one-shot seam distillation uses; `force` bypasses the size floor
+    // so a manual run always executes.
+    const llm: LlmClient = { complete: (prompt) => runtime!.complete(prompt) };
+    const result = await consolidateFacts(llm, { force: true });
+    return { ...result, contents: await readMemoryFiles() };
+  });
 
   // ---- chats + folders ----
   // Chats come from the backend's thread store; folders/assignments from the Stem
@@ -626,6 +638,10 @@ app.whenReady().then(async () => {
       distilling = true;
       try {
         await distillNewMessages(recallLlm);
+        // Once enough new facts have piled up, clean the set: merge reworded
+        // duplicates, apply corrections, drop superseded facts. Same hidden
+        // LlmClient seam, so it's invisible to the user like distillation.
+        if (shouldConsolidate()) await consolidateFacts(recallLlm);
       } catch {
         // non-fatal
       } finally {

@@ -296,6 +296,8 @@ export interface MemoryFile {
   content: string;
   exists: boolean;
   kind: MemoryFileKind;
+  /** Notes only: the durable-fact id, for the "forget this" affordance. */
+  id?: number;
   /** Notes only: the cleaned fact (boilerplate/blockquote stripped). */
   statement?: string;
   /** Notes only: short human chip for how it was captured. */
@@ -308,6 +310,14 @@ export interface MemoryContents {
   files: MemoryFile[];
   /** True when no file has any non-whitespace content. */
   isEmpty: boolean;
+}
+
+/** Outcome of a manual consolidation pass, plus the refreshed memory list. */
+export interface MemoryConsolidateResult {
+  merged: number;
+  corrected: number;
+  dropped: number;
+  contents: MemoryContents;
 }
 
 // ---- Chats (backend-backed) + Folders (Stem-owned organization) ----
@@ -486,6 +496,10 @@ export interface StemApi {
   getMemorySettings(): Promise<MemorySettings>;
   setMemoryEnabled(enabled: boolean): Promise<MemorySettings>;
   readMemory(): Promise<MemoryContents>;
+  /** Delete one durable fact; returns the refreshed memory list. */
+  forgetMemory(id: number): Promise<MemoryContents>;
+  /** Run a consolidation pass now (merge/correct/drop duplicates + stale facts). */
+  consolidateMemory(): Promise<MemoryConsolidateResult>;
 
   // Chats + folders. Folder mutations return the fresh list (like addMcpServer);
   // chat rename/delete return void and the renderer re-fetches.

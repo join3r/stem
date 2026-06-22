@@ -5,7 +5,8 @@
 // Run (from repo root):
 //   rm -rf .recall-build
 //   npx tsc src/main/recall/store.ts src/main/recall/search.ts src/main/recall/inject.ts \
-//     src/main/recall/capture.ts src/main/recall/distill.ts --outDir .recall-build \
+//     src/main/recall/capture.ts src/main/recall/distill.ts src/main/recall/consolidate.ts \
+//     --outDir .recall-build \
 //     --module commonjs --moduleResolution node --target es2022 --skipLibCheck \
 //     --esModuleInterop --rootDir src
 //   printf '{"type":"commonjs"}' > .recall-build/package.json
@@ -24,6 +25,7 @@ const store = require(`${BUILD}/store.js`);
 const search = require(`${BUILD}/search.js`);
 const inject = require(`${BUILD}/inject.js`);
 const distill = require(`${BUILD}/distill.js`);
+const consolidate = require(`${BUILD}/consolidate.js`);
 
 const dbPath = process.env.STEM_RECALL_DB;
 if (!dbPath) {
@@ -100,6 +102,53 @@ check('distill writes facts from new messages', wrote >= 1);
 check('distilled fact is stored', store.getFacts().some((f) => /UZ Gent cardiology appointment/i.test(f.text)));
 const wroteAgain = await distill.distillNewMessages(stubLlm);
 check('distill watermark prevents reprocessing', wroteAgain === 0);
+
+// --- 10. consolidation: pure parsing/clamp helpers ---
+const pc = consolidate.parseConsolidation('sure:\n{"merge":[{"ids":[1,2],"text":"merged"}],"correct":[{"id":3,"text":"fixed"}],"drop":[4]}');
+check('parseConsolidation reads merge/correct/drop', pc.merge.length === 1 && pc.correct.length === 1 && pc.drop[0] === 4);
+const pcBad = consolidate.parseConsolidation('no json here at all');
+check('parseConsolidation on garbage is a no-op', pcBad.merge.length === 0 && pcBad.correct.length === 0 && pcBad.drop.length === 0);
+const clampProt = consolidate.clampOps({ merge: [{ ids: [10, 11], text: 'x' }], correct: [{ id: 11, text: 'y' }], drop: [11] }, new Set([11]), 8);
+check('clampOps strips ops touching protected ids', clampProt.merge.length === 0 && clampProt.correct.length === 0 && clampProt.drop.length === 0);
+const clampMass = consolidate.clampOps({ merge: [], correct: [], drop: [1, 2, 3] }, new Set(), 4);
+check('clampOps rejects a batch that would delete >40% of the set', clampMass.drop.length === 0);
+
+// --- 11. consolidation: applyConsolidation collapses duplicates, keeps protected ---
+store.upsertFact('The user lives in Bratislava, Slovakia', 'distilled');
+store.upsertFact('The user is based in Bratislava', 'distilled'); // reworded duplicate
+store.upsertFact('The user has a dog named Rex', 'distilled');
+store.upsertFact('The user works as a software engineer', 'distilled');
+store.upsertFact('The user wants you to remember the WiFi name is HomeNet', 'explicit'); // protected
+
+const all = store.getAllFacts();
+const idA = all.find((f) => /lives in Bratislava, Slovakia/.test(f.text)).id;
+const idB = all.find((f) => /based in Bratislava/.test(f.text)).id;
+const idProt = all.find((f) => /HomeNet/.test(f.text)).id;
+
+// Stub returns a merge of the two Bratislava facts plus an (illegal) drop of the protected fact.
+const consolidateLlm = {
+  complete: async () =>
+    JSON.stringify({ merge: [{ ids: [idA, idB], text: 'The user lives in Bratislava, Slovakia' }], correct: [], drop: [idProt] })
+};
+const res = await consolidate.consolidateFacts(consolidateLlm);
+const afterFacts = store.getAllFacts();
+check('consolidate merges reworded duplicates into one', afterFacts.filter((f) => /Bratislava/.test(f.text)).length === 1 && res.merged === 1);
+check('consolidate never drops a protected fact', afterFacts.some((f) => /HomeNet/.test(f.text)) && res.dropped === 0);
+
+// --- 12. consolidation: a correction rewrites text in place ---
+const engId = store.getAllFacts().find((f) => /software engineer/.test(f.text)).id;
+const correctLlm = {
+  complete: async () => JSON.stringify({ merge: [], correct: [{ id: engId, text: 'The user works as a data scientist' }], drop: [] })
+};
+// pending counter must clear so this pass is allowed to run again; force it via the threshold gate test below.
+const corrRes = await consolidate.consolidateFacts(correctLlm);
+check('consolidate applies a correction in place', store.getAllFacts().some((f) => /data scientist/.test(f.text)) && corrRes.corrected === 1);
+
+// --- 13. gating: shouldConsolidate flips only past the threshold ---
+store.setMeta('consolidate_pending', '0');
+check('shouldConsolidate is false below threshold', distill.shouldConsolidate() === false);
+store.setMeta('consolidate_pending', '5');
+check('shouldConsolidate is true at/above threshold', distill.shouldConsolidate() === true);
 
 store.closeForTest();
 console.log(failures === 0 ? '\nALL_PASS' : `\n${failures} FAILURE(S)`);
