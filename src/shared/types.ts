@@ -464,6 +464,12 @@ export type QuickChatStatusPhase = 'working' | 'answering' | 'finished';
 export interface QuickChatStatus {
   phase: QuickChatStatusPhase;
   label: string;
+  /**
+   * The currently-registered global accelerator (e.g. 'Alt+Space'), so the
+   * "finished" pill can prompt the user with the real key that re-summons the
+   * overlay. Null when no shortcut is bound (the pill is still clickable).
+   */
+  shortcut?: string | null;
 }
 
 /** Main → overlay: sent on each summon; `reset` starts a fresh session. */

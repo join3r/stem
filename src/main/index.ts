@@ -257,7 +257,8 @@ function showHud(status: QuickChatStatus): void {
     });
     win.showInactive(); // show without stealing focus
   }
-  win.webContents.send('quickchat:status', status);
+  // Stamp the live accelerator so the pill prompts the real summon key, not Enter.
+  win.webContents.send('quickchat:status', { ...status, shortcut: currentShortcut });
 }
 
 function hideHud(): void {
