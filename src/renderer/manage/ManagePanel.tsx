@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, FolderOpen, Trash2, Wand2 } from 'lucide-react';
+import { Brain, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, FolderOpen, Trash2, Wand2 } from 'lucide-react';
 import type {
   BackendEventEnvelope,
   McpLoginUrlParams,
@@ -15,13 +15,12 @@ import type {
 import { MdxView } from '../chat/MdxView';
 import { ChatList, type ChatListProps } from '../chats/ChatList';
 
-type Tab = 'chats' | 'memory' | 'skills' | 'mcp' | 'settings';
+type Tab = 'chats' | 'memory' | 'mcp' | 'settings';
 
 const TABS: { id: Tab; label: string; icon: typeof Brain }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'memory', label: 'Memory', icon: Brain },
-  { id: 'skills', label: 'Skills', icon: Sparkles },
-  { id: 'mcp', label: 'MCP', icon: Plug },
+  { id: 'mcp', label: 'MCP & Skills', icon: Plug },
   { id: 'settings', label: 'Settings', icon: Settings }
 ];
 
@@ -71,8 +70,7 @@ export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: Ma
       <div className="manage-body">
         {tab === 'chats' && <ChatList {...chatProps} />}
         {tab === 'memory' && <MemoryTab />}
-        {tab === 'skills' && <SkillsTab />}
-        {tab === 'mcp' && <McpTab />}
+        {tab === 'mcp' && <McpSkillsTab />}
         {tab === 'settings' && (
           <SettingsTab models={models} modelId={modelId} onSelectModel={onSelectModel} />
         )}
@@ -503,6 +501,24 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
       <p className="muted" style={{ marginTop: 10 }}>
         Press the shortcut to open the overlay; Escape or the shortcut again hides it.
       </p>
+    </div>
+  );
+}
+
+// Combined panel: MCP servers and Skills live under the same icon as two sub-tabs.
+function McpSkillsTab() {
+  const [sub, setSub] = useState<'mcp' | 'skills'>('mcp');
+  return (
+    <div>
+      <div className="seg-ctl">
+        <button className={sub === 'mcp' ? 'active' : ''} onClick={() => setSub('mcp')}>
+          MCP servers
+        </button>
+        <button className={sub === 'skills' ? 'active' : ''} onClick={() => setSub('skills')}>
+          Skills
+        </button>
+      </div>
+      {sub === 'mcp' ? <McpTab /> : <SkillsTab />}
     </div>
   );
 }
