@@ -884,9 +884,18 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   padding: 0;
 }
 .link-btn:disabled { color: var(--muted); cursor: default; }
+.link-btn.danger { color: var(--danger); }
+.link-btn.danger:disabled { color: var(--muted); }
 .memory-doc { margin-top: 12px; }
 .memory-doc h4 { margin: 0 0 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .memory-path { margin-top: 14px; font-size: 11px; word-break: break-all; opacity: 0.7; }
+
+/* Deliberately understated: tucked at the bottom, muted until hovered. */
+.memory-reset { margin-top: 18px; padding-top: 12px; border-top: 0.5px solid var(--line); }
+.memory-reset-trigger { font-size: 11px; color: var(--muted); opacity: 0.65; }
+.memory-reset-trigger:hover { color: var(--danger); opacity: 1; }
+.memory-reset-confirm { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 11px; }
+.memory-reset-confirm .link-btn { font-size: 11px; }
 
 /* User-provided memory: the prominent, default-visible surface. */
 .memory-note {

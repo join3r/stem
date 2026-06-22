@@ -1,5 +1,5 @@
 import type { MemoryContents, MemorySettings } from '../../shared/types';
-import { deleteFact, getFacts, getMeta, setMeta, upsertFact } from '../recall/store';
+import { deleteFact, getFacts, getMeta, resetMemory, setMeta, upsertFact } from '../recall/store';
 import { recallDbPath } from './paths';
 
 // Stem's memory control surface, backed entirely by Stem Recall (recall.sqlite).
@@ -120,4 +120,11 @@ export async function readMemoryFiles(): Promise<MemoryContents> {
 /** Exposed for a future "forget this" affordance in the UI. */
 export async function forgetFact(id: number): Promise<void> {
   deleteFact(id);
+}
+
+/** Wipe all stored memory (facts + episodic log), keeping the Files folder and
+ *  the on/off toggle. Returns the refreshed (empty) memory view. */
+export async function clearAllMemory(): Promise<MemoryContents> {
+  resetMemory();
+  return readMemoryFiles();
 }

@@ -259,6 +259,28 @@ export function deleteFact(id: number): void {
   open().prepare(`DELETE FROM facts WHERE id = ?`).run(id);
 }
 
+/**
+ * Wipe all memory: durable facts (Level 1) + episodic messages/FTS (Level 2) +
+ * the distill/consolidate watermarks. Preserves the recall_enabled toggle and
+ * does NOT touch the Files folder (a separate store on disk).
+ *
+ * Deleting from `messages` fires the messages_ad trigger per row, so the FTS
+ * index is cleared in lockstep — no separate messages_fts delete needed.
+ */
+export function resetMemory(): void {
+  const handle = open();
+  handle.exec('BEGIN');
+  try {
+    handle.exec('DELETE FROM facts');
+    handle.exec('DELETE FROM messages');
+    handle.exec(`DELETE FROM meta WHERE key IN ('distill_watermark', 'consolidate_pending')`);
+    handle.exec('COMMIT');
+  } catch (err) {
+    handle.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 // ---- consolidation (Level 1 cleanup) ----
 
 /** Merge several facts into one: the survivor's text becomes `text`, the rest are dropped. */

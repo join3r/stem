@@ -17,7 +17,14 @@ import { listSkills, setSkillEnabled } from './workspace/skills';
 import { addFiles, listFiles, removeFile, revealFiles } from './files/store';
 import { imagePreviewDataUrl } from './pi/attachments';
 import * as piMcp from './pi/mcp';
-import { forgetFact, getMemorySettings, isRecallEnabled, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
+import {
+  clearAllMemory,
+  forgetFact,
+  getMemorySettings,
+  isRecallEnabled,
+  readMemoryFiles,
+  setMemoryEnabled
+} from './workspace/memory';
 import { captureFromEvent } from './recall/capture';
 import { distillNewMessages, shouldConsolidate } from './recall/distill';
 import { consolidateFacts } from './recall/consolidate';
@@ -482,6 +489,7 @@ function registerIpc(): void {
     await forgetFact(id);
     return readMemoryFiles();
   });
+  ipcMain.handle('memory:reset', () => clearAllMemory());
   ipcMain.handle('memory:consolidate', async () => {
     // Same hidden one-shot seam distillation uses; `force` bypasses the size floor
     // so a manual run always executes.

@@ -87,6 +87,8 @@ function MemoryTab({ models }: { models: ModelSummary[] }) {
   const [showTech, setShowTech] = useState(false);
   const [consolidating, setConsolidating] = useState(false);
   const [consolidateMsg, setConsolidateMsg] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
   // null => use the backend default model for distillation/tidy-up.
   const [memoryModel, setMemoryModel] = useState<string | null>(null);
 
@@ -112,6 +114,24 @@ function MemoryTab({ models }: { models: ModelSummary[] }) {
 
   async function forget(id: number) {
     setContents(await window.stem.forgetMemory(id));
+  }
+
+  async function reset() {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      return;
+    }
+    setResetting(true);
+    setConsolidateMsg(null);
+    try {
+      setContents(await window.stem.resetMemory());
+      setConsolidateMsg('All memories cleared.');
+    } catch {
+      setConsolidateMsg('Reset failed — try again.');
+    } finally {
+      setResetting(false);
+      setConfirmReset(false);
+    }
   }
 
   async function consolidate() {
@@ -229,6 +249,32 @@ function MemoryTab({ models }: { models: ModelSummary[] }) {
         )}
 
         {contents && <p className="muted memory-path">{contents.dir}</p>}
+
+        {(notes.length > 0 || techFiles.length > 0) && (
+          <div className="memory-reset">
+            {confirmReset ? (
+              <span className="memory-reset-confirm">
+                <span className="muted">
+                  Erase all {notes.length} {notes.length === 1 ? 'memory' : 'memories'}? This can’t be undone.
+                </span>
+                <button className="link-btn danger" onClick={reset} disabled={resetting}>
+                  {resetting ? 'Resetting…' : 'Erase everything'}
+                </button>
+                <button className="link-btn" onClick={() => setConfirmReset(false)} disabled={resetting}>
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                className="link-btn danger memory-reset-trigger"
+                onClick={reset}
+                title="Permanently erase all memories (keeps your files)"
+              >
+                <Trash2 size={12} /> Reset all memory
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -554,6 +554,8 @@ export interface StemApi {
   readMemory(): Promise<MemoryContents>;
   /** Delete one durable fact; returns the refreshed memory list. */
   forgetMemory(id: number): Promise<MemoryContents>;
+  /** Wipe all memory (facts + episodic log); keeps Files + toggle. Returns the empty list. */
+  resetMemory(): Promise<MemoryContents>;
   /** Run a consolidation pass now (merge/correct/drop duplicates + stale facts). */
   consolidateMemory(): Promise<MemoryConsolidateResult>;
 
