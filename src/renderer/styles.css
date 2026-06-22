@@ -309,6 +309,13 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   padding: 2px;
 }
 .attachment-remove:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink); }
+/* Attachments shown inside a sent message bubble (thumbnails + file chips). */
+.message-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.message-image {
+  max-width: 260px; max-height: 260px;
+  border: 1px solid var(--line); border-radius: 8px;
+  object-fit: contain; display: block;
+}
 .composer-field textarea {
   flex: 1;
   resize: none;

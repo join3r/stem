@@ -15,6 +15,7 @@ import type {
   TurnCompletedParams
 } from '../shared/types';
 import { agentMessageText } from '../shared/types';
+import { toMessageAttachments } from './attachments';
 import { activityLabel } from '../shared/activity';
 import { ChatView, type ChatViewHandle } from './chat/ChatView';
 import { ManagePanel } from './manage/ManagePanel';
@@ -320,9 +321,7 @@ export default function App() {
 
   const onSend = useCallback(
     async (text: string, attachments: TurnAttachment[] = []) => {
-      const bubble = attachments.length
-        ? `${text}${text ? '\n\n' : ''}📎 ${attachments.map((a) => a.name).join(', ')}`
-        : text;
+      const msgAttachments = attachments.length ? await toMessageAttachments(attachments) : undefined;
       // Where this turn's state lives: the open thread, or DRAFT for a new chat.
       const sendKey = activeThreadId ?? DRAFT;
       // Snapshot the draft identity + folder target so a late resolution can tell
@@ -333,7 +332,7 @@ export default function App() {
       // resolves — that's what makes Edit/Fork work on a just-sent user message.
       const userMsgId = `user-${Date.now()}`;
       setThread(sendKey, (s) => ({
-        messages: [...s.messages, { id: userMsgId, role: 'user', content: bubble }],
+        messages: [...s.messages, { id: userMsgId, role: 'user', content: text, attachments: msgAttachments }],
         running: true,
         activity: null,
         status: 'running'

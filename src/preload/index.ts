@@ -37,6 +37,7 @@ const api: StemApi = {
   addFiles: (paths: string[], subdir?: string) => ipcRenderer.invoke('files:add', paths, subdir),
   removeFile: (rel: string) => ipcRenderer.invoke('files:remove', rel),
   revealFiles: () => ipcRenderer.invoke('files:reveal'),
+  previewImage: (path: string) => ipcRenderer.invoke('files:preview', path),
 
   listMcpServers: () => ipcRenderer.invoke('mcp:list'),
   getMcpStatus: () => ipcRenderer.invoke('mcp:status'),

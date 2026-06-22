@@ -14,6 +14,7 @@ import type {
 import { agentMessageText } from '../../shared/types';
 import { activityLabel } from '../../shared/activity';
 import { ChatView } from '../chat/ChatView';
+import { toMessageAttachments } from '../attachments';
 
 const EFFORT_LABELS: Record<string, string> = {
   low: 'Low',
@@ -188,11 +189,9 @@ export function QuickChat() {
 
   const onSend = useCallback(
     async (text: string, attachments: TurnAttachment[] = []) => {
-      const bubble = attachments.length
-        ? `${text}${text ? '\n\n' : ''}📎 ${attachments.map((a) => a.name).join(', ')}`
-        : text;
+      const msgAttachments = attachments.length ? await toMessageAttachments(attachments) : undefined;
       const userMsgId = `user-${Date.now()}`;
-      setMessages((ms) => [...ms, { id: userMsgId, role: 'user', content: bubble }]);
+      setMessages((ms) => [...ms, { id: userMsgId, role: 'user', content: text, attachments: msgAttachments }]);
       setRunning(true);
       setActivity(null);
       try {

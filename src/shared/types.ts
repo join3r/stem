@@ -12,10 +12,25 @@ export interface MessageMeta {
   serviceTier?: string | null;
 }
 
+/**
+ * A user attachment as shown in the chat bubble. Images carry a `dataUrl` for an inline
+ * `<img>` thumbnail; non-image files render as a chip with just a `name`. Distinct from
+ * the send-time {@link TurnAttachment} — this is the display/replay shape.
+ */
+export interface MessageAttachment {
+  kind: 'image' | 'file';
+  name?: string;
+  mime?: string;
+  /** `data:<mime>;base64,…` for images (live send + rebuilt from session history). */
+  dataUrl?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: Role;
   content: string;
+  /** User messages only: attachments shown as thumbnails/chips in the bubble. */
+  attachments?: MessageAttachment[];
   /** Assistant messages only: which model/effort/speed produced the reply. */
   meta?: MessageMeta;
   /**
@@ -476,6 +491,8 @@ export interface StemApi {
   removeFile(rel: string): Promise<FilesListing>;
   /** Open the Files folder in the OS file manager. */
   revealFiles(): Promise<void>;
+  /** Read an on-disk image → `data:` URL for a bubble thumbnail (null if not an image). */
+  previewImage(path: string): Promise<string | null>;
 
   listMcpServers(): Promise<McpServerSummary[]>;
   /** Live per-server connection status (keyed by name) from the running app-server. */

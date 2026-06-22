@@ -11,6 +11,7 @@ import type {
   McpAdminProposal,
   McpLoginResult,
   McpServerInput,
+  MessageAttachment,
   ModelSummary,
   RuntimeStatus,
   StartTurnInput,
@@ -20,6 +21,7 @@ import { PLAIN_MD_DIRECTIVE, STEM_ASSISTANT_INSTRUCTIONS } from '../workspace/bo
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
 import { buildRecallContext } from '../recall/inject';
 import { buildFilesContext } from '../files/inject';
+import { resolveAttachments, type PiImageContent } from './attachments';
 import { captureUserMessage } from '../recall/capture';
 import type { ChatBackend } from '../backend/types';
 import { ensureMcpConfig, piExtensionPath, piMcpStatusPath, readMcpConfig, saveOAuthToken } from './mcp-config';
@@ -106,6 +108,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private proc: PiProcess | null = null;
   private starting: Promise<void> | null = null;
   private activeThreadId: string | null = null;
+  /**
+   * The model of the CURRENTLY active pi session, mirrored so `applyModel` can skip a
+   * redundant `set_model` within one session. pi resolves the model per session — a new
+   * session resets to the spawn default, switching/forking/rolling back loads that
+   * session's own persisted model — so this MUST be invalidated (set null) on every
+   * session change, or the next `applyModel` wrongly no-ops and the turn runs on the
+   * wrong model (e.g. a vision request silently downgraded to text-only Spark).
+   */
   private currentModel: string | null = null;
   /** sessionId → on-disk session file, learned from get_state / dir scans. */
   private sessionFiles = new Map<string, string>();
@@ -192,8 +202,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   async createThread(model?: string): Promise<string> {
     await this.ensureStarted();
-    if (model) await this.applyModel(model);
+    // Create the session FIRST: newSession resets the active model, so applying the
+    // model before it would be undone. Apply after so the pre-created session is on it.
     const id = await this.newSession();
+    if (model) await this.applyModel(model);
     this.unnamedThreads.add(id);
     return id;
   }
@@ -220,8 +232,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     this.currentTurn = newTurnContext(threadId, turnId);
     this.activeTurnDone = new Promise<void>((resolve) => (this.resolveActiveTurn = resolve));
 
-    const message = await this.buildMessage(input, threadId);
-    const res = await this.proc!.request({ type: 'prompt', message });
+    const { message, images } = await this.buildMessage(input, threadId);
+    const res = await this.proc!.request({
+      type: 'prompt',
+      message,
+      images: images.length ? images : undefined
+    });
     if (!res.success) {
       this.finishTurn();
       throw new Error(res.error ?? 'pi rejected the prompt.');
@@ -396,10 +412,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
       if (entry.type !== 'message' || !entry.message) continue;
       const role = entry.message.role;
-      const content = this.contentToText(entry.message.content);
+      const { text: content, images } = this.contentToParts(entry.message.content);
       if (role === 'user') {
         lastUserId = entry.id ?? lastUserId;
-        if (content.trim()) messages.push({ id: `user-${entry.id}`, role: 'user', content, turnId: entry.id });
+        if (content.trim() || images.length)
+          messages.push({
+            id: `user-${entry.id}`,
+            role: 'user',
+            content,
+            turnId: entry.id,
+            ...(images.length ? { attachments: images } : {})
+          });
       } else if (role === 'assistant') {
         if (content.trim())
           messages.push({ id: `assistant-${entry.id}`, role: 'assistant', content, turnId: lastUserId || entry.id });
@@ -450,6 +473,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     await this.proc!.request({ type: 'new_session' }).catch(() => undefined);
     await writeFile(file, lines.slice(0, idx).join('\n') + '\n');
     await this.proc!.request({ type: 'switch_session', sessionPath: file });
+    // Both RPCs above swap the active session's model out from under us.
+    this.currentModel = null;
     this.activeThreadId = threadId;
   }
 
@@ -473,6 +498,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const state = await this.proc!.request({ type: 'get_state' });
     const newId = this.recordState(state.data);
     if (!newId) throw new Error('pi did not return a forked session id.');
+    // The fork becomes the active session — invalidate the model mirror.
+    this.currentModel = null;
     this.activeThreadId = newId;
     return { threadId: newId };
   }
@@ -687,6 +714,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   /** Start a fresh session on the foreground process; returns its sessionId. */
   private async newSession(): Promise<string> {
     await this.proc!.request({ type: 'new_session' });
+    // A fresh pi session resets the active model to the spawn default — invalidate the
+    // mirror so the next applyModel re-issues set_model for the caller's chosen model.
+    this.currentModel = null;
     const state = await this.proc!.request({ type: 'get_state' });
     const id = this.recordState(state.data);
     if (!id) throw new Error('pi did not return a session id.');
@@ -705,6 +735,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       return id;
     }
     await this.proc!.request({ type: 'switch_session', sessionPath: file });
+    // The loaded session restores its OWN persisted model — invalidate the mirror.
+    this.currentModel = null;
     this.activeThreadId = threadId;
     return threadId;
   }
@@ -728,7 +760,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   }
 
   /** Assemble the prompt: prepend recall/files/format context (pi has no per-turn context field). */
-  private async buildMessage(input: StartTurnInput, threadId: string): Promise<string> {
+  private async buildMessage(
+    input: StartTurnInput,
+    threadId: string
+  ): Promise<{ message: string; images: PiImageContent[] }> {
     const blocks: string[] = [];
     if (isRecallEnabled()) {
       const recall = buildRecallContext(input.input, { currentThreadId: threadId });
@@ -737,8 +772,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const files = await buildFilesContext();
     if (files) blocks.push(files);
     if (input.format === 'md') blocks.push(PLAIN_MD_DIRECTIVE);
-    if (!blocks.length) return input.input;
-    return `${blocks.join('\n\n')}\n\n---\n\n${input.input}`;
+
+    // Images go to pi natively; text-like files are inlined, binaries noted and dropped.
+    const { images, textBlocks, rejected } = await resolveAttachments(input.attachments ?? []);
+
+    // The user's text comes last; context blocks precede it across a `---` rule, while
+    // inlined files and skip notes attach to the user turn just after their message.
+    const tail: string[] = [];
+    if (textBlocks.length) tail.push(textBlocks.join('\n\n'));
+    if (rejected.length) tail.push(`(Skipped unsupported attachment: ${rejected.join(', ')})`);
+    const userText = tail.length ? `${input.input}\n\n${tail.join('\n\n')}` : input.input;
+
+    const message = blocks.length ? `${blocks.join('\n\n')}\n\n---\n\n${userText}` : userText;
+    return { message, images };
   }
 
   private recordState(data: unknown): string | null {
@@ -828,10 +874,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const raw = (res.data as { messages?: { role?: string; content?: unknown }[] } | undefined)?.messages ?? [];
     const messages: ChatMessage[] = [];
     for (const m of raw) {
-      const content = this.contentToText(m.content);
-      if (!content.trim()) continue;
-      if (m.role === 'user') messages.push({ id: `user-${messages.length}`, role: 'user', content });
-      else if (m.role === 'assistant') messages.push({ id: `assistant-${messages.length}`, role: 'assistant', content });
+      const { text: content, images } = this.contentToParts(m.content);
+      if (!content.trim() && !images.length) continue;
+      if (m.role === 'user')
+        messages.push({
+          id: `user-${messages.length}`,
+          role: 'user',
+          content,
+          ...(images.length ? { attachments: images } : {})
+        });
+      else if (m.role === 'assistant')
+        messages.push({ id: `assistant-${messages.length}`, role: 'assistant', content });
     }
     const state = await this.proc!.request({ type: 'get_state' });
     const title = ((state.data as { sessionName?: string } | undefined)?.sessionName || 'New chat').trim() || 'New chat';
@@ -847,14 +900,27 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
   }
 
-  private contentToText(content: unknown): string {
-    if (typeof content === 'string') return content;
-    if (!Array.isArray(content)) return '';
-    return content
-      .filter((c): c is { type?: string; text?: string } => !!c && typeof c === 'object')
-      .filter((c) => c.type === 'text' && typeof c.text === 'string')
-      .map((c) => c.text as string)
-      .join('');
+  /**
+   * Split a persisted message `content` into rendered text and image attachments. pi
+   * stores images as `{type:'image', data, mimeType}` blocks alongside text blocks, so
+   * replay rebuilds thumbnails straight from the session JSONL.
+   */
+  private contentToParts(content: unknown): { text: string; images: MessageAttachment[] } {
+    if (typeof content === 'string') return { text: content, images: [] };
+    if (!Array.isArray(content)) return { text: '', images: [] };
+    const texts: string[] = [];
+    const images: MessageAttachment[] = [];
+    for (const c of content) {
+      if (!c || typeof c !== 'object') continue;
+      const part = c as { type?: string; text?: string; data?: string; mimeType?: string };
+      if (part.type === 'text' && typeof part.text === 'string') {
+        texts.push(part.text);
+      } else if (part.type === 'image' && typeof part.data === 'string') {
+        const mime = part.mimeType || 'image/png';
+        images.push({ kind: 'image', mime, dataUrl: `data:${mime};base64,${part.data}` });
+      }
+    }
+    return { text: texts.join(''), images };
   }
 
   /** Providers Stem has credentials for (from the isolated auth.json). */

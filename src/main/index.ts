@@ -15,6 +15,7 @@ import { createBackend, type ChatBackend } from './backend';
 import { ensureWorkspace } from './workspace/bootstrap';
 import { listSkills, setSkillEnabled } from './workspace/skills';
 import { addFiles, listFiles, removeFile, revealFiles } from './files/store';
+import { imagePreviewDataUrl } from './pi/attachments';
 import * as piMcp from './pi/mcp';
 import { forgetFact, getMemorySettings, isRecallEnabled, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
 import { captureFromEvent } from './recall/capture';
@@ -430,6 +431,7 @@ function registerIpc(): void {
   ipcMain.handle('files:add', (_e, paths: string[], subdir?: string) => addFiles(paths, subdir));
   ipcMain.handle('files:remove', (_e, rel: string) => removeFile(rel));
   ipcMain.handle('files:reveal', () => revealFiles());
+  ipcMain.handle('files:preview', (_e, path: string) => imagePreviewDataUrl(path));
 
   ipcMain.handle('mcp:list', () => piMcp.listMcpServers());
   ipcMain.handle('mcp:status', () => runtime!.getMcpStatus());

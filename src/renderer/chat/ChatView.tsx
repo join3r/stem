@@ -299,6 +299,25 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 ) : (
                   <div className="message-plain">{m.content}</div>
                 )}
+                {!isEditing && m.attachments && m.attachments.length > 0 && (
+                  <div className="message-attachments">
+                    {m.attachments.map((att, i) =>
+                      att.kind === 'image' && att.dataUrl ? (
+                        <img
+                          key={i}
+                          className="message-image"
+                          src={att.dataUrl}
+                          alt={att.name ?? 'attachment'}
+                        />
+                      ) : (
+                        <span className="attachment-chip" key={i}>
+                          <File size={13} />
+                          <span className="attachment-name">{att.name ?? 'file'}</span>
+                        </span>
+                      )
+                    )}
+                  </div>
+                )}
                 {canAct && !isEditing && (
                   <div className="message-actions">
                     {m.role === 'assistant' && (
