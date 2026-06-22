@@ -57,6 +57,16 @@ const providerName = (p: string): string => PROVIDER_NAMES[p] ?? p;
 // stem-mcp-extension.mjs). The message is a JSON McpAdminProposal payload.
 const ADMIN_APPROVAL_TITLE = 'stem-admin-approval';
 
+// pi has no per-turn context channel, so recall/files/format context is prepended
+// into the user's prompt message — which pi then PERSISTS in the session JSONL. To
+// keep that injected scaffolding out of the replayed user bubble (it was showing up
+// as "a lot of information before the first question" when reopening a Quick Chat
+// thread in the main window), wrap it in HTML-comment sentinels and strip it on
+// read. The markers are inert to the model and never occur in real user text.
+const CONTEXT_OPEN = '<!--stem:context-->';
+const CONTEXT_CLOSE = '<!--/stem:context-->';
+const CONTEXT_STRIP_RE = /^<!--stem:context-->[\s\S]*?<!--\/stem:context-->\n+/;
+
 // Max length for an auto-derived chat title; longer first messages are
 // truncated (the sidebar ellipsizes anyway).
 const MAX_AUTO_TITLE = 80;
@@ -805,7 +815,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (rejected.length) tail.push(`(Skipped unsupported attachment: ${rejected.join(', ')})`);
     const userText = tail.length ? `${input.input}\n\n${tail.join('\n\n')}` : input.input;
 
-    const message = blocks.length ? `${blocks.join('\n\n')}\n\n---\n\n${userText}` : userText;
+    // Fence the injected context so replay can strip it (see CONTEXT_* above): the
+    // model still sees it inline, but the stored user bubble renders only userText.
+    const message = blocks.length
+      ? `${CONTEXT_OPEN}\n${blocks.join('\n\n')}\n\n---\n${CONTEXT_CLOSE}\n\n${userText}`
+      : userText;
     return { message, images };
   }
 
@@ -942,7 +956,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         images.push({ kind: 'image', mime, dataUrl: `data:${mime};base64,${part.data}` });
       }
     }
-    return { text: texts.join(''), images };
+    // Drop any fenced recall/files/format context we prepended at send time so the
+    // replayed user bubble shows only what the user actually typed. No-op on turns
+    // with no injection and on assistant messages (markers never appear there).
+    return { text: texts.join('').replace(CONTEXT_STRIP_RE, ''), images };
   }
 
   /** Providers Stem has credentials for (from the isolated auth.json). */
