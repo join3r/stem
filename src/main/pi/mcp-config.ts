@@ -37,6 +37,23 @@ export function piMcpStatusPath(): string {
 }
 
 /**
+ * Per-turn gate the bridge's web-search hook reads to decide whether to inject the
+ * current model's native web_search tool. The main process rewrites it just before
+ * each prompt with the originating context's setting (main vs Quick Chat), since
+ * both share one pi process and the hook can't tell them apart. Carries no
+ * credentials, so a plain (non-secret) file is fine.
+ */
+export function piNativeSearchPath(): string {
+  return join(piHome(), 'native-search.json');
+}
+
+/** Write the `{ enabled }` gate the bridge's web-search hook reads for the next turn. */
+export async function writeNativeSearchGate(enabled: boolean): Promise<void> {
+  await mkdir(piHome(), { recursive: true });
+  await writeFile(piNativeSearchPath(), JSON.stringify({ enabled }, null, 2), 'utf8');
+}
+
+/**
  * OAuth tokens for remote MCP servers, keyed by server name. Written by
  * PiRuntime.mcpLogin after a browser sign-in; the bridge reads it to inject the
  * bearer header and rewrites it when it refreshes an expired token.

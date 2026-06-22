@@ -24,7 +24,14 @@ import { buildFilesContext } from '../files/inject';
 import { resolveAttachments, type PiImageContent } from './attachments';
 import { captureUserMessage } from '../recall/capture';
 import type { ChatBackend } from '../backend/types';
-import { ensureMcpConfig, piExtensionPath, piMcpStatusPath, readMcpConfig, saveOAuthToken } from './mcp-config';
+import {
+  ensureMcpConfig,
+  piExtensionPath,
+  piMcpStatusPath,
+  readMcpConfig,
+  saveOAuthToken,
+  writeNativeSearchGate
+} from './mcp-config';
 import { authorizeMcp } from './oauth';
 import { piMcpConfigPath } from '../workspace/paths';
 import { findPiPath } from './locate';
@@ -37,6 +44,14 @@ import { newTurnContext, normalizePiEvent, type TurnContext } from './normalize'
 // exact model the spike streamed successfully.
 const DEFAULT_PROVIDER = 'openai-codex';
 const DEFAULT_MODEL = 'gpt-5.3-codex-spark';
+
+// Providers that serve a native (server-side) web-search tool, which the bridge
+// extension injects via before_provider_request. Add 'anthropic' once Claude-via-pi
+// is ungated and its injection branch is enabled.
+const PROVIDER_NATIVE_SEARCH = new Set(['openai-codex']);
+// Friendly provider names for the UI (provider picker, web-search toggle).
+const PROVIDER_NAMES: Record<string, string> = { 'openai-codex': 'ChatGPT', anthropic: 'Claude' };
+const providerName = (p: string): string => PROVIDER_NAMES[p] ?? p;
 
 // Sentinel title the bridge uses for an MCP add/remove approval (see
 // stem-mcp-extension.mjs). The message is a JSON McpAdminProposal payload.
@@ -232,6 +247,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     this.currentTurn = newTurnContext(threadId, turnId);
     this.activeTurnDone = new Promise<void>((resolve) => (this.resolveActiveTurn = resolve));
 
+    // Gate native web search for THIS turn (main vs Quick Chat share one process,
+    // so the bridge can't tell them apart — we set the gate just before the prompt).
+    await writeNativeSearchGate(input.webSearch ?? true).catch(() => undefined);
+
     const { message, images } = await this.buildMessage(input, threadId);
     const res = await this.proc!.request({
       type: 'prompt',
@@ -278,6 +297,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         id,
         displayName: m.name ?? m.id,
         description: m.provider,
+        provider: m.provider,
+        providerName: providerName(m.provider),
+        supportsNativeWebSearch: PROVIDER_NATIVE_SEARCH.has(m.provider),
         supportedEfforts: efforts,
         defaultEffort: efforts.includes('medium') ? 'medium' : efforts[0] ?? 'medium',
         serviceTiers: [],

@@ -9,6 +9,7 @@ import type {
   MemoryContents,
   MemorySettings,
   ModelSummary,
+  NativeWebSearchSettings,
   QuickChatSettings,
   SkillSummary
 } from '../../shared/types';
@@ -381,14 +382,22 @@ function ShortcutRecorder({
 
 function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
   const [qc, setQc] = useState<QuickChatSettings | null>(null);
+  const [nws, setNws] = useState<NativeWebSearchSettings>({ main: true, quickChat: true });
   const selectedModel = models.find((m) => m.id === modelId) ?? null;
 
   useEffect(() => {
-    window.stem.getSettings().then((s) => setQc(s.quickChat));
+    window.stem.getSettings().then((s) => {
+      setQc(s.quickChat);
+      setNws(s.nativeWebSearch);
+    });
   }, []);
 
   function update(patch: Partial<QuickChatSettings>) {
     window.stem.updateQuickChat(patch).then((s) => setQc(s.quickChat));
+  }
+
+  function toggleNativeSearch(key: keyof NativeWebSearchSettings, enabled: boolean) {
+    window.stem.updateNativeWebSearch({ [key]: enabled }).then((s) => setNws(s.nativeWebSearch));
   }
 
   if (!qc) return <p className="muted">Loading…</p>;
@@ -423,6 +432,16 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
               ))}
             </select>
             {selectedModel?.description && <p className="muted">{selectedModel.description}</p>}
+            {selectedModel?.supportsNativeWebSearch && (
+              <label className="set-check" title="Search the live web for current info, with citations">
+                <input
+                  type="checkbox"
+                  checked={nws.main}
+                  onChange={(e) => toggleNativeSearch('main', e.target.checked)}
+                />
+                Native web search
+              </label>
+            )}
           </>
         )}
       </div>
@@ -469,6 +488,16 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
               </option>
             ))}
           </select>
+          {qcModel?.supportsNativeWebSearch && (
+            <label className="set-check" title="Search the live web for current info, with citations">
+              <input
+                type="checkbox"
+                checked={nws.quickChat}
+                onChange={(e) => toggleNativeSearch('quickChat', e.target.checked)}
+              />
+              Native web search
+            </label>
+          )}
         </div>
 
         <div className="set-block">

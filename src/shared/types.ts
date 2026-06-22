@@ -82,6 +82,13 @@ export interface StartTurnInput {
   serviceTier?: string | null;
   /** Output format for this turn: 'mdx' = rich components (default); 'md' = plain Markdown. */
   format?: 'md' | 'mdx';
+  /**
+   * Whether native (server-side) web search is allowed this turn. Decided per
+   * context by the caller (main window vs Quick Chat). The backend only injects
+   * the tool when the selected model's provider actually supports it; otherwise
+   * this is a no-op. Defaults to enabled when omitted.
+   */
+  webSearch?: boolean;
   /** Files/images attached to this turn. */
   attachments?: TurnAttachment[];
 }
@@ -99,6 +106,12 @@ export interface ModelSummary {
   id: string;
   displayName: string;
   description: string;
+  /** Provider slug, e.g. 'openai-codex' / 'anthropic' (first segment of `id`). */
+  provider: string;
+  /** Friendly provider name for the UI, e.g. 'ChatGPT' / 'Claude'. */
+  providerName: string;
+  /** True when this model's provider supports native (server-side) web search. */
+  supportsNativeWebSearch: boolean;
   /** e.g. ['low','medium','high','xhigh']. */
   supportedEfforts: string[];
   defaultEffort: string;
@@ -409,8 +422,21 @@ export interface QuickChatSettings {
   newThreadTimeoutMs: number;
 }
 
+/**
+ * Native (server-side) web search, toggled independently per context. The UI only
+ * surfaces a toggle when the relevant model's provider actually supports it; the
+ * backend injects the tool per turn based on the originating context.
+ */
+export interface NativeWebSearchSettings {
+  /** Main window turns. */
+  main: boolean;
+  /** Quick Chat overlay turns. */
+  quickChat: boolean;
+}
+
 export interface AppSettings {
   quickChat: QuickChatSettings;
+  nativeWebSearch: NativeWebSearchSettings;
 }
 
 /**
@@ -537,6 +563,8 @@ export interface StemApi {
   // App settings + Quick Chat overlay.
   getSettings(): Promise<AppSettings>;
   updateQuickChat(patch: Partial<QuickChatSettings>): Promise<AppSettings>;
+  /** Enable/disable native web search per context (e.g. { quickChat: false }). */
+  updateNativeWebSearch(patch: Partial<NativeWebSearchSettings>): Promise<AppSettings>;
   /** Overlay → main: run a prompt in the overlay's own thread (main hides the
    *  overlay + raises the HUD, pre-creating a thread for a fresh session). */
   runQuickChat(prompt: QuickChatPrompt): Promise<StartTurnResult>;

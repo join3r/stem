@@ -11,7 +11,7 @@
 // spawned from the in-repo path (like recall/mcp-server.mjs).
 
 import { spawn } from 'node:child_process';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /**
@@ -259,6 +259,55 @@ function sanitizeToolName(s) {
   return s.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
 }
 
+// ---- Native web search injection ----
+//
+// Some providers expose a server-side web-search tool that pi never asks for (its
+// serializer only emits function tools). The `before_provider_request` hook lets us
+// add the provider's native tool to the outgoing request body — restoring the
+// native web search the codex backend used to give us, billed to the user's
+// subscription, with no third-party API. Whether THIS turn gets it is a single
+// `{ enabled }` gate in native-search.json, rewritten by the main process before
+// each prompt from the originating context's setting (main vs Quick Chat).
+
+/**
+ * Identify the outgoing request's provider from the request body shape and return
+ * the native web-search tool to inject for it, or null if the provider has none.
+ * Shape-based so we never touch a provider we don't recognize.
+ */
+function nativeSearchToolFor(p) {
+  if (!p || typeof p !== 'object') return null;
+  // openai-codex responses body: an `input` array plus an `instructions` string.
+  if (Array.isArray(p.input) && typeof p.instructions === 'string') {
+    return { type: 'web_search' };
+  }
+  // --- FUTURE: anthropic/Claude branch (Claude-via-pi is currently gated) ---
+  // if (Array.isArray(p.messages) && typeof p.max_tokens === 'number') {
+  //   return { type: 'web_search_20250305', name: 'web_search', max_uses: 5 };
+  // }
+  return null;
+}
+
+/**
+ * Returns `enabled()` reading the `{ enabled }` gate in native-search.json with an
+ * mtime cache so it picks up the main process's per-turn write without a restart. A
+ * missing/corrupt file defaults to enabled, so search works out of the box.
+ */
+function makeNativeSearchGate(nsPath) {
+  let cache = { mtime: -1, enabled: true };
+  return () => {
+    try {
+      const mtime = statSync(nsPath).mtimeMs;
+      if (mtime !== cache.mtime) {
+        const data = JSON.parse(readFileSync(nsPath, 'utf8'));
+        cache = { mtime, enabled: data && typeof data.enabled === 'boolean' ? data.enabled : true };
+      }
+    } catch {
+      cache = { mtime: -1, enabled: true };
+    }
+    return cache.enabled;
+  };
+}
+
 export default async function stemMcpBridge(pi) {
   const cfgPath = process.env.STEM_MCP_CONFIG;
   if (!cfgPath) return;
@@ -340,6 +389,21 @@ export default async function stemMcpBridge(pi) {
 
   // Stem self-management tools (list/add/remove MCP servers). Always available.
   registerAdminTools(pi, cfgPath);
+
+  // Restore native web search by injecting the provider's server-side tool into
+  // each outgoing request (gated per provider by native-search.json next to mcp.json).
+  if (typeof pi.on === 'function') {
+    const nativeSearchEnabled = makeNativeSearchGate(join(dirname(cfgPath), 'native-search.json'));
+    pi.on('before_provider_request', (event) => {
+      const p = event && event.payload;
+      if (!nativeSearchEnabled()) return undefined;
+      const tool = nativeSearchToolFor(p);
+      if (!tool) return undefined;
+      const tools = Array.isArray(p.tools) ? p.tools : [];
+      if (tools.some((t) => t && t.type === tool.type)) return undefined; // idempotent
+      return { ...p, tools: [...tools, tool] };
+    });
+  }
 }
 
 // ---- Stem admin: assistant self-manages MCP servers (edits mcp.json) ----

@@ -22,7 +22,7 @@ import { captureFromEvent } from './recall/capture';
 import { distillNewMessages, shouldConsolidate } from './recall/distill';
 import { consolidateFacts } from './recall/consolidate';
 import type { LlmClient } from './recall/llm';
-import { readSettings, updateQuickChat } from './workspace/settings';
+import { readSettings, updateNativeWebSearch, updateQuickChat } from './workspace/settings';
 import {
   createFolder,
   deleteFolder,
@@ -38,6 +38,7 @@ import type {
   ChatListResult,
   ItemEventParams,
   McpServerInput,
+  NativeWebSearchSettings,
   QuickChatHandoff,
   QuickChatPrompt,
   QuickChatSettings,
@@ -414,7 +415,12 @@ function revealMainWindow(): void {
 function registerIpc(): void {
   ipcMain.handle('runtime:status', () => runtime!.status());
   ipcMain.handle('runtime:login', () => runtime!.login());
-  ipcMain.handle('backend:startTurn', (_e, input: StartTurnInput) => runtime!.startTurn(input));
+  ipcMain.handle('backend:startTurn', async (_e, input: StartTurnInput) => {
+    // Main-window turns honor the main native-web-search toggle (the backend no-ops
+    // it for providers without native search).
+    const settings = await readSettings();
+    return runtime!.startTurn({ ...input, webSearch: settings.nativeWebSearch.main });
+  });
   ipcMain.handle('backend:interruptTurn', (_e, turnId: string) => runtime!.interruptTurn(turnId));
   ipcMain.handle('backend:newConversation', () => runtime!.newConversation());
   ipcMain.handle('dialog:openFiles', () =>
@@ -545,6 +551,11 @@ function registerIpc(): void {
     if ('newThreadTimeoutMs' in patch) newThreadTimeoutMs = next.quickChat.newThreadTimeoutMs;
     return next;
   });
+  ipcMain.handle('settings:updateNativeWebSearch', async (_e, patch: Partial<NativeWebSearchSettings>) => {
+    // Just persist — the value is applied per turn (the runtime writes the gate the
+    // bridge reads, based on the originating context), so no restart/file write here.
+    return updateNativeWebSearch(patch);
+  });
   // Run a prompt in the overlay's own thread. For a fresh session we pre-create
   // the thread (so its events route correctly from the very first event), then
   // hide the overlay and raise the HUD — the disappear→HUD half of the cycle.
@@ -579,6 +590,8 @@ function registerIpc(): void {
       effort: prompt.effort ?? undefined,
       serviceTier: prompt.serviceTier,
       format: prompt.format,
+      // Quick Chat turns honor the Quick Chat native-web-search toggle.
+      webSearch: (await readSettings()).nativeWebSearch.quickChat,
       attachments: prompt.attachments
     });
     overlayLastActivityAt = Date.now();
