@@ -18,6 +18,24 @@ export function codexConfigPath(): string {
   return join(codexHome(), 'config.toml');
 }
 
+/**
+ * PI_CODING_AGENT_DIR for the isolated pi backend (auth.json, skills, settings) —
+ * the CODEX_HOME analog. Sessions live under {@link piSessionsDir}.
+ */
+export function piHome(): string {
+  return join(userDataRoot(), 'pi-home');
+}
+
+/** PI_CODING_AGENT_SESSION_DIR — where the pi backend stores session JSONL trees. */
+export function piSessionsDir(): string {
+  return join(piHome(), 'sessions');
+}
+
+/** The pi-mcp-adapter config (mcp.json) under the pi home; the config.toml analog. */
+export function piMcpConfigPath(): string {
+  return join(piHome(), 'mcp.json');
+}
+
 export function skillsRoot(): string {
   return join(codexHome(), 'skills');
 }

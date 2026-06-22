@@ -11,12 +11,12 @@ import {
 } from 'electron';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CodexRuntime } from './codex/runtime';
+import { createBackend, resolveBackendKind, type ChatBackend } from './backend';
 import { ensureWorkspace } from './workspace/bootstrap';
-import { codexHome, workspaceRoot } from './workspace/paths';
 import { listSkills, setSkillEnabled } from './workspace/skills';
 import { addFiles, listFiles, removeFile, revealFiles } from './files/store';
-import { addMcpServer, listMcpServers, removeMcpServer } from './workspace/mcp';
+import * as codexMcp from './workspace/mcp';
+import * as piMcp from './pi/mcp';
 import { getMemorySettings, isRecallEnabled, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
 import { backfillOnce, captureFromEvent } from './recall/capture';
 import { distillNewMessages } from './recall/distill';
@@ -34,6 +34,7 @@ import {
 } from './workspace/chats';
 import { activityLabel } from '../shared/activity';
 import type {
+  BackendKind,
   ChatListResult,
   ItemEventParams,
   McpServerInput,
@@ -64,7 +65,11 @@ let mainWindow: BrowserWindow | null = null;
 let quickChatWindow: BrowserWindow | null = null;
 /** Bottom-left status pill shown while the overlay is hidden and a turn runs. */
 let hudWindow: BrowserWindow | null = null;
-let runtime: CodexRuntime | null = null;
+let runtime: ChatBackend | null = null;
+/** Active backend, set at startup. Routes MCP config (codex config.toml vs pi mcp.json). */
+let activeBackend: BackendKind = 'codex';
+/** MCP add/remove/list service for the active backend. */
+const mcpSvc = (): typeof codexMcp => (activeBackend === 'pi' ? piMcp : codexMcp);
 /** The currently-registered global accelerator, so we can unregister on change. */
 let currentShortcut: string | null = null;
 /** Cached "show overlay on all Spaces" setting, applied once per overlay window. */
@@ -431,10 +436,10 @@ function registerIpc(): void {
   ipcMain.handle('files:remove', (_e, rel: string) => removeFile(rel));
   ipcMain.handle('files:reveal', () => revealFiles());
 
-  ipcMain.handle('mcp:list', () => listMcpServers());
+  ipcMain.handle('mcp:list', () => mcpSvc().listMcpServers());
   ipcMain.handle('mcp:status', () => runtime!.getMcpStatus());
-  ipcMain.handle('mcp:add', (_e, input: McpServerInput) => addMcpServer(input));
-  ipcMain.handle('mcp:remove', (_e, name: string) => removeMcpServer(name));
+  ipcMain.handle('mcp:add', (_e, input: McpServerInput) => mcpSvc().addMcpServer(input));
+  ipcMain.handle('mcp:remove', (_e, name: string) => mcpSvc().removeMcpServer(name));
   ipcMain.handle('mcp:login', (_e, name: string) => runtime!.mcpLogin(name));
   ipcMain.handle('mcp:adminDecision', (_e, id: number | string, accept: boolean) => {
     runtime!.resolveAdminApproval(id, accept);
@@ -610,7 +615,11 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   await ensureWorkspace();
-  runtime = new CodexRuntime({ codexHome: codexHome(), workspaceRoot: workspaceRoot() });
+  // Pick the backend (codex today; pi behind STEM_BACKEND/setting). Both satisfy
+  // ChatBackend, so everything below is backend-agnostic.
+  const backendKind = resolveBackendKind(await readSettings());
+  activeBackend = backendKind;
+  runtime = createBackend(backendKind);
 
   // Stem Recall: distill durable facts via a hidden codex turn (the swappable
   // LlmClient seam). Debounced so it runs ~after the user goes idle, and once

@@ -10,6 +10,7 @@ import { settingsStorePath } from './paths';
 // user records one in Settings.
 
 const DEFAULTS: AppSettings = {
+  backend: 'codex',
   quickChat: {
     shortcut: null,
     defaultModel: null,
@@ -25,6 +26,7 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
   const qc = (parsed?.quickChat ?? {}) as Partial<QuickChatSettings>;
   const d = DEFAULTS.quickChat;
   return {
+    backend: parsed?.backend === 'pi' ? 'pi' : 'codex',
     quickChat: {
       shortcut: typeof qc.shortcut === 'string' && qc.shortcut.trim() ? qc.shortcut : null,
       defaultModel: typeof qc.defaultModel === 'string' && qc.defaultModel.trim() ? qc.defaultModel : null,

@@ -26,6 +26,7 @@ import { captureUserMessage } from '../recall/capture';
 import { RECALL_MCP_NAME } from '../recall/register-mcp';
 import { ADMIN_MCP_NAME } from '../admin/register-mcp';
 import { ingestAttachments } from '../workspace/attachments';
+import type { ChatBackend } from '../backend/types';
 import { findCodexPath } from './locate';
 
 const RPC_TIMEOUT_MS = 60_000;
@@ -87,7 +88,7 @@ interface RawModel {
  * transport. Authenticates against the app's isolated CODEX_HOME and forces
  * ChatGPT (subscription) auth by stripping API-key env vars.
  */
-export class CodexRuntime extends EventEmitter {
+export class CodexRuntime extends EventEmitter implements ChatBackend {
   private proc: ChildProcessWithoutNullStreams | null = null;
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();

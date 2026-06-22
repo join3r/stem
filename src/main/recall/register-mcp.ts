@@ -17,7 +17,7 @@ export const RECALL_MCP_NAME = 'stem-recall';
  * TODO(packaging): when an electron-builder pipeline exists, this script must be
  * unpacked (extraResources/asarUnpack) — it can't be spawned from inside app.asar.
  */
-function recallMcpServerPath(): string {
+export function recallMcpServerPath(): string {
   return join(app.getAppPath(), 'src', 'main', 'recall', 'mcp-server.mjs');
 }
 

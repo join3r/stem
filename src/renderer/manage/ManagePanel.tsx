@@ -551,17 +551,32 @@ function McpTab() {
     return env;
   }
 
+  // Parse the headers textarea ("Key: value" or "Key=value" per line).
+  function parseHeaders(text: string): Record<string, string> {
+    const headers: Record<string, string> = {};
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const i = trimmed.search(/[:=]/);
+      if (i <= 0) continue;
+      headers[trimmed.slice(0, i).trim()] = trimmed.slice(i + 1).trim();
+    }
+    return headers;
+  }
+
   async function add() {
     setError(null);
     try {
-      const env = parseEnv(envText);
+      const headers = transport === 'http' ? parseHeaders(envText) : {};
+      const env = transport === 'http' ? {} : parseEnv(envText);
       const list = await window.stem.addMcpServer({
         name: name.trim(),
         transport,
         command: command.trim(),
         args: args.trim() ? args.trim().split(/\s+/) : [],
         url: url.trim(),
-        ...(Object.keys(env).length > 0 ? { env } : {})
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+        ...(Object.keys(headers).length > 0 ? { headers } : {})
       });
       setServers(list);
       setName('');
@@ -723,7 +738,16 @@ function McpTab() {
         </div>
         <input ref={nameRef} className="ifield" placeholder="Name (e.g. fastmail)" value={name} onChange={(e) => setName(e.target.value)} />
         {transport === 'http' ? (
-          <input className="ifield" placeholder="https://api.fastmail.com/mcp" value={url} onChange={(e) => setUrl(e.target.value)} />
+          <>
+            <input className="ifield" placeholder="https://api.fastmail.com/mcp" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <textarea
+              className="ifield"
+              placeholder="headers (optional), one per line — e.g. Authorization: Bearer …"
+              rows={2}
+              value={envText}
+              onChange={(e) => setEnvText(e.target.value)}
+            />
+          </>
         ) : (
           <>
             <input className="ifield" placeholder="command (e.g. npx)" value={command} onChange={(e) => setCommand(e.target.value)} />
@@ -741,7 +765,10 @@ function McpTab() {
           <button className="push default" onClick={add} disabled={!canAdd}>Add Server</button>
         </div>
         {transport === 'http' && (
-          <p className="muted">Remote servers are added unauthenticated — use “Sign in” to authorize via OAuth.</p>
+          <p className="muted">
+            Add an auth header (e.g. <code>Authorization: Bearer …</code>) above, or leave blank and use
+            “Sign in” to authorize via OAuth where supported.
+          </p>
         )}
         {error && <p className="error">{error}</p>}
       </div>

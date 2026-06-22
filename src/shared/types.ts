@@ -105,11 +105,19 @@ export interface StartTurnResult {
 // Events arrive as JSON-RPC notifications. We dispatch on `method`. Unknown
 // methods are forwarded with the generic envelope and ignored by the UI.
 
-export interface CodexEventEnvelope {
+export interface BackendEventEnvelope {
   method: string;
   params: unknown;
   receivedAt: string;
 }
+
+/**
+ * Alias for {@link BackendEventEnvelope}. The envelope is no longer
+ * codex-specific — every chat backend (codex, pi, …) normalizes into this shape.
+ * Kept so existing renderer/preload imports need no churn; prefer the new name in
+ * new code.
+ */
+export type CodexEventEnvelope = BackendEventEnvelope;
 
 /** `item/agentMessage/delta` — a streamed token chunk of the assistant reply. */
 export interface AgentMessageDeltaParams {
@@ -242,6 +250,8 @@ export interface McpServerInput {
   url?: string;
   /** Environment variables for the spawned stdio server (e.g. API tokens). */
   env?: Record<string, string>;
+  /** HTTP headers for a remote server (e.g. `Authorization: Bearer …`). pi backend. */
+  headers?: Record<string, string>;
 }
 
 export interface McpLoginResult {
@@ -381,8 +391,13 @@ export interface QuickChatSettings {
   newThreadTimeoutMs: number;
 }
 
+/** Which agent backend hosts the chat loop. */
+export type BackendKind = 'codex' | 'pi';
+
 export interface AppSettings {
   quickChat: QuickChatSettings;
+  /** Active chat backend; defaults to codex. Overridable via STEM_BACKEND env. */
+  backend: BackendKind;
 }
 
 /**
