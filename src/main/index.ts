@@ -89,13 +89,12 @@ let overlayLastActivityAt = 0;
 let overlayTurnRunning = false;
 /** Whether the in-flight overlay turn has started streaming text (HUD phase). */
 let hudTextSeen = false;
-/**
- * Whether Stem's main window was the frontmost window the instant the overlay was
- * summoned. Drives dismissal: when the overlay was summoned from *another* app we
- * yield focus back to that app (app.hide) instead of letting macOS surface the
- * main window; when summoned from within Stem we leave the main window be.
- */
-let mainFocusedBeforeOverlay = false;
+
+// True for the brief window around summoning the overlay. Showing the overlay
+// activates the app, which fires `app.on('activate')`; without this guard that
+// handler would recreate a previously-closed main window (and macOS would surface
+// it), so summoning Quick Chat would "also open the main app."
+let summoningOverlay = false;
 
 // All-Spaces visibility for the overlay. `skipTransformProcessType: true` is
 // critical: without it, macOS flips the app between accessory and foreground
@@ -151,11 +150,14 @@ function createWindow(): void {
 // with a `?quickchat` flag. Created once at startup and reused (shown/hidden)
 // so summoning it is instant and never loses the user's draft mid-stream.
 
-const QUICK_CHAT_WIDTH = 640;
+// The window IS the frosted card (native vibrancy + rounded corners + native
+// shadow), so these are the card's own dimensions — no extra room reserved for a
+// CSS shadow as before.
+const QUICK_CHAT_WIDTH = 596;
 // Compact spotlight bar (fresh session) vs. expanded conversation panel (resuming
 // a session with messages). The overlay window is resized between the two on show.
-const QUICK_CHAT_HEIGHT = 150;
-const QUICK_CHAT_PANEL_HEIGHT = 560;
+const QUICK_CHAT_HEIGHT = 108;
+const QUICK_CHAT_PANEL_HEIGHT = 518;
 
 // Bottom-left status HUD pill.
 const HUD_WIDTH = 320;
@@ -166,14 +168,25 @@ function createQuickChatWindow(): void {
     width: QUICK_CHAT_WIDTH,
     height: QUICK_CHAT_HEIGHT,
     frame: false,
-    transparent: true,
+    // A macOS NSPanel (not a normal window): it can take keyboard focus to type
+    // WITHOUT activating Stem, so summoning it never drags the main window forward,
+    // and hiding it never promotes the main window to the front. This is the
+    // Spotlight/Raycast-style overlay behavior.
+    type: 'panel',
     resizable: false,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
     show: false,
-    hasShadow: false, // shadow is drawn in CSS so it follows the rounded card
+    // Native macOS frosting: an NSVisualEffectView blurs the desktop behind the
+    // window (real refraction, unlike CSS backdrop-filter on a transparent window).
+    // The window itself is the rounded card — corners and the drop shadow are drawn
+    // natively (roundedCorners + hasShadow), so no CSS shadow/padding hacks.
+    vibrancy: 'under-window',
+    visualEffectState: 'active', // keep the material lit even when not key
+    roundedCorners: true,
+    hasShadow: true,
     backgroundColor: '#00000000',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
@@ -311,10 +324,12 @@ function showQuickChat(reset: boolean): void {
   const win = quickChatWindow!;
   hideHud();
 
-  // Remember whether we're summoning from within Stem (main window frontmost) so
-  // dismissal knows whether to yield focus back to the previous app.
-  mainFocusedBeforeOverlay =
-    !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused();
+  // Suppress the activate-driven main-window recreation for this summon (cleared
+  // on the next tick, after the activation has been handled).
+  summoningOverlay = true;
+  setImmediate(() => {
+    summoningOverlay = false;
+  });
 
   // Center horizontally on the display under the cursor, in the upper third.
   // Compact when starting fresh; expanded to a panel when resuming a session.
@@ -327,23 +342,25 @@ function showQuickChat(reset: boolean): void {
     width: w,
     height: h
   });
+  // show() orders the panel front; focus() makes it the key window so it actually
+  // receives keystrokes (typing, Escape). Because it's a non-activating panel,
+  // focus() makes it key WITHOUT activating Stem — the previous app stays active
+  // underneath and the main window is never pulled forward.
   win.show();
+  win.focus();
   win.webContents.send('quickchat:focus', { reset });
 }
 
 /**
  * Hide the overlay on an explicit dismiss (Escape, or the shortcut pressed again).
- * On macOS, hiding the overlay normally makes macOS promote the next window of the
- * active app — Stem's main window — to the foreground, which the user doesn't want.
- * When the overlay was summoned from another app, app.hide() yields focus back to
- * that previous app so the main window stays put. When it was summoned from within
- * Stem, we leave the main window alone.
+ * The overlay is a non-activating panel, so hiding it does not promote Stem's main
+ * window to the front and the previously-active app keeps focus — we just hide the
+ * panel (no app.hide, which would also hide the main window and the HUD).
  */
 function dismissQuickChat(): void {
   if (quickChatWindow && !quickChatWindow.isDestroyed() && quickChatWindow.isVisible()) {
     quickChatWindow.hide();
   }
-  if (process.platform === 'darwin' && !mainFocusedBeforeOverlay) app.hide();
 }
 
 /** Hide just the overlay window (without app.hide), so the HUD can stay visible. */
@@ -567,7 +584,10 @@ function registerIpc(): void {
     overlayTurnRunning = true;
     overlayLastActivityAt = Date.now();
     // Hide just the overlay (NOT app.hide — that would also hide the HUD we're
-    // about to show). The HUD is non-focusable, so it never steals focus.
+    // about to show, and re-showing the HUD would reactivate the app and surface
+    // the main window). The overlay is a non-activating panel, so hiding it does
+    // not promote the main window. The HUD is non-focusable, so it never steals
+    // focus from whatever app the user is in.
     hideOverlayWindow();
     showHud({ phase: 'working', label: 'Working…' });
 
@@ -744,6 +764,9 @@ app.whenReady().then(async () => {
   applyQuickChatShortcut(initialSettings.quickChat.shortcut);
 
   app.on('activate', () => {
+    // Don't recreate the main window when the activation was triggered by summoning
+    // the Quick Chat overlay — that would reopen a closed main window unbidden.
+    if (summoningOverlay || quickChatWindow?.isVisible()) return;
     if (!mainWindow || mainWindow.isDestroyed()) createWindow();
   });
 }).catch((error) => {

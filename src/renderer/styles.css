@@ -948,21 +948,23 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .recorder-clear:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
 /* ---- Quick Chat overlay (own frameless, transparent window) ---- */
+/* The window itself is the frosted card: native vibrancy (set in the main process)
+   blurs the desktop behind it, and rounded corners + drop shadow are drawn natively.
+   So the body/root are fully transparent (letting the vibrancy show) and the card
+   only adds a light tint for warmth + text contrast — no CSS blur or box-shadow. */
 body.qc-body { background: transparent; }
 .qc-root {
   height: 100vh;
-  /* Padding leaves room for the card's drop shadow inside the transparent window. */
-  padding: 16px 22px 26px;
+  padding: 0;
   overflow: hidden;
 }
 .qc-card {
-  /* Frosted panel: backdrop-filter blurs the desktop behind the transparent window. */
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
-  -webkit-backdrop-filter: blur(34px) saturate(150%);
-  backdrop-filter: blur(34px) saturate(150%);
+  /* Light tint over the native vibrancy material — keeps text readable while still
+     showing the desktop refraction behind it. */
+  background: color-mix(in srgb, var(--surface) 42%, transparent);
   border: 0.5px solid var(--line);
-  border-radius: 16px;
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.42);
+  border-radius: 12px;
+  height: 100%;
   overflow: hidden;
   -webkit-app-region: drag; /* the whole panel is a drag handle */
 }

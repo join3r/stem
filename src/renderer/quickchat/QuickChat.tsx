@@ -116,6 +116,22 @@ export function QuickChat() {
     inputRef.current?.focus();
   }, []);
 
+  // Window-level Escape => dismiss the overlay, for every mode. The compact bar
+  // wires Escape on its own input, but the expanded panel's ChatView composer does
+  // not — so without this, Escape stops working once a session has messages. We
+  // skip it when an inner handler already consumed the Escape (e.g. cancelling an
+  // inline message edit calls preventDefault), so that behavior still wins.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) {
+        e.preventDefault();
+        window.stem.hideQuickChat();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Stream the overlay-owned thread. The main process only forwards this thread's
   // events to the overlay window, so every event we receive belongs to the current
   // session — we adopt its thread id if we don't have it yet (events can arrive
