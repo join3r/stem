@@ -15,6 +15,7 @@ import type {
 } from '../../shared/types';
 import { MdxView } from '../chat/MdxView';
 import { ChatList, type ChatListProps } from '../chats/ChatList';
+import { ModelPicker } from '../ui/ModelPicker';
 
 type Tab = 'chats' | 'memory' | 'mcp' | 'settings';
 
@@ -158,18 +159,13 @@ function MemoryTab({ models }: { models: ModelSummary[] }) {
 
       <div className="grp-head">Model</div>
       <div className="formgroup">
-        <select
-          className="ifield"
-          value={memoryModel ?? ''}
-          onChange={(e) => selectMemoryModel(e.target.value || null)}
-        >
-          <option value="">Default (recommended)</option>
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.displayName}
-            </option>
-          ))}
-        </select>
+        <ModelPicker
+          models={models}
+          value={memoryModel}
+          onChange={selectMemoryModel}
+          emptyLabel="Default (recommended)"
+          ariaLabel="Memory model"
+        />
         <p className="muted">Used to distill and tidy up memories in the background.</p>
       </div>
 
@@ -449,13 +445,12 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
           <p className="muted">Loading models…</p>
         ) : (
           <>
-            <select className="ifield" value={modelId ?? ''} onChange={(e) => onSelectModel(e.target.value)}>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.displayName}
-                </option>
-              ))}
-            </select>
+            <ModelPicker
+              models={models}
+              value={modelId}
+              onChange={(id) => onSelectModel(id ?? '')}
+              ariaLabel="Model"
+            />
             {selectedModel?.description && <p className="muted">{selectedModel.description}</p>}
             {selectedModel?.supportsNativeWebSearch && (
               <label className="set-check" title="Search the live web for current info, with citations">
@@ -501,18 +496,13 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
 
         <div className="set-block">
           <span className="set-sub">Default model</span>
-          <select
-            className="ifield"
-            value={qc.defaultModel ?? ''}
-            onChange={(e) => selectQcModel(e.target.value || null)}
-          >
-            <option value="">Same as main</option>
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.displayName}
-              </option>
-            ))}
-          </select>
+          <ModelPicker
+            models={models}
+            value={qc.defaultModel}
+            onChange={selectQcModel}
+            emptyLabel="Same as main"
+            ariaLabel="Quick Chat default model"
+          />
           {qcModel?.supportsNativeWebSearch && (
             <label className="set-check" title="Search the live web for current info, with citations">
               <input

@@ -200,16 +200,6 @@ export function QuickChat() {
     });
   }, []);
 
-  // Switching models clamps effort + drops an unsupported Fast pick.
-  function onSelectModel(id: string) {
-    const m = models.find((x) => x.id === id);
-    setModelId(id);
-    if (m) {
-      setEffort((e) => (e && m.supportedEfforts.includes(e) ? e : m.defaultEffort));
-      if (!m.serviceTiers.some((t) => t.id === 'priority')) setServiceTier(null);
-    }
-  }
-
   const pushSystem = useCallback((e: unknown) => {
     setMessages((ms) => [
       ...ms,
@@ -360,15 +350,6 @@ export function QuickChat() {
         <div className="qc-card qc-panel">
           <div className="qc-head">
             <Sparkles className="qc-mark" size={18} />
-            {models.length > 0 && (
-              <select className="qc-model" value={modelId ?? ''} onChange={(e) => onSelectModel(e.target.value)} aria-label="Model">
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.displayName}
-                  </option>
-                ))}
-              </select>
-            )}
             {searchToggle('head')}
             <span className="qc-spacer" />
             <button className="qc-act" title="New thread" onClick={newThread}>
@@ -430,15 +411,6 @@ export function QuickChat() {
           <span className="qc-esc">esc</span>
         </div>
         <div className="qc-foot">
-          {models.length > 0 && (
-            <select className="qc-model" value={modelId ?? ''} onChange={(e) => onSelectModel(e.target.value)} aria-label="Model">
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.displayName}
-                </option>
-              ))}
-            </select>
-          )}
           <div className="seg-ctl compact" role="group" aria-label="Reasoning effort">
             {efforts.map((e) => (
               <button key={e} type="button" className={effort === e ? 'active' : ''} onClick={() => setEffort(e)}>
