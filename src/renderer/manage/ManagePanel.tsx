@@ -393,6 +393,20 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
 
   if (!qc) return <p className="muted">Loading…</p>;
 
+  // The Quick Chat default-effort options follow the chosen default model's capabilities.
+  // "Same as main" (empty) has no concrete model here, so offer all levels.
+  const qcModel = qc.defaultModel ? models.find((m) => m.id === qc.defaultModel) : undefined;
+  const qcEfforts = qcModel?.supportedEfforts.length ? qcModel.supportedEfforts : ['low', 'medium', 'high', 'xhigh'];
+
+  // Switch the default model, clamping a now-unsupported saved effort into range.
+  function selectQcModel(id: string | null) {
+    const m = id ? models.find((x) => x.id === id) : undefined;
+    const efforts = m?.supportedEfforts.length ? m.supportedEfforts : ['low', 'medium', 'high', 'xhigh'];
+    const patch: Partial<QuickChatSettings> = { defaultModel: id };
+    if (qc && !efforts.includes(qc.defaultEffort)) patch.defaultEffort = m?.defaultEffort ?? efforts[0];
+    update(patch);
+  }
+
   return (
     <div>
       <div className="grp-head">Model</div>
@@ -446,7 +460,7 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
           <select
             className="ifield"
             value={qc.defaultModel ?? ''}
-            onChange={(e) => update({ defaultModel: e.target.value || null })}
+            onChange={(e) => selectQcModel(e.target.value || null)}
           >
             <option value="">Same as main</option>
             {models.map((m) => (
@@ -460,9 +474,9 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
         <div className="set-block">
           <span className="set-sub">Default effort</span>
           <div className="seg-ctl">
-            {(['low', 'medium', 'high', 'xhigh'] as const).map((e) => (
+            {qcEfforts.map((e) => (
               <button key={e} className={qc.defaultEffort === e ? 'active' : ''} onClick={() => update({ defaultEffort: e })}>
-                {EFFORT_LABELS[e]}
+                {EFFORT_LABELS[e] ?? e}
               </button>
             ))}
           </div>

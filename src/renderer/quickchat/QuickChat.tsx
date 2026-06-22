@@ -302,7 +302,7 @@ export function QuickChat() {
   }
 
   const efforts =
-    selectedModel && selectedModel.supportedEfforts.length ? selectedModel.supportedEfforts : ['low', 'medium', 'high', 'xhigh'];
+    selectedModel && selectedModel.supportedEfforts.length ? selectedModel.supportedEfforts : ['low', 'medium', 'high'];
   const hasFast = selectedModel ? selectedModel.serviceTiers.some((t) => t.id === 'priority') : true;
 
   // Expanded conversation panel once the session has any messages.

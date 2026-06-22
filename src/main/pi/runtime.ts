@@ -61,6 +61,26 @@ interface PiModel {
   name?: string;
   provider: string;
   reasoning?: boolean;
+  /**
+   * Per-model thinking-level capability/override map from pi. A key present with a
+   * non-null value means that level is supported (pi maps it to the provider value
+   * internally); a key mapped to null means that level is NOT available. Levels not
+   * mentioned keep the reasoning-model default. Absent/null => defaults only.
+   */
+  thinkingLevelMap?: Record<string, string | null> | null;
+}
+
+// The effort levels the UI can display, lowest→highest. We deliberately stick to these
+// four; pi also has 'off'/'minimal' but Stem doesn't surface them.
+const DISPLAY_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+// Levels every reasoning model is assumed to support unless its thinkingLevelMap opts out.
+const BASE_EFFORTS = new Set(['low', 'medium', 'high']);
+
+/** Resolve which display efforts a model supports from pi's thinkingLevelMap. */
+function effortsFor(m: PiModel): string[] {
+  if (!m.reasoning) return [];
+  const map = m.thinkingLevelMap ?? {};
+  return DISPLAY_EFFORTS.filter((lvl) => (lvl in map ? map[lvl] !== null : BASE_EFFORTS.has(lvl)));
 }
 
 interface SessionFile {
@@ -237,12 +257,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const visible = providers.size ? models.filter((m) => providers.has(m.provider)) : models;
     return visible.map((m) => {
       const id = `${m.provider}/${m.id}`;
+      const efforts = effortsFor(m);
       return {
         id,
         displayName: m.name ?? m.id,
         description: m.provider,
-        supportedEfforts: m.reasoning ? ['low', 'medium', 'high'] : [],
-        defaultEffort: 'medium',
+        supportedEfforts: efforts,
+        defaultEffort: efforts.includes('medium') ? 'medium' : efforts[0] ?? 'medium',
         serviceTiers: [],
         isDefault: m.provider === DEFAULT_PROVIDER && m.id === DEFAULT_MODEL
       };
