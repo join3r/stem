@@ -329,10 +329,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * the LlmClient seam (Stem Recall distillation); isolated from the user's
    * active chat so it can't clobber the foreground session.
    */
-  async complete(prompt: string, timeoutMs = 120_000): Promise<string> {
+  async complete(prompt: string, opts?: { model?: string | null; timeoutMs?: number }): Promise<string> {
+    const timeoutMs = opts?.timeoutMs ?? 120_000;
     const piPath = await findPiPath();
     if (!piPath) throw new Error('pi was not found on PATH.');
     await this.ensurePiHome();
+    // Memory distillation/consolidation can run on a user-configured model
+    // (Manage → Memory); fall back to the backend default when unset.
+    const { provider, modelId } = opts?.model
+      ? this.parseModel(opts.model)
+      : { provider: DEFAULT_PROVIDER, modelId: DEFAULT_MODEL };
     const child = new PiProcess({
       piPath,
       cwd: join(this.options.workspaceRoot, '.stem-internal'),
@@ -342,9 +348,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         '--no-builtin-tools',
         '--no-skills',
         '--provider',
-        DEFAULT_PROVIDER,
+        provider,
         '--model',
-        DEFAULT_MODEL,
+        modelId,
         '--system-prompt',
         'You are a precise extraction engine. Follow the instructions exactly and output only what is requested.'
       ]

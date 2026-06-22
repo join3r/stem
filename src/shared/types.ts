@@ -434,9 +434,16 @@ export interface NativeWebSearchSettings {
   quickChat: boolean;
 }
 
+/** Model used for Stem Recall's hidden memory turns (distillation + tidy-up). */
+export interface MemoryModelSettings {
+  /** `provider/model` id; null = the backend default (gpt-5.3-codex-spark). */
+  model: string | null;
+}
+
 export interface AppSettings {
   quickChat: QuickChatSettings;
   nativeWebSearch: NativeWebSearchSettings;
+  memory: MemoryModelSettings;
 }
 
 /**
@@ -571,6 +578,8 @@ export interface StemApi {
   updateQuickChat(patch: Partial<QuickChatSettings>): Promise<AppSettings>;
   /** Enable/disable native web search per context (e.g. { quickChat: false }). */
   updateNativeWebSearch(patch: Partial<NativeWebSearchSettings>): Promise<AppSettings>;
+  /** Set the model used for memory distillation/tidy-up ({ model: null } = default). */
+  updateMemorySettings(patch: Partial<MemoryModelSettings>): Promise<AppSettings>;
   /** Overlay → main: run a prompt in the overlay's own thread (main hides the
    *  overlay + raises the HUD, pre-creating a thread for a fresh session). */
   runQuickChat(prompt: QuickChatPrompt): Promise<StartTurnResult>;

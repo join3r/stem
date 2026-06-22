@@ -4,6 +4,7 @@ import type {
   McpAdminProposal,
   McpServerInput,
   McpServerStatus,
+  MemoryModelSettings,
   NativeWebSearchSettings,
   QuickChatAdopt,
   QuickChatFocus,
@@ -88,6 +89,8 @@ const api: StemApi = {
   updateQuickChat: (patch: Partial<QuickChatSettings>) => ipcRenderer.invoke('settings:updateQuickChat', patch),
   updateNativeWebSearch: (patch: Partial<NativeWebSearchSettings>) =>
     ipcRenderer.invoke('settings:updateNativeWebSearch', patch),
+  updateMemorySettings: (patch: Partial<MemoryModelSettings>) =>
+    ipcRenderer.invoke('settings:updateMemory', patch),
   runQuickChat: (prompt: QuickChatPrompt) => ipcRenderer.invoke('quickchat:run', prompt),
   newQuickChatThread: () => ipcRenderer.invoke('quickchat:newThread'),
   handoffQuickChat: (payload: QuickChatHandoff) => ipcRenderer.invoke('quickchat:handoff', payload),

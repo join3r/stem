@@ -22,7 +22,7 @@ import { captureFromEvent } from './recall/capture';
 import { distillNewMessages, shouldConsolidate } from './recall/distill';
 import { consolidateFacts } from './recall/consolidate';
 import type { LlmClient } from './recall/llm';
-import { readSettings, updateNativeWebSearch, updateQuickChat } from './workspace/settings';
+import { readSettings, updateMemorySettings, updateNativeWebSearch, updateQuickChat } from './workspace/settings';
 import {
   createFolder,
   deleteFolder,
@@ -38,6 +38,7 @@ import type {
   ChatListResult,
   ItemEventParams,
   McpServerInput,
+  MemoryModelSettings,
   NativeWebSearchSettings,
   QuickChatHandoff,
   QuickChatPrompt,
@@ -484,7 +485,9 @@ function registerIpc(): void {
   ipcMain.handle('memory:consolidate', async () => {
     // Same hidden one-shot seam distillation uses; `force` bypasses the size floor
     // so a manual run always executes.
-    const llm: LlmClient = { complete: (prompt) => runtime!.complete(prompt) };
+    const llm: LlmClient = {
+      complete: async (prompt) => runtime!.complete(prompt, { model: (await readSettings()).memory.model })
+    };
     const result = await consolidateFacts(llm, { force: true });
     return { ...result, contents: await readMemoryFiles() };
   });
@@ -573,6 +576,11 @@ function registerIpc(): void {
     // Just persist — the value is applied per turn (the runtime writes the gate the
     // bridge reads, based on the originating context), so no restart/file write here.
     return updateNativeWebSearch(patch);
+  });
+  ipcMain.handle('settings:updateMemory', async (_e, patch: Partial<MemoryModelSettings>) => {
+    // Just persist — the LlmClient closures read the model fresh from settings on
+    // each memory turn, so the change applies to the next distill/tidy-up.
+    return updateMemorySettings(patch);
   });
   // Run a prompt in the overlay's own thread. For a fresh session we pre-create
   // the thread (so its events route correctly from the very first event), then
@@ -663,7 +671,9 @@ app.whenReady().then(async () => {
 
   // Stem Recall: distill durable facts via a hidden backend turn (the swappable
   // LlmClient seam). Debounced so it runs ~after the user goes idle.
-  const recallLlm: LlmClient = { complete: (prompt) => runtime!.complete(prompt) };
+  const recallLlm: LlmClient = {
+    complete: async (prompt) => runtime!.complete(prompt, { model: (await readSettings()).memory.model })
+  };
   let distilling = false;
   let distillTimer: NodeJS.Timeout | null = null;
   const scheduleDistill = (delayMs = 15_000): void => {

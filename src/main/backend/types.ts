@@ -42,8 +42,9 @@ export interface ChatBackend extends EventEmitter {
   interruptTurn(turnId: string): Promise<void>;
   listModels(): Promise<ModelSummary[]>;
 
-  // recall seam (one-shot completion used by Stem Recall distillation)
-  complete(prompt: string, timeoutMs?: number): Promise<string>;
+  // recall seam (one-shot completion used by Stem Recall distillation).
+  // `opts.model` is a `provider/model` id (null/undefined => the backend default).
+  complete(prompt: string, opts?: { model?: string | null; timeoutMs?: number }): Promise<string>;
   isInternalThread(threadId: string): boolean;
 
   // thread CRUD

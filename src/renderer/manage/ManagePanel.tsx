@@ -70,7 +70,7 @@ export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: Ma
       </div>
       <div className="manage-body">
         {tab === 'chats' && <ChatList {...chatProps} />}
-        {tab === 'memory' && <MemoryTab />}
+        {tab === 'memory' && <MemoryTab models={models} />}
         {tab === 'mcp' && <McpSkillsTab />}
         {tab === 'settings' && (
           <SettingsTab models={models} modelId={modelId} onSelectModel={onSelectModel} />
@@ -80,12 +80,14 @@ export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: Ma
   );
 }
 
-function MemoryTab() {
+function MemoryTab({ models }: { models: ModelSummary[] }) {
   const [settings, setSettings] = useState<MemorySettings | null>(null);
   const [contents, setContents] = useState<MemoryContents | null>(null);
   const [showTech, setShowTech] = useState(false);
   const [consolidating, setConsolidating] = useState(false);
   const [consolidateMsg, setConsolidateMsg] = useState<string | null>(null);
+  // null => use the backend default model for distillation/tidy-up.
+  const [memoryModel, setMemoryModel] = useState<string | null>(null);
 
   function loadContents() {
     window.stem.readMemory().then(setContents);
@@ -93,8 +95,14 @@ function MemoryTab() {
 
   useEffect(() => {
     window.stem.getMemorySettings().then(setSettings);
+    window.stem.getSettings().then((s) => setMemoryModel(s.memory.model));
     loadContents();
   }, []);
+
+  function selectMemoryModel(id: string | null) {
+    setMemoryModel(id);
+    window.stem.updateMemorySettings({ model: id }).then((s) => setMemoryModel(s.memory.model));
+  }
 
   async function toggle() {
     if (!settings) return;
@@ -146,6 +154,23 @@ function MemoryTab() {
             onClick={toggle}
           />
         </div>
+      </div>
+
+      <div className="grp-head">Model</div>
+      <div className="formgroup">
+        <select
+          className="ifield"
+          value={memoryModel ?? ''}
+          onChange={(e) => selectMemoryModel(e.target.value || null)}
+        >
+          <option value="">Default (recommended)</option>
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.displayName}
+            </option>
+          ))}
+        </select>
+        <p className="muted">Used to distill and tidy up memories in the background.</p>
       </div>
 
       <div className="memory-view">

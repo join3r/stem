@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
-import type { AppSettings, NativeWebSearchSettings, QuickChatSettings } from '../../shared/types';
+import type { AppSettings, MemoryModelSettings, NativeWebSearchSettings, QuickChatSettings } from '../../shared/types';
 import { settingsStorePath } from './paths';
 
 // Stem-owned app settings. Like the chat store, kept deliberately tiny and
@@ -21,7 +21,9 @@ const DEFAULTS: AppSettings = {
   },
   // Native web search defaults on for both contexts; surfaced in the UI only when
   // the relevant model's provider supports it (currently ChatGPT/openai-codex).
-  nativeWebSearch: { main: true, quickChat: true }
+  nativeWebSearch: { main: true, quickChat: true },
+  // Memory distillation/tidy-up model; null = the backend default.
+  memory: { model: null }
 };
 
 function coerce(parsed: Partial<AppSettings> | null): AppSettings {
@@ -31,6 +33,10 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
   const nws: NativeWebSearchSettings = {
     main: typeof rawNws.main === 'boolean' ? rawNws.main : DEFAULTS.nativeWebSearch.main,
     quickChat: typeof rawNws.quickChat === 'boolean' ? rawNws.quickChat : DEFAULTS.nativeWebSearch.quickChat
+  };
+  const rawMem = (parsed?.memory ?? {}) as Partial<MemoryModelSettings>;
+  const mem: MemoryModelSettings = {
+    model: typeof rawMem.model === 'string' && rawMem.model.trim() ? rawMem.model : null
   };
   return {
     quickChat: {
@@ -46,7 +52,8 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
           ? qc.newThreadTimeoutMs
           : d.newThreadTimeoutMs
     },
-    nativeWebSearch: nws
+    nativeWebSearch: nws,
+    memory: mem
   };
 }
 
@@ -93,6 +100,16 @@ export function updateNativeWebSearch(patch: Partial<NativeWebSearchSettings>): 
   return enqueue(async () => {
     const cur = await readSettings();
     const next = coerce({ ...cur, nativeWebSearch: { ...cur.nativeWebSearch, ...patch } });
+    await writeSettings(next);
+    return next;
+  });
+}
+
+/** Patch the memory-model setting and persist; returns the full settings. */
+export function updateMemorySettings(patch: Partial<MemoryModelSettings>): Promise<AppSettings> {
+  return enqueue(async () => {
+    const cur = await readSettings();
+    const next = coerce({ ...cur, memory: { ...cur.memory, ...patch } });
     await writeSettings(next);
     return next;
   });
