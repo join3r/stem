@@ -1,4 +1,4 @@
-// Friendly label for the "working" indicator, derived from the active Codex item
+// Friendly label for the "working" indicator, derived from the active backend item
 // type. Both camelCase and snake_case are handled defensively since the runtime
 // forwards item.type verbatim; anything unmapped falls back to "Working…".
 // Shared by the main window (ChatView), the Quick Chat overlay, and the main

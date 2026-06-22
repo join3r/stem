@@ -1,4 +1,4 @@
-// The persistent "Files" place — a user-facing folder inside the codex cwd
+// The persistent "Files" place — a user-facing folder inside the backend cwd
 // (workspace/files/) where dropped files live, optionally organized into
 // top-level subfolders. The folder on disk is the single source of truth: there
 // is no separate database, so every mutation re-reads the directory. The agent's

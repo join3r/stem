@@ -1,7 +1,7 @@
 {
   "name": "stem",
   "version": "0.1.0",
-  "description": "An isolated, Codex-backed macOS personal assistant with rich MDX output, app-scoped skills, MCP, and native memory.",
+  "description": "An isolated, pi-backed macOS personal assistant with rich MDX output, app-scoped skills, MCP, and Stem Recall memory.",
   "main": "dist/main/index.js",
   "type": "module",
   "scripts": {
@@ -13,7 +13,6 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@iarna/toml": "^2.2.5",
     "lucide-react": "^0.468.0",
     "remark-gfm": "^4.0.0",
     "remark-mdx": "^3.1.0",

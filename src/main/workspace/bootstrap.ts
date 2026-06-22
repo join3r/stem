@@ -1,23 +1,6 @@
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { agentsMdPath, codexConfigPath, codexHome, filesRoot, skillsRoot, workspaceRoot } from './paths';
-import { updateConfig } from './config';
-import { registerRecallMcpServer } from '../recall/register-mcp';
-import { registerAdminMcpServer } from '../admin/register-mcp';
-
-// Codex native memory is intentionally OFF — Stem Recall (src/main/recall) owns
-// memory end-to-end. Leaving it on would waste background LLM work and inject a
-// competing memory_summary into context.
-const DEFAULT_CONFIG = `# Stem — isolated Codex configuration (managed by the app).
-forced_login_method = "chatgpt"
-
-[features]
-memories = false
-
-[memories]
-use_memories = false
-generate_memories = false
-`;
+import { agentsMdPath, filesRoot, legacyCodexHome, piHome, skillsRoot, workspaceRoot } from './paths';
 
 export const STEM_ASSISTANT_INSTRUCTIONS = `You are Stem, a general-purpose personal assistant with a clear, explanatory teaching style.
 
@@ -27,7 +10,7 @@ You are a PRIVATE assistant for a single user, running on their own device — a
 
 ## Managing your own MCP servers
 
-You can extend your own capabilities by managing MCP servers with your tools: \`list_mcp_servers\`, \`add_mcp_server\`, and \`remove_mcp_server\`. When the user asks to connect a service (Home Assistant, a database, an API, etc.), do it yourself with these tools rather than telling them to run \`codex mcp\` commands by hand. First gather everything the server needs from the user — for a local (stdio) server the command and args (e.g. \`uvx ha-mcp@latest\`) and any required env vars/tokens; for a remote (http) server the URL (the user signs into those separately via OAuth in the app). Adds and removes require the user's approval: a confirm card appears in the app, and the change only applies — and your new tools only become usable — after they approve and Stem reloads, so don't claim a server is connected until then. Note for the user that any token they share is written into your local configuration and kept in this chat's history, so they may want to rotate it later if that's a concern.
+You can extend your own capabilities by managing MCP servers with your tools: \`list_mcp_servers\`, \`add_mcp_server\`, and \`remove_mcp_server\`. When the user asks to connect a service (Home Assistant, a database, an API, etc.), do it yourself with these tools rather than telling them to edit MCP config by hand. First gather everything the server needs from the user — for a local (stdio) server the command and args (e.g. \`uvx ha-mcp@latest\`) and any required env vars/tokens; for a remote (http) server the URL (the user signs into those separately via OAuth in the app). Adds and removes require the user's approval: a confirm card appears in the app, and the change only applies — and your new tools only become usable — after they approve and Stem reloads, so don't claim a server is connected until then. Note for the user that any token they share is written into your local configuration and kept in this chat's history, so they may want to rotate it later if that's a concern.
 
 ## Files
 
@@ -98,37 +81,19 @@ async function writeIfMissing(path: string, content: string): Promise<void> {
 
 /** Create the isolated environment on first run. Idempotent. */
 export async function ensureWorkspace(): Promise<void> {
-  await mkdir(codexHome(), { recursive: true });
+  await mkdir(piHome(), { recursive: true });
   await mkdir(skillsRoot(), { recursive: true });
-  await mkdir(join(codexHome(), 'memories'), { recursive: true });
   await mkdir(workspaceRoot(), { recursive: true });
   // cwd for hidden internal LLM turns (distillation). A distinct dir keeps these
-  // threads out of the cwd-filtered chat list; codex needs it to exist.
+  // threads out of the cwd-filtered chat list; the backend needs it to exist.
   await mkdir(join(workspaceRoot(), '.stem-internal'), { recursive: true });
   // The persistent "Files" place the user drops files into (read by the agent).
   await mkdir(filesRoot(), { recursive: true });
 
-  await writeIfMissing(codexConfigPath(), DEFAULT_CONFIG);
   await writeIfMissing(agentsMdPath(), DEFAULT_AGENTS_MD);
-  await disableNativeMemory();
-  await registerRecallMcpServer();
-  await registerAdminMcpServer();
-}
 
-/**
- * Force codex native memory off on existing installs (config written before Stem
- * Recall). Idempotent — patches the three flags each startup.
- */
-async function disableNativeMemory(): Promise<void> {
-  try {
-    await updateConfig((config) => {
-      config.features = config.features ?? {};
-      config.features.memories = false;
-      config.memories = config.memories ?? {};
-      config.memories.use_memories = false;
-      config.memories.generate_memories = false;
-    });
-  } catch {
-    // Non-fatal: a missing/locked config just means defaults apply.
-  }
+  // One-time cleanup: remove the retired codex backend's home so no unused data
+  // is left on disk. No-op once it's gone. (pi's MCP config + admin tools are
+  // managed by pi/mcp-config.ts and the bridge extension, not config.toml.)
+  await rm(legacyCodexHome(), { recursive: true, force: true }).catch(() => {});
 }

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
-  CodexEventEnvelope,
+  BackendEventEnvelope,
   McpAdminProposal,
   McpServerInput,
   McpServerStatus,
@@ -18,16 +18,16 @@ import type {
 const api: StemApi = {
   runtimeStatus: () => ipcRenderer.invoke('runtime:status'),
   login: () => ipcRenderer.invoke('runtime:login'),
-  startTurn: (input: StartTurnInput) => ipcRenderer.invoke('codex:startTurn', input),
-  interruptTurn: (turnId: string) => ipcRenderer.invoke('codex:interruptTurn', turnId),
-  newConversation: () => ipcRenderer.invoke('codex:newConversation'),
+  startTurn: (input: StartTurnInput) => ipcRenderer.invoke('backend:startTurn', input),
+  interruptTurn: (turnId: string) => ipcRenderer.invoke('backend:interruptTurn', turnId),
+  newConversation: () => ipcRenderer.invoke('backend:newConversation'),
   openFiles: () => ipcRenderer.invoke('dialog:openFiles'),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  listModels: () => ipcRenderer.invoke('codex:listModels'),
-  onCodexEvent: (listener: (event: CodexEventEnvelope) => void) => {
-    const handler = (_e: unknown, event: CodexEventEnvelope) => listener(event);
-    ipcRenderer.on('codex:event', handler);
-    return () => ipcRenderer.removeListener('codex:event', handler);
+  listModels: () => ipcRenderer.invoke('backend:listModels'),
+  onBackendEvent: (listener: (event: BackendEventEnvelope) => void) => {
+    const handler = (_e: unknown, event: BackendEventEnvelope) => listener(event);
+    ipcRenderer.on('backend:event', handler);
+    return () => ipcRenderer.removeListener('backend:event', handler);
   },
 
   listSkills: () => ipcRenderer.invoke('skills:list'),

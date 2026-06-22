@@ -4,7 +4,7 @@ import type { McpAdminProposal } from '../../shared/types';
 
 // A modal confirm card shown when the chat assistant proposes adding or removing
 // an MCP server (the `stem-admin` self-management tools). Nothing is written to
-// config until the user approves — codex holds the tool call open until then.
+// config until the user approves — the backend holds the tool call open until then.
 export function McpApprovalCard() {
   const [proposal, setProposal] = useState<McpAdminProposal | null>(null);
   const [busy, setBusy] = useState(false);

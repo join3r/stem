@@ -4,8 +4,7 @@ import { StringDecoder } from 'node:string_decoder';
 
 // One `pi --mode rpc` child process and its JSONL transport.
 //
-// Two protocol facts from the pi docs that this class enforces (and that codex's
-// transport does NOT share):
+// Two protocol facts from the pi docs that this class enforces:
 //  - Framing is strict JSONL with LF as the ONLY delimiter. Node's `readline`
 //    also splits on U+2028/U+2029, which are valid inside JSON strings, so it is
 //    explicitly non-compliant — we use a StringDecoder + manual `\n` split.

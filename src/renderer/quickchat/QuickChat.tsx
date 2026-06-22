@@ -3,7 +3,7 @@ import { Sparkles, SquarePen, PanelRight } from 'lucide-react';
 import type {
   AgentMessageDeltaParams,
   ChatMessage,
-  CodexEventEnvelope,
+  BackendEventEnvelope,
   ItemEventParams,
   MessageMeta,
   ModelSummary,
@@ -23,7 +23,7 @@ const EFFORT_LABELS: Record<string, string> = {
 };
 
 // The Spotlight-style overlay. It now owns its own conversation: it runs turns in
-// its own codex thread and streams the answer in place (the main process hides it
+// its own backend thread and streams the answer in place (the main process hides it
 // on submit and re-summons it via the shortcut). A compact bar captures the first
 // prompt; once there are messages it expands into a conversation panel.
 export function QuickChat() {
@@ -60,7 +60,7 @@ export function QuickChat() {
   }, []);
 
   // Seed model/effort/speed from the saved Quick Chat defaults (default model
-  // falls back to codex's default when unset).
+  // falls back to the backend's default when unset).
   const applyDefaults = useCallback((qc: QuickChatSettings, list: ModelSummary[]) => {
     const fallback = list.find((m) => m.isDefault) ?? list[0] ?? null;
     const wanted = qc.defaultModel && list.some((m) => m.id === qc.defaultModel) ? qc.defaultModel : fallback?.id ?? null;
@@ -105,7 +105,7 @@ export function QuickChat() {
   // session — we adopt its thread id if we don't have it yet (events can arrive
   // before runQuickChat resolves).
   useEffect(() => {
-    return window.stem.onCodexEvent((event: CodexEventEnvelope) => {
+    return window.stem.onBackendEvent((event: BackendEventEnvelope) => {
       switch (event.method) {
         case 'item/agentMessage/delta': {
           const p = event.params as AgentMessageDeltaParams;

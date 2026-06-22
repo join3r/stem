@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { access } from 'node:fs/promises';
 
-// Resolve the `pi` (pi.dev coding agent) binary, mirroring codex/locate.ts.
+// Resolve the `pi` (pi.dev coding agent) binary.
 // Memoized: PATH lookup first, then the common install locations Homebrew/npm use.
 
 let cached: string | null | undefined;

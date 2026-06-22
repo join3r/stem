@@ -1,7 +1,7 @@
 // Stem Recall — standalone stdio MCP server exposing `search_past_chats`.
 //
-// Codex spawns this as an MCP server (registered in config.toml by
-// register-mcp.ts). It runs under Electron-as-node (ELECTRON_RUN_AS_NODE=1) so it
+// The pi backend spawns this as an MCP server (registered in mcp.json by
+// pi/mcp-config.ts). It runs under Electron-as-node (ELECTRON_RUN_AS_NODE=1) so it
 // shares the exact node:sqlite runtime as the main process. It opens recall.sqlite
 // READ-ONLY at the path given in STEM_RECALL_DB.
 //

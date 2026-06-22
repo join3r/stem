@@ -3,8 +3,8 @@ import { readFile, rename, writeFile } from 'node:fs/promises';
 import type { Folder } from '../../shared/types';
 import { chatStorePath } from './paths';
 
-// The Stem-owned chat-organization store. Codex owns the chats (threads); this
-// file holds only what codex can't: the user's folder tree and which folder each
+// The Stem-owned chat-organization store. The backend owns the chats (threads);
+// this file holds only what it can't: the user's folder tree and which folder each
 // chat sits in. Kept deliberately tiny and resilient — a corrupt/missing file
 // degrades to "no folders, everything at root" rather than breaking the app.
 

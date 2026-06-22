@@ -1,6 +1,6 @@
 // Drives the Stem Recall MCP server over stdio to verify the protocol handshake
 // and a real search_past_chats call. Seeds a throwaway DB via the compiled store,
-// then spawns the server exactly as codex would (Electron-as-node).
+// then spawns the server exactly as the pi backend would (Electron-as-node).
 //
 // Run (after compiling modules into .recall-build — see recall-verify.mjs header):
 //   STEM_RECALL_DB="$PWD/.recall-build/mcp.sqlite" ELECTRON_RUN_AS_NODE=1 \

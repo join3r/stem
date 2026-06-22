@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { recallDbPath } from '../workspace/paths';
 
 // Stem Recall's storage layer. Owns recall.sqlite end-to-end so the memory
-// system is decoupled from the chat backend (codex today, anything later).
+// system is decoupled from the chat backend (pi today, anything later).
 //
 // Two surfaces live here:
 //  - `messages`     Level 2: every user+assistant message, mirrored into an FTS5
@@ -123,8 +123,8 @@ function open(): DatabaseSync {
 
 /**
  * Persist one message. Idempotent: re-capturing the same (thread, role, text) is
- * a no-op via the dedup_key UNIQUE constraint, so live capture and one-time
- * backfill can overlap without creating duplicates.
+ * a no-op via the dedup_key UNIQUE constraint, so overlapping captures never
+ * create duplicates.
  */
 export function recordMessage(input: RecordMessageInput): void {
   const text = input.text.trim();

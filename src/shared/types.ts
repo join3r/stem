@@ -19,7 +19,7 @@ export interface ChatMessage {
   /** Assistant messages only: which model/effort/speed produced the reply. */
   meta?: MessageMeta;
   /**
-   * The codex turn this message belongs to (user message + its reply share one
+   * The backend turn this message belongs to (user message + its reply share one
    * turn id). Lets retry/edit/fork map a rendered message back to an authoritative
    * turn for rollback/fork. Absent on optimistic bubbles until their turn resolves.
    */
@@ -30,8 +30,8 @@ export interface ChatMessage {
 
 export interface RuntimeStatus {
   ok: boolean;
-  codexPath: string | null;
-  codexHome: string;
+  backendPath: string | null;
+  backendHome: string;
   workspaceRoot: string;
   authenticated?: boolean;
   /** Copy-pasteable login command, surfaced when not authenticated. */
@@ -71,7 +71,7 @@ export interface StartTurnInput {
   attachments?: TurnAttachment[];
 }
 
-// ---- Models (codex catalog) ----
+// ---- Models (backend catalog) ----
 
 export interface ModelServiceTier {
   id: string;
@@ -79,7 +79,7 @@ export interface ModelServiceTier {
   description: string;
 }
 
-/** A selectable model from codex's catalog (`model/list`), shaped for the UI. */
+/** A selectable model from the backend's catalog, shaped for the UI. */
 export interface ModelSummary {
   id: string;
   displayName: string;
@@ -100,24 +100,17 @@ export interface StartTurnResult {
   rememberedPath?: string;
 }
 
-// ---- Codex app-server events (verified against codex-cli 0.141.0) ----
+// ---- Backend events (Stem's canonical normalized protocol) ----
 //
-// Events arrive as JSON-RPC notifications. We dispatch on `method`. Unknown
-// methods are forwarded with the generic envelope and ignored by the UI.
+// Events arrive from the backend as { method, params } envelopes. We dispatch on
+// `method`. Unknown methods are forwarded with the generic envelope and ignored
+// by the UI.
 
 export interface BackendEventEnvelope {
   method: string;
   params: unknown;
   receivedAt: string;
 }
-
-/**
- * Alias for {@link BackendEventEnvelope}. The envelope is no longer
- * codex-specific — every chat backend (codex, pi, …) normalizes into this shape.
- * Kept so existing renderer/preload imports need no churn; prefer the new name in
- * new code.
- */
-export type CodexEventEnvelope = BackendEventEnvelope;
 
 /** `item/agentMessage/delta` — a streamed token chunk of the assistant reply. */
 export interface AgentMessageDeltaParams {
@@ -127,23 +120,23 @@ export interface AgentMessageDeltaParams {
   delta: string;
 }
 
-export interface CodexItemContentPart {
+export interface BackendItemContentPart {
   type: string;
   text?: string;
 }
 
-export interface CodexItem {
+export interface BackendItem {
   type: string; // 'userMessage' | 'agentMessage' | 'reasoning' | 'commandExecution' | 'mcpToolCall' | ...
   id: string;
   /** agentMessage carries its text here (a plain string). */
   text?: string;
   /** userMessage carries content as parts. */
-  content?: CodexItemContentPart[];
+  content?: BackendItemContentPart[];
 }
 
 /** `item/started` and `item/completed`. The completed agentMessage item carries authoritative text. */
 export interface ItemEventParams {
-  item: CodexItem;
+  item: BackendItem;
   threadId: string;
   turnId: string;
 }
@@ -165,7 +158,7 @@ export interface RateLimitsParams {
 
 // Helper to pull the authoritative assistant text out of a completed agentMessage item.
 // agentMessage stores its text as a plain `text` string; fall back to `content[]` parts.
-export function agentMessageText(item: CodexItem): string {
+export function agentMessageText(item: BackendItem): string {
   if (item.type !== 'agentMessage') return '';
   if (typeof item.text === 'string' && item.text.length > 0) return item.text;
   if (item.content) {
@@ -224,7 +217,7 @@ export interface McpServerSummary {
   args: string[];
   /** http only (empty string for stdio). */
   url: string;
-  /** Raw `auth_status` from `codex mcp list --json`, when reported (e.g. 'o_auth'). */
+  /** Raw `auth_status` from the backend's MCP listing, when reported (e.g. 'o_auth'). */
   authStatus?: string;
 }
 
@@ -261,13 +254,13 @@ export interface McpLoginResult {
 
 // ---- Assistant-initiated MCP changes (the `stem-admin` self-management server) ----
 //
-// When the chat assistant calls its add/remove MCP tools, codex gates the call
-// through an approval (`mcpServer/elicitation/request`). Stem surfaces that as an
-// in-app confirm card; only on approval is config.toml written and hot-reloaded.
+// When the chat assistant calls its add/remove MCP tools, the backend gates the
+// call through an approval. Stem surfaces that as an in-app confirm card; only on
+// approval is the MCP config written and hot-reloaded.
 
 /**
  * A pending assistant-proposed MCP change awaiting the user's approval.
- * `id` is the codex elicitation request id — pass it back to approve/decline.
+ * `id` is the backend's approval request id — pass it back to approve/decline.
  */
 export interface McpAdminProposal {
   id: number | string;
@@ -293,7 +286,7 @@ export interface MemorySettings {
   generateMemories: boolean;
 }
 
-/** `note` is a user-provided memory; `native` is a Codex-generated technical file. */
+/** `note` is a user-provided memory; `native` is a backend-generated technical file. */
 export type MemoryFileKind = 'note' | 'native';
 
 /** One on-disk memory markdown file; `exists:false` when not yet written. */
@@ -317,11 +310,11 @@ export interface MemoryContents {
   isEmpty: boolean;
 }
 
-// ---- Chats (codex-backed) + Folders (Stem-owned organization) ----
+// ---- Chats (backend-backed) + Folders (Stem-owned organization) ----
 //
-// A "chat" is a codex thread (codex persists threads on disk under CODEX_HOME).
-// Folders are a pure-organization layer Stem owns: codex has no folder concept,
-// so the folder tree and the chat->folder assignment live in a Stem JSON store.
+// A "chat" is a backend thread (the backend persists threads on disk in its home).
+// Folders are a pure-organization layer Stem owns: the backend has no folder
+// concept, so the folder tree and the chat->folder assignment live in a Stem JSON store.
 
 /** A user-managed folder. `parentId: null` = top level; nesting via `parentId`. */
 export interface Folder {
@@ -341,7 +334,7 @@ export interface Folder {
  */
 export type ThreadStatus = 'idle' | 'running' | 'done' | 'error';
 
-/** A chat row in the sidebar — a codex thread merged with its folder assignment. */
+/** A chat row in the sidebar — a backend thread merged with its folder assignment. */
 export interface ChatSummary {
   threadId: string;
   /** Computed main-side as `name ?? preview ?? 'New chat'`. */
@@ -391,13 +384,8 @@ export interface QuickChatSettings {
   newThreadTimeoutMs: number;
 }
 
-/** Which agent backend hosts the chat loop. */
-export type BackendKind = 'codex' | 'pi';
-
 export interface AppSettings {
   quickChat: QuickChatSettings;
-  /** Active chat backend; defaults to pi. Overridable via STEM_BACKEND env. */
-  backend: BackendKind;
 }
 
 /**
@@ -458,7 +446,7 @@ export interface StemApi {
   startTurn(input: StartTurnInput): Promise<StartTurnResult>;
   interruptTurn(turnId: string): Promise<void>;
   newConversation(): Promise<void>;
-  onCodexEvent(listener: (event: CodexEventEnvelope) => void): () => void;
+  onBackendEvent(listener: (event: BackendEventEnvelope) => void): () => void;
 
   /** Open a native file picker; returns chosen absolute paths ([] if canceled). */
   openFiles(): Promise<string[]>;

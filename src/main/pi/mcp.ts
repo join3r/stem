@@ -3,8 +3,7 @@ import { readMcpConfig, writeMcpConfig, deleteOAuthToken, readOAuthTokens } from
 import { RECALL_MCP_NAME } from '../recall/register-mcp';
 import { ADMIN_MCP_NAME } from '../admin/register-mcp';
 
-// User-facing MCP add/remove/list for the pi backend — the pi analog of
-// workspace/mcp.ts, operating on mcp.json instead of codex's config.toml. The
+// User-facing MCP add/remove/list for the pi backend, operating on mcp.json. The
 // bridge extension (stem-mcp-extension.mjs) reads this file on (re)start; the
 // renderer calls restartRuntime() after a change so the bridge reconnects.
 
@@ -27,7 +26,7 @@ export async function listMcpServers(): Promise<McpServerSummary[]> {
     .filter(([name]) => !RESERVED_NAMES.has(name))
     .map(([name, def]) => {
       const url = def.url ?? '';
-      // Mirror codex's `auth_status` so the panel shows the right state before the
+      // Populate `auth_status` so the panel shows the right state before the
       // bridge reports live connection status: a stored OAuth token or a static
       // auth header both count as credentials-on-disk.
       const hasHeaderAuth = !!def.headers && Object.keys(def.headers).length > 0;

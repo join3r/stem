@@ -11,14 +11,13 @@ import {
 } from 'electron';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createBackend, resolveBackendKind, type ChatBackend } from './backend';
+import { createBackend, type ChatBackend } from './backend';
 import { ensureWorkspace } from './workspace/bootstrap';
 import { listSkills, setSkillEnabled } from './workspace/skills';
 import { addFiles, listFiles, removeFile, revealFiles } from './files/store';
-import * as codexMcp from './workspace/mcp';
 import * as piMcp from './pi/mcp';
 import { getMemorySettings, isRecallEnabled, readMemoryFiles, setMemoryEnabled } from './workspace/memory';
-import { backfillOnce, captureFromEvent } from './recall/capture';
+import { captureFromEvent } from './recall/capture';
 import { distillNewMessages } from './recall/distill';
 import type { LlmClient } from './recall/llm';
 import { readSettings, updateQuickChat } from './workspace/settings';
@@ -34,7 +33,6 @@ import {
 } from './workspace/chats';
 import { activityLabel } from '../shared/activity';
 import type {
-  BackendKind,
   ChatListResult,
   ItemEventParams,
   McpServerInput,
@@ -66,10 +64,6 @@ let quickChatWindow: BrowserWindow | null = null;
 /** Bottom-left status pill shown while the overlay is hidden and a turn runs. */
 let hudWindow: BrowserWindow | null = null;
 let runtime: ChatBackend | null = null;
-/** Active backend, set at startup. Routes MCP config (codex config.toml vs pi mcp.json). */
-let activeBackend: BackendKind = 'codex';
-/** MCP add/remove/list service for the active backend. */
-const mcpSvc = (): typeof codexMcp => (activeBackend === 'pi' ? piMcp : codexMcp);
 /** The currently-registered global accelerator, so we can unregister on change. */
 let currentShortcut: string | null = null;
 /** Cached "show overlay on all Spaces" setting, applied once per overlay window. */
@@ -80,7 +74,7 @@ let newThreadTimeoutMs = 5 * 60_000;
 // ---- Quick Chat session ownership ----
 //
 // The overlay owns one live conversation at a time. While it owns a thread, that
-// thread's codex events route to the overlay (not the main window) and drive the
+// thread's backend events route to the overlay (not the main window) and drive the
 // status HUD. Hand-off (button, or opening the thread from the sidebar) flips
 // `overlayHandedOff` so events route to the main window from then on.
 let overlayThreadId: string | null = null;
@@ -418,15 +412,15 @@ function revealMainWindow(): void {
 function registerIpc(): void {
   ipcMain.handle('runtime:status', () => runtime!.status());
   ipcMain.handle('runtime:login', () => runtime!.login());
-  ipcMain.handle('codex:startTurn', (_e, input: StartTurnInput) => runtime!.startTurn(input));
-  ipcMain.handle('codex:interruptTurn', (_e, turnId: string) => runtime!.interruptTurn(turnId));
-  ipcMain.handle('codex:newConversation', () => runtime!.newConversation());
+  ipcMain.handle('backend:startTurn', (_e, input: StartTurnInput) => runtime!.startTurn(input));
+  ipcMain.handle('backend:interruptTurn', (_e, turnId: string) => runtime!.interruptTurn(turnId));
+  ipcMain.handle('backend:newConversation', () => runtime!.newConversation());
   ipcMain.handle('dialog:openFiles', () =>
     dialog
       .showOpenDialog(mainWindow!, { properties: ['openFile', 'multiSelections'] })
       .then((r) => (r.canceled ? [] : r.filePaths))
   );
-  ipcMain.handle('codex:listModels', () => runtime!.listModels());
+  ipcMain.handle('backend:listModels', () => runtime!.listModels());
 
   ipcMain.handle('skills:list', () => listSkills());
   ipcMain.handle('skills:setEnabled', (_e, slug: string, enabled: boolean) => setSkillEnabled(slug, enabled));
@@ -436,10 +430,10 @@ function registerIpc(): void {
   ipcMain.handle('files:remove', (_e, rel: string) => removeFile(rel));
   ipcMain.handle('files:reveal', () => revealFiles());
 
-  ipcMain.handle('mcp:list', () => mcpSvc().listMcpServers());
+  ipcMain.handle('mcp:list', () => piMcp.listMcpServers());
   ipcMain.handle('mcp:status', () => runtime!.getMcpStatus());
-  ipcMain.handle('mcp:add', (_e, input: McpServerInput) => mcpSvc().addMcpServer(input));
-  ipcMain.handle('mcp:remove', (_e, name: string) => mcpSvc().removeMcpServer(name));
+  ipcMain.handle('mcp:add', (_e, input: McpServerInput) => piMcp.addMcpServer(input));
+  ipcMain.handle('mcp:remove', (_e, name: string) => piMcp.removeMcpServer(name));
   ipcMain.handle('mcp:login', (_e, name: string) => runtime!.mcpLogin(name));
   ipcMain.handle('mcp:adminDecision', (_e, id: number | string, accept: boolean) => {
     runtime!.resolveAdminApproval(id, accept);
@@ -458,9 +452,9 @@ function registerIpc(): void {
   ipcMain.handle('memory:read', () => readMemoryFiles());
 
   // ---- chats + folders ----
-  // Chats come from codex's thread store; folders/assignments from the Stem
-  // store. We merge them here so the runtime stays codex-only and the store
-  // stays codex-unaware.
+  // Chats come from the backend's thread store; folders/assignments from the Stem
+  // store. We merge them here so the runtime stays backend-only and the store
+  // stays backend-unaware.
   const chatList = async (): Promise<ChatListResult> => {
     const [chats, folders, assignments] = await Promise.all([
       runtime!.listThreads(),
@@ -615,15 +609,12 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   await ensureWorkspace();
-  // Pick the backend (codex today; pi behind STEM_BACKEND/setting). Both satisfy
-  // ChatBackend, so everything below is backend-agnostic.
-  const backendKind = resolveBackendKind(await readSettings());
-  activeBackend = backendKind;
-  runtime = createBackend(backendKind);
+  // pi is the only backend; it satisfies ChatBackend so everything below is
+  // backend-agnostic.
+  runtime = createBackend();
 
-  // Stem Recall: distill durable facts via a hidden codex turn (the swappable
-  // LlmClient seam). Debounced so it runs ~after the user goes idle, and once
-  // after the initial backfill.
+  // Stem Recall: distill durable facts via a hidden backend turn (the swappable
+  // LlmClient seam). Debounced so it runs ~after the user goes idle.
   const recallLlm: LlmClient = { complete: (prompt) => runtime!.complete(prompt) };
   let distilling = false;
   let distillTimer: NodeJS.Timeout | null = null;
@@ -643,11 +634,11 @@ app.whenReady().then(async () => {
     }, delayMs);
   };
 
-  // Forward codex events to the main window. Registered once (not per-window) so
+  // Forward backend events to the main window. Registered once (not per-window) so
   // recreating the window can't double-subscribe.
   runtime.on('event', (event) => {
     // Stem-internal MCP self-management signals: deliver to the windows on their
-    // own channels (never as a codex thread event, and never captured into recall).
+    // own channels (never as a backend thread event, and never captured into recall).
     if (event.method === 'mcp/admin/approvalRequest') {
       mainWindow?.webContents.send('mcp:adminApproval', event.params);
       quickChatWindow?.webContents.send('mcp:adminApproval', event.params);
@@ -671,15 +662,15 @@ app.whenReady().then(async () => {
     // main window — otherwise the main window would build a phantom user-less slice.
     const overlayOwned = !!threadId && threadId === overlayThreadId && !overlayHandedOff;
     if (overlayOwned) {
-      quickChatWindow?.webContents.send('codex:event', event);
+      quickChatWindow?.webContents.send('backend:event', event);
       driveHud(event);
     } else if (!threadId) {
       // Process-level events (e.g. process/exit) carry no threadId — let both
       // windows clear their run state.
-      mainWindow?.webContents.send('codex:event', event);
-      quickChatWindow?.webContents.send('codex:event', event);
+      mainWindow?.webContents.send('backend:event', event);
+      quickChatWindow?.webContents.send('backend:event', event);
     } else {
-      mainWindow?.webContents.send('codex:event', event);
+      mainWindow?.webContents.send('backend:event', event);
     }
     if (isRecallEnabled()) {
       captureFromEvent(event); // tap assistant replies into Stem Recall (all threads)
@@ -687,11 +678,9 @@ app.whenReady().then(async () => {
     }
   });
 
-  // Seed Stem Recall from existing codex rollouts once, in the background, so
-  // chats from before Recall existed are immediately searchable; then distill.
-  backfillOnce()
-    .catch(() => 0)
-    .then(() => scheduleDistill(20_000));
+  // Kick off a distillation pass shortly after startup so any messages captured
+  // before the app last quit get turned into durable facts.
+  scheduleDistill(20_000);
 
   // Strict CSP for the renderer in production: only self, no remote/inline
   // script. Skipped in dev so the Vite dev server / HMR can run.
@@ -730,10 +719,9 @@ app.whenReady().then(async () => {
   app.quit();
 });
 
-// Shut the app-server down gracefully before quitting. Codex drains its
-// background memory jobs on SIGTERM; an abrupt kill orphans their leases and
-// silently stalls memory generation. preventDefault + await gives it that
-// window, then we exit for real (shutdown has its own SIGKILL backstop).
+// Shut the backend down gracefully before quitting. preventDefault + await gives
+// it a window to drain in-flight work, then we exit for real (shutdown has its
+// own SIGKILL backstop).
 let quitting = false;
 app.on('before-quit', (event) => {
   if (quitting || !runtime) return;

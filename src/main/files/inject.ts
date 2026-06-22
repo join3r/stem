@@ -1,7 +1,7 @@
 import { listFiles } from './store';
 
-// Builds the per-turn context Stem injects into codex via `additionalContext`
-// so the assistant always knows which files are available in the Files folder.
+// Builds the per-turn context Stem prepends to the user's message so the
+// assistant always knows which files are available in the Files folder.
 // Names only (never contents): the model reads a file on demand with its read
 // tools. Returns null when the folder is empty (nothing to inject).
 

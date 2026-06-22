@@ -1,7 +1,7 @@
 import type { PiEvent } from './rpc';
 
 // Translate pi's RPC event stream into Stem's canonical backend events (the
-// codex-shaped { method, params } envelopes the renderer/HUD/recall consume).
+// { method, params } envelopes the renderer/HUD/recall consume).
 //
 // Verified event order for a turn (Phase-0 spike):
 //   agent_start → turn_start → message_start(user) → message_end(user)
@@ -48,7 +48,7 @@ interface PiMessage {
   errorMessage?: string;
 }
 
-/** Map a pi tool name onto the codex item-type vocabulary `activityLabel` knows. */
+/** Map a pi tool name onto the item-type vocabulary `activityLabel` knows. */
 function toolItemType(toolName: string | undefined): string {
   const n = (toolName ?? '').toLowerCase();
   if (n === 'bash' || n === 'read' || n === 'ls' || n === 'glob' || n === 'grep') return 'commandExecution';

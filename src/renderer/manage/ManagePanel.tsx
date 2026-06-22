@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Brain, Sparkles, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, FolderOpen } from 'lucide-react';
 import type {
-  CodexEventEnvelope,
+  BackendEventEnvelope,
   McpLoginUrlParams,
   McpServerStatus,
   McpServerSummary,
@@ -520,7 +520,7 @@ function McpTab() {
 
   // The OAuth authorize URL is streamed mid-login as a fallback link.
   useEffect(() => {
-    return window.stem.onCodexEvent((event: CodexEventEnvelope) => {
+    return window.stem.onBackendEvent((event: BackendEventEnvelope) => {
       if (event.method === 'mcp/login/url') setLoginUrl(event.params as McpLoginUrlParams);
     });
   }, []);

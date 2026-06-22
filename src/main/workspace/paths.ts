@@ -2,25 +2,21 @@ import { app } from 'electron';
 import { join } from 'node:path';
 
 // All app state lives under Electron's userData dir, fully isolated from the
-// user's global ~/.codex. CODEX_HOME and the working dir we launch Codex in are
-// both app-owned so no external skills/config can leak in.
+// user's global pi config. The backend home and the working dir we launch the
+// backend in are both app-owned so no external skills/config can leak in.
 
 export function userDataRoot(): string {
   return app.getPath('userData');
 }
 
-/** CODEX_HOME for the isolated runtime (config, auth, skills, memory). */
-export function codexHome(): string {
+/** The legacy codex backend home, removed on startup (see bootstrap cleanup). */
+export function legacyCodexHome(): string {
   return join(userDataRoot(), 'codex-home');
 }
 
-export function codexConfigPath(): string {
-  return join(codexHome(), 'config.toml');
-}
-
 /**
- * PI_CODING_AGENT_DIR for the isolated pi backend (auth.json, skills, settings) —
- * the CODEX_HOME analog. Sessions live under {@link piSessionsDir}.
+ * PI_CODING_AGENT_DIR for the isolated pi backend (auth.json, skills, settings).
+ * Sessions live under {@link piSessionsDir}.
  */
 export function piHome(): string {
   return join(userDataRoot(), 'pi-home');
@@ -37,15 +33,10 @@ export function piMcpConfigPath(): string {
 }
 
 export function skillsRoot(): string {
-  return join(codexHome(), 'skills');
+  return join(piHome(), 'skills');
 }
 
-/** Where Codex stores its native cross-conversation memory (markdown + SQLite). */
-export function memoriesRoot(): string {
-  return join(codexHome(), 'memories');
-}
-
-/** The controlled cwd we spawn `codex app-server` in — empty/app-owned. */
+/** The controlled cwd we spawn the backend in — empty/app-owned. */
 export function workspaceRoot(): string {
   return join(userDataRoot(), 'workspace');
 }
@@ -55,7 +46,7 @@ export function agentsMdPath(): string {
 }
 
 /**
- * The persistent "Files" place: a user-facing folder inside the codex cwd where
+ * The persistent "Files" place: a user-facing folder inside the backend cwd where
  * the user drops files (optionally organized into subfolders) that the assistant
  * can read on demand. Inside workspaceRoot() so the agent's read tools reach it.
  */
@@ -67,8 +58,8 @@ export function filesRoot(): string {
 
 /**
  * Stem-owned chat-organization store: the user's folder tree and the
- * chat->folder assignments. Chats themselves are codex threads on disk; this
- * file only holds the organization layer codex has no concept of.
+ * chat->folder assignments. Chats themselves are backend threads on disk; this
+ * file only holds the organization layer the backend has no concept of.
  */
 export function chatStorePath(): string {
   return join(userDataRoot(), 'folders.json');

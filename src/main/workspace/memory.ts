@@ -2,8 +2,7 @@ import type { MemoryContents, MemorySettings } from '../../shared/types';
 import { deleteFact, getFacts, getMeta, setMeta, upsertFact } from '../recall/store';
 import { recallDbPath } from './paths';
 
-// Stem's memory control surface, backed entirely by Stem Recall (recall.sqlite) —
-// codex native memory is no longer used (see bootstrap.disableNativeMemory).
+// Stem's memory control surface, backed entirely by Stem Recall (recall.sqlite).
 //
 // This module owns:
 //  - the explicit "remember that …" fast-path (writes a durable Level-1 fact),

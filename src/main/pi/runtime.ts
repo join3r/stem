@@ -63,12 +63,12 @@ interface SessionFile {
 }
 
 /**
- * The pi (pi.dev) backend, run in RPC mode as a long-lived subprocess — the same
- * integration shape as CodexRuntime. Normalizes pi's command/event protocol into
- * Stem's canonical backend events and satisfies {@link ChatBackend}.
+ * The pi (pi.dev) backend, run in RPC mode as a long-lived subprocess.
+ * Normalizes pi's command/event protocol into Stem's canonical backend events
+ * and satisfies {@link ChatBackend}.
  *
- * Architectural note vs codex: pi RPC holds ONE active session per process. So
- * the foreground process tracks the active thread (switch_session/new_session),
+ * Architectural note: pi RPC holds ONE active session per process. So the
+ * foreground process tracks the active thread (switch_session/new_session),
  * and `complete()` uses a separate ephemeral `--no-session` process so recall
  * distillation never clobbers the user's active chat.
  */
@@ -103,13 +103,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   async status(): Promise<RuntimeStatus> {
     const base: RuntimeStatus = {
       ok: false,
-      codexPath: null,
-      codexHome: this.options.piHome,
+      backendPath: null,
+      backendHome: this.options.piHome,
       workspaceRoot: this.options.workspaceRoot
     };
     const piPath = await findPiPath();
     if (!piPath) return { ...base, error: 'pi was not found on PATH.' };
-    base.codexPath = piPath;
+    base.backendPath = piPath;
 
     await this.ensurePiHome();
     const authed = await this.fileExists(join(this.options.piHome, 'auth.json'));

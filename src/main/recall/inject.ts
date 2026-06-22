@@ -1,9 +1,9 @@
 import { getFacts } from './store';
 import { searchMemory } from './search';
 
-// Builds the per-turn context Stem injects into codex via `additionalContext`.
+// Builds the per-turn recall context Stem prepends to the user's message.
 // Two parts: Level-1 durable facts (always) and Level-2 episodic hits relevant
-// to the current message (excluding the current thread, whose history codex
+// to the current message (excluding the current thread, whose history the backend
 // already has). Returns null when there's nothing to add.
 
 const MAX_HITS = 3;

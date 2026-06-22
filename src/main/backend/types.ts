@@ -10,24 +10,23 @@ import type {
 } from '../../shared/types';
 
 /**
- * The single seam between Stem and whatever hosts the agent loop. CodexRuntime
- * is one implementation; PiRuntime (pi.dev, RPC mode) is the other. The renderer,
- * the IPC layer, the HUD, and Stem Recall all talk only to this surface plus the
+ * The single seam between Stem and whatever hosts the agent loop. PiRuntime
+ * (pi.dev, RPC mode) is the only implementation today. The renderer, the IPC
+ * layer, the HUD, and Stem Recall all talk only to this surface plus the
  * normalized `'event'` stream — they never know which backend is live.
  *
  * Two load-bearing contracts every backend must honor:
  *
  *  1. It extends EventEmitter and emits `'event'` with a `BackendEventEnvelope`
  *     ({ method, params, receivedAt }). The set of `method` strings the UI
- *     consumes is Stem's canonical internal protocol (originally codex's):
+ *     consumes is Stem's canonical internal protocol:
  *     `item/agentMessage/delta`, `item/started`, `item/completed`,
  *     `turn/completed`, `turn/failed`, `turn/aborted`, `process/exit`,
  *     plus the side channels `mcp/login/url`, `mcp/changed`, `mcp/status`,
  *     `mcp/admin/approvalRequest`. Deltas and the completed item for one turn
  *     share a `turnId` (the renderer keys bubbles `assistant-${turnId}`).
- *  2. The method surface below mirrors the original CodexRuntime API so the seam
- *     is a drop-in. A new backend that lacks a codex feature should degrade
- *     gracefully (e.g. emit nothing) rather than change these shapes.
+ *  2. A new backend that lacks a feature in the method surface below should
+ *     degrade gracefully (e.g. emit nothing) rather than change these shapes.
  */
 export interface ChatBackend extends EventEmitter {
   // lifecycle / auth

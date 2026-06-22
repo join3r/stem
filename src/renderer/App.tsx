@@ -5,7 +5,7 @@ import type {
   ChatListResult,
   ChatMessage,
   ChatSummary,
-  CodexEventEnvelope,
+  BackendEventEnvelope,
   ItemEventParams,
   MessageMeta,
   ModelSummary,
@@ -22,7 +22,7 @@ import { McpApprovalCard } from './manage/McpApprovalCard';
 import { DropOverlay } from './files/DropOverlay';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
 
-// Sentinel key for a brand-new chat that has no codex thread id yet. Its slice is
+// Sentinel key for a brand-new chat that has no backend thread id yet. Its slice is
 // migrated to the real thread id once the first turn returns one.
 const DRAFT = '__draft__';
 
@@ -69,7 +69,7 @@ export default function App() {
   const [showInspector, setShowInspector] = useState(true);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [chatList, setChatList] = useState<ChatListResult>({ chats: [], folders: [] });
-  // Optimistic rows for chats created this session that codex's thread/list hasn't
+  // Optimistic rows for chats created this session that the backend's thread/list hasn't
   // returned yet (a brand-new thread isn't listed until its first turn persists).
   // Keyed by threadId; dropped once the real list includes them.
   const [pendingChats, setPendingChats] = useState<Record<string, ChatSummary>>({});
@@ -97,7 +97,7 @@ export default function App() {
   // Folder a pending new draft should land in once its real thread is created
   // (set by the per-folder New-chat button; null for a root-level new chat).
   const pendingDraftFolderRef = useRef<string | null>(null);
-  // Threads deleted this session — late codex events for them are ignored so a
+  // Threads deleted this session — late backend events for them are ignored so a
   // dying turn can't resurrect a removed chat's slice.
   const deletedThreadsRef = useRef(new Set<string>());
 
@@ -126,7 +126,7 @@ export default function App() {
     return out;
   }, [threadStates]);
 
-  // Once codex's list includes an optimistic chat, drop our stand-in for it so the
+  // Once the backend's list includes an optimistic chat, drop our stand-in for it so the
   // authoritative title/folder takes over (and we don't render a duplicate).
   useEffect(() => {
     setPendingChats((prev) => {
@@ -141,7 +141,7 @@ export default function App() {
     });
   }, [chatList]);
 
-  // Sidebar data: codex's chats plus any session-created chats it hasn't listed yet,
+  // Sidebar data: the backend's chats plus any session-created chats it hasn't listed yet,
   // so a brand-new chat has a row (and stays selectable) the moment it's created.
   const displayList = useMemo<ChatListResult>(() => {
     const known = new Set(chatList.chats.map((c) => c.threadId));
@@ -186,7 +186,7 @@ export default function App() {
     if (status?.ok) refreshChats();
   }, [status?.ok, refreshChats]);
 
-  // Fetch the model catalog once the runtime is ready; seed defaults from codex
+  // Fetch the model catalog once the runtime is ready; seed defaults from the backend
   // (the `isDefault` model + its default effort) when nothing is remembered yet.
   useEffect(() => {
     if (!status?.ok) return;
@@ -240,7 +240,7 @@ export default function App() {
       if (!threadId || deletedThreadsRef.current.has(threadId)) return;
       setThreadStates((prev) => ({ ...prev, [threadId]: fn(prev[threadId] ?? EMPTY_STATE) }));
     };
-    return window.stem.onCodexEvent((event: CodexEventEnvelope) => {
+    return window.stem.onBackendEvent((event: BackendEventEnvelope) => {
       switch (event.method) {
         case 'item/agentMessage/delta': {
           const p = event.params as AgentMessageDeltaParams;
@@ -329,7 +329,7 @@ export default function App() {
       // whether this draft is still the one the user is looking at.
       const sendSeq = draftSeqRef.current;
       const sendFolder = pendingDraftFolderRef.current;
-      // Capture the bubble id so we can stamp its codex turn id once startTurn
+      // Capture the bubble id so we can stamp its backend turn id once startTurn
       // resolves — that's what makes Edit/Fork work on a just-sent user message.
       const userMsgId = `user-${Date.now()}`;
       setThread(sendKey, (s) => ({
@@ -395,7 +395,7 @@ export default function App() {
             setActiveThreadId(realId);
             pendingDraftFolderRef.current = null;
           }
-          // Show a sidebar row immediately — codex won't list this thread until its
+          // Show a sidebar row immediately — the backend won't list this thread until its
           // first turn persists, so without this the chat (and its highlight) is
           // invisible mid-turn and the user can't switch back to it.
           setPendingChats((p) => ({
@@ -408,7 +408,7 @@ export default function App() {
               updatedAt: Date.now()
             }
           }));
-          // Persist the folder assignment (if any) so it survives once codex lists
+          // Persist the folder assignment (if any) so it survives once the backend lists
           // the thread; otherwise just refresh the list.
           if (sendFolder) window.stem.setChatFolder(realId, sendFolder).then(setChatList);
           else refreshChats();
@@ -469,7 +469,7 @@ export default function App() {
   }, [refreshChats]);
 
   // Quick Chat session started → show the thread in the sidebar immediately
-  // (codex won't list it until its first turn persists), reusing the optimistic
+  // (the backend won't list it until its first turn persists), reusing the optimistic
   // pending-chats mechanism.
   useEffect(() => {
     return window.stem.onQuickChatSessionStarted(({ threadId, title }) => {

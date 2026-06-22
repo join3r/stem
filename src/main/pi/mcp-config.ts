@@ -5,9 +5,9 @@ import { piHome, piMcpConfigPath, recallDbPath } from '../workspace/paths';
 import { RECALL_MCP_NAME, recallMcpServerPath } from '../recall/register-mcp';
 import type { OAuthToken } from './oauth';
 
-// Stem's MCP config for the pi backend — the pi analog of codex's config.toml
-// [mcp_servers]. Consumed by the bridge extension (stem-mcp-extension.mjs), which
-// pi loads via `-e`. Stem owns this file end-to-end under the isolated pi home.
+// Stem's MCP config for the pi backend (mcp.json). Consumed by the bridge
+// extension (stem-mcp-extension.mjs), which pi loads via `-e`. Stem owns this file
+// end-to-end under the isolated pi home.
 
 export interface PiMcpServer {
   /** stdio transport */
@@ -81,7 +81,7 @@ export async function deleteOAuthToken(name: string): Promise<void> {
   await writeSecretFile(piMcpOAuthPath(), JSON.stringify(all, null, 2));
 }
 
-/** The reserved stem-recall entry — spawned exactly like the codex registration. */
+/** The reserved stem-recall entry the bridge always spawns. */
 function recallServerEntry(): PiMcpServer {
   return {
     command: process.execPath,
