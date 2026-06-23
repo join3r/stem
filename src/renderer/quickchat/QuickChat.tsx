@@ -1,28 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles, SquarePen, PanelRight, Globe } from 'lucide-react';
 import type {
-  AgentMessageDeltaParams,
-  ChatMessage,
   BackendEventEnvelope,
-  ItemEventParams,
   MessageMeta,
   ModelSummary,
   NativeWebSearchSettings,
   QuickChatSettings,
-  TurnAttachment,
-  TurnCompletedParams
+  TurnAttachment
 } from '../../shared/types';
-import { agentMessageText } from '../../shared/types';
-import { activityLabel } from '../../shared/activity';
 import { ChatView } from '../chat/ChatView';
 import { toMessageAttachments } from '../attachments';
-
-const EFFORT_LABELS: Record<string, string> = {
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'X-High'
-};
+import { EFFORT_LABELS } from '../modelLabels';
+import {
+  EMPTY_STATE,
+  appendSystemMessage,
+  applyBackendEventToThread,
+  applyProcessExitToThread,
+  backendEventThreadId,
+  type ThreadState
+} from '../chatState';
 
 // The Spotlight-style overlay. It now owns its own conversation: it runs turns in
 // its own backend thread and streams the answer in place (the main process hides it
@@ -40,12 +36,8 @@ export function QuickChat() {
   const [nativeWebSearch, setNativeWebSearch] = useState<NativeWebSearchSettings>({ main: true, quickChat: true });
 
   // One conversation's state (this overlay only ever holds one thread at a time).
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [running, setRunning] = useState(false);
-  const [streamingId, setStreamingId] = useState<string | null>(null);
-  const [activity, setActivity] = useState<string | null>(null);
+  const [chatState, setChatState] = useState<ThreadState>(EMPTY_STATE);
   const [threadId, setThreadId] = useState<string | null>(null);
-  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
 
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -56,6 +48,7 @@ export function QuickChat() {
   const turnMetaRef = useRef(new Map<string, MessageMeta>());
 
   const selectedModel = models.find((m) => m.id === modelId) ?? null;
+  const { messages, running, streamingId, activity, activeTurnId } = chatState;
 
   useEffect(() => {
     window.stem
@@ -93,12 +86,8 @@ export function QuickChat() {
   // Clear the live session and return to a fresh compact bar (New thread, or an
   // inactivity reset). Re-seed the pickers from the saved defaults.
   const resetSession = useCallback(() => {
-    setMessages([]);
     setThreadId(null);
-    setActiveTurnId(null);
-    setRunning(false);
-    setStreamingId(null);
-    setActivity(null);
+    setChatState(EMPTY_STATE);
     setInput('');
     if (models.length) window.stem.getSettings().then((s) => applyDefaults(s.quickChat, models));
   }, [models, applyDefaults]);
@@ -138,83 +127,38 @@ export function QuickChat() {
   // before runQuickChat resolves).
   useEffect(() => {
     return window.stem.onBackendEvent((event: BackendEventEnvelope) => {
-      switch (event.method) {
-        case 'item/agentMessage/delta': {
-          const p = event.params as AgentMessageDeltaParams;
-          if (!threadIdRef.current) setThreadId(p.threadId);
-          const id = `assistant-${p.turnId}`;
-          setMessages((ms) => {
-            const idx = ms.findIndex((m) => m.id === id);
-            const meta = turnMetaRef.current.get(p.turnId);
-            return idx === -1
-              ? [...ms, { id, role: 'assistant', content: p.delta, meta, turnId: p.turnId } as ChatMessage]
-              : ms.map((m, i) => (i === idx ? { ...m, content: m.content + p.delta } : m));
-          });
-          setRunning(true);
-          setStreamingId(id);
-          setActivity(null);
-          break;
-        }
-        case 'item/started': {
-          const p = event.params as ItemEventParams;
-          const type = p.item?.type;
-          if (type && type !== 'agentMessage') setActivity(activityLabel(type));
-          break;
-        }
-        case 'item/completed': {
-          const p = event.params as ItemEventParams;
-          if (p.item?.type !== 'agentMessage') break;
-          const id = `assistant-${p.turnId}`;
-          const text = agentMessageText(p.item);
-          setMessages((ms) => {
-            const meta = turnMetaRef.current.get(p.turnId);
-            const idx = ms.findIndex((m) => m.id === id);
-            return idx === -1
-              ? [...ms, { id, role: 'assistant', content: text, meta, turnId: p.turnId } as ChatMessage]
-              : ms.map((m, i) => (i === idx ? { ...m, content: text || m.content, meta: m.meta ?? meta } : m));
-          });
-          setStreamingId(null);
-          break;
-        }
-        case 'turn/completed':
-        case 'turn/failed':
-        case 'turn/aborted': {
-          const p = event.params as TurnCompletedParams;
-          if (threadIdRef.current && p.threadId !== threadIdRef.current) break;
-          setRunning(false);
-          setStreamingId(null);
-          setActivity(null);
-          setActiveTurnId(null);
-          break;
-        }
-        case 'process/exit': {
-          setRunning(false);
-          setStreamingId(null);
-          setActivity(null);
-          setActiveTurnId(null);
-          break;
-        }
-        default:
-          break;
+      if (event.method === 'process/exit') {
+        setChatState((s) => applyProcessExitToThread(s));
+        return;
       }
+
+      const eventThreadId = backendEventThreadId(event);
+      if (threadIdRef.current && eventThreadId && eventThreadId !== threadIdRef.current) return;
+      if (!threadIdRef.current && eventThreadId) setThreadId(eventThreadId);
+      setChatState((s) =>
+        applyBackendEventToThread(s, event, {
+          turnMeta: turnMetaRef.current,
+          settledStatus: () => 'idle'
+        }) ?? s
+      );
     });
   }, []);
 
   const pushSystem = useCallback((e: unknown) => {
-    setMessages((ms) => [
-      ...ms,
-      { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
-    ]);
-    setRunning(false);
+    setChatState((s) => appendSystemMessage(s, e));
   }, []);
 
   const onSend = useCallback(
     async (text: string, attachments: TurnAttachment[] = []) => {
       const msgAttachments = attachments.length ? await toMessageAttachments(attachments) : undefined;
       const userMsgId = `user-${Date.now()}`;
-      setMessages((ms) => [...ms, { id: userMsgId, role: 'user', content: text, attachments: msgAttachments }]);
-      setRunning(true);
-      setActivity(null);
+      setChatState((s) => ({
+        ...s,
+        messages: [...s.messages, { id: userMsgId, role: 'user', content: text, attachments: msgAttachments }],
+        running: true,
+        activity: null,
+        status: 'running'
+      }));
       try {
         const result = await window.stem.runQuickChat({
           input: text,
@@ -228,17 +172,22 @@ export function QuickChat() {
         if (result.threadId) setThreadId(result.threadId);
         if (result.turnId) {
           turnMetaRef.current.set(result.turnId, { model: modelId ?? undefined, effort: effort ?? undefined, serviceTier });
-          setActiveTurnId(result.turnId);
-          setMessages((ms) => ms.map((m) => (m.id === userMsgId ? { ...m, turnId: result.turnId } : m)));
+          setChatState((s) => ({
+            ...s,
+            activeTurnId: result.turnId ?? null,
+            messages: s.messages.map((m) => (m.id === userMsgId ? { ...m, turnId: result.turnId } : m))
+          }));
         }
         if (result.handled) {
-          setMessages((ms) =>
-            result.assistantMessage
-              ? [...ms, { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }]
-              : ms
-          );
-          setRunning(false);
-          setActiveTurnId(null);
+          setChatState((s) => ({
+            ...s,
+            messages: result.assistantMessage
+              ? [...s.messages, { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }]
+              : s.messages,
+            running: false,
+            activeTurnId: null,
+            status: 'idle'
+          }));
         }
       } catch (e) {
         pushSystem(e);
@@ -249,10 +198,7 @@ export function QuickChat() {
 
   const onInterrupt = useCallback(async () => {
     if (activeTurnId) await window.stem.interruptTurn(activeTurnId);
-    setRunning(false);
-    setStreamingId(null);
-    setActivity(null);
-    setActiveTurnId(null);
+    setChatState((s) => ({ ...s, running: false, streamingId: null, activity: null, activeTurnId: null, status: 'idle' }));
   }, [activeTurnId]);
 
   // Retry/Edit: roll the thread back to a turn and re-send. No-op while running.
@@ -267,7 +213,7 @@ export function QuickChat() {
         pushSystem(e);
         return;
       }
-      setMessages((ms) => ms.slice(0, userIdx));
+      setChatState((s) => ({ ...s, messages: s.messages.slice(0, userIdx) }));
       onSend(text, []);
     },
     [threadId, running, messages, onSend, pushSystem]

@@ -1,53 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { SquarePen, PanelRight } from 'lucide-react';
 import type {
-  AgentMessageDeltaParams,
   ChatListResult,
-  ChatMessage,
   ChatSummary,
   BackendEventEnvelope,
-  ItemEventParams,
   MessageMeta,
   ModelSummary,
   RuntimeStatus,
-  ThreadStatus,
   TurnAttachment,
-  TurnCompletedParams
+  ThreadStatus
 } from '../shared/types';
-import { agentMessageText } from '../shared/types';
 import { toMessageAttachments } from './attachments';
-import { activityLabel } from '../shared/activity';
 import { ChatView, type ChatViewHandle } from './chat/ChatView';
 import { ManagePanel } from './manage/ManagePanel';
 import { McpApprovalCard } from './manage/McpApprovalCard';
 import { DropOverlay } from './files/DropOverlay';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
+import {
+  EMPTY_STATE,
+  appendSystemMessage,
+  applyBackendEventToThread,
+  applyProcessExitToThread,
+  backendEventThreadId,
+  type ThreadState
+} from './chatState';
 
 // Sentinel key for a brand-new chat that has no backend thread id yet. Its slice is
 // migrated to the real thread id once the first turn returns one.
 const DRAFT = '__draft__';
-
-// Everything about one chat's in-flight/visible state. Stored per thread id (plus
-// the DRAFT slice) so multiple chats can run and stream at the same time.
-interface ThreadState {
-  messages: ChatMessage[];
-  running: boolean;
-  streamingId: string | null;
-  /** Label of the in-flight activity (tool/reasoning); null once text streams. */
-  activity: string | null;
-  activeTurnId: string | null;
-  /** Drives the status dot on the chat row. */
-  status: ThreadStatus;
-}
-
-const EMPTY_STATE: ThreadState = {
-  messages: [],
-  running: false,
-  streamingId: null,
-  activity: null,
-  activeTurnId: null,
-  status: 'idle'
-};
 
 // Merge a DRAFT slice into the (possibly already-created) real-thread slice when a
 // new chat's first turn returns its id. The draft holds the user bubble; the live
@@ -235,87 +215,33 @@ export default function App() {
   );
 
   useEffect(() => {
-    // Apply a slice update for one thread, lazily creating its entry. Late events
-    // for a deleted thread are dropped so they can't resurrect it.
-    const applyTo = (threadId: string | undefined, fn: (s: ThreadState) => ThreadState) => {
-      if (!threadId || deletedThreadsRef.current.has(threadId)) return;
-      setThreadStates((prev) => ({ ...prev, [threadId]: fn(prev[threadId] ?? EMPTY_STATE) }));
-    };
     return window.stem.onBackendEvent((event: BackendEventEnvelope) => {
-      switch (event.method) {
-        case 'item/agentMessage/delta': {
-          const p = event.params as AgentMessageDeltaParams;
-          const id = `assistant-${p.turnId}`;
-          applyTo(p.threadId, (s) => {
-            const idx = s.messages.findIndex((m) => m.id === id);
-            const meta = turnMetaRef.current.get(p.turnId);
-            const messages =
-              idx === -1
-                ? [...s.messages, { id, role: 'assistant', content: p.delta, meta, turnId: p.turnId } as ChatMessage]
-                : s.messages.map((m, i) => (i === idx ? { ...m, content: m.content + p.delta } : m));
-            return { ...s, messages, running: true, streamingId: id, activity: null, status: 'running' };
-          });
-          break;
-        }
-        case 'item/started': {
-          const p = event.params as ItemEventParams;
-          const type = p.item?.type;
-          // A non-message item (reasoning, web search, command, MCP tool…) is
-          // running. Surface it as the activity label until text starts streaming.
-          if (type && type !== 'agentMessage') applyTo(p.threadId, (s) => ({ ...s, activity: activityLabel(type) }));
-          break;
-        }
-        case 'item/completed': {
-          const p = event.params as ItemEventParams;
-          if (p.item?.type !== 'agentMessage') break;
-          const id = `assistant-${p.turnId}`;
-          const text = agentMessageText(p.item);
-          applyTo(p.threadId, (s) => {
-            const meta = turnMetaRef.current.get(p.turnId);
-            const idx = s.messages.findIndex((m) => m.id === id);
-            const messages =
-              idx === -1
-                ? [...s.messages, { id, role: 'assistant', content: text, meta, turnId: p.turnId } as ChatMessage]
-                // Prefer authoritative text; keep streamed deltas if it's empty.
-                : s.messages.map((m, i) => (i === idx ? { ...m, content: text || m.content, meta: m.meta ?? meta } : m));
-            return { ...s, messages, streamingId: null };
-          });
-          break;
-        }
-        case 'turn/completed': {
-          const p = event.params as TurnCompletedParams;
-          applyTo(p.threadId, (s) => ({
-            ...s,
-            running: false,
-            streamingId: null,
-            activity: null,
-            activeTurnId: null,
-            // Mark unread (a solid dot) if it finished while another chat was open.
-            status: p.threadId === activeThreadIdRef.current ? 'idle' : 'done'
-          }));
-          break;
-        }
-        case 'process/exit':
-          // No threadId — the server died, so clear every thread's run state.
-          setThreadStates((prev) => {
-            const next: Record<string, ThreadState> = {};
-            for (const [tid, s] of Object.entries(prev)) {
-              next[tid] = {
-                ...s,
-                running: false,
-                streamingId: null,
-                activity: null,
-                activeTurnId: null,
-                status: s.status === 'running' ? 'idle' : s.status
-              };
-            }
-            return next;
-          });
-          break;
-        default:
-          // Unknown / unhandled events are ignored on purpose.
-          break;
+      if (event.method === 'process/exit') {
+        // No threadId — the server died, so clear every thread's run state.
+        setThreadStates((prev) => {
+          const next: Record<string, ThreadState> = {};
+          for (const [tid, s] of Object.entries(prev)) next[tid] = applyProcessExitToThread(s);
+          return next;
+        });
+        return;
       }
+
+      const threadId = backendEventThreadId(event);
+      if (!threadId || deletedThreadsRef.current.has(threadId)) return;
+      setThreadStates((prev) => {
+        const nextState = applyBackendEventToThread(prev[threadId] ?? EMPTY_STATE, event, {
+          turnMeta: turnMetaRef.current,
+          settledStatus: (method, id) => {
+            if (method === 'turn/failed') return 'error';
+            if (method === 'turn/completed') {
+              // Mark unread (a solid dot) if it finished while another chat was open.
+              return id === activeThreadIdRef.current ? 'idle' : 'done';
+            }
+            return 'idle';
+          }
+        });
+        return nextState ? { ...prev, [threadId]: nextState } : prev;
+      });
     });
   }, []);
 
@@ -421,15 +347,7 @@ export default function App() {
           }));
         }
       } catch (e) {
-        setThread(sendKey, (s) => ({
-          messages: [
-            ...s.messages,
-            { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
-          ],
-          running: false,
-          activeTurnId: null,
-          status: 'error'
-        }));
+        setThread(sendKey, (s) => appendSystemMessage(s, e));
       }
     },
     [activeThreadId, refreshChats, modelId, effort, serviceTier, format, setThread]
@@ -586,13 +504,7 @@ export default function App() {
       try {
         await window.stem.rollbackToTurn(threadId, turnId);
       } catch (e) {
-        setThread(threadId, (s) => ({
-          messages: [
-            ...s.messages,
-            { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
-          ],
-          status: 'error'
-        }));
+        setThread(threadId, (s) => appendSystemMessage(s, e));
         return;
       }
       // Truncate to before this turn's user message; onSend re-appends + streams.
@@ -632,13 +544,7 @@ export default function App() {
         await refreshChats();
         await openChat(newId);
       } catch (e) {
-        setThread(threadId, (s) => ({
-          messages: [
-            ...s.messages,
-            { id: `system-${Date.now()}`, role: 'system', content: String(e instanceof Error ? e.message : e) }
-          ],
-          status: 'error'
-        }));
+        setThread(threadId, (s) => appendSystemMessage(s, e));
       }
     },
     [chatList, refreshChats, openChat, setThread]

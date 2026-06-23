@@ -25,6 +25,7 @@ import type { ChatMessage, ModelSummary, TurnAttachment } from '../../shared/typ
 import { MdxView } from './MdxView';
 import { MdxActionContext } from '../mdx/ActionContext';
 import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
+import { EFFORT_LABELS } from '../modelLabels';
 
 const AVATAR: Record<ChatMessage['role'], { cls: string; icon: ReactNode; label: string }> = {
   user: { cls: 'you', icon: <User size={15} />, label: 'You' },
@@ -75,13 +76,6 @@ interface ChatViewProps {
   onChangeSpeed: (serviceTier: string | null) => void;
   onChangeFormat: (format: 'md' | 'mdx') => void;
 }
-
-const EFFORT_LABELS: Record<string, string> = {
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'X-High'
-};
 
 // Build the inline meta label: "Claude Opus · High". Resolves the model id to its
 // catalog display name; effort is appended only when known (some models have no

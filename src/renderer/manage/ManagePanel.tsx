@@ -17,6 +17,7 @@ import type {
 import { MdxView } from '../chat/MdxView';
 import { ChatList, type ChatListProps } from '../chats/ChatList';
 import { ModelPicker } from '../ui/ModelPicker';
+import { EFFORT_LABELS } from '../modelLabels';
 
 type Tab = 'chats' | 'memory' | 'mcp' | 'settings';
 
@@ -26,13 +27,6 @@ const TABS: { id: Tab; label: string; icon: typeof Brain }[] = [
   { id: 'mcp', label: 'MCP & Skills', icon: Plug },
   { id: 'settings', label: 'Settings', icon: Settings }
 ];
-
-const EFFORT_LABELS: Record<string, string> = {
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'X-High'
-};
 
 // Inactivity presets for starting a fresh Quick Chat thread on re-summon.
 // 0 = never (always continue the current session).

@@ -37,6 +37,7 @@ import { piMcpConfigPath } from '../workspace/paths';
 import { findPiPath } from './locate';
 import { PiProcess, type PiEvent } from './rpc';
 import { newTurnContext, normalizePiEvent, type TurnContext } from './normalize';
+import { ForegroundSessionGate } from './session-gate';
 
 // Default provider/model. openai-codex is the user's working ChatGPT subscription
 // (verified streaming in the Phase-0 spike); Anthropic/Claude Max is selectable
@@ -132,6 +133,7 @@ interface SessionFile {
 export class PiRuntime extends EventEmitter implements ChatBackend {
   private proc: PiProcess | null = null;
   private starting: Promise<void> | null = null;
+  private foreground = new ForegroundSessionGate();
   private activeThreadId: string | null = null;
   /**
    * The model of the CURRENTLY active pi session, mirrored so `applyModel` can skip a
@@ -158,8 +160,6 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private turnEntryIds = new Map<string, string>();
   /** The turn currently streaming on the foreground process (one at a time). */
   private currentTurn: TurnContext | null = null;
-  private activeTurnDone: Promise<void> | null = null;
-  private resolveActiveTurn: (() => void) | null = null;
   /** Pending stem-admin approvals, keyed by the bridge's extension_ui_request id. */
   private adminApprovals = new Set<string>();
   /** Set when an admin add/remove was approved; reloads MCP servers at turn end. */
@@ -217,22 +217,22 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     this.proc = null;
     this.activeThreadId = null;
     this.currentTurn = null;
-    this.resolveActiveTurn?.();
-    this.resolveActiveTurn = null;
-    this.activeTurnDone = null;
+    this.foreground.reset();
     if (proc) await proc.dispose();
   }
 
   // ---- turns ----
 
   async createThread(model?: string): Promise<string> {
-    await this.ensureStarted();
-    // Create the session FIRST: newSession resets the active model, so applying the
-    // model before it would be undone. Apply after so the pre-created session is on it.
-    const id = await this.newSession();
-    if (model) await this.applyModel(model);
-    this.unnamedThreads.add(id);
-    return id;
+    return this.foreground.run(async () => {
+      await this.ensureStarted();
+      // Create the session FIRST: newSession resets the active model, so applying the
+      // model before it would be undone. Apply after so the pre-created session is on it.
+      const id = await this.newSession();
+      if (model) await this.applyModel(model);
+      this.unnamedThreads.add(id);
+      return id;
+    });
   }
 
   async startTurn(input: StartTurnInput): Promise<StartTurnResult> {
@@ -241,51 +241,56 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       return { handled: true, assistantMessage: "I'll remember that.", rememberedPath: memory.path };
     }
 
-    await this.ensureStarted();
-    // Serialize: a single pi process streams one turn at a time, so wait for any
-    // in-flight turn to finish before we touch the active session.
-    if (this.activeTurnDone) await this.activeTurnDone;
+    return this.foreground.run(async () => {
+      await this.ensureStarted();
 
-    // First turn of a new chat — either a draft started here (no threadId) or a
-    // session pre-created via createThread (Quick Chat) that hasn't been prompted.
-    const isNewThread = !input.threadId || this.unnamedThreads.has(input.threadId);
-    const threadId = input.threadId ? await this.ensureActive(input.threadId) : await this.newSession();
-    if (input.model) await this.applyModel(input.model);
-    if (input.effort) await this.setThinking(input.effort);
+      // First turn of a new chat — either a draft started here (no threadId) or a
+      // session pre-created via createThread (Quick Chat) that hasn't been prompted.
+      const isNewThread = !input.threadId || this.unnamedThreads.has(input.threadId);
+      const threadId = input.threadId ? await this.ensureActive(input.threadId) : await this.newSession();
+      if (input.model) await this.applyModel(input.model);
+      if (input.effort) await this.setThinking(input.effort);
 
-    const turnId = randomUUID();
-    this.currentTurn = newTurnContext(threadId, turnId);
-    this.activeTurnDone = new Promise<void>((resolve) => (this.resolveActiveTurn = resolve));
+      const turnId = randomUUID();
+      this.currentTurn = newTurnContext(threadId, turnId);
+      this.foreground.claimTurn();
 
-    // Gate native web search for THIS turn (main vs Quick Chat share one process,
-    // so the bridge can't tell them apart — we set the gate just before the prompt).
-    await writeNativeSearchGate(input.webSearch ?? true).catch(() => undefined);
+      try {
+        // Gate native web search for THIS turn (main vs Quick Chat share one process,
+        // so the bridge can't tell them apart — we set the gate just before the prompt).
+        await writeNativeSearchGate(input.webSearch ?? true).catch(() => undefined);
 
-    const { message, images } = await this.buildMessage(input, threadId);
-    const res = await this.proc!.request({
-      type: 'prompt',
-      message,
-      images: images.length ? images : undefined
+        const { message, images } = await this.buildMessage(input, threadId);
+        const res = await this.proc!.request({
+          type: 'prompt',
+          message,
+          images: images.length ? images : undefined
+        });
+        if (!res.success) throw new Error(res.error ?? 'pi rejected the prompt.');
+      } catch (e) {
+        this.finishTurn();
+        throw e;
+      }
+
+      // Persist a title for a brand-new chat. pi never auto-names sessions, so
+      // without this the session_info `name` stays empty and the sidebar reverts
+      // to "New chat" the moment the backend lists the thread (on restart, refresh,
+      // or a folder move) — replacing the renderer's optimistic first-message title.
+      this.unnamedThreads.delete(threadId);
+      if (isNewThread) {
+        const name = titleFromInput(input.input);
+        if (name) await this.proc!.request({ type: 'set_session_name', name }).catch(() => undefined);
+      }
+
+      if (isRecallEnabled()) {
+        try {
+          captureUserMessage({ threadId, turnId, text: input.input, cwd: this.options.workspaceRoot });
+        } catch {
+          // non-fatal; the live turn is already streaming
+        }
+      }
+      return { threadId, turnId };
     });
-    if (!res.success) {
-      this.finishTurn();
-      throw new Error(res.error ?? 'pi rejected the prompt.');
-    }
-
-    // Persist a title for a brand-new chat. pi never auto-names sessions, so
-    // without this the session_info `name` stays empty and the sidebar reverts
-    // to "New chat" the moment the backend lists the thread (on restart, refresh,
-    // or a folder move) — replacing the renderer's optimistic first-message title.
-    this.unnamedThreads.delete(threadId);
-    if (isNewThread) {
-      const name = titleFromInput(input.input);
-      if (name) await this.proc!.request({ type: 'set_session_name', name }).catch(() => undefined);
-    }
-
-    if (isRecallEnabled()) {
-      captureUserMessage({ threadId, turnId, text: input.input, cwd: this.options.workspaceRoot });
-    }
-    return { threadId, turnId };
   }
 
   async interruptTurn(_turnId: string): Promise<void> {
@@ -470,25 +475,31 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   }
 
   async resumeThread(threadId: string): Promise<void> {
-    await this.ensureStarted();
-    await this.ensureActive(threadId);
+    await this.foreground.run(async () => {
+      await this.ensureStarted();
+      await this.ensureActive(threadId);
+    });
   }
 
   async renameThread(threadId: string, name: string): Promise<void> {
-    await this.ensureStarted();
-    await this.ensureActive(threadId);
-    await this.proc!.request({ type: 'set_session_name', name });
+    await this.foreground.run(async () => {
+      await this.ensureStarted();
+      await this.ensureActive(threadId);
+      await this.proc!.request({ type: 'set_session_name', name });
+    });
   }
 
   async deleteThread(threadId: string): Promise<void> {
-    const file = await this.resolveSessionFile(threadId);
-    if (this.activeThreadId === threadId) {
-      this.activeThreadId = null;
-      if (this.proc) await this.proc.request({ type: 'new_session' }).catch(() => undefined);
-    }
-    this.sessionFiles.delete(threadId);
-    this.unnamedThreads.delete(threadId);
-    if (file) await unlink(file).catch(() => undefined);
+    await this.foreground.run(async () => {
+      const file = await this.resolveSessionFile(threadId);
+      if (this.activeThreadId === threadId) {
+        this.activeThreadId = null;
+        if (this.proc) await this.proc.request({ type: 'new_session' }).catch(() => undefined);
+      }
+      this.sessionFiles.delete(threadId);
+      this.unnamedThreads.delete(threadId);
+      if (file) await unlink(file).catch(() => undefined);
+    });
   }
 
   /**
@@ -499,21 +510,23 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * id-stable). The renderer then re-sends the prompt as a fresh turn.
    */
   async rollbackToTurn(threadId: string, turnId: string): Promise<void> {
-    await this.ensureStarted();
-    const file = await this.resolveSessionFile(threadId);
-    if (!file) throw new Error('This chat has no saved history to edit yet.');
-    const entryId = this.resolveEntryId(turnId);
-    const raw = await readFile(file, 'utf8');
-    const lines = raw.split('\n').filter((l) => l.trim());
-    const idx = lines.findIndex((l) => this.entryIdOf(l) === entryId);
-    if (idx <= 0) throw new Error('Could not locate that message to edit. Reopen the chat and try again.');
-    // Park the foreground off this file so the reload reads our truncated copy.
-    await this.proc!.request({ type: 'new_session' }).catch(() => undefined);
-    await writeFile(file, lines.slice(0, idx).join('\n') + '\n');
-    await this.proc!.request({ type: 'switch_session', sessionPath: file });
-    // Both RPCs above swap the active session's model out from under us.
-    this.currentModel = null;
-    this.activeThreadId = threadId;
+    await this.foreground.run(async () => {
+      await this.ensureStarted();
+      const file = await this.resolveSessionFile(threadId);
+      if (!file) throw new Error('This chat has no saved history to edit yet.');
+      const entryId = this.resolveEntryId(turnId);
+      const raw = await readFile(file, 'utf8');
+      const lines = raw.split('\n').filter((l) => l.trim());
+      const idx = lines.findIndex((l) => this.entryIdOf(l) === entryId);
+      if (idx <= 0) throw new Error('Could not locate that message to edit. Reopen the chat and try again.');
+      // Park the foreground off this file so the reload reads our truncated copy.
+      await this.proc!.request({ type: 'new_session' }).catch(() => undefined);
+      await writeFile(file, lines.slice(0, idx).join('\n') + '\n');
+      await this.proc!.request({ type: 'switch_session', sessionPath: file });
+      // Both RPCs above swap the active session's model out from under us.
+      this.currentModel = null;
+      this.activeThreadId = threadId;
+    });
   }
 
   /**
@@ -523,23 +536,25 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * session is active and read live until its file is written on first append.
    */
   async forkThread(threadId: string, turnId: string): Promise<{ threadId: string }> {
-    await this.ensureStarted();
-    await this.ensureActive(threadId);
-    const entryId = this.resolveEntryId(turnId);
-    const fm = await this.proc!.request({ type: 'get_fork_messages' });
-    const entries = (fm.data as { messages?: { entryId: string }[] } | undefined)?.messages ?? [];
-    const i = entries.findIndex((e) => e.entryId === entryId);
-    if (i === -1) throw new Error('Reopen this chat to fork from an earlier message.');
-    const forkEntry = entries[i + 1]?.entryId ?? entries[i].entryId;
-    const res = await this.proc!.request({ type: 'fork', entryId: forkEntry });
-    if (!res.success) throw new Error(res.error ?? 'pi could not fork this chat.');
-    const state = await this.proc!.request({ type: 'get_state' });
-    const newId = this.recordState(state.data);
-    if (!newId) throw new Error('pi did not return a forked session id.');
-    // The fork becomes the active session — invalidate the model mirror.
-    this.currentModel = null;
-    this.activeThreadId = newId;
-    return { threadId: newId };
+    return this.foreground.run(async () => {
+      await this.ensureStarted();
+      await this.ensureActive(threadId);
+      const entryId = this.resolveEntryId(turnId);
+      const fm = await this.proc!.request({ type: 'get_fork_messages' });
+      const entries = (fm.data as { messages?: { entryId: string }[] } | undefined)?.messages ?? [];
+      const i = entries.findIndex((e) => e.entryId === entryId);
+      if (i === -1) throw new Error('Reopen this chat to fork from an earlier message.');
+      const forkEntry = entries[i + 1]?.entryId ?? entries[i].entryId;
+      const res = await this.proc!.request({ type: 'fork', entryId: forkEntry });
+      if (!res.success) throw new Error(res.error ?? 'pi could not fork this chat.');
+      const state = await this.proc!.request({ type: 'get_state' });
+      const newId = this.recordState(state.data);
+      if (!newId) throw new Error('pi did not return a forked session id.');
+      // The fork becomes the active session — invalidate the model mirror.
+      this.currentModel = null;
+      this.activeThreadId = newId;
+      return { threadId: newId };
+    });
   }
 
   // ---- MCP (Phase 3) ----
@@ -648,9 +663,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       this.proc = null;
       this.activeThreadId = null;
       this.currentTurn = null;
-      this.resolveActiveTurn?.();
-      this.resolveActiveTurn = null;
-      this.activeTurnDone = null;
+      this.foreground.finishTurn();
       this.emitEvent('process/exit', info);
     });
 
@@ -705,9 +718,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   private finishTurn(): void {
     this.currentTurn = null;
-    this.resolveActiveTurn?.();
-    this.resolveActiveTurn = null;
-    this.activeTurnDone = null;
+    this.foreground.finishTurn();
     // An approved MCP add/remove takes effect by reloading the bridge after the
     // turn (restarting mid-turn would kill the in-flight conversation).
     if (this.pendingMcpReload) {
