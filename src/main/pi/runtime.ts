@@ -643,15 +643,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       cwd: this.options.workspaceRoot,
       env: this.sanitizedEnv(),
       args: [
-        // Read-only filesystem access: keep pi's read/grep/find/ls built-ins so the
-        // assistant can actually open files in the Files folder (files/<name>) — the
-        // per-turn listing + system prompt both tell it to "read with your file tools".
-        // Exclude only the mutating/shell built-ins (edit/write/bash); Stem is a chat
-        // assistant, not a coding agent. `--exclude-tools` (not `--no-builtin-tools` or
-        // a `--tools` allowlist) is deliberate: it leaves the extension-bridged tools
-        // (stem-recall, stem-admin, user MCP, web_search) enabled.
+        // Filesystem access: keep pi's read/edit/write/grep/find/ls built-ins so the
+        // assistant can open AND create/modify files in the Files folder (files/<name>) —
+        // the per-turn listing + system prompt both point it there. Exclude only `bash`
+        // (arbitrary shell is a much larger surface and not needed for a chat assistant).
+        // `--exclude-tools` (not `--no-builtin-tools` or a `--tools` allowlist) is
+        // deliberate: it leaves the extension-bridged tools (stem-recall, stem-admin,
+        // user MCP, web_search) enabled.
         '--exclude-tools',
-        'edit,write,bash',
+        'bash',
         '-e',
         piExtensionPath(),
         '--provider',
