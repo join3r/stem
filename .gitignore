@@ -10,3 +10,7 @@ out/
 
 # Files-place verification probe build output
 .files-build/
+
+# Playwright E2E artifacts
+test-results/
+playwright-report/

@@ -55,6 +55,7 @@ import type {
   QuickChatPrompt,
   QuickChatSettings,
   QuickChatStatus,
+  RuntimeStatus,
   StartTurnInput,
   StartTurnResult
 } from '../shared/types';
@@ -442,8 +443,19 @@ function revealMainWindow(): void {
   win.focus();
 }
 
+// Test seam: when STEM_E2E is set, report a healthy backend without touching pi,
+// so end-to-end UI tests can get past the sign-in gate and drive the real
+// renderer hermetically. Only the backend handshake is faked — every store
+// (recall, files, settings) still runs for real against the isolated workspace.
+const E2E = !!process.env.STEM_E2E;
+
 function registerIpc(): void {
-  ipcMain.handle('runtime:status', () => runtime!.status());
+  ipcMain.handle('runtime:status', (): Promise<RuntimeStatus> | RuntimeStatus => {
+    if (E2E) {
+      return { ok: true, authenticated: true, backendPath: null, backendHome: '', workspaceRoot: '' };
+    }
+    return runtime!.status();
+  });
   ipcMain.handle('runtime:login', () => runtime!.login());
   ipcMain.handle('backend:startTurn', async (_e, input: StartTurnInput) => {
     // Main-window turns honor the main native-web-search toggle (the backend no-ops
@@ -485,7 +497,9 @@ function registerIpc(): void {
   ipcMain.handle('memory:get', () => getMemorySettings());
   ipcMain.handle('memory:setEnabled', async (_e, enabled: boolean) => {
     const settings = await setMemoryEnabled(enabled);
-    await runtime!.restart();
+    // Restart applies the recall-MCP change to the live backend; skipped under the
+    // E2E seam, where there's no real backend to restart.
+    if (!E2E) await runtime!.restart();
     return settings;
   });
   ipcMain.handle('memory:read', () => readMemoryFiles());

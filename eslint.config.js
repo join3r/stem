@@ -32,5 +32,17 @@ export default [
     files: ['**/*.mjs'],
     languageOptions: { ecmaVersion: 'latest', sourceType: 'module' },
     rules: { 'no-undef': 'off' }
+  },
+  {
+    // Tests: Playwright's `use()` fixture API trips react-hooks/rules-of-hooks
+    // (it's not a React Hook), and probing the renderer through `window.stem`
+    // legitimately needs `any` casts.
+    files: ['tests/**/*.ts'],
+    rules: {
+      'react-hooks/rules-of-hooks': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+      // Playwright fixtures idiomatically destructure `{}` as the first arg.
+      'no-empty-pattern': 'off'
+    }
   }
 ];
