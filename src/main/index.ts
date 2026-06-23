@@ -155,13 +155,11 @@ let summoningOverlay = false;
 // this exactly once per window (at creation) and on settings change, never per
 // show, so summoning the overlay never disturbs the main window or dock.
 function applyOverlayWorkspaceVisibility(): void {
-  for (const win of [quickChatWindow, hudWindow]) {
-    if (win && !win.isDestroyed()) {
-      win.setVisibleOnAllWorkspaces(overlayOnAllDisplays, {
-        visibleOnFullScreen: true,
-        skipTransformProcessType: true
-      });
-    }
+  if (quickChatWindow && !quickChatWindow.isDestroyed()) {
+    quickChatWindow.setVisibleOnAllWorkspaces(overlayOnAllDisplays, {
+      visibleOnFullScreen: true,
+      skipTransformProcessType: true
+    });
   }
 }
 
@@ -301,7 +299,15 @@ function createHudWindow(): void {
 
   installNavigationGuards(hudWindow);
 
+  // The status pill must float above everything and follow the user across every
+  // Space and into full-screen apps — unlike the overlay, this is unconditional
+  // (not tied to the `overlayOnAllDisplays` preference): the pill is the only
+  // signal that a turn is still running once the overlay is hidden.
   hudWindow.setAlwaysOnTop(true, 'screen-saver');
+  hudWindow.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: true,
+    skipTransformProcessType: true
+  });
   hudWindow.on('closed', () => {
     hudWindow = null;
   });
