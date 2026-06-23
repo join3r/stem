@@ -1,4 +1,4 @@
-import { recordMessage } from './store';
+import { enforceEpisodicLimit, recordMessage } from './store';
 import type { BackendEventEnvelope, ItemEventParams } from '../../shared/types';
 import { agentMessageText } from '../../shared/types';
 
@@ -23,6 +23,21 @@ function isSyntheticText(text: string): boolean {
   return SYNTHETIC_MARKERS.some((m) => text.includes(m));
 }
 
+// Pruning the episodic store VACUUMs the db, so we don't want to do it on every
+// message. Check the size limit only every Nth capture; the actual prune is also
+// gated behind a cheap size comparison and runs only when genuinely over.
+const ENFORCE_EVERY = 20;
+let sinceEnforce = 0;
+function maybeEnforceEpisodicLimit(): void {
+  if (++sinceEnforce < ENFORCE_EVERY) return;
+  sinceEnforce = 0;
+  try {
+    enforceEpisodicLimit();
+  } catch {
+    // Pruning must never break capture.
+  }
+}
+
 /** Live tap for assistant replies: record the authoritative completed agentMessage. */
 export function captureFromEvent(envelope: BackendEventEnvelope): void {
   if (envelope.method !== 'item/completed') return;
@@ -33,6 +48,7 @@ export function captureFromEvent(envelope: BackendEventEnvelope): void {
   if (!text.trim()) return;
   try {
     recordMessage({ threadId: params.threadId, turnId: params.turnId, role: 'assistant', text });
+    maybeEnforceEpisodicLimit();
   } catch {
     // Capture must never break the chat.
   }
@@ -54,6 +70,7 @@ export function captureUserMessage(input: {
       text: input.text,
       cwd: input.cwd ?? null
     });
+    maybeEnforceEpisodicLimit();
   } catch {
     // ignore
   }

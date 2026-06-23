@@ -312,6 +312,18 @@ export interface MemorySettings {
   enabled: boolean;
   useMemories: boolean;
   generateMemories: boolean;
+  /** Max on-disk size for the episodic store, in bytes (0 = unlimited). */
+  episodicLimitBytes: number;
+  /** New-fact count that triggers an automatic tidy-up (0 = manual only). */
+  tidyThreshold: number;
+}
+
+/** Metadata for the Level-2 episodic store, shown in the Memory → Recall sub-tab. */
+export interface EpisodicStats {
+  /** Number of captured messages in the episodic store. */
+  messageCount: number;
+  /** On-disk size of recall.sqlite (+ WAL sidecar) in bytes. */
+  sizeBytes: number;
 }
 
 /** `note` is a user-provided memory; `native` is a backend-generated technical file. */
@@ -554,10 +566,18 @@ export interface StemApi {
   readMemory(): Promise<MemoryContents>;
   /** Delete one durable fact; returns the refreshed memory list. */
   forgetMemory(id: number): Promise<MemoryContents>;
-  /** Wipe all memory (facts + episodic log); keeps Files + toggle. Returns the empty list. */
-  resetMemory(): Promise<MemoryContents>;
+  /** Wipe durable facts (Level 1); keeps episodic + toggle. Returns the empty fact list. */
+  resetFactsMemory(): Promise<MemoryContents>;
+  /** Wipe the episodic store (Level 2); keeps facts + toggle. Returns refreshed stats. */
+  resetEpisodicMemory(): Promise<EpisodicStats>;
   /** Run a consolidation pass now (merge/correct/drop duplicates + stale facts). */
   consolidateMemory(): Promise<MemoryConsolidateResult>;
+  /** Episodic-store metadata for the Memory → Recall sub-tab (count + size only). */
+  getEpisodicStats(): Promise<EpisodicStats>;
+  /** Set the episodic-store size cap (bytes; 0 = unlimited); returns refreshed settings. */
+  setEpisodicLimit(bytes: number): Promise<MemorySettings>;
+  /** Set the auto-tidy-up fact threshold (0 = manual only); returns refreshed settings. */
+  setTidyThreshold(n: number): Promise<MemorySettings>;
 
   // Chats + folders. Folder mutations return the fresh list (like addMcpServer);
   // chat rename/delete return void and the renderer re-fetches.

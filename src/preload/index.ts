@@ -69,8 +69,12 @@ const api: StemApi = {
   setMemoryEnabled: (enabled: boolean) => ipcRenderer.invoke('memory:setEnabled', enabled),
   readMemory: () => ipcRenderer.invoke('memory:read'),
   forgetMemory: (id: number) => ipcRenderer.invoke('memory:forget', id),
-  resetMemory: () => ipcRenderer.invoke('memory:reset'),
+  resetFactsMemory: () => ipcRenderer.invoke('memory:resetFacts'),
+  resetEpisodicMemory: () => ipcRenderer.invoke('memory:resetEpisodic'),
   consolidateMemory: () => ipcRenderer.invoke('memory:consolidate'),
+  getEpisodicStats: () => ipcRenderer.invoke('memory:episodicStats'),
+  setEpisodicLimit: (bytes: number) => ipcRenderer.invoke('memory:setEpisodicLimit', bytes),
+  setTidyThreshold: (n: number) => ipcRenderer.invoke('memory:setTidyThreshold', n),
 
   listChats: () => ipcRenderer.invoke('chats:list'),
   openChat: (threadId: string) => ipcRenderer.invoke('chats:open', threadId),

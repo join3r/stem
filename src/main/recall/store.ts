@@ -1,6 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
+import { statSync } from 'node:fs';
 import { recallDbPath } from '../workspace/paths';
+import type { EpisodicStats } from '../../shared/types';
 
 // Stem Recall's storage layer. Owns recall.sqlite end-to-end so the memory
 // system is decoupled from the chat backend (pi today, anything later).
@@ -260,20 +262,39 @@ export function deleteFact(id: number): void {
 }
 
 /**
- * Wipe all memory: durable facts (Level 1) + episodic messages/FTS (Level 2) +
- * the distill/consolidate watermarks. Preserves the recall_enabled toggle and
- * does NOT touch the Files folder (a separate store on disk).
+ * Wipe the episodic store (Level 2): all messages + their FTS index, and the
+ * distill watermark — message ids can be reused after a VACUUM, so a stale
+ * watermark would make distillation skip freshly captured messages. VACUUM runs
+ * after the delete (it can't run inside a transaction) to reclaim disk pages.
  *
  * Deleting from `messages` fires the messages_ad trigger per row, so the FTS
  * index is cleared in lockstep — no separate messages_fts delete needed.
+ * Leaves facts and the recall_enabled toggle untouched.
  */
-export function resetMemory(): void {
+export function resetEpisodic(): void {
+  const handle = open();
+  handle.exec('BEGIN');
+  try {
+    handle.exec('DELETE FROM messages');
+    handle.exec(`DELETE FROM meta WHERE key = 'distill_watermark'`);
+    handle.exec('COMMIT');
+  } catch (err) {
+    handle.exec('ROLLBACK');
+    throw err;
+  }
+  handle.exec('VACUUM');
+}
+
+/**
+ * Wipe durable facts (Level 1) + the consolidation dirty-counter. Leaves the
+ * episodic store and the recall_enabled toggle untouched.
+ */
+export function resetFacts(): void {
   const handle = open();
   handle.exec('BEGIN');
   try {
     handle.exec('DELETE FROM facts');
-    handle.exec('DELETE FROM messages');
-    handle.exec(`DELETE FROM meta WHERE key IN ('distill_watermark', 'consolidate_pending')`);
+    handle.exec(`DELETE FROM meta WHERE key = 'consolidate_pending'`);
     handle.exec('COMMIT');
   } catch (err) {
     handle.exec('ROLLBACK');
@@ -387,6 +408,94 @@ export function setMeta(key: string, value: string): void {
 export function messageCount(): number {
   const row = open().prepare(`SELECT COUNT(*) AS n FROM messages`).get() as { n: number };
   return row.n;
+}
+
+/** On-disk footprint of recall.sqlite + its WAL sidecar (uncheckpointed writes). */
+function dbSizeBytes(): number {
+  const path = recallDbPath();
+  let total = 0;
+  for (const p of [path, `${path}-wal`]) {
+    try {
+      total += statSync(p).size;
+    } catch {
+      // sidecar (or db) not on disk yet — counts as 0.
+    }
+  }
+  return total;
+}
+
+/**
+ * Metadata for the Level-2 episodic store: how many messages are captured and how
+ * much disk recall.sqlite occupies.
+ */
+export function getEpisodicStats(): EpisodicStats {
+  return { messageCount: messageCount(), sizeBytes: dbSizeBytes() };
+}
+
+// ---- tunable limits (stored in meta so the backend can read them synchronously) ----
+
+const EPISODIC_MAX_KEY = 'episodic_max_bytes';
+const TIDY_THRESHOLD_KEY = 'consolidate_threshold';
+/** 100 MB of chat text is effectively a safety ceiling, not a routine cap. */
+export const DEFAULT_EPISODIC_MAX_BYTES = 100 * 1024 * 1024;
+/** Run a tidy-up once this many new facts have accumulated (0 = manual only). */
+export const DEFAULT_TIDY_THRESHOLD = 5;
+
+/** Max on-disk size for the episodic store in bytes; 0 = unlimited. */
+export function getEpisodicLimitBytes(): number {
+  const raw = Number.parseInt(getMeta(EPISODIC_MAX_KEY) ?? '', 10);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_EPISODIC_MAX_BYTES;
+}
+export function setEpisodicLimitBytes(bytes: number): void {
+  setMeta(EPISODIC_MAX_KEY, String(Math.max(0, Math.floor(bytes))));
+}
+
+/** New-fact count that triggers an automatic tidy-up; 0 = manual only. */
+export function getTidyThreshold(): number {
+  const raw = Number.parseInt(getMeta(TIDY_THRESHOLD_KEY) ?? '', 10);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_TIDY_THRESHOLD;
+}
+export function setTidyThreshold(n: number): void {
+  setMeta(TIDY_THRESHOLD_KEY, String(Math.max(0, Math.floor(n))));
+}
+
+/**
+ * Trim the episodic store back under its size limit by deleting the oldest
+ * messages, then VACUUM to actually reclaim the disk pages (SQLite keeps freed
+ * pages otherwise, so the file — and the reported size — wouldn't shrink). Prunes
+ * to ~85% of the limit so a steady trickle of new messages doesn't re-trigger a
+ * VACUUM on every capture. Returns how many messages were removed.
+ *
+ * The messages_ad trigger keeps the FTS index in lockstep as rows are deleted.
+ */
+export function enforceEpisodicLimit(): number {
+  const max = getEpisodicLimitBytes();
+  if (max <= 0) return 0; // unlimited
+  if (dbSizeBytes() <= max) return 0;
+
+  const handle = open();
+  const target = Math.floor(max * 0.85);
+  let deleted = 0;
+  // Bounded loop: the size estimate can under-shoot (fixed facts/meta overhead),
+  // so re-measure after each VACUUM and prune again if still over.
+  for (let i = 0; i < 8; i++) {
+    const rows = messageCount();
+    if (rows === 0) break;
+    const size = dbSizeBytes();
+    if (size <= target) break;
+    const dropFraction = Math.min(0.9, 1 - target / size);
+    const dropCount = Math.max(1, Math.ceil(rows * dropFraction));
+    const cutoff = handle
+      .prepare(`SELECT id FROM messages ORDER BY id ASC LIMIT 1 OFFSET ?`)
+      .get(dropCount) as { id?: number } | undefined;
+    if (cutoff?.id == null) {
+      deleted += handle.prepare(`DELETE FROM messages`).run().changes as number;
+    } else {
+      deleted += handle.prepare(`DELETE FROM messages WHERE id < ?`).run(cutoff.id).changes as number;
+    }
+    handle.exec('VACUUM');
+  }
+  return deleted;
 }
 
 /** Test hook: close the handle so a fresh path can be opened. */

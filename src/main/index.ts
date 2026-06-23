@@ -18,14 +18,18 @@ import { addFiles, listFiles, removeFile, revealFiles } from './files/store';
 import { imagePreviewDataUrl } from './pi/attachments';
 import * as piMcp from './pi/mcp';
 import {
-  clearAllMemory,
+  clearEpisodicMemory,
+  clearFactsMemory,
   forgetFact,
   getMemorySettings,
   isRecallEnabled,
   readMemoryFiles,
-  setMemoryEnabled
+  setEpisodicLimit,
+  setMemoryEnabled,
+  setTidyUpThreshold
 } from './workspace/memory';
 import { captureFromEvent } from './recall/capture';
+import { getEpisodicStats } from './recall/store';
 import { distillNewMessages, shouldConsolidate } from './recall/distill';
 import { consolidateFacts } from './recall/consolidate';
 import type { LlmClient } from './recall/llm';
@@ -489,7 +493,11 @@ function registerIpc(): void {
     await forgetFact(id);
     return readMemoryFiles();
   });
-  ipcMain.handle('memory:reset', () => clearAllMemory());
+  ipcMain.handle('memory:resetFacts', () => clearFactsMemory());
+  ipcMain.handle('memory:resetEpisodic', () => clearEpisodicMemory());
+  ipcMain.handle('memory:episodicStats', () => getEpisodicStats());
+  ipcMain.handle('memory:setEpisodicLimit', (_e, bytes: number) => setEpisodicLimit(bytes));
+  ipcMain.handle('memory:setTidyThreshold', (_e, n: number) => setTidyUpThreshold(n));
   ipcMain.handle('memory:consolidate', async () => {
     // Same hidden one-shot seam distillation uses; `force` bypasses the size floor
     // so a manual run always executes.

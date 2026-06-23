@@ -1,4 +1,4 @@
-import { getFacts, getMessagesForDistill, getMeta, setMeta, upsertFact } from './store';
+import { getFacts, getMessagesForDistill, getMeta, getTidyThreshold, setMeta, upsertFact } from './store';
 import { isRecallEnabled } from '../workspace/memory';
 import type { LlmClient } from './llm';
 
@@ -15,12 +15,16 @@ const MAX_TRANSCRIPT_CHARS = 16000;
 // signal that gates consolidation (see consolidate.ts). Distillation is the only
 // writer of `distilled` facts, so it owns the counter.
 export const PENDING_KEY = 'consolidate_pending';
-// Run consolidation once this many new facts have accumulated.
-const CONSOLIDATE_THRESHOLD = 5;
 
-/** True when enough new facts have piled up to warrant a consolidation pass. */
+/**
+ * True when enough new facts have piled up to warrant a consolidation pass. The
+ * threshold is user-configurable (Facts tab); 0 disables automatic tidy-up, so
+ * consolidation then only runs from the manual "Tidy up" button.
+ */
 export function shouldConsolidate(): boolean {
-  return (Number.parseInt(getMeta(PENDING_KEY) ?? '0', 10) || 0) >= CONSOLIDATE_THRESHOLD;
+  const threshold = getTidyThreshold();
+  if (threshold <= 0) return false;
+  return (Number.parseInt(getMeta(PENDING_KEY) ?? '0', 10) || 0) >= threshold;
 }
 
 const INSTRUCTIONS = `You maintain a long-term memory of DURABLE facts about a user, from a chat transcript. This is a PRIVATE personal assistant used by one person on their own device — knowing a lot about the user is the whole point, so capture genuinely personal details that make future help better.

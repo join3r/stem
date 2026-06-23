@@ -150,6 +150,36 @@ check('shouldConsolidate is false below threshold', distill.shouldConsolidate() 
 store.setMeta('consolidate_pending', '5');
 check('shouldConsolidate is true at/above threshold', distill.shouldConsolidate() === true);
 
+// --- 14. configurable tidy-up threshold ---
+check('tidy threshold defaults to 5', store.getTidyThreshold() === 5);
+store.setTidyThreshold(10);
+check('tidy threshold round-trips', store.getTidyThreshold() === 10);
+check('shouldConsolidate respects a raised threshold', distill.shouldConsolidate() === false); // pending 5 < 10
+store.setTidyThreshold(0);
+store.setMeta('consolidate_pending', '999');
+check('tidy threshold 0 disables auto tidy-up', distill.shouldConsolidate() === false);
+
+// --- 15. episodic size limit + pruning ---
+check('episodic limit defaults to 100 MB', store.getEpisodicLimitBytes() === 100 * 1024 * 1024);
+store.setEpisodicLimitBytes(50 * 1024 * 1024);
+check('episodic limit round-trips', store.getEpisodicLimitBytes() === 50 * 1024 * 1024);
+store.setEpisodicLimitBytes(0);
+check('episodic limit 0 means unlimited (no prune)', store.enforceEpisodicLimit() === 0);
+const beforePrune = store.messageCount();
+store.setEpisodicLimitBytes(1); // absurdly small → prune everything
+const pruned = store.enforceEpisodicLimit();
+check('enforceEpisodicLimit prunes when over the cap', pruned > 0 && pruned <= beforePrune);
+check('pruning empties the episodic store under a tiny cap', store.messageCount() === 0);
+
+// --- 16. split resets (facts vs episodic are independent) ---
+store.upsertFact('The user keeps a fact for the reset test', 'distilled');
+store.recordMessage({ threadId: 'R', turnId: 'r1', role: 'user', text: 'a message for the reset test' });
+store.resetFacts();
+check('resetFacts clears facts but keeps episodic', store.getFacts().length === 0 && store.messageCount() === 1);
+store.upsertFact('The user keeps another fact', 'distilled');
+store.resetEpisodic();
+check('resetEpisodic clears messages but keeps facts', store.messageCount() === 0 && store.getFacts().length === 1);
+
 store.closeForTest();
 console.log(failures === 0 ? '\nALL_PASS' : `\n${failures} FAILURE(S)`);
 process.exit(failures === 0 ? 0 : 1);

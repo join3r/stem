@@ -6,6 +6,7 @@ import type {
   McpServerStatus,
   McpServerSummary,
   McpTransport,
+  EpisodicStats,
   MemoryContents,
   MemorySettings,
   ModelSummary,
@@ -40,6 +41,25 @@ const NEW_THREAD_PRESETS: { label: string; ms: number }[] = [
   { label: '1m', ms: 60_000 },
   { label: '5m', ms: 5 * 60_000 },
   { label: '15m', ms: 15 * 60_000 }
+];
+
+// Auto tidy-up cadence, expressed as the new-fact count that triggers a pass
+// (0 = manual only). Mirrors CONSOLIDATE defaults in the recall store.
+const TIDY_PRESETS: { label: string; value: number; hint: string }[] = [
+  { label: 'Frequent', value: 3, hint: 'after 3 new facts' },
+  { label: 'Normal', value: 5, hint: 'after 5 new facts' },
+  { label: 'Occasional', value: 10, hint: 'after 10 new facts' },
+  { label: 'Manual', value: 0, hint: 'never automatically' }
+];
+
+// Episodic-store size caps. 0 = unlimited. Default is 100 MB (see the recall store).
+const MB = 1024 * 1024;
+const EPISODIC_PRESETS: { label: string; bytes: number }[] = [
+  { label: '50 MB', bytes: 50 * MB },
+  { label: '100 MB', bytes: 100 * MB },
+  { label: '250 MB', bytes: 250 * MB },
+  { label: '500 MB', bytes: 500 * MB },
+  { label: 'Unlimited', bytes: 0 }
 ];
 
 interface ModelTabProps {
@@ -81,7 +101,155 @@ export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: Ma
   );
 }
 
+// Memory lives under the Brain icon as two sub-tabs: durable facts (Level 1) and
+// the episodic recall store (Level 2, shown as metadata only — it's searched, not
+// browsed). Mirrors the MCP + Skills sub-tab pattern below.
 function MemoryTab({ models }: { models: ModelSummary[] }) {
+  const [sub, setSub] = useState<'facts' | 'recall'>('facts');
+  return (
+    <div>
+      <div className="seg-ctl">
+        <button className={sub === 'facts' ? 'active' : ''} onClick={() => setSub('facts')}>
+          Facts
+        </button>
+        <button className={sub === 'recall' ? 'active' : ''} onClick={() => setSub('recall')}>
+          Recall
+        </button>
+      </div>
+      {sub === 'facts' ? <FactsTab models={models} /> : <EpisodicTab />}
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let val = bytes / 1024;
+  let i = 0;
+  while (val >= 1024 && i < units.length - 1) {
+    val /= 1024;
+    i += 1;
+  }
+  return `${val.toFixed(1)} ${units[i]}`;
+}
+
+function EpisodicTab() {
+  const [stats, setStats] = useState<EpisodicStats | null>(null);
+  const [settings, setSettings] = useState<MemorySettings | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetMsg, setResetMsg] = useState<string | null>(null);
+
+  function load() {
+    window.stem.getEpisodicStats().then(setStats);
+  }
+  useEffect(() => {
+    window.stem.getMemorySettings().then(setSettings);
+    load();
+  }, []);
+
+  function selectLimit(bytes: number) {
+    window.stem.setEpisodicLimit(bytes).then((s) => {
+      setSettings(s);
+      // Lowering the cap can trigger pruning on the next capture; refresh the size.
+      load();
+    });
+  }
+
+  async function reset() {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      return;
+    }
+    setResetting(true);
+    setResetMsg(null);
+    try {
+      setStats(await window.stem.resetEpisodicMemory());
+      setResetMsg('Episodic recall cleared.');
+    } catch {
+      setResetMsg('Reset failed — try again.');
+    } finally {
+      setResetting(false);
+      setConfirmReset(false);
+    }
+  }
+
+  return (
+    <div>
+      {settings && (
+        <div className="set-block">
+          <span className="set-sub">Storage limit</span>
+          <div className="seg-ctl">
+            {EPISODIC_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                className={settings.episodicLimitBytes === p.bytes ? 'active' : ''}
+                onClick={() => selectLimit(p.bytes)}
+                title={p.bytes === 0 ? 'Never prune episodic recall' : `Keep episodic recall under ${p.label}`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <p className="muted">When the store grows past this, Stem drops the oldest messages first.</p>
+        </div>
+      )}
+
+      <div className="memory-view">
+        <div className="memory-view-head">
+          <strong>Episodic recall</strong>
+          <span className="memory-view-actions">
+            <button className="link-btn" onClick={load}>Refresh</button>
+          </span>
+        </div>
+        <p className="muted">
+          The searchable history of past chats Stem draws on to recall what you've
+          discussed before. Stored as a local database, never browsed directly.
+        </p>
+        {resetMsg && <p className="muted">{resetMsg}</p>}
+        {!stats && <p className="muted">Loading…</p>}
+        {stats && stats.messageCount === 0 && (
+          <p className="muted">No episodic memory captured yet — Stem builds this as you chat.</p>
+        )}
+        {stats && stats.messageCount > 0 && (
+          <p className="statement">
+            {stats.messageCount.toLocaleString()}{' '}
+            {stats.messageCount === 1 ? 'message' : 'messages'} · {formatBytes(stats.sizeBytes)}
+          </p>
+        )}
+
+        {stats && stats.messageCount > 0 && (
+          <div className="memory-reset">
+            {confirmReset ? (
+              <span className="memory-reset-confirm">
+                <span className="muted">
+                  Erase all {stats.messageCount.toLocaleString()} captured{' '}
+                  {stats.messageCount === 1 ? 'message' : 'messages'}? This can’t be undone.
+                </span>
+                <button className="link-btn danger" onClick={reset} disabled={resetting}>
+                  {resetting ? 'Resetting…' : 'Erase recall'}
+                </button>
+                <button className="link-btn" onClick={() => setConfirmReset(false)} disabled={resetting}>
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                className="link-btn danger memory-reset-trigger"
+                onClick={reset}
+                title="Permanently erase episodic recall (keeps facts + your files)"
+              >
+                <Trash2 size={12} /> Reset recall
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FactsTab({ models }: { models: ModelSummary[] }) {
   const [settings, setSettings] = useState<MemorySettings | null>(null);
   const [contents, setContents] = useState<MemoryContents | null>(null);
   const [showTech, setShowTech] = useState(false);
@@ -107,6 +275,10 @@ function MemoryTab({ models }: { models: ModelSummary[] }) {
     window.stem.updateMemorySettings({ model: id }).then((s) => setMemoryModel(s.memory.model));
   }
 
+  function selectTidyThreshold(n: number) {
+    window.stem.setTidyThreshold(n).then(setSettings);
+  }
+
   async function toggle() {
     if (!settings) return;
     setSettings(await window.stem.setMemoryEnabled(!settings.enabled));
@@ -124,8 +296,8 @@ function MemoryTab({ models }: { models: ModelSummary[] }) {
     setResetting(true);
     setConsolidateMsg(null);
     try {
-      setContents(await window.stem.resetMemory());
-      setConsolidateMsg('All memories cleared.');
+      setContents(await window.stem.resetFactsMemory());
+      setConsolidateMsg('Facts cleared.');
     } catch {
       setConsolidateMsg('Reset failed — try again.');
     } finally {
@@ -187,6 +359,23 @@ function MemoryTab({ models }: { models: ModelSummary[] }) {
           ariaLabel="Memory model"
         />
         <p className="muted">Used to distill and tidy up memories in the background.</p>
+      </div>
+
+      <div className="set-block">
+        <span className="set-sub">Tidy up automatically</span>
+        <div className="seg-ctl">
+          {TIDY_PRESETS.map((p) => (
+            <button
+              key={p.label}
+              className={settings.tidyThreshold === p.value ? 'active' : ''}
+              onClick={() => selectTidyThreshold(p.value)}
+              title={`Tidy up ${p.hint}`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <p className="muted">Stem merges duplicates and drops stale facts once this many new ones accumulate.</p>
       </div>
 
       <div className="memory-view">
@@ -255,10 +444,10 @@ function MemoryTab({ models }: { models: ModelSummary[] }) {
             {confirmReset ? (
               <span className="memory-reset-confirm">
                 <span className="muted">
-                  Erase all {notes.length} {notes.length === 1 ? 'memory' : 'memories'}? This can’t be undone.
+                  Erase all {notes.length} {notes.length === 1 ? 'fact' : 'facts'}? This can’t be undone.
                 </span>
                 <button className="link-btn danger" onClick={reset} disabled={resetting}>
-                  {resetting ? 'Resetting…' : 'Erase everything'}
+                  {resetting ? 'Resetting…' : 'Erase facts'}
                 </button>
                 <button className="link-btn" onClick={() => setConfirmReset(false)} disabled={resetting}>
                   Cancel
@@ -268,9 +457,9 @@ function MemoryTab({ models }: { models: ModelSummary[] }) {
               <button
                 className="link-btn danger memory-reset-trigger"
                 onClick={reset}
-                title="Permanently erase all memories (keeps your files)"
+                title="Permanently erase all durable facts (keeps episodic recall + your files)"
               >
-                <Trash2 size={12} /> Reset all memory
+                <Trash2 size={12} /> Reset facts
               </button>
             )}
           </div>

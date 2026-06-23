@@ -1,5 +1,18 @@
-import type { MemoryContents, MemorySettings } from '../../shared/types';
-import { deleteFact, getFacts, getMeta, resetMemory, setMeta, upsertFact } from '../recall/store';
+import type { EpisodicStats, MemoryContents, MemorySettings } from '../../shared/types';
+import {
+  deleteFact,
+  getEpisodicLimitBytes,
+  getEpisodicStats,
+  getFacts,
+  getMeta,
+  getTidyThreshold,
+  resetEpisodic,
+  resetFacts,
+  setEpisodicLimitBytes,
+  setMeta,
+  setTidyThreshold,
+  upsertFact
+} from '../recall/store';
 import { recallDbPath } from './paths';
 
 // Stem's memory control surface, backed entirely by Stem Recall (recall.sqlite).
@@ -19,7 +32,25 @@ export async function getMemorySettings(): Promise<MemorySettings> {
   const enabled = isRecallEnabled();
   // The legacy three-flag shape is kept for the IPC/UI contract; for Stem Recall
   // the single enabled flag governs both capture (generate) and injection (use).
-  return { enabled, useMemories: enabled, generateMemories: enabled };
+  return {
+    enabled,
+    useMemories: enabled,
+    generateMemories: enabled,
+    episodicLimitBytes: getEpisodicLimitBytes(),
+    tidyThreshold: getTidyThreshold()
+  };
+}
+
+/** Set the episodic-store size cap (bytes; 0 = unlimited); returns refreshed settings. */
+export async function setEpisodicLimit(bytes: number): Promise<MemorySettings> {
+  setEpisodicLimitBytes(bytes);
+  return getMemorySettings();
+}
+
+/** Set the auto-tidy-up fact threshold (0 = manual only); returns refreshed settings. */
+export async function setTidyUpThreshold(n: number): Promise<MemorySettings> {
+  setTidyThreshold(n);
+  return getMemorySettings();
 }
 
 export async function setMemoryEnabled(enabled: boolean): Promise<MemorySettings> {
@@ -122,9 +153,16 @@ export async function forgetFact(id: number): Promise<void> {
   deleteFact(id);
 }
 
-/** Wipe all stored memory (facts + episodic log), keeping the Files folder and
- *  the on/off toggle. Returns the refreshed (empty) memory view. */
-export async function clearAllMemory(): Promise<MemoryContents> {
-  resetMemory();
+/** Wipe the episodic store (Level 2), keeping facts and the on/off toggle.
+ *  Returns the refreshed (empty) episodic stats for the Recall sub-tab. */
+export async function clearEpisodicMemory(): Promise<EpisodicStats> {
+  resetEpisodic();
+  return getEpisodicStats();
+}
+
+/** Wipe durable facts (Level 1), keeping the episodic store and the on/off
+ *  toggle. Returns the refreshed (empty) facts view for the Facts sub-tab. */
+export async function clearFactsMemory(): Promise<MemoryContents> {
+  resetFacts();
   return readMemoryFiles();
 }
