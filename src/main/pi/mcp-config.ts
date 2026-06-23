@@ -1,6 +1,8 @@
 import { app } from 'electron';
+import { existsSync } from 'node:fs';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { piHome, piMcpConfigPath, recallDbPath } from '../workspace/paths';
 import { RECALL_MCP_NAME, recallMcpServerPath } from '../recall/register-mcp';
 import type { OAuthToken } from './oauth';
@@ -26,9 +28,16 @@ export interface PiMcpConfig {
   servers: Record<string, PiMcpServer>;
 }
 
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+
+function mainRuntimeAssetPath(rel: string): string {
+  const built = join(__dirname, rel);
+  return existsSync(built) ? built : join(app.getAppPath(), 'src', 'main', rel);
+}
+
 /** Absolute path to the bridge extension asset (mirrors recallMcpServerPath's basis). */
 export function piExtensionPath(): string {
-  return join(app.getAppPath(), 'src', 'main', 'pi', 'stem-mcp-extension.mjs');
+  return mainRuntimeAssetPath(join('pi', 'stem-mcp-extension.mjs'));
 }
 
 /** Where the bridge writes live connection status (next to mcp.json). */

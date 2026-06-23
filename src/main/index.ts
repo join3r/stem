@@ -7,7 +7,8 @@ import {
   nativeImage,
   nativeTheme,
   screen,
-  session
+  session,
+  shell
 } from 'electron';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,6 +74,44 @@ const appIcon = nativeImage.createFromPath(join(app.getAppPath(), 'build', 'icon
 // In dev, expose a CDP port so tooling (agent-browser) can attach to the UI.
 if (process.env.ELECTRON_RENDERER_URL) {
   app.commandLine.appendSwitch('remote-debugging-port', '9222');
+}
+
+const EXTERNAL_URL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+
+function openExternalUrl(url: string): void {
+  try {
+    const parsed = new URL(url);
+    if (!EXTERNAL_URL_PROTOCOLS.has(parsed.protocol)) return;
+    void shell.openExternal(parsed.toString()).catch(() => undefined);
+  } catch {
+    // Ignore malformed renderer-provided URLs.
+  }
+}
+
+function isAppNavigation(win: BrowserWindow, url: string): boolean {
+  const current = win.webContents.getURL();
+  if (!current) return false;
+  try {
+    const next = new URL(url);
+    const cur = new URL(current);
+    if (next.href === cur.href) return true;
+    if (cur.protocol === 'file:' && next.protocol === 'file:' && next.pathname === cur.pathname) return true;
+    return !!process.env.ELECTRON_RENDERER_URL && next.origin === cur.origin;
+  } catch {
+    return false;
+  }
+}
+
+function installNavigationGuards(win: BrowserWindow): void {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalUrl(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isAppNavigation(win, url)) return;
+    event.preventDefault();
+    openExternalUrl(url);
+  });
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -145,6 +184,8 @@ function createWindow(): void {
     }
   });
 
+  installNavigationGuards(mainWindow);
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -209,6 +250,8 @@ function createQuickChatWindow(): void {
     }
   });
 
+  installNavigationGuards(quickChatWindow);
+
   // Float above full-screen apps. All-Spaces visibility is applied once here
   // (see applyOverlayWorkspaceVisibility) rather than on every show.
   quickChatWindow.setAlwaysOnTop(true, 'screen-saver');
@@ -255,6 +298,8 @@ function createHudWindow(): void {
       sandbox: true
     }
   });
+
+  installNavigationGuards(hudWindow);
 
   hudWindow.setAlwaysOnTop(true, 'screen-saver');
   hudWindow.on('closed', () => {
@@ -316,9 +361,15 @@ function driveHud(event: { method: string; params: unknown }): void {
     case 'turn/completed':
     case 'turn/failed':
     case 'turn/aborted': {
+      const label =
+        event.method === 'turn/completed'
+          ? 'Answer ready'
+          : event.method === 'turn/failed'
+            ? 'Request failed'
+            : 'Stopped';
       overlayTurnRunning = false;
       overlayLastActivityAt = Date.now();
-      showHud({ phase: 'finished', label: 'Answer ready' });
+      showHud({ phase: 'finished', label });
       break;
     }
     default:
@@ -629,38 +680,46 @@ function registerIpc(): void {
     hideOverlayWindow();
     showHud({ phase: 'working', label: 'Working…' });
 
-    const continuing = !!prompt.threadId && prompt.threadId === overlayThreadId && !overlayHandedOff;
-    let threadId = continuing ? overlayThreadId! : null;
-    if (!threadId) {
-      threadId = await runtime!.createThread(prompt.model ?? undefined);
-      overlayThreadId = threadId;
-      overlayHandedOff = false;
-      // Optimistic sidebar row so the quickchat thread shows immediately.
-      mainWindow?.webContents.send('quickchat:sessionStarted', {
-        threadId,
-        title: prompt.input.trim() || 'New chat'
-      });
-    }
+    try {
+      const continuing = !!prompt.threadId && prompt.threadId === overlayThreadId && !overlayHandedOff;
+      let threadId = continuing ? overlayThreadId! : null;
+      if (!threadId) {
+        threadId = await runtime!.createThread(prompt.model ?? undefined);
+        overlayThreadId = threadId;
+        overlayHandedOff = false;
+        // Optimistic sidebar row so the quickchat thread shows immediately.
+        mainWindow?.webContents.send('quickchat:sessionStarted', {
+          threadId,
+          title: prompt.input.trim() || 'New chat'
+        });
+      }
 
-    const result = await runtime!.startTurn({
-      input: prompt.input,
-      threadId,
-      model: prompt.model ?? undefined,
-      effort: prompt.effort ?? undefined,
-      serviceTier: prompt.serviceTier,
-      format: prompt.format,
-      // Quick Chat turns honor the Quick Chat native-web-search toggle.
-      webSearch: (await readSettings()).nativeWebSearch.quickChat,
-      attachments: prompt.attachments
-    });
-    overlayLastActivityAt = Date.now();
-    // The memory shortcut ("remember that …") completes with no stream — jump the
-    // HUD straight to finished.
-    if (result.handled) {
+      const result = await runtime!.startTurn({
+        input: prompt.input,
+        threadId,
+        model: prompt.model ?? undefined,
+        effort: prompt.effort ?? undefined,
+        serviceTier: prompt.serviceTier,
+        format: prompt.format,
+        // Quick Chat turns honor the Quick Chat native-web-search toggle.
+        webSearch: (await readSettings()).nativeWebSearch.quickChat,
+        attachments: prompt.attachments
+      });
+      overlayLastActivityAt = Date.now();
+      // The memory shortcut ("remember that …") completes with no stream — jump the
+      // HUD straight to finished.
+      if (result.handled) {
+        overlayTurnRunning = false;
+        showHud({ phase: 'finished', label: 'Answer ready' });
+      }
+      return result;
+    } catch (e) {
       overlayTurnRunning = false;
-      showHud({ phase: 'finished', label: 'Answer ready' });
+      overlayLastActivityAt = Date.now();
+      hideHud();
+      showQuickChat(false);
+      throw e;
     }
-    return result;
   });
 
   // Forget the current overlay thread so the next prompt opens a fresh one.
