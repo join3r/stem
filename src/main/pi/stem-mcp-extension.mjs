@@ -129,13 +129,16 @@ class McpStdioClient {
   }
 }
 
-/** Refresh an expired OAuth access token in place (public client, no PKCE). */
+/** Refresh an expired OAuth access token in place. Confidential clients (with a
+ * stored clientSecret, e.g. Slack) send it via client_secret_post; public clients
+ * just send the client_id. No PKCE on refresh either way. */
 async function refreshOAuth(auth) {
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: auth.refreshToken,
     client_id: auth.clientId
   });
+  if (auth.clientSecret) body.set('client_secret', auth.clientSecret);
   if (auth.resource) body.set('resource', auth.resource);
   const res = await fetch(auth.tokenEndpoint, {
     method: 'POST',
@@ -143,7 +146,10 @@ async function refreshOAuth(auth) {
     body: body.toString()
   });
   if (!res.ok) throw new Error(`token refresh failed: HTTP ${res.status}`);
-  const tok = await res.json();
+  const raw = await res.json();
+  // Standard servers return token fields at top level; Slack may nest them under
+  // `authed_user`. Prefer top-level, else fall back to the wrapper.
+  const tok = typeof raw.access_token === 'string' ? raw : raw.authed_user ?? raw;
   if (!tok.access_token) throw new Error('token refresh returned no access_token');
   auth.accessToken = tok.access_token;
   if (tok.refresh_token) auth.refreshToken = tok.refresh_token;
@@ -468,8 +474,29 @@ function buildServerEntry(params) {
       params && params.headers && typeof params.headers === 'object' && Object.keys(params.headers).length
         ? params.headers
         : undefined;
-    const entry = { url, ...(headers ? { headers } : {}), trusted: true };
-    const input = { name, transport, url, ...(headers ? { headers } : {}) };
+    // Optional static OAuth client for providers without dynamic client
+    // registration (e.g. Slack). Stored on the entry; mcpLogin runs the
+    // confidential-client flow when oauthClientId is present.
+    const oauthClientId = String((params && params.oauthClientId) || '').trim() || undefined;
+    const oauthClientSecret = String((params && params.oauthClientSecret) || '').trim() || undefined;
+    const oauthScope = String((params && params.oauthScope) || '').trim() || undefined;
+    const oauth = {
+      ...(oauthClientId ? { oauthClientId } : {}),
+      ...(oauthClientSecret ? { oauthClientSecret } : {}),
+      ...(oauthScope ? { oauthScope } : {})
+    };
+    const entry = { url, ...(headers ? { headers } : {}), ...oauth, trusted: true };
+    // `input` is shown on the approval card — carry the client id/scope so the
+    // user can verify them, but never surface the secret (show presence only).
+    const input = {
+      name,
+      transport,
+      url,
+      ...(headers ? { headers } : {}),
+      ...(oauthClientId ? { oauthClientId } : {}),
+      ...(oauthScope ? { oauthScope } : {}),
+      ...(oauthClientSecret ? { oauthClientSecret: '********' } : {})
+    };
     return { name, entry, input };
   }
   const command = String((params && params.command) || '').trim();
@@ -516,7 +543,7 @@ function registerAdminTools(pi, cfgPath) {
     name: 'add_mcp_server',
     label: 'Add MCP server',
     description:
-      'Add (or replace) an MCP server so its tools become available. The user must approve the change in the app before it is applied; after approval Stem reloads so the new tools are usable. Use transport "stdio" for a local command (uvx/npx) or "http" for a remote streamable-HTTP URL (optionally with an auth header).',
+      'Add (or replace) an MCP server so its tools become available. The user must approve the change in the app before it is applied; after approval Stem reloads so the new tools are usable. Use transport "stdio" for a local command (uvx/npx) or "http" for a remote streamable-HTTP URL. For a remote server, authenticate it in one of two ways: a static auth header (`headers`), or OAuth — for OAuth providers that lack dynamic client registration (e.g. Slack) supply `oauthClientId`/`oauthClientSecret`/`oauthScope` from a pre-registered provider app; the user then signs in via the browser. Pass OAuth credentials the user gives you here rather than as headers.',
     parameters: {
       type: 'object',
       properties: {
@@ -526,7 +553,10 @@ function registerAdminTools(pi, cfgPath) {
         args: { type: 'array', items: { type: 'string' }, description: 'stdio only: command arguments.' },
         url: { type: 'string', description: 'http only: the streamable-HTTP endpoint.' },
         env: { type: 'object', additionalProperties: { type: 'string' }, description: 'stdio only: environment variables.' },
-        headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'http only: request headers, e.g. {"Authorization": "Bearer …"}.' }
+        headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'http only: request headers, e.g. {"Authorization": "Bearer …"}.' },
+        oauthClientId: { type: 'string', description: 'http only: OAuth client id from a pre-registered provider app, for OAuth servers without dynamic client registration (e.g. Slack). The user signs in via the browser afterward.' },
+        oauthClientSecret: { type: 'string', description: 'http only: OAuth client secret for a confidential client (e.g. Slack). Stored securely (0600); needed alongside oauthClientId.' },
+        oauthScope: { type: 'string', description: 'http only: space-separated OAuth scopes to request; must match what is enabled on the provider app.' }
       },
       required: ['name', 'transport']
     },

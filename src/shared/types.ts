@@ -273,6 +273,16 @@ export interface McpServerInput {
   env?: Record<string, string>;
   /** HTTP headers for a remote server (e.g. `Authorization: Bearer …`). pi backend. */
   headers?: Record<string, string>;
+  /**
+   * OAuth (http only) for servers without dynamic client registration — you
+   * pre-register an app with the provider and supply its credentials. When
+   * `oauthClientId` is set, Stem's sign-in skips DCR and runs the confidential-
+   * client code flow. `oauthScope` is the space/comma-separated scope string
+   * (must match what you enabled on the provider app).
+   */
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  oauthScope?: string;
 }
 
 export interface McpLoginResult {

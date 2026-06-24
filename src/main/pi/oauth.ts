@@ -14,13 +14,29 @@ import { shell } from 'electron';
 // The resulting token (incl. refresh token) is persisted by the caller; the
 // bridge extension injects it as `Authorization: Bearer …` and refreshes it.
 
+// Fixed loopback port for the static-client (confidential) path. Providers like
+// Slack only allow pre-registered redirect URLs, so a random port can never
+// match — the user registers exactly this URL in their provider app. The DCR
+// path keeps a random port (the server registers whatever we send).
+export const STEM_OAUTH_REDIRECT_PORT = 41759;
+
+/** The exact redirect URL to register with a static-client OAuth provider. */
+export function stemOAuthRedirectUri(): string {
+  return `http://127.0.0.1:${STEM_OAUTH_REDIRECT_PORT}/callback`;
+}
+
 export interface OAuthToken {
   /** The MCP resource URL these credentials are scoped to (RFC 8707). */
   resource: string;
   /** Token endpoint, for the bridge's refresh. */
   tokenEndpoint: string;
-  /** The dynamically-registered public client id. */
+  /** The OAuth client id — dynamically registered, or a static pre-registered one. */
   clientId: string;
+  /**
+   * The static client secret, for confidential clients (e.g. Slack). Present only
+   * when the server was configured with one; the bridge sends it on refresh.
+   */
+  clientSecret?: string;
   scope: string;
   accessToken: string;
   refreshToken?: string;
@@ -147,10 +163,16 @@ interface Loopback {
   close: () => void;
 }
 
-/** A one-shot loopback HTTP server that catches the OAuth redirect. */
-function startLoopback(): Promise<Loopback> {
-  return new Promise((resolve) => {
+/**
+ * A one-shot loopback HTTP server that catches the OAuth redirect. `port` 0 (the
+ * default) picks a random free port — used for the DCR path, where the server
+ * registers whatever redirect we send. The static-client path passes a fixed
+ * port so the redirect URL matches the one pre-registered with the provider.
+ */
+function startLoopback(port = 0): Promise<Loopback> {
+  return new Promise((resolve, reject) => {
     const server = createServer();
+    server.on('error', reject); // e.g. EADDRINUSE when the fixed port is taken
     let settle: (v: { code: string | null; state: string | null }) => void;
     let fail: (e: Error) => void;
     const codePromise = new Promise<{ code: string | null; state: string | null }>((res, rej) => {
@@ -174,7 +196,7 @@ function startLoopback(): Promise<Loopback> {
       if (error) fail(new Error(`Authorization was denied (${error}).`));
       else settle({ code: reqUrl.searchParams.get('code'), state: reqUrl.searchParams.get('state') });
     });
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(port, '127.0.0.1', () => {
       const addr = server.address();
       const port = typeof addr === 'object' && addr ? addr.port : 0;
       resolve({
@@ -198,11 +220,34 @@ async function exchangeCode(tokenEndpoint: string, params: Record<string, string
   return (await res.json()) as Record<string, unknown>;
 }
 
+/**
+ * Normalize a token-endpoint response. Standard OAuth servers return the token
+ * fields at the top level; Slack's `oauth.v2.user.access` may instead nest them
+ * under `authed_user`. Prefer a top-level access_token, else fall back to the
+ * wrapper so the static-client path works either way.
+ */
+function normalizeTokenResponse(tok: Record<string, unknown>): Record<string, unknown> {
+  if (typeof tok.access_token === 'string') return tok;
+  const wrapped = tok.authed_user;
+  if (wrapped && typeof wrapped === 'object') return wrapped as Record<string, unknown>;
+  return tok;
+}
+
 export interface AuthorizeOptions {
   /** Called with the authorization URL so the UI can show a click/copy fallback. */
   onAuthUrl?: (url: string) => void;
   /** Overall timeout for the browser round-trip (default 5 min). */
   timeoutMs?: number;
+  /**
+   * A pre-registered client id. When set, the flow skips dynamic client
+   * registration (for providers like Slack that don't support it) and uses a
+   * fixed loopback redirect so the URL matches the provider's registration.
+   */
+  clientId?: string;
+  /** The client secret for a confidential static client (`client_secret_post`). */
+  clientSecret?: string;
+  /** Verbatim scope string for the static-client path (overrides discovery). */
+  scope?: string;
 }
 
 /**
@@ -216,15 +261,25 @@ export async function authorizeMcp(mcpUrl: string, opts: AuthorizeOptions = {}):
   if (!asMeta.authorization_endpoint || !asMeta.token_endpoint) {
     throw new Error('The authorization server is missing its authorize/token endpoints.');
   }
-  if (!asMeta.registration_endpoint) {
-    throw new Error('This server has no dynamic client registration endpoint, so Stem cannot sign in automatically.');
+  // A pre-registered (static) client sidesteps dynamic client registration, which
+  // servers like Slack don't offer.
+  const staticClient = !!opts.clientId;
+  if (!staticClient && !asMeta.registration_endpoint) {
+    throw new Error(
+      "This server has no dynamic client registration endpoint. Register an app with the provider and add its OAuth Client ID (and secret) to this server's settings, then sign in again."
+    );
   }
 
-  const scope = chooseScope(pr.scopes, asMeta.scopes_supported);
-  const loop = await startLoopback();
+  // A static client may carry its own scope (matching what's enabled on the
+  // provider app); otherwise fall back to discovery-derived scopes.
+  const scope = opts.scope?.trim() || chooseScope(pr.scopes, asMeta.scopes_supported);
+  // Static (confidential) clients must use the fixed, pre-registered redirect URL.
+  const loop = await startLoopback(staticClient ? STEM_OAUTH_REDIRECT_PORT : 0);
   const timeout = setTimeout(() => loop.close(), opts.timeoutMs ?? 300_000);
   try {
-    const clientId = await registerClient(asMeta.registration_endpoint, loop.redirectUri, scope);
+    const clientId = staticClient
+      ? opts.clientId!
+      : await registerClient(asMeta.registration_endpoint!, loop.redirectUri, scope);
 
     const verifier = base64url(randomBytes(32));
     const challenge = base64url(createHash('sha256').update(verifier).digest());
@@ -247,20 +302,24 @@ export async function authorizeMcp(mcpUrl: string, opts: AuthorizeOptions = {}):
     if (!code) throw new Error('No authorization code was returned.');
     if (returnedState !== state) throw new Error('OAuth state mismatch — aborting for safety.');
 
-    const tok = await exchangeCode(asMeta.token_endpoint, {
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: loop.redirectUri,
-      client_id: clientId,
-      code_verifier: verifier,
-      resource: pr.resource
-    });
+    const tok = normalizeTokenResponse(
+      await exchangeCode(asMeta.token_endpoint, {
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: loop.redirectUri,
+        client_id: clientId,
+        code_verifier: verifier,
+        resource: pr.resource,
+        ...(opts.clientSecret ? { client_secret: opts.clientSecret } : {})
+      })
+    );
     if (typeof tok.access_token !== 'string') throw new Error('The token response had no access_token.');
 
     return {
       resource: pr.resource,
       tokenEndpoint: asMeta.token_endpoint,
       clientId,
+      ...(opts.clientSecret ? { clientSecret: opts.clientSecret } : {}),
       scope,
       accessToken: tok.access_token,
       refreshToken: typeof tok.refresh_token === 'string' ? tok.refresh_token : undefined,

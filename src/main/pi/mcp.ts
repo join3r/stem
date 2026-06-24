@@ -30,7 +30,15 @@ export async function listMcpServers(): Promise<McpServerSummary[]> {
       // bridge reports live connection status: a stored OAuth token or a static
       // auth header both count as credentials-on-disk.
       const hasHeaderAuth = !!def.headers && Object.keys(def.headers).length > 0;
-      const authStatus = url ? (oauth[name] ? 'o_auth' : hasHeaderAuth ? 'bearer_token' : undefined) : undefined;
+      const authStatus = url
+        ? oauth[name]
+          ? 'o_auth'
+          : hasHeaderAuth
+            ? 'bearer_token'
+            : def.oauthClientId
+              ? 'o_auth' // static OAuth client configured but not yet signed in
+              : undefined
+        : undefined;
       return {
         name,
         transport: url ? 'http' : 'stdio',
@@ -53,9 +61,22 @@ export async function addMcpServer(input: McpServerInput): Promise<McpServerSumm
     const url = input.url?.trim();
     if (!url) throw new Error('A remote MCP server requires a URL.');
     const headers = input.headers && Object.keys(input.headers).length > 0 ? input.headers : undefined;
+    // Optional static OAuth client (for providers without dynamic registration,
+    // e.g. Slack). Stored alongside the server; mcpLogin runs the confidential-
+    // client flow when a client id is present.
+    const oauthClientId = input.oauthClientId?.trim() || undefined;
+    const oauthClientSecret = input.oauthClientSecret?.trim() || undefined;
+    const oauthScope = input.oauthScope?.trim() || undefined;
     // A user explicitly adding a server implies trust → its tools run without a
     // per-call confirmation (standard MCP-host behavior).
-    config.servers[name] = { url, ...(headers ? { headers } : {}), trusted: true };
+    config.servers[name] = {
+      url,
+      ...(headers ? { headers } : {}),
+      ...(oauthClientId ? { oauthClientId } : {}),
+      ...(oauthClientSecret ? { oauthClientSecret } : {}),
+      ...(oauthScope ? { oauthScope } : {}),
+      trusted: true
+    };
   } else {
     const command = input.command?.trim();
     if (!command) throw new Error('A local MCP server requires a command.');

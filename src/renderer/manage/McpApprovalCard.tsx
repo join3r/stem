@@ -56,6 +56,24 @@ export function McpApprovalCard() {
               <>
                 <dt>URL</dt>
                 <dd>{input.url || <em>—</em>}</dd>
+                {input.oauthClientId && (
+                  <>
+                    <dt>OAuth Client ID</dt>
+                    <dd><code>{input.oauthClientId}</code></dd>
+                  </>
+                )}
+                {input.oauthScope && (
+                  <>
+                    <dt>OAuth Scopes</dt>
+                    <dd>{input.oauthScope}</dd>
+                  </>
+                )}
+                {input.oauthClientSecret && (
+                  <>
+                    <dt>OAuth Client Secret</dt>
+                    <dd><em>provided</em></dd>
+                  </>
+                )}
               </>
             ) : (
               <>

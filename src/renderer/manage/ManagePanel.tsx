@@ -818,6 +818,11 @@ function McpTab() {
   const [args, setArgs] = useState('');
   const [url, setUrl] = useState('');
   const [envText, setEnvText] = useState('');
+  // Optional static OAuth client for remote servers without dynamic registration
+  // (e.g. Slack): you pre-register an app with the provider and paste its creds.
+  const [oauthClientId, setOauthClientId] = useState('');
+  const [oauthClientSecret, setOauthClientSecret] = useState('');
+  const [oauthScope, setOauthScope] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [loginName, setLoginName] = useState<string | null>(null);
@@ -909,7 +914,10 @@ function McpTab() {
         args: args.trim() ? args.trim().split(/\s+/) : [],
         url: url.trim(),
         ...(Object.keys(env).length > 0 ? { env } : {}),
-        ...(Object.keys(headers).length > 0 ? { headers } : {})
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+        ...(transport === 'http' && oauthClientId.trim() ? { oauthClientId: oauthClientId.trim() } : {}),
+        ...(transport === 'http' && oauthClientSecret.trim() ? { oauthClientSecret: oauthClientSecret.trim() } : {}),
+        ...(transport === 'http' && oauthScope.trim() ? { oauthScope: oauthScope.trim() } : {})
       });
       setServers(list);
       setName('');
@@ -917,6 +925,9 @@ function McpTab() {
       setArgs('');
       setUrl('');
       setEnvText('');
+      setOauthClientId('');
+      setOauthClientSecret('');
+      setOauthScope('');
       await reconnect();
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -1080,6 +1091,32 @@ function McpTab() {
               value={envText}
               onChange={(e) => setEnvText(e.target.value)}
             />
+            <div className="grp-head">OAuth sign-in (optional)</div>
+            <input
+              className="ifield"
+              placeholder="OAuth Client ID — for providers without auto-registration (e.g. Slack)"
+              value={oauthClientId}
+              onChange={(e) => setOauthClientId(e.target.value)}
+            />
+            <input
+              className="ifield"
+              type="password"
+              placeholder="OAuth Client Secret (if the provider is a confidential client)"
+              value={oauthClientSecret}
+              onChange={(e) => setOauthClientSecret(e.target.value)}
+            />
+            <input
+              className="ifield"
+              placeholder="OAuth Scopes (space-separated, must match the provider app)"
+              value={oauthScope}
+              onChange={(e) => setOauthScope(e.target.value)}
+            />
+            {oauthClientId.trim() && (
+              <p className="muted">
+                Register this exact redirect URL in the provider app:{' '}
+                <code>http://127.0.0.1:41759/callback</code>
+              </p>
+            )}
           </>
         ) : (
           <>

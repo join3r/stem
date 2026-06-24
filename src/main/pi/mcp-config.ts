@@ -19,6 +19,16 @@ export interface PiMcpServer {
   /** remote transport (HTTP/OAuth) — recognized but not yet connected by the bridge */
   url?: string;
   headers?: Record<string, string>;
+  /**
+   * Static OAuth client for remote servers that lack dynamic client registration
+   * (e.g. Slack). When `oauthClientId` is present, mcpLogin runs the confidential-
+   * client code flow instead of auto-registering. `oauthScope` is the requested
+   * scope string (verbatim); the secret is needed because these servers are
+   * confidential clients (`client_secret_post`).
+   */
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  oauthScope?: string;
   /** Stem-internal servers run without per-call confirmation. */
   trusted?: boolean;
   disabled?: boolean;

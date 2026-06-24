@@ -578,7 +578,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (!server) return { ok: false, error: `No MCP server named "${name}".` };
       if (!server.url) return { ok: false, error: 'Only remote (http) servers use OAuth sign-in.' };
       const token = await authorizeMcp(server.url, {
-        onAuthUrl: (url) => this.emitEvent('mcp/login/url', { name, url })
+        onAuthUrl: (url) => this.emitEvent('mcp/login/url', { name, url }),
+        // Static confidential-client credentials, when the server was configured
+        // with them (providers without dynamic client registration, e.g. Slack).
+        clientId: server.oauthClientId,
+        clientSecret: server.oauthClientSecret,
+        scope: server.oauthScope
       });
       await saveOAuthToken(name, token);
       return { ok: true };
