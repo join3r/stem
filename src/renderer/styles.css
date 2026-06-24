@@ -698,7 +698,6 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   display: flex;
   justify-content: center;
   padding: 9px;
-  border-bottom: 0.5px solid var(--line);
   position: sticky;
   top: 0;
   background: var(--panel);
@@ -740,8 +739,9 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 /* Disabled server: still listed (config + token kept) but the bridge skips it. */
 .group-row.disabled .row-icon, .group-row.disabled .row-main { opacity: 0.5; }
 .row-icon { width: 24px; height: 24px; border-radius: var(--radius); display: flex; align-items: center; justify-content: center; color: #fff; flex: none; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25); }
-.row-icon.remote { background: #2b6cb0; }
-.row-icon.local { background: #9a6230; }
+/* MCP transport icons: quiet glyphs (globe = remote, hard-drive = local) rather
+   than loud filled tiles — the shape carries the meaning, like the chat list. */
+.row-icon.remote, .row-icon.local { background: transparent; color: var(--muted); box-shadow: none; }
 .row-main { flex: 1; min-width: 0; }
 .row-main strong { display: block; font-size: var(--fs-13); font-weight: 500; }
 .row-main em { font-style: normal; font-size: var(--fs-11); color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -749,6 +749,13 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .pill { font-size: var(--fs-10); font-weight: 600; padding: 2px 8px; border-radius: var(--radius-pill); white-space: nowrap; }
 .pill.ok { background: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
 .pill.off { background: color-mix(in srgb, var(--muted) 22%, transparent); color: var(--muted); }
+
+/* Connection status dot — a quiet green circle says "running fine" without a pill. */
+.mcp-dot { flex: none; width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--success); }
+.mcp-dot.pending { background: var(--warn); animation: stem-dot-pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .mcp-dot.pending { animation: none; opacity: 0.8; }
+}
 
 /* table-footer +/- gutter */
 .gutter { display: inline-flex; margin-top: 7px; border: 0.5px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05); }
@@ -759,6 +766,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 
 /* ---- chat list (inspector tab) ---- */
 .chats-panel .grp-head { display: flex; align-items: center; justify-content: space-between; }
+.grp-head-actions { display: inline-flex; align-items: center; gap: var(--sp-1); }
 .grp-head-add { border: none; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; display: inline-flex; align-items: center; }
 .grp-head-add:hover { color: var(--ink); }
 /* hover-revealed per-row action (e.g. New chat on a folder row) */

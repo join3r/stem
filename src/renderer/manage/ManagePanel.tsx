@@ -687,7 +687,6 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
               onChange={(id) => onSelectModel(id ?? '')}
               ariaLabel="Model"
             />
-            {selectedModel?.description && <p className="muted">{selectedModel.description}</p>}
             {selectedModel?.supportsNativeWebSearch && (
               <label className="set-check" title="Search the live web for current info, with citations">
                 <input
@@ -1073,9 +1072,11 @@ function McpTab() {
                     {signInLabel(s.name, state)}
                   </button>
                 ) : remote ? (
-                  <span className={`pill ${state === 'pending' ? 'off' : 'ok'}`}>
-                    {state === 'pending' ? 'Connecting…' : 'Connected'}
-                  </span>
+                  <span
+                    className={`mcp-dot${state === 'pending' ? ' pending' : ''}`}
+                    title={state === 'pending' ? 'Connecting…' : 'Connected'}
+                    aria-label={state === 'pending' ? 'Connecting' : 'Connected'}
+                  />
                 ) : (
                   <span className="pill off">Local</span>
                 )}

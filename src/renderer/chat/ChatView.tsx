@@ -219,6 +219,20 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   const streamingMsg = messages.find((m) => m.id === streamingId);
   const showActivity = running && !(streamingMsg && streamingMsg.content);
 
+  // The pulsing-dots "Thinking…" indicator. It lives inside the assistant bubble
+  // while that turn has no text yet (so there's a single Stem row, not two), and
+  // only stands alone in the brief window before the bubble even exists.
+  const activityIndicator = (
+    <div className="activity" role="status" aria-live="polite">
+      <span className="activity-dots" aria-hidden="true">
+        <span className="activity-dot" />
+        <span className="activity-dot" />
+        <span className="activity-dot" />
+      </span>
+      <span className="activity-label">{activity ?? 'Working…'}</span>
+    </div>
+  );
+
   // Bridge for interactive MDX components (Quiz/Form): submitting routes through the
   // normal send path, so it appears as a user message just like typing would.
   const mdxActions = useMemo(
@@ -290,6 +304,8 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                   </div>
                 ) : renderRich ? (
                   <MdxView text={m.content} />
+                ) : isStreaming && !m.content && showActivity ? (
+                  activityIndicator
                 ) : (
                   <div className="message-plain">{m.content}</div>
                 )}
@@ -348,19 +364,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             </div>
           );
         })}
-        {showActivity && (
-          <div className="message message-assistant activity-row" role="status" aria-live="polite">
+        {showActivity && !streamingMsg && (
+          <div className="message message-assistant activity-row">
             <div className="msg-avatar stem">{AVATAR.assistant.icon}</div>
-            <div className="message-body">
-              <div className="activity">
-                <span className="activity-dots" aria-hidden="true">
-                  <span className="activity-dot" />
-                  <span className="activity-dot" />
-                  <span className="activity-dot" />
-                </span>
-                <span className="activity-label">{activity ?? 'Working…'}</span>
-              </div>
-            </div>
+            <div className="message-body">{activityIndicator}</div>
           </div>
         )}
         <div ref={endRef} />

@@ -262,13 +262,22 @@ export function ChatList(props: ChatListProps) {
     <div className="chats-panel">
       <div className="grp-head chats-head">
         <span>Chats</span>
-        <button
-          className="grp-head-add"
-          title="New folder"
-          onClick={() => setCreating({ parentId: null, value: '' })}
-        >
-          <FolderPlus size={14} />
-        </button>
+        <span className="grp-head-actions">
+          <button
+            className="grp-head-add"
+            title="New thread"
+            onClick={() => props.onNewChat(null)}
+          >
+            <SquarePen size={14} />
+          </button>
+          <button
+            className="grp-head-add"
+            title="New folder"
+            onClick={() => setCreating({ parentId: null, value: '' })}
+          >
+            <FolderPlus size={14} />
+          </button>
+        </span>
       </div>
       <div
         className={`group chats-group${dropTarget === 'root' ? ' drop-target' : ''}`}
