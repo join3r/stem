@@ -586,9 +586,9 @@ export default function App() {
           <h1>Stem</h1>
           {status.authenticated === false ? (
             <>
-              <p>Sign in with your ChatGPT subscription to continue.</p>
+              <p>Sign in with your Claude subscription to continue.</p>
               <button className="primary" onClick={signIn} disabled={signingIn}>
-                {signingIn ? 'Waiting for browser…' : 'Sign in with ChatGPT'}
+                {signingIn ? 'Waiting for browser…' : 'Sign in with Claude'}
               </button>
               {status.loginCommand && <code className="login-cmd">{status.loginCommand}</code>}
             </>
@@ -666,7 +666,7 @@ export default function App() {
       </button>
       <div className="toolbar-title">
         <strong>Stem</strong>
-        <span>ChatGPT subscription</span>
+        <span>{selectedModel ? selectedModel.displayName : 'Claude'}</span>
       </div>
       <div className="toolbar-spacer" />
       <button
