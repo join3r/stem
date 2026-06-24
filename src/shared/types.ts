@@ -247,6 +247,12 @@ export interface McpServerSummary {
   url: string;
   /** Raw `auth_status` from the backend's MCP listing, when reported (e.g. 'o_auth'). */
   authStatus?: string;
+  /**
+   * Whether the server is connected on (re)start. A disabled server stays in
+   * `mcp.json` (config + OAuth token preserved) but the bridge skips it. Derived
+   * from `!def.disabled`.
+   */
+  enabled: boolean;
 }
 
 /**
@@ -558,6 +564,8 @@ export interface StemApi {
   getMcpStatus(): Promise<Record<string, McpServerStatus>>;
   addMcpServer(input: McpServerInput): Promise<McpServerSummary[]>;
   removeMcpServer(name: string): Promise<McpServerSummary[]>;
+  /** Enable/disable a server without removing it (preserves config + OAuth token). */
+  setMcpServerEnabled(name: string, enabled: boolean): Promise<McpServerSummary[]>;
   loginMcpServer(name: string): Promise<McpLoginResult>;
   restartRuntime(): Promise<RuntimeStatus>;
   /** Assistant proposed an MCP change; fired so the UI can show a confirm card. */

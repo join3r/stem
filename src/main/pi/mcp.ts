@@ -45,7 +45,8 @@ export async function listMcpServers(): Promise<McpServerSummary[]> {
         command: def.command ?? '',
         args: Array.isArray(def.args) ? def.args : [],
         url,
-        authStatus
+        authStatus,
+        enabled: !def.disabled
       } satisfies McpServerSummary;
     });
 }
@@ -83,6 +84,23 @@ export async function addMcpServer(input: McpServerInput): Promise<McpServerSumm
     const env = input.env && Object.keys(input.env).length > 0 ? input.env : undefined;
     config.servers[name] = { command, args: input.args ?? [], ...(env ? { env } : {}), trusted: true };
   }
+  await writeMcpConfig(config);
+  return listMcpServers();
+}
+
+/**
+ * Toggle a server on/off without removing it. A disabled server stays in
+ * `mcp.json` (and keeps its OAuth token) but the bridge skips connecting it
+ * (`stem-mcp-extension.mjs`: `if (spec.disabled) continue;`). Re-enabling deletes
+ * the key rather than writing `disabled:false`, keeping the file minimal.
+ */
+export async function setMcpServerEnabled(name: string, enabled: boolean): Promise<McpServerSummary[]> {
+  if (RESERVED_NAMES.has(name)) throw new Error(`"${name}" is a reserved Stem server name.`);
+  const config = await readMcpConfig();
+  const def = config.servers[name];
+  if (!def) throw new Error(`No MCP server named "${name}".`);
+  if (enabled) delete def.disabled;
+  else def.disabled = true;
   await writeMcpConfig(config);
   return listMcpServers();
 }

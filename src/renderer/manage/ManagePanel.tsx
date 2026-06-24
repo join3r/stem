@@ -840,6 +840,11 @@ function McpTab() {
   // the token is rejected at connect time and the server exposes no tools.
   const [statuses, setStatuses] = useState<Record<string, McpServerStatus>>({});
   const [selected, setSelected] = useState<string | null>(null);
+  // The Add Server form is collapsed by default — the + button reveals it — so the
+  // panel stays calm when you're just reviewing servers. `showAdvanced` hides headers
+  // and the static OAuth client fields behind a disclosure (most adds are Name + URL).
+  const [adding, setAdding] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
   async function refresh() {
@@ -870,6 +875,11 @@ function McpTab() {
     });
   }, []);
 
+  // Focus the Name field once the form has mounted (the + button opens it).
+  useEffect(() => {
+    if (adding) nameRef.current?.focus();
+  }, [adding]);
+
   // Apply config/token changes to the live session without an app restart.
   async function reconnect() {
     setBusy('Reconnecting…');
@@ -882,6 +892,21 @@ function McpTab() {
 
   const canAdd =
     !!name.trim() && (transport === 'http' ? !!url.trim() : !!command.trim()) && !busy;
+
+  // Collapse the Add Server form and reset every field + disclosure to a clean slate.
+  function closeForm() {
+    setAdding(false);
+    setShowAdvanced(false);
+    setName('');
+    setCommand('');
+    setArgs('');
+    setUrl('');
+    setEnvText('');
+    setOauthClientId('');
+    setOauthClientSecret('');
+    setOauthScope('');
+    setError(null);
+  }
 
   // Parse the env textarea ("KEY=value" per line) into a map; blank/`#` lines skipped.
   function parseEnv(text: string): Record<string, string> {
@@ -927,14 +952,7 @@ function McpTab() {
         ...(transport === 'http' && oauthScope.trim() ? { oauthScope: oauthScope.trim() } : {})
       });
       setServers(list);
-      setName('');
-      setCommand('');
-      setArgs('');
-      setUrl('');
-      setEnvText('');
-      setOauthClientId('');
-      setOauthClientSecret('');
-      setOauthScope('');
+      closeForm();
       await reconnect();
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -950,6 +968,14 @@ function McpTab() {
       delete next[serverName];
       return next;
     });
+    await reconnect();
+  }
+
+  // Toggle a server on/off without removing it. The bridge only reads mcp.json on
+  // (re)start, so a reconnect is required for the change to take effect.
+  async function toggleEnabled(serverName: string, enabled: boolean) {
+    setError(null);
+    setServers(await window.stem.setMcpServerEnabled(serverName, enabled));
     await reconnect();
   }
 
@@ -1003,7 +1029,7 @@ function McpTab() {
         <div className="group">
           <div className="group-row">
             <span className="row-main">
-              <em>No servers yet. Add one below.</em>
+              <em>No servers yet. Add one with the + button.</em>
             </span>
           </div>
         </div>
@@ -1017,7 +1043,7 @@ function McpTab() {
             return (
               <div
                 key={s.name}
-                className={`group-row${selected === s.name ? ' selected' : ''}`}
+                className={`group-row${selected === s.name ? ' selected' : ''}${s.enabled ? '' : ' disabled'}`}
                 onClick={() => setSelected(s.name)}
               >
                 <span className={`row-icon ${remote ? 'remote' : 'local'}`}>
@@ -1025,15 +1051,17 @@ function McpTab() {
                 </span>
                 <span className="row-main">
                   <strong>{s.name}</strong>
-                  <em title={state === 'failed' ? error : undefined} className={state === 'failed' ? 'mcp-failed' : undefined}>
-                    {state === 'failed'
+                  <em title={s.enabled && state === 'failed' ? error : undefined} className={s.enabled && state === 'failed' ? 'mcp-failed' : undefined}>
+                    {s.enabled && state === 'failed'
                       ? 'Connection failed — sign in again.'
                       : remote
                         ? s.url
                         : `${s.command} ${s.args.join(' ')}`.trim()}
                   </em>
                 </span>
-                {remote && needsLogin ? (
+                {!s.enabled ? (
+                  <span className="pill off">Disabled</span>
+                ) : remote && needsLogin ? (
                   <button
                     className="push"
                     onClick={(e) => {
@@ -1051,13 +1079,25 @@ function McpTab() {
                 ) : (
                   <span className="pill off">Local</span>
                 )}
+                <button
+                  className={`switch${s.enabled ? ' on' : ''}`}
+                  role="switch"
+                  aria-checked={s.enabled}
+                  aria-label={`${s.name} enabled`}
+                  title={s.enabled ? 'Disable server' : 'Enable server'}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleEnabled(s.name, !s.enabled);
+                  }}
+                  disabled={!!busy || !!loginName}
+                />
               </div>
             );
           })}
         </div>
       )}
       <div className="gutter">
-        <button title="Add server" onClick={() => nameRef.current?.focus()}>
+        <button title="Add server" onClick={() => (adding ? nameRef.current?.focus() : setAdding(true))}>
           <Plus size={15} />
         </button>
         <button
@@ -1077,78 +1117,106 @@ function McpTab() {
       )}
       {busy && <p className="muted">{busy}</p>}
 
-      <div className="grp-head">Add Server</div>
-      <div className="formgroup">
-        <div className="seg-ctl">
-          <button className={transport === 'http' ? 'active' : ''} onClick={() => setTransport('http')}>
-            Remote
-          </button>
-          <button className={transport === 'stdio' ? 'active' : ''} onClick={() => setTransport('stdio')}>
-            Local
-          </button>
-        </div>
-        <input ref={nameRef} className="ifield" placeholder="Name (e.g. fastmail)" value={name} onChange={(e) => setName(e.target.value)} />
-        {transport === 'http' ? (
-          <>
-            <input className="ifield" placeholder="https://api.fastmail.com/mcp" value={url} onChange={(e) => setUrl(e.target.value)} />
-            <textarea
-              className="ifield"
-              placeholder="headers (optional), one per line — e.g. Authorization: Bearer …"
-              rows={2}
-              value={envText}
-              onChange={(e) => setEnvText(e.target.value)}
-            />
-            <div className="grp-head">OAuth sign-in (optional)</div>
-            <input
-              className="ifield"
-              placeholder="OAuth Client ID — for providers without auto-registration (e.g. Slack)"
-              value={oauthClientId}
-              onChange={(e) => setOauthClientId(e.target.value)}
-            />
-            <input
-              className="ifield"
-              type="password"
-              placeholder="OAuth Client Secret (if the provider is a confidential client)"
-              value={oauthClientSecret}
-              onChange={(e) => setOauthClientSecret(e.target.value)}
-            />
-            <input
-              className="ifield"
-              placeholder="OAuth Scopes (space-separated, must match the provider app)"
-              value={oauthScope}
-              onChange={(e) => setOauthScope(e.target.value)}
-            />
-            {oauthClientId.trim() && (
+      {adding && (
+        <>
+          <div className="grp-head">Add Server</div>
+          <div className="formgroup">
+            <div className="seg-ctl">
+              <button className={transport === 'http' ? 'active' : ''} onClick={() => setTransport('http')}>
+                Remote
+              </button>
+              <button className={transport === 'stdio' ? 'active' : ''} onClick={() => setTransport('stdio')}>
+                Local
+              </button>
+            </div>
+            <input ref={nameRef} className="ifield" placeholder="Name (e.g. fastmail)" value={name} onChange={(e) => setName(e.target.value)} />
+            {transport === 'http' ? (
+              <>
+                <input className="ifield" placeholder="https://api.fastmail.com/mcp" value={url} onChange={(e) => setUrl(e.target.value)} />
+                <button
+                  className="memory-view-toggle"
+                  aria-expanded={showAdvanced}
+                  onClick={() => setShowAdvanced((v) => !v)}
+                >
+                  <ChevronRight size={14} className={showAdvanced ? 'open' : ''} />
+                  <strong>Advanced — headers, OAuth client</strong>
+                </button>
+                {showAdvanced && (
+                  <>
+                    <textarea
+                      className="ifield"
+                      placeholder="headers (optional), one per line — e.g. Authorization: Bearer …"
+                      rows={2}
+                      value={envText}
+                      onChange={(e) => setEnvText(e.target.value)}
+                    />
+                    <div className="grp-head">OAuth sign-in (optional)</div>
+                    <input
+                      className="ifield"
+                      placeholder="OAuth Client ID — for providers without auto-registration (e.g. Slack)"
+                      value={oauthClientId}
+                      onChange={(e) => setOauthClientId(e.target.value)}
+                    />
+                    <input
+                      className="ifield"
+                      type="password"
+                      placeholder="OAuth Client Secret (if the provider is a confidential client)"
+                      value={oauthClientSecret}
+                      onChange={(e) => setOauthClientSecret(e.target.value)}
+                    />
+                    <input
+                      className="ifield"
+                      placeholder="OAuth Scopes (space-separated, must match the provider app)"
+                      value={oauthScope}
+                      onChange={(e) => setOauthScope(e.target.value)}
+                    />
+                    {oauthClientId.trim() && (
+                      <p className="muted">
+                        Register this exact redirect URL in the provider app:{' '}
+                        <code>http://127.0.0.1:41759/callback</code>
+                      </p>
+                    )}
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <input className="ifield" placeholder="command (e.g. npx)" value={command} onChange={(e) => setCommand(e.target.value)} />
+                <input className="ifield" placeholder="args (space-separated)" value={args} onChange={(e) => setArgs(e.target.value)} />
+                <button
+                  className="memory-view-toggle"
+                  aria-expanded={showAdvanced}
+                  onClick={() => setShowAdvanced((v) => !v)}
+                >
+                  <ChevronRight size={14} className={showAdvanced ? 'open' : ''} />
+                  <strong>Advanced — environment variables</strong>
+                </button>
+                {showAdvanced && (
+                  <textarea
+                    className="ifield"
+                    placeholder="env (optional), one KEY=value per line"
+                    rows={2}
+                    value={envText}
+                    onChange={(e) => setEnvText(e.target.value)}
+                  />
+                )}
+              </>
+            )}
+            <div className="push-row">
+              <button className="push" onClick={closeForm} disabled={!!busy}>Cancel</button>
+              <button className="push default" onClick={add} disabled={!canAdd}>Add Server</button>
+            </div>
+            {transport === 'http' && (
               <p className="muted">
-                Register this exact redirect URL in the provider app:{' '}
-                <code>http://127.0.0.1:41759/callback</code>
+                Most remote servers just need a name and URL — add it, then use “Sign in” to authorize
+                via OAuth where supported. For a static token, add an <code>Authorization: Bearer …</code>{' '}
+                header under Advanced.
               </p>
             )}
-          </>
-        ) : (
-          <>
-            <input className="ifield" placeholder="command (e.g. npx)" value={command} onChange={(e) => setCommand(e.target.value)} />
-            <input className="ifield" placeholder="args (space-separated)" value={args} onChange={(e) => setArgs(e.target.value)} />
-            <textarea
-              className="ifield"
-              placeholder="env (optional), one KEY=value per line"
-              rows={2}
-              value={envText}
-              onChange={(e) => setEnvText(e.target.value)}
-            />
-          </>
-        )}
-        <div className="push-row">
-          <button className="push default" onClick={add} disabled={!canAdd}>Add Server</button>
-        </div>
-        {transport === 'http' && (
-          <p className="muted">
-            Add an auth header (e.g. <code>Authorization: Bearer …</code>) above, or leave blank and use
-            “Sign in” to authorize via OAuth where supported.
-          </p>
-        )}
-        {error && <p className="error">{error}</p>}
-      </div>
+            {error && <p className="error">{error}</p>}
+          </div>
+        </>
+      )}
     </div>
   );
 }

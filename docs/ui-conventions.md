@@ -19,7 +19,7 @@ Build UI by composing the class names below, not by inventing new layout.
 | `.muted` | Secondary helper text (12px, muted) | One short explanatory line under a control. |
 | `.memory-view` | Section divided off by a top border | The "stored data" area of a memory tab (head + actions + body). |
 | `.memory-view-head` + `.memory-view-actions` + `.link-btn` | Section header with right-aligned text actions | "Stored memory" / "Episodic recall" headers with Refresh / Tidy up. |
-| `.memory-view-toggle` | Chevron disclosure header (`ChevronRight` + `svg.open` rotate) | Collapsible section headers; show a count in the label when collapsed. |
+| `.memory-view-toggle` | Chevron disclosure header (`ChevronRight` + `svg.open` rotate) | Collapsible section headers; show a count in the label when collapsed. Renders **recessive — muted color, normal weight (400)**, subtler than body text, brightening to `--ink` on hover. A disclosure is a quiet affordance, not a heading; never bold. |
 | `.memory-reset` / `.memory-reset-trigger` | Understated, bottom-tucked destructive action | Reset / erase, with an inline confirm step before acting. |
 
 ## Rules

@@ -542,6 +542,9 @@ function registerIpc(): void {
   ipcMain.handle('mcp:status', () => runtime!.getMcpStatus());
   ipcMain.handle('mcp:add', (_e, input: McpServerInput) => piMcp.addMcpServer(input));
   ipcMain.handle('mcp:remove', (_e, name: string) => piMcp.removeMcpServer(name));
+  ipcMain.handle('mcp:setEnabled', (_e, name: string, enabled: boolean) =>
+    piMcp.setMcpServerEnabled(name, enabled)
+  );
   ipcMain.handle('mcp:login', (_e, name: string) => runtime!.mcpLogin(name));
   ipcMain.handle('mcp:adminDecision', (_e, id: number | string, accept: boolean) => {
     runtime!.resolveAdminApproval(id, accept);
