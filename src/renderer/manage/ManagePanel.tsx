@@ -52,7 +52,6 @@ const EPISODIC_PRESETS: { label: string; bytes: number }[] = [
   { label: '50 MB', bytes: 50 * MB },
   { label: '100 MB', bytes: 100 * MB },
   { label: '250 MB', bytes: 250 * MB },
-  { label: '500 MB', bytes: 500 * MB },
   { label: 'Unlimited', bytes: 0 }
 ];
 
@@ -171,21 +170,23 @@ function EpisodicTab() {
   return (
     <div>
       {settings && (
-        <div className="set-block">
-          <span className="set-sub">Storage limit</span>
-          <div className="seg-ctl">
-            {EPISODIC_PRESETS.map((p) => (
-              <button
-                key={p.label}
-                className={settings.episodicLimitBytes === p.bytes ? 'active' : ''}
-                onClick={() => selectLimit(p.bytes)}
-                title={p.bytes === 0 ? 'Never prune episodic recall' : `Keep episodic recall under ${p.label}`}
-              >
-                {p.label}
-              </button>
-            ))}
+        <div className="formgroup">
+          <div className="set-block">
+            <span className="set-sub">Storage limit</span>
+            <div className="seg-ctl">
+              {EPISODIC_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  className={settings.episodicLimitBytes === p.bytes ? 'active' : ''}
+                  onClick={() => selectLimit(p.bytes)}
+                  title={p.bytes === 0 ? 'Never prune episodic recall' : `Keep episodic recall under ${p.label}`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <p className="muted">When the store grows past this, Stem drops the oldest messages first.</p>
           </div>
-          <p className="muted">When the store grows past this, Stem drops the oldest messages first.</p>
         </div>
       )}
 
@@ -247,6 +248,7 @@ function FactsTab({ models }: { models: ModelSummary[] }) {
   const [settings, setSettings] = useState<MemorySettings | null>(null);
   const [contents, setContents] = useState<MemoryContents | null>(null);
   const [showTech, setShowTech] = useState(false);
+  const [showMemories, setShowMemories] = useState(false);
   const [consolidating, setConsolidating] = useState(false);
   const [consolidateMsg, setConsolidateMsg] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -353,28 +355,34 @@ function FactsTab({ models }: { models: ModelSummary[] }) {
           ariaLabel="Memory model"
         />
         <p className="muted">Used to distill and tidy up memories in the background.</p>
-      </div>
-
-      <div className="set-block">
-        <span className="set-sub">Tidy up automatically</span>
-        <div className="seg-ctl">
-          {TIDY_PRESETS.map((p) => (
-            <button
-              key={p.label}
-              className={settings.tidyThreshold === p.value ? 'active' : ''}
-              onClick={() => selectTidyThreshold(p.value)}
-              title={`Tidy up ${p.hint}`}
-            >
-              {p.label}
-            </button>
-          ))}
+        <div className="set-block fg-divider">
+          <span className="set-sub">Tidy up automatically</span>
+          <div className="seg-ctl">
+            {TIDY_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                className={settings.tidyThreshold === p.value ? 'active' : ''}
+                onClick={() => selectTidyThreshold(p.value)}
+                title={`Tidy up ${p.hint}`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <p className="muted">Stem merges duplicates and drops stale facts once this many new ones accumulate.</p>
         </div>
-        <p className="muted">Stem merges duplicates and drops stale facts once this many new ones accumulate.</p>
       </div>
 
       <div className="memory-view">
         <div className="memory-view-head">
-          <strong>Stored memory</strong>
+          <button
+            className="memory-view-toggle"
+            aria-expanded={showMemories}
+            onClick={() => setShowMemories((v) => !v)}
+          >
+            <ChevronRight size={14} className={showMemories ? 'open' : ''} />
+            <strong>Stored memory{notes.length ? ` (${notes.length})` : ''}</strong>
+          </button>
           <span className="memory-view-actions">
             <button
               className="link-btn"
@@ -389,27 +397,28 @@ function FactsTab({ models }: { models: ModelSummary[] }) {
         </div>
         {consolidateMsg && <p className="muted">{consolidateMsg}</p>}
         {!contents && <p className="muted">Loading…</p>}
-        {contents && notes.length === 0 && (
+        {showMemories && contents && notes.length === 0 && (
           <p className="muted">No memories stored yet — Stem builds these as you chat.</p>
         )}
-        {notes.map((f) => (
-          <div key={f.name} className="memory-note">
-            <div className="memory-note-body">
-              {f.statement ? <p className="statement">{f.statement}</p> : <MdxView text={f.content} />}
-              {f.source && <span className="chip">{f.source}</span>}
+        {showMemories &&
+          notes.map((f) => (
+            <div key={f.name} className="memory-note">
+              <div className="memory-note-body">
+                {f.statement ? <p className="statement">{f.statement}</p> : <MdxView text={f.content} />}
+                {f.source && <span className="chip">{f.source}</span>}
+              </div>
+              {f.id != null && (
+                <button
+                  className="memory-note-forget"
+                  title="Forget this"
+                  aria-label="Forget this memory"
+                  onClick={() => forget(f.id!)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
             </div>
-            {f.id != null && (
-              <button
-                className="memory-note-forget"
-                title="Forget this"
-                aria-label="Forget this memory"
-                onClick={() => forget(f.id!)}
-              >
-                <Trash2 size={14} />
-              </button>
-            )}
-          </div>
-        ))}
+          ))}
 
         {techFiles.length > 0 && (
           <div className="memory-tech">
@@ -430,8 +439,6 @@ function FactsTab({ models }: { models: ModelSummary[] }) {
               ))}
           </div>
         )}
-
-        {contents && <p className="muted memory-path">{contents.dir}</p>}
 
         {(notes.length > 0 || techFiles.length > 0) && (
           <div className="memory-reset">

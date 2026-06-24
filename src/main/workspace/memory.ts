@@ -13,7 +13,6 @@ import {
   setTidyThreshold,
   upsertFact
 } from '../recall/store';
-import { recallDbPath } from './paths';
 
 // Stem's memory control surface, backed entirely by Stem Recall (recall.sqlite).
 //
@@ -142,7 +141,6 @@ export async function readMemoryFiles(): Promise<MemoryContents> {
     source: sourceLabel(f.source)
   }));
   return {
-    dir: recallDbPath(),
     files,
     isEmpty: files.length === 0
   };

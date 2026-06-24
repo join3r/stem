@@ -355,8 +355,6 @@ export interface MemoryFile {
 }
 
 export interface MemoryContents {
-  /** Absolute path to the memories directory on disk. */
-  dir: string;
   files: MemoryFile[];
   /** True when no file has any non-whitespace content. */
   isEmpty: boolean;
