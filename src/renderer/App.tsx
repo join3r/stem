@@ -50,6 +50,10 @@ export default function App() {
   const [signingIn, setSigningIn] = useState(false);
   const [showInspector, setShowInspector] = useState(true);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  // Display-only mirror of pendingDraftFolderRef so the empty-state welcome can
+  // tell the user which folder a new draft will be saved in (the ref itself is
+  // non-reactive, used only on the send path).
+  const [draftFolderId, setDraftFolderId] = useState<string | null>(null);
   const [chatList, setChatList] = useState<ChatListResult>({ chats: [], folders: [] });
   // Optimistic rows for chats created this session that the backend's thread/list hasn't
   // returned yet (a brand-new thread isn't listed until its first turn persists).
@@ -130,6 +134,16 @@ export default function App() {
     const extras = Object.values(pendingChats).filter((c) => !known.has(c.threadId));
     return extras.length ? { chats: [...extras, ...chatList.chats], folders: chatList.folders } : chatList;
   }, [chatList, pendingChats]);
+
+  // Folder name shown on the new-chat welcome screen — only while a fresh draft is
+  // current (activeThreadId === null) and it targets a folder.
+  const draftFolderName = useMemo(
+    () =>
+      activeThreadId === null && draftFolderId
+        ? chatList.folders.find((f) => f.id === draftFolderId)?.name ?? null
+        : null,
+    [activeThreadId, draftFolderId, chatList.folders]
+  );
 
   // Model / effort / speed — per-turn overrides, remembered across launches.
   const [models, setModels] = useState<ModelSummary[]>([]);
@@ -421,6 +435,7 @@ export default function App() {
     // marks any in-flight draft turn as no-longer-current so it can't steal focus.
     draftSeqRef.current += 1;
     pendingDraftFolderRef.current = folderId;
+    setDraftFolderId(folderId);
     setThreadStates((prev) => ({ ...prev, [DRAFT]: EMPTY_STATE }));
     setActiveThreadId(null);
   }, []);
@@ -628,6 +643,7 @@ export default function App() {
           effort={effort}
           serviceTier={serviceTier}
           format={format}
+          draftFolderName={draftFolderName}
           onChangeEffort={setEffort}
           onChangeSpeed={setServiceTier}
           onChangeFormat={setFormat}

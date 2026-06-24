@@ -585,3 +585,9 @@ export const componentMap: Record<string, ComponentEntry> = {
     <FormField name={props.name} label={props.label} placeholder={props.placeholder} type={props.type} />
   )
 };
+
+/** User-facing names of the top-level MDX features, in display order.
+ * Keep in sync with componentMap when adding/removing a top-level component. */
+export const mdxFeatureLabels = [
+  'callouts', 'steps', 'collapsibles', 'tabs', 'tables', 'charts', 'quizzes', 'forms',
+];

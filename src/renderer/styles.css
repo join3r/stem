@@ -214,6 +214,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 
 .empty { color: var(--muted); margin-top: 16vh; text-align: center; }
 .empty h2 { color: var(--ink); margin-bottom: 6px; }
+.empty .empty-folder { font-size: 0.85em; margin-top: 10px; opacity: 0.8; }
 
 /* message rows with an avatar gutter */
 .message { display: flex; gap: var(--sp-6); margin-bottom: 20px; }

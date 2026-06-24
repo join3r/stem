@@ -25,6 +25,7 @@ import type { ChatMessage, ModelSummary, TurnAttachment } from '../../shared/typ
 import { MdxView } from './MdxView';
 import { ShortcutHint, useShortcut } from '../shortcuts';
 import { MdxActionContext } from '../mdx/ActionContext';
+import { mdxFeatureLabels } from '../mdx/components';
 import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
 import { EFFORT_LABELS } from '../modelLabels';
 
@@ -73,6 +74,8 @@ interface ChatViewProps {
   effort: string | null;
   serviceTier: string | null;
   format: 'md' | 'mdx';
+  /** Name of the folder a fresh draft will be saved in, or null for root / a real thread. */
+  draftFolderName: string | null;
   onChangeEffort: (effort: string) => void;
   onChangeSpeed: (serviceTier: string | null) => void;
   onChangeFormat: (format: 'md' | 'mdx') => void;
@@ -104,6 +107,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   effort,
   serviceTier,
   format,
+  draftFolderName,
   onChangeEffort,
   onChangeSpeed,
   onChangeFormat
@@ -258,6 +262,16 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     [onSend, running]
   );
 
+  // Welcome-screen subtext: in MDX mode advertise the live component set (from the
+  // registry, so it can't drift); in MD mode there are no components to offer.
+  const emptyHint =
+    format === 'md'
+      ? "Ask me to explain something. I'll reply in plain Markdown."
+      : `Ask me to explain something. I can use ${new Intl.ListFormat('en', {
+          style: 'long',
+          type: 'conjunction'
+        }).format(mdxFeatureLabels)}.`;
+
   return (
     <MdxActionContext.Provider value={mdxActions}>
     <div className="chat">
@@ -265,7 +279,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         {messages.length === 0 && (
           <div className="empty">
             <h2>Stem</h2>
-            <p>Ask me to explain something. I can use callouts, steps, and collapsible details.</p>
+            <p>{emptyHint}</p>
+            {draftFolderName && (
+              <p className="empty-folder">This chat will be saved in “{draftFolderName}”.</p>
+            )}
           </div>
         )}
         {messages.map((m) => {

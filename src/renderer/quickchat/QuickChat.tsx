@@ -323,6 +323,7 @@ export function QuickChat() {
           effort={effort}
           serviceTier={serviceTier}
           format={format}
+          draftFolderName={null}
             onChangeEffort={setEffort}
             onChangeSpeed={setServiceTier}
             onChangeFormat={setFormat}
