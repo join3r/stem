@@ -81,6 +81,23 @@ vocabulary. Compose these — don't invent new layout.
 Reveals are calm: actions and meta fade in on `:hover` over `--motion-fast`, never appear by
 default. The composer auto-grows from one line (`min-height` 24px) to `max-height` 180px.
 
+## Keyboard shortcuts
+
+`src/renderer/shortcuts.tsx` is the single source of truth for Cmd shortcuts and their hints
+(`BINDINGS`). It's a main-window concern — `<ShortcutsProvider>` wraps `<App>` only (Quick Chat
+has no provider; the hook/components fall back to a no-op there).
+
+- **Bind an action** with `useShortcut('id', handler)` where the action lives (e.g. `App` registers
+  `new-conversation`/`toggle-inspector`; `ChatView` registers the composer ones). A bound combo
+  fires immediately on press.
+- **Show the hint** by dropping `<ShortcutHint id="…" placement="tr|br" />` *inside* the control it
+  labels; the control must be a positioning context (`position: relative`). Hold ⌘ alone for ~1.2 s
+  and every hint reveals a `.kbd` keycap — a real shortcut press, any other key, or ⌘-up cancels
+  the reveal, so quick presses never flash.
+- `.kbd` is the keycap (inverted `--ink`/`--paper` so it reads in light and dark); `.sc-hint` is the
+  floating wrapper that anchors and fades it in. Add a new shortcut by extending `BINDINGS` and
+  placing a `<ShortcutHint>` — never hard-code a keycap elsewhere.
+
 ## Quick Chat overlay (`.qc-*`) and status HUD (`.hud-*`)
 
 These are **separate frameless windows** (`body.qc-body`, `body.hud-body`) that share the same

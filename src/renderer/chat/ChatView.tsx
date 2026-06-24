@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import type { ChatMessage, ModelSummary, TurnAttachment } from '../../shared/types';
 import { MdxView } from './MdxView';
+import { ShortcutHint, useShortcut } from '../shortcuts';
 import { MdxActionContext } from '../mdx/ActionContext';
 import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
 import { EFFORT_LABELS } from '../modelLabels';
@@ -213,6 +214,23 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
 
   const hasFast = !!model?.serviceTiers.some((t) => t.id === 'priority');
 
+  // Composer shortcuts. Effort/format mirror the seg-ctls (inert while running, like
+  // the buttons themselves); ⌘. stops only when a turn is in flight.
+  useShortcut('cycle-effort', () => {
+    const efforts = model?.supportedEfforts ?? [];
+    if (running || efforts.length === 0) return;
+    const next = efforts[(efforts.indexOf(effort ?? '') + 1) % efforts.length];
+    onChangeEffort(next);
+  });
+  useShortcut('toggle-format', () => {
+    if (running) return;
+    onChangeFormat(format === 'mdx' ? 'md' : 'mdx');
+  });
+  useShortcut('attach', () => void pickFiles());
+  useShortcut('stop', () => {
+    if (running) onInterrupt();
+  });
+
   // Show the working indicator while a turn runs and no answer text is streaming
   // yet (reasoning / tool calls happen before the first token, when no assistant
   // bubble exists). It's replaced by the streamed reply once content arrives.
@@ -377,6 +395,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         <div className="composer-controls">
           {model && model.supportedEfforts.length > 0 && (
             <div className="seg-ctl compact" role="group" aria-label="Reasoning effort">
+              <ShortcutHint id="cycle-effort" />
               {model.supportedEfforts.map((e) => (
                 <button
                   key={e}
@@ -412,6 +431,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             </div>
           )}
           <div className="seg-ctl compact" role="group" aria-label="Output format">
+            <ShortcutHint id="toggle-format" />
             <button
               type="button"
               className={format === 'mdx' ? 'active' : ''}
@@ -462,6 +482,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
           <div className="composer-row">
             <button type="button" className="composer-attach" title="Attach" onClick={pickFiles}>
               <Paperclip size={17} />
+              <ShortcutHint id="attach" />
             </button>
             <textarea
               ref={textareaRef}
@@ -490,6 +511,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 title="Send"
               >
                 <ArrowUp size={16} />
+                <ShortcutHint id="send" placement="br" />
               </button>
             )}
           </div>

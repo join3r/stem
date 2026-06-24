@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import { QuickChat } from './quickchat/QuickChat';
 import { StatusHud } from './quickchat/StatusHud';
+import { ShortcutsProvider } from './shortcuts';
 import './styles.css';
 
 // The same renderer bundle serves all three windows; the URL flag selects which:
@@ -13,7 +14,15 @@ const isHud = params.has('hud');
 if (isQuickChat) document.body.classList.add('qc-body');
 if (isHud) document.body.classList.add('hud-body');
 
-const root = isHud ? <StatusHud /> : isQuickChat ? <QuickChat /> : <App />;
+const root = isHud ? (
+  <StatusHud />
+) : isQuickChat ? (
+  <QuickChat />
+) : (
+  <ShortcutsProvider>
+    <App />
+  </ShortcutsProvider>
+);
 
 const container = document.getElementById('root');
 if (container) {

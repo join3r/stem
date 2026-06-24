@@ -135,6 +135,7 @@ body {
 button, input, textarea, a, label, .switch, .insp-seg, .seg-ctl { -webkit-app-region: no-drag; }
 
 .tbtn {
+  position: relative;
   width: 30px;
   height: var(--ctl-h);
   border-radius: var(--radius);
@@ -389,6 +390,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 }
 .composer-field textarea::placeholder { color: var(--muted); }
 .composer-attach {
+  position: relative;
   width: 30px; height: 30px; flex: none;
   border: none; background: none; color: var(--muted);
   border-radius: var(--radius); cursor: pointer;
@@ -397,6 +399,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .composer-attach:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
 
 .icon-btn {
+  position: relative;
   border: none;
   border-radius: var(--radius-md);
   width: var(--ctl-h-lg);
@@ -415,9 +418,42 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 
 /* effort + speed controls above the field */
 .composer-controls { display: flex; gap: var(--sp-4); margin: 0 2px 8px; }
-.seg-ctl.compact { padding: 2px; align-self: flex-start; }
+.seg-ctl.compact { position: relative; padding: 2px; align-self: flex-start; }
 .seg-ctl.compact button { flex: 0 0 auto; padding: 3px 9px; font-size: var(--fs-11); }
 .seg-ctl button:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- Keyboard-shortcut hints (hold ⌘ to reveal) ---- */
+/* A keycap badge, e.g. ⌘N. Inverted against the UI so it reads in light + dark. */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--fs-11);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--paper);
+}
+/* Floating keycap anchored to a (position: relative) control, shown only in hint mode. */
+.sc-hint {
+  position: absolute;
+  z-index: var(--z-menu);
+  pointer-events: none;
+  box-shadow: var(--shadow-pop);
+  border-radius: var(--radius-sm);
+  animation: sc-hint-in var(--motion-med) ease both;
+}
+.sc-hint.sc-tr { top: -7px; right: -7px; }
+.sc-hint.sc-br { bottom: -7px; right: -7px; }
+@keyframes sc-hint-in {
+  from { opacity: 0; transform: scale(0.8); }
+  to { opacity: 1; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-hint { animation: none; }
+}
 
 /* ---- MDX content ---- */
 .mdx > :first-child { margin-top: 0; }

@@ -12,6 +12,7 @@ import type {
 } from '../shared/types';
 import { toMessageAttachments } from './attachments';
 import { ChatView, type ChatViewHandle } from './chat/ChatView';
+import { ShortcutHint, useShortcut } from './shortcuts';
 import { ManagePanel } from './manage/ManagePanel';
 import { McpApprovalCard } from './manage/McpApprovalCard';
 import { DropOverlay } from './files/DropOverlay';
@@ -424,6 +425,10 @@ export default function App() {
     setActiveThreadId(null);
   }, []);
 
+  // ⌘N / ⌘\ — mirror the titlebar buttons. (Composer shortcuts live in ChatView.)
+  useShortcut('new-conversation', () => newConversation());
+  useShortcut('toggle-inspector', () => setShowInspector((v) => !v));
+
   const openChat = useCallback(
     async (threadId: string) => {
       const existing = threadStatesRef.current[threadId];
@@ -663,6 +668,7 @@ export default function App() {
         disabled={cur.messages.length === 0 || (activeThreadId === null && cur.running)}
       >
         <SquarePen size={17} />
+        <ShortcutHint id="new-conversation" />
       </button>
       <div className="toolbar-title">
         <strong>Stem</strong>
@@ -675,6 +681,7 @@ export default function App() {
         onClick={() => setShowInspector((v) => !v)}
       >
         <PanelRight size={17} />
+        <ShortcutHint id="toggle-inspector" placement="br" />
       </button>
     </>
   );
