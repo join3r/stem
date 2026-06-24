@@ -792,7 +792,7 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
           </div>
         </div>
       </div>
-      <p className="muted" style={{ marginTop: 10 }}>
+      <p className="muted" style={{ marginTop: 'var(--sp-5)' }}>
         Press the shortcut to open the overlay; Escape or the shortcut again hides it.
       </p>
     </div>
