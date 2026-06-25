@@ -611,7 +611,12 @@ function registerIpc(): void {
       hideHud();
       hideOverlayWindow();
     }
-    await runtime!.resumeThread(threadId);
+    // Read is a local file read and isn't gated, so the open returns immediately.
+    // Pre-warm pi (switch_session) in the background — it's redundant for
+    // correctness since startTurn calls ensureActive itself, but it makes the
+    // first send faster. Crucially it no longer blocks the open behind the
+    // foreground gate / any in-flight turn.
+    void runtime!.resumeThread(threadId).catch(() => {});
     const { title, messages } = await runtime!.readThread(threadId);
     return { threadId, title, messages };
   });

@@ -147,6 +147,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   /** sessionId → on-disk session file, learned from get_state / dir scans. */
   private sessionFiles = new Map<string, string>();
   /**
+   * path → parsed metadata, keyed so an unchanged file (same mtime) is reused on
+   * the next scan instead of being re-read and re-parsed. Reading a whole JSONL
+   * file (incl. inlined base64 images) just to extract its title is the dominant
+   * list/delete cost, so this keeps repeated `listThreads` refreshes cheap.
+   */
+  private metaCache = new Map<string, { mtimeMs: number; meta: SessionFile }>();
+  /**
    * Sessions pre-created via createThread (e.g. Quick Chat) that haven't had a
    * turn yet, so their first turn still gets an auto-derived title — matching the
    * no-threadId path. Drained on first prompt.
@@ -871,29 +878,44 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /** Walk the session dir and read each JSONL header + name for the chat list. */
   private async scanSessions(): Promise<SessionFile[]> {
-    const out: SessionFile[] = [];
-    const walk = async (dir: string): Promise<void> => {
+    const seen = new Set<string>();
+    const walk = async (dir: string): Promise<SessionFile[]> => {
       let entries;
       try {
         entries = await readdir(dir, { withFileTypes: true });
       } catch {
-        return;
+        return [];
       }
-      for (const entry of entries) {
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          await walk(full);
-        } else if (entry.name.endsWith('.jsonl')) {
-          const parsed = await this.readSessionMeta(full);
-          if (parsed) out.push(parsed);
-        }
-      }
+      const results = await Promise.all(
+        entries.map(async (entry): Promise<SessionFile[]> => {
+          const full = join(dir, entry.name);
+          if (entry.isDirectory()) return walk(full);
+          if (!entry.name.endsWith('.jsonl')) return [];
+          seen.add(full);
+          // stat first (cheap); reuse cached metadata when the file is unchanged.
+          let mtimeMs: number | null = null;
+          try {
+            mtimeMs = Math.floor((await stat(full)).mtimeMs);
+          } catch {
+            return [];
+          }
+          const cached = this.metaCache.get(full);
+          if (cached && cached.mtimeMs === mtimeMs) return [cached.meta];
+          const meta = await this.readSessionMeta(full, mtimeMs);
+          if (!meta) return [];
+          this.metaCache.set(full, { mtimeMs, meta });
+          return [meta];
+        })
+      );
+      return results.flat();
     };
-    await walk(this.options.sessionsDir);
+    const out = await walk(this.options.sessionsDir);
+    // Drop cache entries for files that disappeared (deleted/moved threads).
+    for (const path of this.metaCache.keys()) if (!seen.has(path)) this.metaCache.delete(path);
     return out;
   }
 
-  private async readSessionMeta(path: string): Promise<SessionFile | null> {
+  private async readSessionMeta(path: string, mtimeMs: number): Promise<SessionFile | null> {
     let text: string;
     try {
       text = await readFile(path, 'utf8');
@@ -925,13 +947,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // ignore
       }
     }
-    let updatedAt = createdAt;
-    try {
-      updatedAt = Math.floor((await stat(path)).mtimeMs);
-    } catch {
-      // keep createdAt
-    }
-    return { id, path, name, cwd, createdAt: Math.floor(createdAt), updatedAt };
+    return { id, path, name, cwd, createdAt: Math.floor(createdAt), updatedAt: mtimeMs };
   }
 
   /** Read the live foreground session's messages (for active sessions without a file yet). */

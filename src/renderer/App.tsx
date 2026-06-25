@@ -508,9 +508,14 @@ export default function App() {
         return next;
       });
       if (threadId === activeThreadIdRef.current) setActiveThreadId(null);
-      refreshChats();
+      // Prune the one row locally instead of re-scanning every session file on
+      // disk (folders are untouched by a chat delete).
+      setChatList((prev) => ({
+        ...prev,
+        chats: prev.chats.filter((c) => c.threadId !== threadId)
+      }));
     },
-    [refreshChats]
+    []
   );
 
   // ⌃X — confirm-then-delete the active thread. Reuses onDeleteChat; reading
