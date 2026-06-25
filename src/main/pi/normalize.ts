@@ -58,6 +58,31 @@ function toolItemType(toolName: string | undefined): string {
   return 'mcpToolCall'; // generic tool → "Using a tool…"
 }
 
+// Argument keys that carry a human-meaningful target, most-specific first. pi's
+// tool_execution_start arg shape isn't formally typed (PiEvent is open), so we
+// probe both the event itself and a nested args object defensively.
+const DETAIL_KEYS = ['file_path', 'path', 'filename', 'command', 'cmd', 'pattern', 'query', 'url'] as const;
+
+/** Pull a short, human target string (file/command/query) from a tool-start event. */
+function toolDetail(ev: PiEvent): string | undefined {
+  const nested = (ev.toolInput ?? ev.args ?? ev.input ?? ev.arguments ?? ev.params) as
+    | Record<string, unknown>
+    | undefined;
+  const lookup = (src: Record<string, unknown> | undefined, key: string): string | undefined => {
+    const v = src?.[key];
+    return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+  };
+  for (const key of DETAIL_KEYS) {
+    const raw = lookup(ev as unknown as Record<string, unknown>, key) ?? lookup(nested, key);
+    if (!raw) continue;
+    // Basename file paths; truncate long commands/queries to keep the label tidy.
+    const isPath = key === 'file_path' || key === 'path' || key === 'filename';
+    const value = isPath ? raw.split('/').filter(Boolean).pop() ?? raw : raw;
+    return value.length > 60 ? `${value.slice(0, 57)}…` : value;
+  }
+  return undefined;
+}
+
 function textOf(content: ContentBlock[] | string | undefined): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -92,10 +117,15 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
       break;
     }
     case 'tool_execution_start': {
-      const type = toolItemType(ev.toolName as string | undefined);
+      const name = ev.toolName as string | undefined;
+      const type = toolItemType(name);
       out.push({
         method: 'item/started',
-        params: { item: { type, id: String(ev.toolCallId ?? turnId) }, threadId, turnId }
+        params: {
+          item: { type, id: String(ev.toolCallId ?? turnId), name, detail: toolDetail(ev) },
+          threadId,
+          turnId
+        }
       });
       break;
     }

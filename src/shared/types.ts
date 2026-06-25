@@ -160,6 +160,10 @@ export interface BackendItem {
   text?: string;
   /** userMessage carries content as parts. */
   content?: BackendItemContentPart[];
+  /** Tool items carry the real tool name (e.g. 'read', 'bash', 'mcp__…'). */
+  name?: string;
+  /** Tool items carry a short human target (file basename, command, query). */
+  detail?: string;
 }
 
 /** `item/started` and `item/completed`. The completed agentMessage item carries authoritative text. */

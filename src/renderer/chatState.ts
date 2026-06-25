@@ -64,7 +64,7 @@ export function applyBackendEventToThread(
       const p = event.params as ItemEventParams;
       const type = p.item?.type;
       if (!type || type === 'agentMessage') return null;
-      return { ...state, activity: activityLabel(type) };
+      return { ...state, activity: activityLabel(type, p.item?.name, p.item?.detail) };
     }
     case 'item/completed': {
       const p = event.params as ItemEventParams;

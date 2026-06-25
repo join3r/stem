@@ -353,8 +353,10 @@ function driveHud(event: { method: string; params: unknown }): void {
   if (quickChatWindow?.isVisible()) return;
   switch (event.method) {
     case 'item/started': {
-      const type = (event.params as ItemEventParams)?.item?.type;
-      if (type && type !== 'agentMessage' && !hudTextSeen) showHud({ phase: 'working', label: activityLabel(type) });
+      const item = (event.params as ItemEventParams)?.item;
+      const type = item?.type;
+      if (type && type !== 'agentMessage' && !hudTextSeen)
+        showHud({ phase: 'working', label: activityLabel(type, item?.name, item?.detail) });
       break;
     }
     case 'item/agentMessage/delta': {
