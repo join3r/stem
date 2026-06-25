@@ -15,6 +15,7 @@ import { ChatView, type ChatViewHandle } from './chat/ChatView';
 import { ShortcutHint, useShortcut } from './shortcuts';
 import { ManagePanel } from './manage/ManagePanel';
 import { McpApprovalCard } from './manage/McpApprovalCard';
+import { DeleteThreadDialog } from './DeleteThreadDialog';
 import { DropOverlay } from './files/DropOverlay';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
 import {
@@ -50,6 +51,8 @@ export default function App() {
   const [signingIn, setSigningIn] = useState(false);
   const [showInspector, setShowInspector] = useState(true);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  // The active thread queued for deletion behind the ⌃X confirm popup (null = closed).
+  const [pendingDelete, setPendingDelete] = useState<{ threadId: string; title: string } | null>(null);
   // Display-only mirror of pendingDraftFolderRef so the empty-state welcome can
   // tell the user which folder a new draft will be saved in (the ref itself is
   // non-reactive, used only on the send path).
@@ -510,6 +513,27 @@ export default function App() {
     [refreshChats]
   );
 
+  // ⌃X — confirm-then-delete the active thread. Reuses onDeleteChat; reading
+  // pendingDelete via the updater keeps the ⌃X-again confirm path free of stale
+  // closures. Registered after onDeleteChat so the useCallback dep is initialized.
+  const confirmDeleteThread = useCallback(() => {
+    setPendingDelete((p) => {
+      if (p) onDeleteChat(p.threadId);
+      return null;
+    });
+  }, [onDeleteChat]);
+  useShortcut('delete-thread', () => {
+    if (pendingDelete) {
+      // Popup already open — a second ⌃X confirms.
+      confirmDeleteThread();
+      return;
+    }
+    const id = activeThreadIdRef.current;
+    if (!id) return; // Nothing open (draft/empty) — no-op.
+    const title = displayList.chats.find((c) => c.threadId === id)?.title ?? '';
+    setPendingDelete({ threadId: id, title });
+  });
+
   // Roll back to (and including) a turn on the backend, drop that turn + everything
   // after it from the visible slice, then re-send `text` as a fresh turn. Shared by
   // retry (same text) and edit (new text). No-op while the thread is streaming.
@@ -672,6 +696,13 @@ export default function App() {
       )}
       <DropOverlay onDropToChat={onDropToChat} />
       <McpApprovalCard />
+      {pendingDelete && (
+        <DeleteThreadDialog
+          title={pendingDelete.title}
+          onConfirm={confirmDeleteThread}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>,
     <>
       <button

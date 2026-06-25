@@ -969,6 +969,12 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   box-shadow: var(--shadow-btn);
   font-weight: 500;
 }
+/* Destructive confirm (e.g. delete thread) — overrides the accent fill. */
+.push.default.danger {
+  background: linear-gradient(color-mix(in srgb, var(--danger) 86%, white), var(--danger));
+  border-color: color-mix(in srgb, var(--danger) 55%, black);
+  color: #fff;
+}
 
 /* Read-only viewer for Codex's native memory. */
 .memory-view { margin-top: 18px; border-top: 0.5px solid var(--line); padding-top: 14px; }
