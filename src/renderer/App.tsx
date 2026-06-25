@@ -491,32 +491,34 @@ export default function App() {
     },
     [refreshChats]
   );
-  const onDeleteChat = useCallback(
-    async (threadId: string) => {
-      // Guard against late events from this thread's in-flight turn resurrecting it.
-      deletedThreadsRef.current.add(threadId);
-      await window.stem.deleteChat(threadId);
-      setThreadStates((prev) => {
-        const next = { ...prev };
-        delete next[threadId];
-        return next;
-      });
-      setPendingChats((prev) => {
-        if (!prev[threadId]) return prev;
-        const next = { ...prev };
-        delete next[threadId];
-        return next;
-      });
-      if (threadId === activeThreadIdRef.current) setActiveThreadId(null);
-      // Prune the one row locally instead of re-scanning every session file on
-      // disk (folders are untouched by a chat delete).
-      setChatList((prev) => ({
-        ...prev,
-        chats: prev.chats.filter((c) => c.threadId !== threadId)
-      }));
-    },
-    []
-  );
+  const onDeleteChat = useCallback((threadId: string) => {
+    // Guard against late events from this thread's in-flight turn resurrecting it.
+    deletedThreadsRef.current.add(threadId);
+    // Prune all UI state synchronously and optimistically — the backend delete is
+    // gated behind any in-flight turn / background switch_session, so awaiting it
+    // would leave the row on screen for seconds. The IPC never meaningfully
+    // rejects (unlink/new_session/removeChat all swallow errors) and the ref above
+    // guards against resurrection, so fire-and-forget is safe.
+    setThreadStates((prev) => {
+      const next = { ...prev };
+      delete next[threadId];
+      return next;
+    });
+    setPendingChats((prev) => {
+      if (!prev[threadId]) return prev;
+      const next = { ...prev };
+      delete next[threadId];
+      return next;
+    });
+    if (threadId === activeThreadIdRef.current) setActiveThreadId(null);
+    // Prune the one row locally instead of re-scanning every session file on
+    // disk (folders are untouched by a chat delete).
+    setChatList((prev) => ({
+      ...prev,
+      chats: prev.chats.filter((c) => c.threadId !== threadId)
+    }));
+    window.stem.deleteChat(threadId).catch(() => {});
+  }, []);
 
   // ⌃X — confirm-then-delete the active thread. Reuses onDeleteChat; reading
   // pendingDelete via the updater keeps the ⌃X-again confirm path free of stale

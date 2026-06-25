@@ -630,8 +630,8 @@ function registerIpc(): void {
   );
   ipcMain.handle('chats:rename', (_e, threadId: string, name: string) => runtime!.renameThread(threadId, name));
   ipcMain.handle('chats:delete', async (_e, threadId: string) => {
-    await runtime!.deleteThread(threadId);
-    await removeChat(threadId);
+    // Independent stores (pi session file vs. folder-assignment JSON) — run concurrently.
+    await Promise.all([runtime!.deleteThread(threadId), removeChat(threadId)]);
   });
   ipcMain.handle('chats:setFolder', async (_e, threadId: string, folderId: string | null) => {
     await setChatFolder(threadId, folderId);

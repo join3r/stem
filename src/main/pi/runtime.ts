@@ -497,6 +497,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   }
 
   async deleteThread(threadId: string): Promise<void> {
+    // If the thread being deleted is mid-stream, abort its turn first: the gated
+    // body below waits on activeTurnDone, so without this the unlink/new_session
+    // would stall until the whole LLM turn finishes. pi emits `done` on abort,
+    // which resolves the gate and lets the delete proceed promptly.
+    if (this.activeThreadId === threadId && this.currentTurn) {
+      await this.interruptTurn(this.currentTurn.turnId);
+    }
     await this.foreground.run(async () => {
       const file = await this.resolveSessionFile(threadId);
       if (this.activeThreadId === threadId) {
