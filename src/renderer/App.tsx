@@ -724,7 +724,7 @@ export default function App() {
       </button>
       <div className="toolbar-title">
         <strong>Stem</strong>
-        <span>{selectedModel ? selectedModel.displayName : 'Claude'}</span>
+        {selectedModel && <span>{selectedModel.displayName}</span>}
       </div>
       <div className="toolbar-spacer" />
       <button
