@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { recallDbPath } from '../workspace/paths';
-import type { EpisodicStats } from '../../shared/types';
+import type { EmbeddingCacheStats, EpisodicStats } from '../../shared/types';
 
 // Stem Recall's storage layer. Owns recall.sqlite end-to-end so the memory
 // system is decoupled from the chat backend (pi today, anything later).
@@ -114,6 +114,19 @@ function open(): DatabaseSync {
       updated_at INTEGER NOT NULL
     );
 
+    -- Cached embedding per (fact, model) for relevance ranking at inject time.
+    -- Keyed by model so swapping the embeddings model just recomputes; stale rows
+    -- under an old model are never read. Vectors are invalidated (deleted) whenever
+    -- a fact's text changes, so a cached vector always matches its current text.
+    CREATE TABLE IF NOT EXISTS fact_vectors (
+      fact_id    INTEGER NOT NULL,
+      model      TEXT NOT NULL,
+      dim        INTEGER NOT NULL,
+      vec        BLOB NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (fact_id, model)
+    );
+
     CREATE TABLE IF NOT EXISTS meta (
       key   TEXT PRIMARY KEY,
       value TEXT
@@ -218,13 +231,17 @@ export function upsertFact(text: string, source = 'distilled'): void {
   const clean = text.trim();
   if (!clean) return;
   const handle = open();
+  const norm = normalizeFact(clean);
+  // A correction can change the text under an existing norm — drop any cached
+  // vector so it's re-embedded against the new text on the next inject.
+  handle.prepare(`DELETE FROM fact_vectors WHERE fact_id IN (SELECT id FROM facts WHERE norm = ?)`).run(norm);
   handle
     .prepare(
       `INSERT INTO facts (text, norm, source, updated_at)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(norm) DO UPDATE SET text = excluded.text, source = excluded.source, updated_at = excluded.updated_at`
     )
-    .run(clean, normalizeFact(clean), source, nowSeconds());
+    .run(clean, norm, source, nowSeconds());
 }
 
 export function getFacts(limit = 100): Fact[] {
@@ -258,7 +275,75 @@ export function getAllFacts(): Fact[] {
 }
 
 export function deleteFact(id: number): void {
-  open().prepare(`DELETE FROM facts WHERE id = ?`).run(id);
+  const handle = open();
+  // No FK cascade (foreign_keys isn't globally enabled), so drop the vector by hand.
+  handle.prepare(`DELETE FROM fact_vectors WHERE fact_id = ?`).run(id);
+  handle.prepare(`DELETE FROM facts WHERE id = ?`).run(id);
+}
+
+// ---- embedding cache (Level 1 relevance ranking) ----
+
+function bytesToFloat32(u8: Uint8Array): Float32Array {
+  // The row buffer may be reused/unaligned — copy into a fresh, 0-aligned buffer.
+  const copy = new Uint8Array(u8.byteLength);
+  copy.set(u8);
+  return new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / 4));
+}
+
+/** Facts with no cached vector for `model` (need embedding before ranking). */
+export function getFactsMissingVector(model: string): Fact[] {
+  const rows = open()
+    .prepare(
+      `SELECT f.id, f.text, f.source, f.updated_at AS updatedAt
+         FROM facts f
+         LEFT JOIN fact_vectors v ON v.fact_id = f.id AND v.model = ?
+        WHERE v.fact_id IS NULL
+        ORDER BY f.id ASC`
+    )
+    .all(model) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    id: r.id as number,
+    text: r.text as string,
+    source: r.source as string,
+    updatedAt: r.updatedAt as number
+  }));
+}
+
+/** All cached vectors for `model`, keyed by fact id. */
+export function getFactVectors(model: string): Map<number, Float32Array> {
+  const rows = open()
+    .prepare(`SELECT fact_id AS factId, vec FROM fact_vectors WHERE model = ?`)
+    .all(model) as Array<{ factId: number; vec: Uint8Array }>;
+  const out = new Map<number, Float32Array>();
+  for (const r of rows) out.set(r.factId, bytesToFloat32(r.vec));
+  return out;
+}
+
+/** Cache a fact's embedding for `model` (replaces any prior vector). */
+export function upsertFactVector(factId: number, model: string, vec: Float32Array): void {
+  const buf = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+  open()
+    .prepare(
+      `INSERT INTO fact_vectors (fact_id, model, dim, vec, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(fact_id, model) DO UPDATE SET dim = excluded.dim, vec = excluded.vec, updated_at = excluded.updated_at`
+    )
+    .run(factId, model, vec.length, buf, nowSeconds());
+}
+
+/** Drop cached vectors for every model except `model` (hygiene after a model switch). */
+export function pruneVectorsExceptModel(model: string): void {
+  open().prepare(`DELETE FROM fact_vectors WHERE model <> ?`).run(model);
+}
+
+/** How many facts have a cached vector for `model` (plus total facts + vector dim). */
+export function getEmbeddingCacheStats(model: string): EmbeddingCacheStats {
+  const handle = open();
+  const factCount = (handle.prepare(`SELECT COUNT(*) AS n FROM facts`).get() as { n: number }).n;
+  const row = handle
+    .prepare(`SELECT COUNT(*) AS n, MAX(dim) AS dim FROM fact_vectors WHERE model = ?`)
+    .get(model) as { n: number; dim: number | null };
+  return { factCount, embeddedCount: row.n, dim: row.n > 0 ? (row.dim ?? null) : null };
 }
 
 /**
@@ -293,6 +378,7 @@ export function resetFacts(): void {
   const handle = open();
   handle.exec('BEGIN');
   try {
+    handle.exec('DELETE FROM fact_vectors');
     handle.exec('DELETE FROM facts');
     handle.exec(`DELETE FROM meta WHERE key = 'consolidate_pending'`);
     handle.exec('COMMIT');
@@ -370,8 +456,17 @@ export function applyConsolidation(ops: ConsolidationOps): ConsolidationResult {
   try {
     // Deletes first so a survivor/correction can reclaim a deleted row's norm.
     const del = handle.prepare(`DELETE FROM facts WHERE id = ?`);
-    for (const id of mergeLoserIds) merged += del.run(id).changes as number;
-    for (const id of dropIds) dropped += del.run(id).changes as number;
+    const delVec = handle.prepare(`DELETE FROM fact_vectors WHERE fact_id = ?`);
+    for (const id of mergeLoserIds) {
+      delVec.run(id);
+      merged += del.run(id).changes as number;
+    }
+    for (const id of dropIds) {
+      delVec.run(id);
+      dropped += del.run(id).changes as number;
+    }
+    // Survivors/corrections keep their row but get new text — invalidate their vectors.
+    for (const w of textWrites) delVec.run(w.id);
 
     const upd = handle.prepare(`UPDATE facts SET text = ?, norm = ?, updated_at = ? WHERE id = ?`);
     for (const w of textWrites) {
@@ -457,6 +552,48 @@ export function getTidyThreshold(): number {
 }
 export function setTidyThreshold(n: number): void {
   setMeta(TIDY_THRESHOLD_KEY, String(Math.max(0, Math.floor(n))));
+}
+
+// ---- fact-ranking tunables (inject-time relevance selection) ----
+
+const FACT_THRESHOLD_KEY = 'recall_fact_threshold';
+const FACT_COSINE_M_KEY = 'recall_cosine_m';
+const FACT_RERANK_K_KEY = 'recall_rerank_k';
+/** At or below this many facts, inject all of them (cheap, no embedding call). */
+export const DEFAULT_FACT_THRESHOLD = 40;
+/** Embedding-cosine shortlist size handed to the reranker. */
+export const DEFAULT_FACT_COSINE_M = 20;
+/** Facts actually injected after reranking (or cosine top-K when no reranker). */
+export const DEFAULT_FACT_RERANK_K = 8;
+
+function getMetaPositiveInt(key: string, fallback: number): number {
+  const raw = Number.parseInt(getMeta(key) ?? '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
+export function getFactThreshold(): number {
+  return getMetaPositiveInt(FACT_THRESHOLD_KEY, DEFAULT_FACT_THRESHOLD);
+}
+export function setFactThreshold(n: number): void {
+  setMeta(FACT_THRESHOLD_KEY, String(Math.max(1, Math.floor(n))));
+}
+export function getFactCosineM(): number {
+  return getMetaPositiveInt(FACT_COSINE_M_KEY, DEFAULT_FACT_COSINE_M);
+}
+export function getFactRerankK(): number {
+  return getMetaPositiveInt(FACT_RERANK_K_KEY, DEFAULT_FACT_RERANK_K);
+}
+
+const CONSOLIDATE_CHUNK_KEY = 'consolidate_chunk_size';
+/** Max facts per consolidation prompt; larger sets are clustered into chunks. */
+export const DEFAULT_CONSOLIDATE_CHUNK = 50;
+
+export function getConsolidateChunkSize(): number {
+  // Floor of 2 so a "chunk" can always hold a mergeable pair.
+  return Math.max(2, getMetaPositiveInt(CONSOLIDATE_CHUNK_KEY, DEFAULT_CONSOLIDATE_CHUNK));
+}
+export function setConsolidateChunkSize(n: number): void {
+  setMeta(CONSOLIDATE_CHUNK_KEY, String(Math.max(2, Math.floor(n))));
 }
 
 /**

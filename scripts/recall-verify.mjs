@@ -5,6 +5,8 @@
 // Run (from repo root):
 //   rm -rf .recall-build
 //   npx tsc src/main/recall/store.ts src/main/recall/search.ts src/main/recall/inject.ts \
+//     src/main/recall/embeddings.ts src/main/recall/rerank.ts src/main/recall/retrieval.ts \
+//     src/main/recall/vector.ts \
 //     src/main/recall/capture.ts src/main/recall/distill.ts src/main/recall/consolidate.ts \
 //     --outDir .recall-build \
 //     --module commonjs --moduleResolution node --target es2022 --skipLibCheck \
@@ -84,7 +86,7 @@ check('fact upsert dedups by normalized text', facts.filter((f) => /cardiology f
 check('fact correction updates source', facts.find((f) => /cardiology follow-up/i.test(f.text))?.source === 'explicit');
 
 // --- 7. inject: builds a context block with facts + relevant hits, excluding current thread ---
-const ctx = inject.buildRecallContext('what is my UZ Gent cardiology appointment', { currentThreadId: 'B' });
+const ctx = await inject.buildRecallContext('what is my UZ Gent cardiology appointment', { currentThreadId: 'B' });
 check('inject includes durable facts', /durable facts/i.test(ctx ?? ''));
 check('inject includes the recalled health snippet', /UZ Gent/.test(ctx ?? ''));
 check('inject mentions the search tool', /search_past_chats/.test(ctx ?? ''));

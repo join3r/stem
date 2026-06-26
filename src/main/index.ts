@@ -30,11 +30,20 @@ import {
   setTidyUpThreshold
 } from './workspace/memory';
 import { captureFromEvent } from './recall/capture';
-import { getEpisodicStats } from './recall/store';
+import { getEmbeddingCacheStats, getEpisodicStats } from './recall/store';
 import { distillNewMessages, shouldConsolidate } from './recall/distill';
 import { consolidateFacts } from './recall/consolidate';
+import { setRetrievalClients } from './recall/retrieval';
+import { createHttpEmbeddingsClient } from './recall/embeddings';
+import { createHttpRerankClient } from './recall/rerank';
 import type { LlmClient } from './recall/llm';
-import { readSettings, updateMemorySettings, updateNativeWebSearch, updateQuickChat } from './workspace/settings';
+import {
+  readSettings,
+  updateMemorySettings,
+  updateNativeWebSearch,
+  updateQuickChat,
+  updateRetrievalSettings
+} from './workspace/settings';
 import {
   createFolder,
   deleteFolder,
@@ -52,6 +61,9 @@ import type {
   McpServerInput,
   MemoryModelSettings,
   NativeWebSearchSettings,
+  PartialRetrievalSettings,
+  RetrievalStage,
+  RetrievalTestResult,
   QuickChatHandoff,
   QuickChatPrompt,
   QuickChatSettings,
@@ -572,6 +584,9 @@ function registerIpc(): void {
   ipcMain.handle('memory:resetFacts', () => clearFactsMemory());
   ipcMain.handle('memory:resetEpisodic', () => clearEpisodicMemory());
   ipcMain.handle('memory:episodicStats', () => getEpisodicStats());
+  ipcMain.handle('memory:embeddingStats', async () =>
+    getEmbeddingCacheStats((await readSettings()).retrieval.embeddings.model)
+  );
   ipcMain.handle('memory:setEpisodicLimit', (_e, bytes: number) => setEpisodicLimit(bytes));
   ipcMain.handle('memory:setTidyThreshold', (_e, n: number) => setTidyUpThreshold(n));
   ipcMain.handle('memory:consolidate', async () => {
@@ -679,6 +694,35 @@ function registerIpc(): void {
     // each memory turn, so the change applies to the next distill/tidy-up.
     return updateMemorySettings(patch);
   });
+  ipcMain.handle('settings:updateRetrieval', async (_e, patch: PartialRetrievalSettings) => {
+    // Just persist — the embeddings/rerank clients read their config fresh from
+    // settings on each turn, so the change applies to the next fact-ranking pass.
+    return updateRetrievalSettings(patch);
+  });
+  ipcMain.handle('settings:testRetrieval', async (_e, stage: RetrievalStage): Promise<RetrievalTestResult> => {
+    // Live one-shot probe of the configured endpoint so the user can confirm it
+    // actually responds (the fact-ranking path is otherwise silent). Ignores the
+    // `enabled` flag — testing while toggling is the point.
+    const cfg = (await readSettings()).retrieval[stage];
+    if (!cfg.baseUrl || !cfg.model) return { ok: false, detail: 'Set a base URL and model first.' };
+    const getCfg = async () => ({ baseUrl: cfg.baseUrl, model: cfg.model, apiKey: cfg.apiKey });
+    const startedAt = Date.now();
+    try {
+      if (stage === 'embeddings') {
+        const [vec] = await createHttpEmbeddingsClient(getCfg, { timeoutMs: 20_000 }).embed(['Stem retrieval test']);
+        return { ok: true, detail: `${vec.length}-dim · ${Date.now() - startedAt} ms` };
+      }
+      const ranked = await createHttpRerankClient(getCfg, { timeoutMs: 20_000 }).rerank(
+        'pets',
+        ['I have a dog', 'the sky is blue'],
+        2
+      );
+      return { ok: true, detail: `ranked ${ranked.length} · ${Date.now() - startedAt} ms` };
+    } catch (err) {
+      const e = err as { message?: string; cause?: { code?: string } };
+      return { ok: false, detail: e.cause?.code ?? e.message ?? 'request failed' };
+    }
+  });
   // Run a prompt in the overlay's own thread. For a fresh session we pre-create
   // the thread (so its events route correctly from the very first event), then
   // hide the overlay and raise the HUD — the disappear→HUD half of the cycle.
@@ -779,6 +823,24 @@ app.whenReady().then(async () => {
   const recallLlm: LlmClient = {
     complete: async (prompt) => runtime!.complete(prompt, { model: (await readSettings()).memory.model })
   };
+
+  // Stem Recall relevance ranking: embeddings + reranker HTTP endpoints (e.g. a
+  // local Ollama + a /rerank server). Config is read fresh each turn, so toggling
+  // or repointing them in Settings takes effect on the next fact-ranking pass with
+  // no restart. Disabled config → the clients report unavailable and inject falls
+  // back to recency selection.
+  setRetrievalClients({
+    embeddings: createHttpEmbeddingsClient(async () => {
+      const e = (await readSettings()).retrieval.embeddings;
+      return e.enabled && e.baseUrl && e.model ? { baseUrl: e.baseUrl, model: e.model, apiKey: e.apiKey } : null;
+    }),
+    // Reranker is intentionally not wired to the live ranking path: it has no UI and
+    // a verified /rerank server is hard to host (Ollama can't serve one). Fact ranking
+    // runs embeddings → cosine only. The seam (rerank.ts, the optional rerank step in
+    // inject, the Test handler below) stays intact, so re-enable here once you run a
+    // real /rerank endpoint (llama.cpp --reranking, Infinity, …).
+    rerank: null
+  });
   let distilling = false;
   let distillTimer: NodeJS.Timeout | null = null;
   const scheduleDistill = (delayMs = 15_000): void => {

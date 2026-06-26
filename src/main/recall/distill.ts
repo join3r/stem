@@ -96,8 +96,9 @@ export async function distillNewMessages(llm: LlmClient): Promise<number> {
     .slice(0, MAX_TRANSCRIPT_CHARS);
 
   // Show the model what it already knows so it returns only new/corrected facts
-  // (curbs reworded duplicates the norm-based dedup can't catch).
-  const known = getFacts().map((f) => `- ${f.text}`).join('\n');
+  // (curbs reworded duplicates the norm-based dedup can't catch). Bounded at 100
+  // (recency) on purpose: a dedup hint, not authoritative, and it caps prompt size.
+  const known = getFacts(100).map((f) => `- ${f.text}`).join('\n');
   const knownBlock = known ? `\n\nKnown facts (do not restate these):\n${known}` : '';
 
   let facts: string[] = [];

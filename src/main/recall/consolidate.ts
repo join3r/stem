@@ -1,21 +1,35 @@
 import {
   applyConsolidation,
   getAllFacts,
+  getConsolidateChunkSize,
+  getFactsMissingVector,
+  getFactVectors,
   setMeta,
+  upsertFactVector,
   type ConsolidationOps,
   type ConsolidationResult,
   type Fact
 } from './store';
 import { isRecallEnabled } from '../workspace/memory';
 import { PENDING_KEY } from './distill';
+import { getEmbeddingsClient } from './retrieval';
+import { cosineSim } from './vector';
 import type { LlmClient } from './llm';
 
 // Level 1 cleanup: the consolidation pass. Distillation only ever ADDS facts and
 // can only dedup byte-for-byte (normalizeFact), so over time the set accumulates
 // reworded near-duplicates and stale/contradicted facts. This pass periodically
-// hands the whole fact list to the LLM and asks for merge/correct/drop operations,
-// then applies them transactionally. Default posture is KEEP: only ids the model
-// names are touched, so a flaky/lazy reply is a no-op, never a memory wipe.
+// asks the LLM for merge/correct/drop operations, then applies them transactionally.
+// Default posture is KEEP: only ids the model names are touched, so a flaky/lazy
+// reply is a no-op, never a memory wipe.
+//
+// For large sets the prompt is bounded by SMART chunking: facts are grouped into
+// similarity clusters (via the embeddings seam) so likely duplicates/contradictions
+// land in the same prompt. Naive size-chunking would scatter a duplicate pair
+// across two prompts and never merge them; clustering keeps them together. With no
+// embeddings configured it falls back to sequential size-chunks (still bounded,
+// best effort). Each chunk is clamped independently — which also bounds the
+// aggregate removal to MAX_DROP_FRACTION of the whole set.
 
 // Below this many facts there's nothing worth consolidating.
 const MIN_FACTS = 6;
@@ -121,6 +135,65 @@ function buildPrompt(facts: Fact[]): string {
 
 const ZERO: ConsolidationResult = { merged: 0, corrected: 0, dropped: 0 };
 
+/** Even-sized chunk target so a large set splits into balanced chunks (no tiny tail). */
+function chunkTarget(total: number, max: number): number {
+  const n = Math.max(1, Math.ceil(total / max));
+  return Math.ceil(total / n);
+}
+
+function sizeChunks(facts: Fact[], size: number): Fact[][] {
+  const out: Fact[][] = [];
+  for (let i = 0; i < facts.length; i += size) out.push(facts.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Greedy similarity clustering: take the next unassigned fact as a seed and pull
+ * in its nearest unassigned neighbours by cosine, up to `size`. Near-duplicates
+ * (which are semantically close) therefore land in the same chunk where the model
+ * can actually merge them. Deterministic — seeds are visited in id order.
+ */
+function greedyClusters(facts: Fact[], vectors: Map<number, Float32Array>, size: number): Fact[][] {
+  const byId = new Map(facts.map((f) => [f.id, f]));
+  const withVec = facts.filter((f) => vectors.has(f.id));
+  const without = facts.filter((f) => !vectors.has(f.id));
+  const unassigned = new Set(withVec.map((f) => f.id));
+  const chunks: Fact[][] = [];
+
+  for (const seed of withVec) {
+    if (!unassigned.has(seed.id)) continue;
+    unassigned.delete(seed.id);
+    const sv = vectors.get(seed.id)!;
+    const neighbours = [...unassigned]
+      .map((id) => ({ id, score: cosineSim(sv, vectors.get(id)!) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, size - 1);
+    for (const n of neighbours) unassigned.delete(n.id);
+    chunks.push([seed, ...neighbours.map((n) => byId.get(n.id)!)]);
+  }
+  // Facts without a vector (e.g. an embedding gap) still get cleaned, via size-chunks.
+  if (without.length > 0) chunks.push(...sizeChunks(without, size));
+  return chunks;
+}
+
+/** Split facts into bounded chunks: similarity clusters when embeddings are available. */
+async function chunkFacts(facts: Fact[]): Promise<Fact[][]> {
+  const size = chunkTarget(facts.length, getConsolidateChunkSize());
+  const emb = getEmbeddingsClient();
+  if (!emb || !(await emb.available())) return sizeChunks(facts, size);
+  try {
+    const model = (await emb.modelId()) ?? '';
+    const missing = getFactsMissingVector(model);
+    if (missing.length > 0) {
+      const vecs = await emb.embed(missing.map((f) => f.text));
+      missing.forEach((f, i) => upsertFactVector(f.id, model, vecs[i]));
+    }
+    return greedyClusters(facts, getFactVectors(model), size);
+  } catch {
+    return sizeChunks(facts, size); // endpoint hiccup → still bounded, best effort
+  }
+}
+
 /**
  * Run one consolidation pass over the durable facts. Returns counts of what
  * changed. Always resets the pending counter when it actually ran the model (so a
@@ -137,19 +210,32 @@ export async function consolidateFacts(
   // trigger (`force`) still needs at least two facts to merge anything.
   if (facts.length < (opts.force ? 2 : MIN_FACTS)) return ZERO;
 
-  let ops: ConsolidationOps;
-  try {
-    const reply = await llm.complete(buildPrompt(facts));
-    ops = parseConsolidation(reply);
-  } catch {
-    // Leave the pending counter so a later cycle retries.
-    return ZERO;
+  // One prompt while small; cluster into bounded chunks once the set is large.
+  const chunks = facts.length <= getConsolidateChunkSize() ? [facts] : await chunkFacts(facts);
+  const protectedIds = new Set(facts.filter(isProtected).map((f) => f.id));
+
+  const combined: ConsolidationOps = { merge: [], correct: [], drop: [] };
+  let anyFailed = false;
+  for (const chunk of chunks) {
+    let chunkOps: ConsolidationOps;
+    try {
+      chunkOps = parseConsolidation(await llm.complete(buildPrompt(chunk)));
+    } catch {
+      anyFailed = true; // leave this chunk for a later cycle
+      continue;
+    }
+    // Clamp per chunk against its own size: bounds the model's blast radius to
+    // MAX_DROP_FRACTION of each chunk, which bounds the aggregate to the same
+    // fraction of the whole set — no brittle all-or-nothing global rejection.
+    const clamped = clampOps(chunkOps, protectedIds, chunk.length);
+    combined.merge.push(...clamped.merge);
+    combined.correct.push(...clamped.correct);
+    combined.drop.push(...clamped.drop);
   }
 
-  const protectedIds = new Set(facts.filter(isProtected).map((f) => f.id));
-  const clamped = clampOps(ops, protectedIds, facts.length);
-  const result = applyConsolidation(clamped);
-
-  setMeta(PENDING_KEY, '0');
+  const result = applyConsolidation(combined);
+  // Only clear the pending counter when every chunk ran — a failed chunk (model
+  // error) should be retried next cycle rather than marked done.
+  if (!anyFailed) setMeta(PENDING_KEY, '0');
   return result;
 }

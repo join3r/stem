@@ -1,17 +1,22 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Brain, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, FolderOpen, Trash2, Wand2 } from 'lucide-react';
+import { Brain, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, Check, FolderOpen, Trash2, Wand2 } from 'lucide-react';
 import type {
   BackendEventEnvelope,
   McpLoginUrlParams,
   McpServerStatus,
   McpServerSummary,
   McpTransport,
+  EmbeddingCacheStats,
   EpisodicStats,
   MemoryContents,
   MemorySettings,
   ModelSummary,
   NativeWebSearchSettings,
   QuickChatSettings,
+  RetrievalEndpointSettings,
+  RetrievalSettings,
+  RetrievalStage,
+  RetrievalTestResult,
   SkillSummary
 } from '../../shared/types';
 import { MdxView } from '../chat/MdxView';
@@ -244,6 +249,103 @@ function EpisodicTab() {
   );
 }
 
+// One retrieval endpoint's controls (embeddings or reranker). Free-text — Stem
+// just makes the HTTP call — so it isn't the pi ModelPicker. Edits stay local
+// while typing and persist on blur; the enable toggle persists immediately.
+function RetrievalFields({
+  label,
+  hint,
+  modelPlaceholder,
+  stage,
+  value,
+  onPatch
+}: {
+  label: string;
+  hint: string;
+  modelPlaceholder: string;
+  stage: RetrievalStage;
+  value: RetrievalEndpointSettings;
+  onPatch: (patch: Partial<RetrievalEndpointSettings>) => void;
+}) {
+  const [local, setLocal] = useState(value);
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<RetrievalTestResult | null>(null);
+  useEffect(() => setLocal(value), [value]);
+
+  async function runTest() {
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await window.stem.testRetrievalEndpoint(stage));
+    } catch {
+      setTest({ ok: false, detail: 'request failed' });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <div className="set-block fg-divider">
+      <div className="group-row">
+        <span className="row-main">
+          <strong>{label}</strong>
+          <em>{hint}</em>
+        </span>
+        <button
+          className={`switch${local.enabled ? ' on' : ''}`}
+          role="switch"
+          aria-checked={local.enabled}
+          aria-label={`${label} enabled`}
+          onClick={() => onPatch({ enabled: !local.enabled })}
+        />
+      </div>
+      <input
+        className="ifield"
+        placeholder="http://localhost:11434"
+        aria-label={`${label} base URL`}
+        value={local.baseUrl}
+        onChange={(e) => setLocal({ ...local, baseUrl: e.target.value })}
+        onBlur={() => onPatch({ baseUrl: local.baseUrl })}
+      />
+      <input
+        className="ifield"
+        placeholder={modelPlaceholder}
+        aria-label={`${label} model`}
+        value={local.model}
+        onChange={(e) => setLocal({ ...local, model: e.target.value })}
+        onBlur={() => onPatch({ model: local.model })}
+      />
+      <input
+        className="ifield"
+        type="password"
+        placeholder="API key (optional)"
+        aria-label={`${label} API key`}
+        value={local.apiKey ?? ''}
+        onChange={(e) => setLocal({ ...local, apiKey: e.target.value })}
+        onBlur={() => onPatch({ apiKey: local.apiKey })}
+      />
+      <div className="retrieval-test">
+        <button
+          className="retrieval-test-btn"
+          onClick={runTest}
+          disabled={testing}
+          title={testing ? 'Testing…' : 'Test connection'}
+          aria-label="Test connection"
+        >
+          <Plug size={14} />
+        </button>
+        {testing && <span className="retrieval-test-status">Testing…</span>}
+        {!testing && test && (
+          <span className={`retrieval-test-status ${test.ok ? 'ok' : 'err'}`} title={test.detail}>
+            {test.ok ? <Check size={12} /> : <X size={12} />}
+            {test.detail}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FactsTab({ models }: { models: ModelSummary[] }) {
   const [settings, setSettings] = useState<MemorySettings | null>(null);
   const [contents, setContents] = useState<MemoryContents | null>(null);
@@ -255,20 +357,34 @@ function FactsTab({ models }: { models: ModelSummary[] }) {
   const [resetting, setResetting] = useState(false);
   // null => use the backend default model for distillation/tidy-up.
   const [memoryModel, setMemoryModel] = useState<string | null>(null);
+  const [retrieval, setRetrieval] = useState<RetrievalSettings | null>(null);
+  const [showRetrieval, setShowRetrieval] = useState(false);
+  const [embStats, setEmbStats] = useState<EmbeddingCacheStats | null>(null);
 
   function loadContents() {
     window.stem.readMemory().then(setContents);
   }
+  function loadEmbStats() {
+    window.stem.getEmbeddingStats().then(setEmbStats);
+  }
 
   useEffect(() => {
     window.stem.getMemorySettings().then(setSettings);
-    window.stem.getSettings().then((s) => setMemoryModel(s.memory.model));
+    window.stem.getSettings().then((s) => {
+      setMemoryModel(s.memory.model);
+      setRetrieval(s.retrieval);
+    });
     loadContents();
+    loadEmbStats();
   }, []);
 
   function selectMemoryModel(id: string | null) {
     setMemoryModel(id);
     window.stem.updateMemorySettings({ model: id }).then((s) => setMemoryModel(s.memory.model));
+  }
+
+  function patchEmbeddings(patch: Partial<RetrievalEndpointSettings>) {
+    window.stem.updateRetrievalSettings({ embeddings: patch }).then((s) => setRetrieval(s.retrieval));
   }
 
   function selectTidyThreshold(n: number) {
@@ -372,6 +488,53 @@ function FactsTab({ models }: { models: ModelSummary[] }) {
           <p className="muted">Stem merges duplicates and drops stale facts once this many new ones accumulate.</p>
         </div>
       </div>
+
+      {retrieval && (
+        <>
+          <div className="grp-head">
+            <button
+              className="memory-view-toggle"
+              aria-expanded={showRetrieval}
+              onClick={() => {
+                if (!showRetrieval) loadEmbStats();
+                setShowRetrieval((v) => !v);
+              }}
+            >
+              <ChevronRight size={14} className={showRetrieval ? 'open' : ''} />
+              <strong>Relevance ranking (advanced)</strong>
+            </button>
+          </div>
+          {showRetrieval && (
+            <div className="formgroup">
+              <p className="muted">
+                With more than ~40 facts, Stem ranks them by relevance to each message instead of injecting
+                them all. Point this at an OpenAI-compatible embeddings endpoint (e.g. Ollama). Off → the
+                most recent facts are used.
+              </p>
+              <RetrievalFields
+                label="Embeddings"
+                hint="Ranks facts by similarity"
+                modelPlaceholder="qwen3-embedding:8b"
+                stage="embeddings"
+                value={retrieval.embeddings}
+                onPatch={patchEmbeddings}
+              />
+              <p className="muted">
+                {embStats == null
+                  ? 'Embedding cache: …'
+                  : embStats.embeddedCount === 0
+                    ? `0 of ${embStats.factCount} facts embedded — send a message to build the cache.`
+                    : `${embStats.embeddedCount} of ${embStats.factCount} facts embedded${
+                        embStats.dim ? ` · ${embStats.dim}-dim vectors` : ''
+                      }.`}{' '}
+                <button className="link-btn" onClick={loadEmbStats}>
+                  Refresh
+                </button>
+              </p>
+            </div>
+          )}
+        </>
+      )}
 
       <div className="memory-view">
         <div className="memory-view-head">

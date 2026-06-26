@@ -1,9 +1,9 @@
 import type { EpisodicStats, MemoryContents, MemorySettings } from '../../shared/types';
 import {
   deleteFact,
+  getAllFacts,
   getEpisodicLimitBytes,
   getEpisodicStats,
-  getFacts,
   getMeta,
   getTidyThreshold,
   resetEpisodic,
@@ -129,7 +129,9 @@ function sourceLabel(source: string): string {
  * not browsed.
  */
 export async function readMemoryFiles(): Promise<MemoryContents> {
-  const facts = getFacts();
+  // Browse view: show every fact (newest first), not just the most recent 100 —
+  // the old cap silently hid older facts from the Manage panel.
+  const facts = getAllFacts().sort((a, b) => b.updatedAt - a.updatedAt);
   const files = facts.map((f) => ({
     name: `fact-${f.id}`,
     label: 'Fact',

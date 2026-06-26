@@ -842,7 +842,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   ): Promise<{ message: string; images: PiImageContent[] }> {
     const blocks: string[] = [];
     if (isRecallEnabled()) {
-      const recall = buildRecallContext(input.input, { currentThreadId: threadId });
+      const recall = await buildRecallContext(input.input, { currentThreadId: threadId });
       if (recall) blocks.push(recall);
     }
     const files = await buildFilesContext();

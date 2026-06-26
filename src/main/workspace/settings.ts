@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
-import type { AppSettings, MemoryModelSettings, NativeWebSearchSettings, QuickChatSettings } from '../../shared/types';
+import type {
+  AppSettings,
+  MemoryModelSettings,
+  NativeWebSearchSettings,
+  PartialRetrievalSettings,
+  QuickChatSettings,
+  RetrievalEndpointSettings,
+  RetrievalSettings
+} from '../../shared/types';
 import { settingsStorePath } from './paths';
 
 // Stem-owned app settings. Like the chat store, kept deliberately tiny and
@@ -23,8 +31,28 @@ const DEFAULTS: AppSettings = {
   // the relevant model's provider supports it (currently ChatGPT/openai-codex).
   nativeWebSearch: { main: true, quickChat: true },
   // Memory distillation/tidy-up model; null = the backend default.
-  memory: { model: null }
+  memory: { model: null },
+  // Embeddings + reranker endpoints for relevance-ranking facts at inject time.
+  // Off by default: until the user points these at a server, fact selection stays
+  // recency-based (no network). Default URL/model match a local Ollama setup.
+  retrieval: {
+    embeddings: { baseUrl: 'http://localhost:11434', model: 'qwen3-embedding:8b', apiKey: null, enabled: false },
+    reranker: { baseUrl: 'http://localhost:8080', model: '', apiKey: null, enabled: false }
+  }
 };
+
+function coerceEndpoint(
+  raw: Partial<RetrievalEndpointSettings> | undefined,
+  def: RetrievalEndpointSettings
+): RetrievalEndpointSettings {
+  const r = raw ?? {};
+  return {
+    baseUrl: typeof r.baseUrl === 'string' && r.baseUrl.trim() ? r.baseUrl.trim() : def.baseUrl,
+    model: typeof r.model === 'string' ? r.model.trim() : def.model,
+    apiKey: typeof r.apiKey === 'string' && r.apiKey.trim() ? r.apiKey : null,
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : def.enabled
+  };
+}
 
 function coerce(parsed: Partial<AppSettings> | null): AppSettings {
   const qc = (parsed?.quickChat ?? {}) as Partial<QuickChatSettings>;
@@ -37,6 +65,11 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
   const rawMem = (parsed?.memory ?? {}) as Partial<MemoryModelSettings>;
   const mem: MemoryModelSettings = {
     model: typeof rawMem.model === 'string' && rawMem.model.trim() ? rawMem.model : null
+  };
+  const rawRet = (parsed?.retrieval ?? {}) as Partial<RetrievalSettings>;
+  const retrieval: RetrievalSettings = {
+    embeddings: coerceEndpoint(rawRet.embeddings, DEFAULTS.retrieval.embeddings),
+    reranker: coerceEndpoint(rawRet.reranker, DEFAULTS.retrieval.reranker)
   };
   return {
     quickChat: {
@@ -53,7 +86,8 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
           : d.newThreadTimeoutMs
     },
     nativeWebSearch: nws,
-    memory: mem
+    memory: mem,
+    retrieval
   };
 }
 
@@ -110,6 +144,22 @@ export function updateMemorySettings(patch: Partial<MemoryModelSettings>): Promi
   return enqueue(async () => {
     const cur = await readSettings();
     const next = coerce({ ...cur, memory: { ...cur.memory, ...patch } });
+    await writeSettings(next);
+    return next;
+  });
+}
+
+/** Patch the retrieval endpoints (deep-merged per stage) and persist; returns full settings. */
+export function updateRetrievalSettings(patch: PartialRetrievalSettings): Promise<AppSettings> {
+  return enqueue(async () => {
+    const cur = await readSettings();
+    const next = coerce({
+      ...cur,
+      retrieval: {
+        embeddings: { ...cur.retrieval.embeddings, ...patch.embeddings },
+        reranker: { ...cur.retrieval.reranker, ...patch.reranker }
+      }
+    });
     await writeSettings(next);
     return next;
   });

@@ -470,10 +470,61 @@ export interface MemoryModelSettings {
   model: string | null;
 }
 
+/**
+ * One HTTP retrieval endpoint (embeddings or reranker). Free-text — Stem just
+ * makes the call — so it works with Ollama, vLLM, LM Studio, TEI, or a hosted API.
+ * Disabled by default; until enabled+configured, fact selection stays recency-based.
+ */
+export interface RetrievalEndpointSettings {
+  /** Base URL, e.g. http://localhost:11434 (no path; Stem appends /v1/embeddings or /rerank). */
+  baseUrl: string;
+  /** Model id as the server names it, e.g. qwen3-embedding:8b. */
+  model: string;
+  /** Optional bearer token for hosted/secured endpoints. */
+  apiKey: string | null;
+  enabled: boolean;
+}
+
+/**
+ * Reusable two-stage retrieval config: embeddings (candidate ranking) + reranker
+ * (precision reorder). Used today to rank durable facts at inject time; the same
+ * seam can back episodic semantic search later.
+ */
+export interface RetrievalSettings {
+  embeddings: RetrievalEndpointSettings;
+  reranker: RetrievalEndpointSettings;
+}
+
+/** A partial retrieval patch — update either stage, any subset of its fields. */
+export interface PartialRetrievalSettings {
+  embeddings?: Partial<RetrievalEndpointSettings>;
+  reranker?: Partial<RetrievalEndpointSettings>;
+}
+
+/** Embedding-cache coverage for the configured model — shown in the Manage panel. */
+export interface EmbeddingCacheStats {
+  /** Total durable facts. */
+  factCount: number;
+  /** Facts with a cached vector for the current embeddings model. */
+  embeddedCount: number;
+  /** Vector dimension for the current model, or null when nothing is cached. */
+  dim: number | null;
+}
+
+export type RetrievalStage = 'embeddings' | 'reranker';
+
+/** Result of a live probe against a retrieval endpoint (the Settings "Test" button). */
+export interface RetrievalTestResult {
+  ok: boolean;
+  /** Human-readable detail: dims/latency on success, or the error (e.g. ECONNREFUSED). */
+  detail: string;
+}
+
 export interface AppSettings {
   quickChat: QuickChatSettings;
   nativeWebSearch: NativeWebSearchSettings;
   memory: MemoryModelSettings;
+  retrieval: RetrievalSettings;
 }
 
 /**
@@ -622,6 +673,12 @@ export interface StemApi {
   updateNativeWebSearch(patch: Partial<NativeWebSearchSettings>): Promise<AppSettings>;
   /** Set the model used for memory distillation/tidy-up ({ model: null } = default). */
   updateMemorySettings(patch: Partial<MemoryModelSettings>): Promise<AppSettings>;
+  /** Update the embeddings/reranker retrieval endpoints (deep-merged per stage). */
+  updateRetrievalSettings(patch: PartialRetrievalSettings): Promise<AppSettings>;
+  /** Live-probe a retrieval endpoint with the current settings (Settings "Test" button). */
+  testRetrievalEndpoint(stage: RetrievalStage): Promise<RetrievalTestResult>;
+  /** Embedding-cache coverage for the configured model (how many facts are embedded). */
+  getEmbeddingStats(): Promise<EmbeddingCacheStats>;
   /** Overlay → main: run a prompt in the overlay's own thread (main hides the
    *  overlay + raises the HUD, pre-creating a thread for a fresh session). */
   runQuickChat(prompt: QuickChatPrompt): Promise<StartTurnResult>;

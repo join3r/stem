@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import * as store from '../../src/main/recall/store';
 import * as search from '../../src/main/recall/search';
 import * as inject from '../../src/main/recall/inject';
+import * as retrieval from '../../src/main/recall/retrieval';
 import * as distill from '../../src/main/recall/distill';
 import * as consolidate from '../../src/main/recall/consolidate';
 
@@ -59,8 +60,8 @@ describe('Stem Recall', () => {
     expect(facts.find((f) => /cardiology follow-up/i.test(f.text))?.source).toBe('explicit');
   });
 
-  it('inject builds a context block with facts + relevant hits, excluding current thread', () => {
-    const ctx = inject.buildRecallContext('what is my UZ Gent cardiology appointment', { currentThreadId: 'B' }) ?? '';
+  it('inject builds a context block with facts + relevant hits, excluding current thread', async () => {
+    const ctx = (await inject.buildRecallContext('what is my UZ Gent cardiology appointment', { currentThreadId: 'B' })) ?? '';
     expect(ctx).toMatch(/durable facts/i);
     expect(ctx).toMatch(/UZ Gent/);
     expect(ctx).toMatch(/search_past_chats/);
@@ -173,5 +174,180 @@ describe('Stem Recall', () => {
     store.resetEpisodic();
     expect(store.messageCount()).toBe(0);
     expect(store.getFacts().length).toBe(1);
+  });
+});
+
+// Fact relevance ranking (embeddings + reranker). Uses fake clients so the suite
+// stays offline. Shares the same DB as above; closeForTest runs in the file-level
+// afterAll. resetFacts() at the start of each test makes the fact set deterministic.
+describe('Stem Recall — fact relevance ranking', () => {
+  // Keyword-encoding fake embedder: a text matching `key` maps to [1,0], else [0,1],
+  // so the query and any fact sharing the keyword have cosine 1 and everything else 0.
+  function keywordEmbeddings(key: RegExp) {
+    let calls = 0;
+    return {
+      client: {
+        available: async () => true,
+        modelId: async () => 'fake-model',
+        embed: async (texts: string[]) => {
+          calls += 1;
+          return texts.map((t) => Float32Array.from(key.test(t) ? [1, 0] : [0, 1]));
+        }
+      },
+      calls: () => calls
+    };
+  }
+
+  it('surfaces a relevant buried fact past the inject threshold (fixes the silent drop)', async () => {
+    store.resetFacts();
+    const emb = keywordEmbeddings(/pangolin/i);
+    retrieval.setRetrievalClients({ embeddings: emb.client, rerank: null });
+
+    store.upsertFact('The user once met a pangolin in Borneo', 'distilled'); // oldest → dropped by the recency cap
+    for (let i = 0; i < 45; i++) store.upsertFact(`The user has misc preference ${i}`, 'distilled');
+    expect(store.getAllFacts().length).toBeGreaterThan(store.getFactThreshold());
+
+    const ctx = (await inject.buildRecallContext('tell me about the pangolin', {})) ?? '';
+    expect(ctx).toMatch(/pangolin/); // relevance pulls the oldest fact back in
+    expect(ctx).not.toMatch(/misc preference 40/); // irrelevant facts are filtered out
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+  });
+
+  it('below the threshold injects every fact without calling embeddings', async () => {
+    store.resetFacts();
+    const emb = keywordEmbeddings(/anything/i);
+    retrieval.setRetrievalClients({ embeddings: emb.client, rerank: null });
+
+    store.upsertFact('The user lives in Bratislava', 'distilled');
+    store.upsertFact('The user has a dog named Rex', 'distilled');
+    store.upsertFact('The user codes in TypeScript', 'distilled');
+
+    const ctx = (await inject.buildRecallContext('where do I live', {})) ?? '';
+    expect(emb.calls()).toBe(0); // cheap path never touches the endpoint
+    expect(ctx).toMatch(/Bratislava/);
+    expect(ctx).toMatch(/Rex/);
+    expect(ctx).toMatch(/TypeScript/);
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+  });
+
+  it('falls back to recency injection when embeddings error (never breaks a turn)', async () => {
+    store.resetFacts();
+    retrieval.setRetrievalClients({
+      embeddings: {
+        available: async () => true,
+        modelId: async () => 'fake-model',
+        embed: async () => {
+          throw new Error('endpoint down');
+        }
+      },
+      rerank: null
+    });
+    for (let i = 0; i < 50; i++) store.upsertFact(`The user holds opinion number ${i}`, 'distilled');
+
+    const ctx = await inject.buildRecallContext('what do I think', {});
+    expect(ctx).not.toBeNull();
+    expect(ctx).toMatch(/durable facts/i); // facts still injected, via recency fallback
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+  });
+
+  it('reranker reorders the cosine shortlist', async () => {
+    store.resetFacts();
+    // All facts embed identically → cosine ties → shortlist is the first M by id.
+    const flat = {
+      available: async () => true,
+      modelId: async () => 'fake-model',
+      embed: async (texts: string[]) => texts.map(() => Float32Array.from([1, 0]))
+    };
+    // Reranker promotes whichever doc mentions a zebra.
+    const rerank = {
+      available: async () => true,
+      rerank: async (_q: string, docs: string[], topN: number) =>
+        docs
+          .map((d, index) => ({ index, score: /zebra/i.test(d) ? 1 : 0 }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, topN)
+    };
+    retrieval.setRetrievalClients({ embeddings: flat, rerank });
+
+    for (let i = 0; i < 8; i++) store.upsertFact(`The user has trait ${i}`, 'distilled');
+    store.upsertFact('The user owns a zebra named Stripes', 'distilled'); // id ~9: in the shortlist, not cosine top-K
+    for (let i = 0; i < 40; i++) store.upsertFact(`The user has habit ${i}`, 'distilled');
+
+    const ctx = (await inject.buildRecallContext('any animals?', {})) ?? '';
+    expect(ctx).toMatch(/zebra/); // the reranker pulled it into the injected set
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+  });
+
+  it('degrades to cosine ranking (not recency) when the reranker errors', async () => {
+    store.resetFacts();
+    const emb = keywordEmbeddings(/pangolin/i);
+    // Reranker is "available" but every call throws — a dead/misconfigured endpoint.
+    const brokenRerank = {
+      available: async () => true,
+      rerank: async () => {
+        throw new Error('ECONNREFUSED');
+      }
+    };
+    retrieval.setRetrievalClients({ embeddings: emb.client, rerank: brokenRerank });
+
+    store.upsertFact('The user once met a pangolin in Borneo', 'distilled'); // oldest
+    for (let i = 0; i < 45; i++) store.upsertFact(`The user has misc preference ${i}`, 'distilled');
+
+    const ctx = (await inject.buildRecallContext('tell me about the pangolin', {})) ?? '';
+    expect(ctx).toMatch(/pangolin/); // embeddings still rank it; rerank failure didn't nuke the path
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+  });
+
+  it('caches vectors as BLOBs and re-flags them missing on a model change', () => {
+    store.resetFacts();
+    store.upsertFact('The user keeps a fact for the vector round-trip test', 'distilled');
+    const id = store.getAllFacts()[0].id;
+    const vec = Float32Array.from([0.1, 0.2, 0.3, 0.4]);
+
+    store.upsertFactVector(id, 'm1', vec);
+    const got = store.getFactVectors('m1').get(id)!;
+    expect(Array.from(got)).toEqual(Array.from(vec)); // bit-identical round-trip
+    expect(store.getFactsMissingVector('m1').length).toBe(0);
+    // A different model has no vector yet → the fact is "missing" and gets re-embedded.
+    expect(store.getFactsMissingVector('m2').some((f) => f.id === id)).toBe(true);
+  });
+
+  it('smart-chunks a large fact set and merges duplicates split far apart by id', async () => {
+    store.resetFacts();
+    store.setConsolidateChunkSize(4); // force chunking with a small set
+
+    // zebra facts share a vector (cosine 1 → cluster together); fillers are distinct
+    // and orthogonal to zebra, so similarity clustering — not id order — groups dupes.
+    const emb = {
+      available: async () => true,
+      modelId: async () => 'cluster-model',
+      embed: async (texts: string[]) =>
+        texts.map((t, i) => (/zebra/i.test(t) ? Float32Array.from([1, 0, 0]) : Float32Array.from([0, 1, i + 1])))
+    };
+    retrieval.setRetrievalClients({ embeddings: emb, rerank: null });
+
+    // The model merges any chunk that contains two zebra facts (ids read from the prompt).
+    const mergeZebra = {
+      complete: async (prompt: string) => {
+        const ids = [...prompt.matchAll(/\[(\d+)\][^\n]*zebra/gi)].map((m) => Number(m[1]));
+        return ids.length >= 2
+          ? JSON.stringify({ merge: [{ ids, text: 'The user owns a zebra' }], correct: [], drop: [] })
+          : JSON.stringify({ merge: [], correct: [], drop: [] });
+      }
+    };
+
+    store.upsertFact('The user has a pet zebra', 'distilled'); // first by id
+    for (let i = 0; i < 10; i++) store.upsertFact(`The user enjoys hobby ${i}`, 'distilled');
+    store.upsertFact('The user keeps a zebra at home', 'distilled'); // last by id — far from the first
+
+    expect(store.getAllFacts().length).toBeGreaterThan(store.getConsolidateChunkSize());
+    const res = await consolidate.consolidateFacts(mergeZebra, { force: true });
+
+    // A naive id-order chunk would split the two zebras; clustering kept them together.
+    expect(res.merged).toBe(1);
+    expect(store.getAllFacts().filter((f) => /zebra/i.test(f.text)).length).toBe(1);
+
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+    store.setConsolidateChunkSize(store.DEFAULT_CONSOLIDATE_CHUNK);
   });
 });

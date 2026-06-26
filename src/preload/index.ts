@@ -6,6 +6,8 @@ import type {
   McpServerStatus,
   MemoryModelSettings,
   NativeWebSearchSettings,
+  PartialRetrievalSettings,
+  RetrievalStage,
   QuickChatAdopt,
   QuickChatFocus,
   QuickChatHandoff,
@@ -98,6 +100,10 @@ const api: StemApi = {
     ipcRenderer.invoke('settings:updateNativeWebSearch', patch),
   updateMemorySettings: (patch: Partial<MemoryModelSettings>) =>
     ipcRenderer.invoke('settings:updateMemory', patch),
+  updateRetrievalSettings: (patch: PartialRetrievalSettings) =>
+    ipcRenderer.invoke('settings:updateRetrieval', patch),
+  testRetrievalEndpoint: (stage: RetrievalStage) => ipcRenderer.invoke('settings:testRetrieval', stage),
+  getEmbeddingStats: () => ipcRenderer.invoke('memory:embeddingStats'),
   runQuickChat: (prompt: QuickChatPrompt) => ipcRenderer.invoke('quickchat:run', prompt),
   newQuickChatThread: () => ipcRenderer.invoke('quickchat:newThread'),
   handoffQuickChat: (payload: QuickChatHandoff) => ipcRenderer.invoke('quickchat:handoff', payload),
