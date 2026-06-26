@@ -35,6 +35,9 @@ export interface ChatBackend extends EventEmitter {
   restart(): Promise<void>;
   shutdown(timeoutMs?: number): Promise<void>;
   newConversation(): Promise<void>;
+  /** Eagerly spawn the backend process and connect MCP servers so the first turn
+   *  doesn't pay cold-start. Idempotent; safe to call repeatedly. */
+  prewarm(): Promise<void>;
 
   // turns
   createThread(model?: string): Promise<string>;

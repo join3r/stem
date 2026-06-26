@@ -930,6 +930,19 @@ app.whenReady().then(async () => {
 
   registerIpc();
   createWindow();
+  // Eagerly spawn pi + connect MCP once the window has painted, so the first prompt
+  // doesn't pay backend cold-start. Skipped in E2E (the backend is faked) and when
+  // not signed in (status() is cheap and never spawns). did-finish-load keeps the
+  // spawn + MCP child processes off the first-paint path. Fire-and-forget; races
+  // harmlessly with the renderer's listModels warm (ensureStarted is idempotent).
+  if (!E2E) {
+    mainWindow?.webContents.once('did-finish-load', () => {
+      void runtime!
+        .status()
+        .then((s) => (s.ok ? runtime!.prewarm() : undefined))
+        .catch(() => {});
+    });
+  }
   // Pre-create the overlay (hidden) so the shortcut summons it instantly, and
   // bind the global accelerator from the saved settings. Seed the all-Spaces
   // flag before creating the overlay so it's applied once, at creation.

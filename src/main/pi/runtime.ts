@@ -233,6 +233,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     await this.ensureStarted();
   }
 
+  async prewarm(): Promise<void> {
+    await this.ensureStarted();
+  }
+
   async newConversation(): Promise<void> {
     // no-op: the next startTurn with no threadId starts a fresh session.
   }

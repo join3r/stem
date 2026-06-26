@@ -52,6 +52,9 @@ class McpStdioClient {
     this.nextId = 1;
     this.pending = new Map();
     this.tools = [];
+    // Tracks whether the child is still up, so the cross-session connection cache
+    // can detect a crashed server and reconnect instead of reusing a dead client.
+    this.alive = false;
   }
 
   start() {
@@ -59,6 +62,7 @@ class McpStdioClient {
       env: { ...process.env, ...(this.spec.env ?? {}) },
       stdio: ['pipe', 'pipe', 'pipe']
     });
+    this.alive = true;
     this.proc.stdout.on('data', (chunk) => {
       this.buf += chunk.toString('utf8');
       let i;
@@ -70,9 +74,20 @@ class McpStdioClient {
     });
     this.proc.stderr.on('data', () => {});
     this.proc.on('exit', () => {
+      this.alive = false;
       for (const p of this.pending.values()) p.reject(new Error(`${this.name} exited`));
       this.pending.clear();
     });
+  }
+
+  /** Kill the child (used when the connection cache rebuilds). Best-effort. */
+  stop() {
+    this.alive = false;
+    try {
+      this.proc?.kill();
+    } catch {
+      // already gone
+    }
   }
 
   onLine(line) {
@@ -180,9 +195,15 @@ class McpHttpClient {
     this.sessionId = null;
     this.nextId = 1;
     this.tools = [];
+    // Stateless (each call is a fresh fetch), so a cached HTTP client never goes
+    // stale — always alive for the connection-cache liveness check.
+    this.alive = true;
   }
 
   start() {}
+
+  /** No persistent resource to tear down; present for parity with the stdio client. */
+  stop() {}
 
   async authHeaders() {
     if (!this.auth) return {};
@@ -494,6 +515,47 @@ function buildCatalogText(clients) {
   return sections.join('\n\n');
 }
 
+// Live MCP connections, cached at MODULE scope so they survive pi re-running this
+// factory on every session change. pi rebuilds the whole session runtime — and
+// re-invokes cached extension factories — on new/switch/fork/rollback. Connecting
+// the servers (remote OAuth handshakes + uvx/stdio spawns) costs ~2s, so without
+// this cache EVERY new chat / chat-open / fork re-paid it (measured: ~2.1s per
+// session change, vs ~3ms with the bridge absent). We connect once per process,
+// then on each subsequent session only re-register the (cheap, no-network) tools
+// on that session's fresh `pi`. Module state persists because pi caches the
+// extension factory function across sessions (loadExtensionsCached).
+let sharedConn = null; // { key, clients: Map, recall: [{name,spec,client,tools}], status }
+
+/** Connect every configured server once; split recall (eager) from routed servers. */
+async function connectServers(servers, oauthTokens, persistAuth) {
+  const clients = new Map(); // name -> { client, spec, tools } (routed via meta-tools)
+  const recall = []; // [{ name, spec, client, tools }] (eager, registered natively)
+  const status = {};
+  for (const [name, spec] of Object.entries(servers)) {
+    if (spec.disabled) continue;
+    // Remote (Streamable HTTP — static header or OAuth) or local (stdio); both
+    // expose the same handshake()/callTool() surface.
+    const client = spec.url
+      ? new McpHttpClient(name, spec, oauthTokens[name], (auth) => persistAuth(name, auth))
+      : new McpStdioClient(name, spec);
+    try {
+      client.start();
+      const tools = await client.handshake();
+      if (name === RECALL_SERVER_NAME) recall.push({ name, spec, client, tools });
+      else clients.set(name, { client, spec, tools });
+      status[name] = { status: 'ready', error: null };
+    } catch (e) {
+      status[name] = { status: 'failed', error: String((e && e.message) || e) };
+    }
+  }
+  return { clients, recall, status };
+}
+
+/** Every connected client in a cached connection (recall + routed). */
+function connClients(conn) {
+  return [...conn.recall.map((r) => r.client), ...[...conn.clients.values()].map((e) => e.client)];
+}
+
 export default async function stemMcpBridge(pi) {
   const cfgPath = process.env.STEM_MCP_CONFIG;
   if (!cfgPath) return;
@@ -504,7 +566,6 @@ export default async function stemMcpBridge(pi) {
     return;
   }
   const servers = (config && config.servers) || {};
-  const status = {};
 
   // OAuth tokens (from Stem's browser sign-in) live next to mcp.json; the bridge
   // injects them as bearer headers and rewrites the file when it refreshes one.
@@ -530,31 +591,25 @@ export default async function stemMcpBridge(pi) {
     }
   };
 
-  // Non-eager servers go here; their tools are reached via the router meta-tools.
-  const clients = new Map(); // name -> { client, spec, tools }
-
-  for (const [name, spec] of Object.entries(servers)) {
-    if (spec.disabled) continue;
-    // Remote (Streamable HTTP — static header or OAuth) or local (stdio); both
-    // expose the same handshake()/callTool() surface.
-    const client = spec.url
-      ? new McpHttpClient(name, spec, oauthTokens[name], (auth) => persistAuth(name, auth))
-      : new McpStdioClient(name, spec);
-    try {
-      client.start();
-      const tools = await client.handshake();
-      if (name === RECALL_SERVER_NAME) {
-        // Internal recall server: keep eager (used every turn) as native pi tools.
-        for (const tool of tools) registerNativeMcpTool(pi, name, spec, client, tool);
-      } else {
-        // Everything else: behind the lazy router + the per-turn catalog.
-        clients.set(name, { client, spec, tools });
+  // (Re)connect only when there's no cache yet, the server set changed (defensive —
+  // server changes go through a full process restart), or a cached child crashed.
+  // Otherwise reuse the live connections and skip the ~2s of handshakes entirely.
+  const key = JSON.stringify(servers);
+  if (!sharedConn || sharedConn.key !== key || !connClients(sharedConn).every((c) => c.alive !== false)) {
+    if (sharedConn) for (const c of connClients(sharedConn)) {
+      try {
+        c.stop();
+      } catch {
+        // best-effort teardown of the stale connection
       }
-      status[name] = { status: 'ready', error: null };
-    } catch (e) {
-      status[name] = { status: 'failed', error: String((e && e.message) || e) };
     }
+    sharedConn = { key, ...(await connectServers(servers, oauthTokens, persistAuth)) };
   }
+  const { clients, recall, status } = sharedConn;
+
+  // Register tools on THIS session's pi (cheap, no network). Recall stays eager
+  // (native tools, used every turn); everything else is behind the router.
+  for (const r of recall) for (const tool of r.tools) registerNativeMcpTool(pi, r.name, r.spec, r.client, tool);
 
   // Register the router meta-tools over the connected servers.
   registerRouterTools(pi, clients);
