@@ -131,6 +131,23 @@ function toolItemType(toolName: string | undefined): string {
 // probe both the event itself and a nested args object defensively.
 const DETAIL_KEYS = ['file_path', 'path', 'filename', 'command', 'cmd', 'pattern', 'query', 'url'] as const;
 
+/** Format a target value for the label: basename file paths, truncate long strings. */
+function formatDetail(key: string, raw: string): string {
+  const isPath = key === 'file_path' || key === 'path' || key === 'filename';
+  const value = isPath ? raw.split('/').filter(Boolean).pop() ?? raw : raw;
+  return value.length > 60 ? `${value.slice(0, 57)}…` : value;
+}
+
+/** Probe a single args object for the first human-meaningful target key. */
+function detailFromArgs(src: Record<string, unknown> | undefined): string | undefined {
+  if (!src) return undefined;
+  for (const key of DETAIL_KEYS) {
+    const v = src[key];
+    if (typeof v === 'string' && v.trim()) return formatDetail(key, v.trim());
+  }
+  return undefined;
+}
+
 /** Pull a short, human target string (file/command/query) from a tool-start event. */
 function toolDetail(ev: PiEvent): string | undefined {
   const nested = (ev.toolInput ?? ev.args ?? ev.input ?? ev.arguments ?? ev.params) as
@@ -143,10 +160,7 @@ function toolDetail(ev: PiEvent): string | undefined {
   for (const key of DETAIL_KEYS) {
     const raw = lookup(ev as unknown as Record<string, unknown>, key) ?? lookup(nested, key);
     if (!raw) continue;
-    // Basename file paths; truncate long commands/queries to keep the label tidy.
-    const isPath = key === 'file_path' || key === 'path' || key === 'filename';
-    const value = isPath ? raw.split('/').filter(Boolean).pop() ?? raw : raw;
-    return value.length > 60 ? `${value.slice(0, 57)}…` : value;
+    return formatDetail(key, raw);
   }
   return undefined;
 }
@@ -185,12 +199,28 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
       break;
     }
     case 'tool_execution_start': {
-      const name = ev.toolName as string | undefined;
+      let name = ev.toolName as string | undefined;
+      let detail = toolDetail(ev);
+      // Router unwrap: the bridge's invoke_tool wraps the real call as
+      // { server, tool, args }. Recover the underlying tool name + target so the
+      // activity label stays specific ("Searching the web…") instead of collapsing
+      // to "Using invoke_tool…".
+      if (name === 'invoke_tool') {
+        const inp = (ev.toolInput ?? ev.args ?? ev.input ?? ev.arguments ?? ev.params) as
+          | Record<string, unknown>
+          | undefined;
+        const real = typeof inp?.tool === 'string' ? inp.tool : undefined;
+        if (real) {
+          name = real;
+          const innerArgs = inp?.args as Record<string, unknown> | undefined;
+          detail = detailFromArgs(innerArgs) ?? (typeof inp?.server === 'string' ? inp.server : undefined);
+        }
+      }
       const type = toolItemType(name);
       out.push({
         method: 'item/started',
         params: {
-          item: { type, id: String(ev.toolCallId ?? turnId), name, detail: toolDetail(ev) },
+          item: { type, id: String(ev.toolCallId ?? turnId), name, detail },
           threadId,
           turnId
         }

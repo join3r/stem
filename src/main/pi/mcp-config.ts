@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +53,44 @@ export function piExtensionPath(): string {
 /** Where the bridge writes live connection status (next to mcp.json). */
 export function piMcpStatusPath(): string {
   return join(piHome(), 'mcp-status.json');
+}
+
+/** Where the bridge writes the routed-tools names+signatures catalog (next to mcp.json). */
+export function piMcpCatalogPath(): string {
+  return join(piHome(), 'mcp-catalog.json');
+}
+
+// mtime-cached read of the routed-tools catalog. The file is static per pi-process
+// lifetime (rewritten only when the bridge reconnects on a runtime restart), so we
+// re-parse it only when its mtime changes rather than on every turn.
+let catalogCache: { mtime: number; text: string } = { mtime: -1, text: '' };
+
+/**
+ * The per-turn "Available tools" block, injected alongside the files listing. Lists
+ * routed MCP servers' tools as name + 1-line description + compact signature — the
+ * heavy input schemas are deferred and fetched on demand via the bridge's
+ * describe_tool. Returns null when no routed servers are connected (nothing to add).
+ */
+export function buildMcpCatalogContext(): string | null {
+  let text: string;
+  try {
+    const mtime = statSync(piMcpCatalogPath()).mtimeMs;
+    if (mtime !== catalogCache.mtime) {
+      const data = JSON.parse(readFileSync(piMcpCatalogPath(), 'utf8')) as { text?: string };
+      catalogCache = { mtime, text: typeof data.text === 'string' ? data.text : '' };
+    }
+    text = catalogCache.text;
+  } catch {
+    catalogCache = { mtime: -1, text: '' };
+    return null; // missing/corrupt → nothing to inject
+  }
+  if (!text.trim()) return null;
+  return (
+    `Available tools (extra MCP servers, beyond your built-in file tools):\n${text}\n\n` +
+    `To use any of these, call \`invoke_tool\` with the server name, the exact tool name, and an \`args\` object. ` +
+    `The signatures above are compact — if a tool's arguments aren't obvious, call \`describe_tool\` first to get ` +
+    `its full input schema. Do not invent servers or tools that aren't listed here.`
+  );
 }
 
 /**

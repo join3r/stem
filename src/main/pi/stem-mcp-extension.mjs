@@ -14,6 +14,11 @@ import { spawn } from 'node:child_process';
 import { chmodSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+// Stem's internal recall server stays EAGER (its one tool is used every turn);
+// every other server goes behind the lazy router (invoke_tool/describe_tool) so
+// its schemas don't bloat the prompt. Mirrors RECALL_MCP_NAME in recall/register-mcp.ts.
+const RECALL_SERVER_NAME = 'stem-recall';
+
 /**
  * Write a credential-bearing file owner-only (0600). mcp.json may carry bearer
  * headers and mcp-oauth.json holds OAuth tokens; neither should be readable by
@@ -322,6 +327,152 @@ function makeNativeSearchGate(nsPath) {
   };
 }
 
+// ---- Lazy MCP router ----
+//
+// Re-registering every server's tools as native pi tools puts all their JSON input
+// schemas in the system prompt on every turn (~48k tokens for a few servers, and
+// O(servers) as more are added). Instead, only the internal recall server stays
+// native; all other servers are fronted by two meta-tools (invoke_tool/describe_tool)
+// over a `clients` map, and a cheap names+signatures catalog is injected per turn by
+// the main process (see buildMcpCatalogContext). The model discovers tools from the
+// catalog and calls them through invoke_tool; full schemas come from describe_tool
+// only when needed. Token floor stays ~flat regardless of server count.
+
+/** Register one MCP tool as a native pi tool (used only for the eager recall server). */
+function registerNativeMcpTool(pi, name, spec, client, tool) {
+  const toolName = spec.trusted ? sanitizeToolName(tool.name) : sanitizeToolName(`${name}_${tool.name}`);
+  pi.registerTool({
+    name: toolName,
+    label: tool.title || tool.name,
+    description: tool.description || `MCP tool "${tool.name}" from ${name}`,
+    parameters: tool.inputSchema || { type: 'object', properties: {} },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!spec.trusted && ctx && ctx.ui && typeof ctx.ui.confirm === 'function') {
+        const ok = await ctx.ui.confirm('Allow MCP tool', `Run ${name} → ${tool.name}?`);
+        if (!ok) return { content: [{ type: 'text', text: 'Denied by user.' }], details: {} };
+      }
+      const result = await client.callTool(tool.name, params || {});
+      const content = Array.isArray(result && result.content)
+        ? result.content
+        : [{ type: 'text', text: JSON.stringify(result ?? null) }];
+      return { content, details: {} };
+    }
+  });
+}
+
+function errText(text) {
+  return { content: [{ type: 'text', text }], details: {}, isError: true };
+}
+
+/** Register the router meta-tools over the connected (non-eager) clients map. */
+function registerRouterTools(pi, clients) {
+  pi.registerTool({
+    name: 'invoke_tool',
+    label: 'Use a tool',
+    description:
+      'Call a tool on one of the MCP servers listed in the "Available tools" catalog in this turn\'s context. ' +
+      'Pass the server name, the exact tool name, and an args object matching that tool. If you are unsure of a ' +
+      "tool's arguments, call describe_tool first. Only use servers and tools shown in the catalog — do not invent them.",
+    parameters: {
+      type: 'object',
+      properties: {
+        server: { type: 'string', description: 'Server name from the catalog.' },
+        tool: { type: 'string', description: 'Exact tool name on that server.' },
+        args: { type: 'object', description: 'Arguments matching the tool input schema.', additionalProperties: true }
+      },
+      required: ['server', 'tool']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const server = String((params && params.server) || '');
+      const toolName = String((params && params.tool) || '');
+      const entry = clients.get(server);
+      if (!entry) return errText(`No connected MCP server named "${server}". See the Available tools catalog.`);
+      const def = entry.tools.find((t) => t.name === toolName);
+      if (!def) return errText(`Server "${server}" has no tool "${toolName}".`);
+      // Preserve the per-call trusted gate (parity with the eager path): untrusted
+      // servers confirm via ctx.ui; in practice all Stem-added servers are trusted.
+      if (!entry.spec.trusted && ctx && ctx.ui && typeof ctx.ui.confirm === 'function') {
+        const ok = await ctx.ui.confirm('Allow MCP tool', `Run ${server} → ${def.name}?`);
+        if (!ok) return { content: [{ type: 'text', text: 'Denied by user.' }], details: {} };
+      }
+      const result = await entry.client.callTool(def.name, (params && params.args) || {});
+      const content = Array.isArray(result && result.content)
+        ? result.content
+        : [{ type: 'text', text: JSON.stringify(result ?? null) }];
+      // details carries the real server/tool so normalize.ts can recover the activity label.
+      return { content, details: { server, tool: def.name } };
+    }
+  });
+
+  pi.registerTool({
+    name: 'describe_tool',
+    label: 'Describe a tool',
+    description:
+      'Return the full JSON input schema for one tool on a configured MCP server, so you can build a correct ' +
+      "invoke_tool call. Only needed when a tool's arguments are not obvious from the catalog signature.",
+    parameters: {
+      type: 'object',
+      properties: {
+        server: { type: 'string', description: 'Server name from the catalog.' },
+        tool: { type: 'string', description: 'Exact tool name on that server.' }
+      },
+      required: ['server', 'tool']
+    },
+    async execute(_id, params) {
+      const server = String((params && params.server) || '');
+      const toolName = String((params && params.tool) || '');
+      const entry = clients.get(server);
+      const def = entry && entry.tools.find((t) => t.name === toolName);
+      if (!def) return errText(`No such tool "${toolName}" on server "${server}".`);
+      const text = JSON.stringify(
+        { server, name: def.name, description: def.description || '', inputSchema: def.inputSchema || { type: 'object' } },
+        null,
+        2
+      );
+      return { content: [{ type: 'text', text }], details: {} };
+    }
+  });
+}
+
+/** First sentence (or ~120 chars) of a tool description, collapsed to one line. */
+function oneLine(desc) {
+  if (!desc || typeof desc !== 'string') return '';
+  const flat = desc.replace(/\s+/g, ' ').trim();
+  const stop = flat.indexOf('. ');
+  const s = stop > 0 && stop < 120 ? flat.slice(0, stop + 1) : flat;
+  return s.length > 120 ? `${s.slice(0, 117)}…` : s;
+}
+
+/** Compact "(req, req, opt?)" signature from a JSON-Schema object (required first). */
+function compactSig(schema) {
+  if (!schema || typeof schema !== 'object' || !schema.properties || typeof schema.properties !== 'object') {
+    return '()';
+  }
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  const keys = Object.keys(schema.properties);
+  if (!keys.length) return '()';
+  const req = keys.filter((k) => required.has(k));
+  const opt = keys.filter((k) => !required.has(k)).map((k) => `${k}?`);
+  const ordered = [...req, ...opt];
+  const shown = ordered.slice(0, 8);
+  const more = ordered.length > shown.length ? ', …' : '';
+  return `(${shown.join(', ')}${more})`;
+}
+
+/** Names+signatures catalog text for the routed servers (the cheap per-turn list). */
+function buildCatalogText(clients) {
+  const sections = [];
+  for (const [name, { tools }] of clients) {
+    const lines = tools.map((t) => {
+      const desc = oneLine(t.description);
+      const sig = compactSig(t.inputSchema);
+      return desc ? `  - ${t.name}: ${desc} — ${sig}` : `  - ${t.name}: ${sig}`;
+    });
+    sections.push(`### ${name} (${tools.length} tool${tools.length === 1 ? '' : 's'})\n${lines.join('\n')}`);
+  }
+  return sections.join('\n\n');
+}
+
 export default async function stemMcpBridge(pi) {
   const cfgPath = process.env.STEM_MCP_CONFIG;
   if (!cfgPath) return;
@@ -358,6 +509,9 @@ export default async function stemMcpBridge(pi) {
     }
   };
 
+  // Non-eager servers go here; their tools are reached via the router meta-tools.
+  const clients = new Map(); // name -> { client, spec, tools }
+
   for (const [name, spec] of Object.entries(servers)) {
     if (spec.disabled) continue;
     // Remote (Streamable HTTP — static header or OAuth) or local (stdio); both
@@ -368,25 +522,12 @@ export default async function stemMcpBridge(pi) {
     try {
       client.start();
       const tools = await client.handshake();
-      for (const tool of tools) {
-        const toolName = spec.trusted ? sanitizeToolName(tool.name) : sanitizeToolName(`${name}_${tool.name}`);
-        pi.registerTool({
-          name: toolName,
-          label: tool.title || tool.name,
-          description: tool.description || `MCP tool "${tool.name}" from ${name}`,
-          parameters: tool.inputSchema || { type: 'object', properties: {} },
-          async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-            if (!spec.trusted && ctx && ctx.ui && typeof ctx.ui.confirm === 'function') {
-              const ok = await ctx.ui.confirm('Allow MCP tool', `Run ${name} → ${tool.name}?`);
-              if (!ok) return { content: [{ type: 'text', text: 'Denied by user.' }], details: {} };
-            }
-            const result = await client.callTool(tool.name, params || {});
-            const content = Array.isArray(result && result.content)
-              ? result.content
-              : [{ type: 'text', text: JSON.stringify(result ?? null) }];
-            return { content, details: {} };
-          }
-        });
+      if (name === RECALL_SERVER_NAME) {
+        // Internal recall server: keep eager (used every turn) as native pi tools.
+        for (const tool of tools) registerNativeMcpTool(pi, name, spec, client, tool);
+      } else {
+        // Everything else: behind the lazy router + the per-turn catalog.
+        clients.set(name, { client, spec, tools });
       }
       status[name] = { status: 'ready', error: null };
     } catch (e) {
@@ -394,9 +535,24 @@ export default async function stemMcpBridge(pi) {
     }
   }
 
+  // Register the router meta-tools over the connected servers.
+  registerRouterTools(pi, clients);
+
   // Publish connection status so Stem's main process can surface it (getMcpStatus).
   try {
     writeFileSync(join(dirname(cfgPath), 'mcp-status.json'), JSON.stringify(status, null, 2));
+  } catch {
+    // best-effort
+  }
+
+  // Publish the names+signatures catalog so the main process can inject it each
+  // turn (cheap discovery; full schemas come from describe_tool). Always written —
+  // an empty object clears a stale catalog when no routed servers are connected.
+  try {
+    writeFileSync(
+      join(dirname(cfgPath), 'mcp-catalog.json'),
+      JSON.stringify({ text: buildCatalogText(clients) }, null, 2)
+    );
   } catch {
     // best-effort
   }

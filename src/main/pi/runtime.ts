@@ -25,6 +25,7 @@ import { resolveAttachments, type PiImageContent } from './attachments';
 import { captureUserMessage } from '../recall/capture';
 import type { ChatBackend } from '../backend/types';
 import {
+  buildMcpCatalogContext,
   ensureMcpConfig,
   piExtensionPath,
   piMcpStatusPath,
@@ -978,6 +979,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
     const files = await buildFilesContext();
     if (files) blocks.push(files);
+    // Cheap names+signatures catalog of routed MCP tools (schemas fetched on demand
+    // via describe_tool). Keeps the prompt floor flat as more servers are added.
+    const catalog = buildMcpCatalogContext();
+    if (catalog) blocks.push(catalog);
     if (input.format === 'md') blocks.push(PLAIN_MD_DIRECTIVE);
 
     // Images go to pi natively; text-like files are inlined, binaries noted and dropped.
