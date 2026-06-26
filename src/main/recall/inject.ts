@@ -41,6 +41,15 @@ function clip(text: string, max: number): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
+/** Per-stage latency breakdown for one buildRecallContext call (ms). */
+export interface RecallTimings {
+  facts?: number; // chooseFacts total (embed + cosine + rerank, or cheap path)
+  embed?: number; // query embed + lazy fact-vector backfill
+  rerank?: number; // reranker round-trip
+  search?: number; // FTS5 episodic search
+  total?: number; // buildRecallContext wall time
+}
+
 /** Cosine-rank `facts` against the query vector; return the top `m` facts. */
 function cosineTopM(qVec: Float32Array, facts: Fact[], vectors: Map<number, Float32Array>, m: number): Fact[] {
   const qMag = magnitude(qVec) || 1;
@@ -60,11 +69,12 @@ function cosineTopM(qVec: Float32Array, facts: Fact[], vectors: Map<number, Floa
  * K (or cosine top-K when no reranker). Throws on any unavailability/error so the
  * caller can fall back to recency.
  */
-async function selectRelevantFacts(userText: string, facts: Fact[]): Promise<Fact[]> {
+async function selectRelevantFacts(userText: string, facts: Fact[], timings?: RecallTimings): Promise<Fact[]> {
   const emb = getEmbeddingsClient();
   if (!emb || !(await emb.available())) throw new Error('embeddings unavailable');
   const model = (await emb.modelId()) ?? '';
 
+  const embStart = Date.now();
   const [qVec] = await emb.embed([userText]);
 
   // Lazily embed only facts missing a vector for this model, then cache them.
@@ -73,6 +83,7 @@ async function selectRelevantFacts(userText: string, facts: Fact[]): Promise<Fac
     const vecs = await emb.embed(missing.map((f) => f.text));
     missing.forEach((f, i) => upsertFactVector(f.id, model, vecs[i]));
   }
+  if (timings) timings.embed = Date.now() - embStart;
 
   const vectors = getFactVectors(model);
   const candidates = cosineTopM(qVec, facts, vectors, getFactCosineM());
@@ -80,26 +91,29 @@ async function selectRelevantFacts(userText: string, facts: Fact[]): Promise<Fac
 
   const rr = getRerankClient();
   if (rr && candidates.length > 0 && (await rr.available())) {
+    const rrStart = Date.now();
     try {
       const ranked = await rr.rerank(userText, candidates.map((f) => f.text), k);
       const picked = ranked.map((r) => candidates[r.index]).filter((f): f is Fact => !!f);
+      if (timings) timings.rerank = Date.now() - rrStart;
       if (picked.length > 0) return picked;
     } catch {
       // The reranker is the optional precision stage. If it's down/misconfigured,
       // degrade to the cosine ranking rather than discarding the (working) embedding
       // result and falling all the way back to recency.
+      if (timings) timings.rerank = Date.now() - rrStart;
     }
   }
   return candidates.slice(0, k);
 }
 
 /** Choose which durable facts to inject this turn (see module header). */
-async function chooseFacts(userText: string): Promise<Fact[]> {
+async function chooseFacts(userText: string, timings?: RecallTimings): Promise<Fact[]> {
   const all = getAllFacts();
   const threshold = getFactThreshold();
   if (all.length <= threshold) return all; // cheap path: inject everything
   try {
-    return await selectRelevantFacts(userText, all);
+    return await selectRelevantFacts(userText, all, timings);
   } catch {
     // Endpoint disabled/unreachable/error → recency fallback (never break a turn).
     return getFacts(threshold);
@@ -109,6 +123,8 @@ async function chooseFacts(userText: string): Promise<Fact[]> {
 export interface BuildContextOptions {
   /** The current chat — its hits are excluded (already in context). */
   currentThreadId?: string | null;
+  /** Optional sink: filled with the per-stage latency breakdown of this call. */
+  timings?: RecallTimings;
 }
 
 /**
@@ -120,11 +136,22 @@ export async function buildRecallContext(
   userText: string,
   options: BuildContextOptions = {}
 ): Promise<string | null> {
-  const facts = await chooseFacts(userText);
+  const timings = options.timings;
+  const totalStart = Date.now();
+
+  const factsStart = Date.now();
+  const facts = await chooseFacts(userText, timings);
+  if (timings) timings.facts = Date.now() - factsStart;
+
+  const searchStart = Date.now();
   const hits = searchMemory(userText, {
     limit: MAX_HITS,
     excludeThreadId: options.currentThreadId ?? null
   }).filter((h) => h.score <= SCORE_CEILING);
+  if (timings) {
+    timings.search = Date.now() - searchStart;
+    timings.total = Date.now() - totalStart;
+  }
 
   if (facts.length === 0 && hits.length === 0) return null;
 

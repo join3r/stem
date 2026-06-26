@@ -232,6 +232,33 @@ export function QuickChat() {
     },
     [rerunFromTurn]
   );
+  // Delete this turn and everything after it (truncate, no re-send). First turn →
+  // delete the whole thread and reset to a fresh session.
+  const onDelete = useCallback(
+    async (turnId: string) => {
+      if (!threadId || running) return;
+      const userIdx = messages.findIndex((m) => m.turnId === turnId && m.role === 'user');
+      if (userIdx === -1) return;
+      if (userIdx === 0) {
+        try {
+          await window.stem.deleteChat(threadId);
+        } catch (e) {
+          pushSystem(e);
+          return;
+        }
+        resetSession();
+        return;
+      }
+      try {
+        await window.stem.rollbackToTurn(threadId, turnId);
+      } catch (e) {
+        pushSystem(e);
+        return;
+      }
+      setChatState((s) => ({ ...s, messages: s.messages.slice(0, userIdx) }));
+    },
+    [threadId, running, messages, resetSession, pushSystem]
+  );
   // Fork: branch the thread and continue the branch in the main app.
   const onFork = useCallback(
     async (turnId: string) => {
@@ -318,6 +345,7 @@ export function QuickChat() {
           onRetry={onRetry}
           onEdit={onEdit}
           onFork={onFork}
+          onDelete={onDelete}
           models={models}
           model={selectedModel}
           effort={effort}

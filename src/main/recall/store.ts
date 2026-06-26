@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { recallDbPath } from '../workspace/paths';
-import type { EmbeddingCacheStats, EpisodicStats } from '../../shared/types';
+import type { EmbeddingCacheStats, EpisodicStats, TurnTiming } from '../../shared/types';
 
 // Stem Recall's storage layer. Owns recall.sqlite end-to-end so the memory
 // system is decoupled from the chat backend (pi today, anything later).
@@ -131,6 +131,23 @@ function open(): DatabaseSync {
       key   TEXT PRIMARY KEY,
       value TEXT
     );
+
+    -- Per-turn answer-time breakdown, surfaced on the assistant message. Keyed by
+    -- the FINAL assistant entry id (pi's session entry id) so readThread can attach
+    -- it to the rebuilt assistant bubble on reopen. Independent of recall capture.
+    CREATE TABLE IF NOT EXISTS turn_timings (
+      turn_entry_id TEXT PRIMARY KEY,
+      thread_id     TEXT NOT NULL,
+      total_ms      INTEGER,
+      thinking_ms   INTEGER NOT NULL,
+      tool_ms       INTEGER NOT NULL,
+      answer_ms     INTEGER NOT NULL,
+      ttft_ms       INTEGER,
+      build_ms      INTEGER,
+      recall_ms     INTEGER,
+      created_at    INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_turn_timings_thread ON turn_timings(thread_id);
   `);
   db = handle;
   return handle;
@@ -159,6 +176,86 @@ export function recordMessage(input: RecordMessageInput): void {
       text,
       dedupKey(input.threadId, input.role, text)
     );
+}
+
+export interface TurnTimingRecord {
+  /** pi's final assistant entry id for the turn — the persistence key. */
+  turnEntryId: string;
+  threadId: string;
+  totalMs: number | null;
+  thinkingMs: number;
+  toolMs: number;
+  answerMs: number;
+  ttftMs: number | null;
+  buildMs: number | null;
+  recallMs: number | null;
+}
+
+/** Persist (or replace) a turn's answer-time breakdown. Best-effort; keyed by entry id. */
+export function upsertTurnTiming(rec: TurnTimingRecord): void {
+  const handle = open();
+  handle
+    .prepare(
+      `INSERT INTO turn_timings
+         (turn_entry_id, thread_id, total_ms, thinking_ms, tool_ms, answer_ms, ttft_ms, build_ms, recall_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(turn_entry_id) DO UPDATE SET
+         thread_id = excluded.thread_id,
+         total_ms = excluded.total_ms,
+         thinking_ms = excluded.thinking_ms,
+         tool_ms = excluded.tool_ms,
+         answer_ms = excluded.answer_ms,
+         ttft_ms = excluded.ttft_ms,
+         build_ms = excluded.build_ms,
+         recall_ms = excluded.recall_ms`
+    )
+    .run(
+      rec.turnEntryId,
+      rec.threadId,
+      rec.totalMs,
+      rec.thinkingMs,
+      rec.toolMs,
+      rec.answerMs,
+      rec.ttftMs,
+      rec.buildMs,
+      rec.recallMs,
+      nowSeconds()
+    );
+}
+
+/** Load a thread's persisted turn timings, keyed by final assistant entry id. */
+export function getTurnTimingsByThread(threadId: string): Map<string, TurnTiming> {
+  const handle = open();
+  const rows = handle
+    .prepare(
+      `SELECT turn_entry_id AS entryId, total_ms AS totalMs, thinking_ms AS thinkingMs,
+              tool_ms AS toolMs, answer_ms AS answerMs, ttft_ms AS ttftMs,
+              build_ms AS buildMs, recall_ms AS recallMs
+       FROM turn_timings WHERE thread_id = ?`
+    )
+    .all(threadId) as Array<{
+    entryId: string;
+    totalMs: number | null;
+    thinkingMs: number;
+    toolMs: number;
+    answerMs: number;
+    ttftMs: number | null;
+    buildMs: number | null;
+    recallMs: number | null;
+  }>;
+  const out = new Map<string, TurnTiming>();
+  for (const r of rows) {
+    out.set(r.entryId, {
+      totalMs: r.totalMs,
+      thinkingMs: r.thinkingMs,
+      toolMs: r.toolMs,
+      answerMs: r.answerMs,
+      ttftMs: r.ttftMs,
+      buildMs: r.buildMs,
+      recallMs: r.recallMs
+    });
+  }
+  return out;
 }
 
 /**

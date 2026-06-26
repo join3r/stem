@@ -242,6 +242,16 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   transition: opacity var(--motion-fast) ease;
 }
 .message:hover .message-meta { opacity: 1; }
+/* Answer-time breakdown (total · thinking · tools) — same muted, hover-revealed
+   treatment as .message-meta so it sits quietly next to the model label. */
+.message-timing {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  opacity: 0;
+  transition: opacity var(--motion-fast) ease;
+}
+.message:hover .message-timing { opacity: 1; }
 .message-plain { white-space: pre-wrap; margin: 0; }
 .message-system .message-who { color: var(--danger); }
 .message-system .message-plain { color: var(--danger); }
@@ -269,6 +279,14 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   cursor: pointer;
 }
 .message-action:hover { background: var(--sel); border-color: var(--line); color: var(--ink); }
+/* Armed delete (first click): turns destructive to signal the second click deletes
+   this turn and everything after it. */
+.message-action.danger,
+.message-action.danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
 
 /* Inline editor that replaces a user message's body while editing. */
 .message-edit { display: flex; flex-direction: column; gap: var(--sp-4); }

@@ -19,7 +19,7 @@ import type {
 } from '../../shared/types';
 import { PLAIN_MD_DIRECTIVE, STEM_ASSISTANT_INSTRUCTIONS } from '../workspace/bootstrap';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
-import { buildRecallContext } from '../recall/inject';
+import { buildRecallContext, type RecallTimings } from '../recall/inject';
 import { buildFilesContext } from '../files/inject';
 import { resolveAttachments, type PiImageContent } from './attachments';
 import { captureUserMessage } from '../recall/capture';
@@ -36,7 +36,15 @@ import { authorizeMcp } from './oauth';
 import { piMcpConfigPath } from '../workspace/paths';
 import { findPiPath } from './locate';
 import { PiProcess, type PiEvent } from './rpc';
-import { newTurnContext, normalizePiEvent, type TurnContext } from './normalize';
+import {
+  newTurnContext,
+  normalizePiEvent,
+  phaseOfEvents,
+  type NormalizedEvent,
+  type TurnContext,
+  type TurnTimingBreakdown
+} from './normalize';
+import { getTurnTimingsByThread, upsertTurnTiming } from '../recall/store';
 import { ForegroundSessionGate } from './session-gate';
 
 // Default provider/model. openai-codex is the user's working ChatGPT subscription
@@ -249,7 +257,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
 
     return this.foreground.run(async () => {
+      const startedAt = Date.now();
       await this.ensureStarted();
+      const ensureMs = Date.now() - startedAt;
 
       // First turn of a new chat — either a draft started here (no threadId) or a
       // session pre-created via createThread (Quick Chat) that hasn't been prompted.
@@ -259,7 +269,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (input.effort) await this.setThinking(input.effort);
 
       const turnId = randomUUID();
-      this.currentTurn = newTurnContext(threadId, turnId);
+      const turn = newTurnContext(threadId, turnId);
+      turn.startedAt = startedAt;
+      turn.ensureMs = ensureMs;
+      turn.recall = {};
+      this.currentTurn = turn;
       this.foreground.claimTurn();
 
       try {
@@ -267,7 +281,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // so the bridge can't tell them apart — we set the gate just before the prompt).
         await writeNativeSearchGate(input.webSearch ?? true).catch(() => undefined);
 
-        const { message, images } = await this.buildMessage(input, threadId);
+        const buildStart = Date.now();
+        const { message, images } = await this.buildMessage(input, threadId, turn.recall);
+        turn.buildMs = Date.now() - buildStart;
+        // Anchor "send" at the write itself so send→firstToken is independent of how
+        // pi acks the prompt command. The pre-first-event wait is attributed to no
+        // phase bucket (it's TTFT, not thinking) — see advancePhase.
+        turn.promptSentAt = Date.now();
+        turn.lastEventAt = turn.promptSentAt;
         const res = await this.proc!.request({
           type: 'prompt',
           message,
@@ -443,6 +464,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     let title = 'New chat';
     const messages: ChatMessage[] = [];
     let lastUserId = '';
+    // Persisted answer-time breakdowns, keyed by the final assistant entry id.
+    const timings = getTurnTimingsByThread(threadId);
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
       let entry: {
@@ -474,8 +497,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             ...(images.length ? { attachments: images } : {})
           });
       } else if (role === 'assistant') {
-        if (content.trim())
-          messages.push({ id: `assistant-${entry.id}`, role: 'assistant', content, turnId: lastUserId || entry.id });
+        if (content.trim()) {
+          const timing = entry.id ? timings.get(entry.id) : undefined;
+          messages.push({
+            id: `assistant-${entry.id}`,
+            role: 'assistant',
+            content,
+            turnId: lastUserId || entry.id,
+            ...(timing ? { timing } : {})
+          });
+        }
       }
     }
     return { title, messages };
@@ -717,22 +748,118 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (!this.currentTurn) return;
     const turn = this.currentTurn;
     const { events, done } = normalizePiEvent(ev, turn);
+    const now = Date.now();
+    if (events.length) {
+      if (turn.firstActivityAt === undefined) turn.firstActivityAt = now;
+      if (turn.firstTokenAt === undefined && events.some((e) => e.method === 'item/agentMessage/delta')) {
+        turn.firstTokenAt = now;
+      }
+      this.advancePhase(turn, events, now);
+    }
     for (const e of events) this.emitEvent(e.method, e.params);
     if (done) {
+      turn.endedAt = now;
+      this.advancePhase(turn, [], now); // flush the trailing segment
+      this.reportTurnTiming(turn);
       this.finishTurn();
-      // Map this live turn's minted id to its persisted user-entry id so a later
-      // fork/edit on the just-streamed message can target the right pi entry.
-      void this.recordTurnEntry(turn.threadId, turn.turnId);
+      // Map this live turn's minted id to its persisted entry id so a later
+      // fork/edit targets the right pi entry — and persist the turn's timing.
+      void this.recordTurnEntry(turn);
     }
   }
 
-  private async recordTurnEntry(threadId: string, turnId: string): Promise<void> {
+  /**
+   * Attribute the interval since the last event to the phase that was active, then
+   * switch to the phase the new events represent. The first interval (promptSent →
+   * first event) is skipped because phase starts 'pending' — that wait is TTFT, not
+   * thinking. Approximate: a tool's idle gap until the next event counts as tool time.
+   */
+  private advancePhase(turn: TurnContext, events: NormalizedEvent[], now: number): void {
+    if (turn.phase !== 'pending' && turn.lastEventAt !== undefined) {
+      const dt = now - turn.lastEventAt;
+      if (turn.phase === 'thinking') turn.thinkingMs += dt;
+      else if (turn.phase === 'tool') turn.toolMs += dt;
+      else if (turn.phase === 'answer') turn.answerMs += dt;
+    }
+    const next = phaseOfEvents(events);
+    if (next) turn.phase = next;
+    turn.lastEventAt = now;
+  }
+
+  /**
+   * Log a one-line latency breakdown for a finished turn and emit it as a
+   * `turn/timing` event. Splits the wall time into pre-send work (build/recall,
+   * which is dead time the user waits through before any response) vs. the model's
+   * own time-to-first-token and generation, so a slow turn can be attributed.
+   */
+  private reportTurnTiming(turn: TurnContext): void {
+    const { startedAt, promptSentAt, firstActivityAt, firstTokenAt, endedAt } = turn;
+    if (startedAt === undefined || endedAt === undefined) return;
+    const ms = (a?: number, b?: number): number | null =>
+      a === undefined || b === undefined ? null : Math.round(b - a);
+    const r = turn.recall ?? {};
+    const breakdown: TurnTimingBreakdown = {
+      threadId: turn.threadId,
+      turnId: turn.turnId,
+      ensureMs: turn.ensureMs ?? 0,
+      buildMs: turn.buildMs ?? null,
+      recall: {
+        total: r.total ?? null,
+        facts: r.facts ?? null,
+        embed: r.embed ?? null,
+        rerank: r.rerank ?? null,
+        search: r.search ?? null
+      },
+      thinkingMs: turn.thinkingMs,
+      toolMs: turn.toolMs,
+      answerMs: turn.answerMs,
+      sendToFirstActivityMs: ms(promptSentAt, firstActivityAt),
+      sendToFirstTokenMs: ms(promptSentAt, firstTokenAt),
+      firstTokenToEndMs: ms(firstTokenAt, endedAt),
+      totalMs: ms(startedAt, endedAt)
+    };
+    const fmt = (n: number | null): string => (n === null ? '—' : `${n}ms`);
+    const recallStr =
+      r.total === undefined
+        ? ''
+        : ` recall=${fmt(r.total ?? null)}[facts=${fmt(r.facts ?? null)} embed=${fmt(r.embed ?? null)}` +
+          ` rerank=${fmt(r.rerank ?? null)} search=${fmt(r.search ?? null)}]`;
+    console.log(
+      `[turn timing] build=${fmt(breakdown.buildMs)}${recallStr} ` +
+        `think=${fmt(breakdown.thinkingMs)} tools=${fmt(breakdown.toolMs)} answer=${fmt(breakdown.answerMs)} ` +
+        `send→first=${fmt(breakdown.sendToFirstTokenMs)} ` +
+        `first→end=${fmt(breakdown.firstTokenToEndMs)} total=${fmt(breakdown.totalMs)}` +
+        (breakdown.ensureMs ? ` (ensure=${breakdown.ensureMs}ms)` : '')
+    );
+    // Stash for recordTurnEntry to persist once the assistant entry id resolves.
+    turn.timing = breakdown;
+    this.emitEvent('turn/timing', breakdown);
+  }
+
+  private async recordTurnEntry(turn: TurnContext): Promise<void> {
     try {
-      if (!this.proc || this.activeThreadId !== threadId) return;
+      if (!this.proc || this.activeThreadId !== turn.threadId) return;
       const fm = await this.proc.request({ type: 'get_fork_messages' });
       const entries = (fm.data as { messages?: { entryId: string }[] } | undefined)?.messages ?? [];
       const last = entries[entries.length - 1];
-      if (last) this.turnEntryIds.set(turnId, last.entryId);
+      if (!last) return;
+      this.turnEntryIds.set(turn.turnId, last.entryId);
+      // Persist timing keyed by the FINAL assistant entry id — readThread rebuilds
+      // that same bubble from entry.id on reopen, so the lookup matches.
+      const b = turn.timing;
+      if (b) {
+        upsertTurnTiming({
+          turnEntryId: last.entryId,
+          threadId: turn.threadId,
+          totalMs: b.totalMs,
+          thinkingMs: b.thinkingMs,
+          toolMs: b.toolMs,
+          answerMs: b.answerMs,
+          ttftMs: b.sendToFirstTokenMs,
+          buildMs: b.buildMs,
+          recallMs: b.recall.total
+        });
+      }
     } catch {
       // best-effort; rollback/fork will surface a clear error if unresolved
     }
@@ -838,11 +965,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   /** Assemble the prompt: prepend recall/files/format context (pi has no per-turn context field). */
   private async buildMessage(
     input: StartTurnInput,
-    threadId: string
+    threadId: string,
+    recallTimings?: RecallTimings
   ): Promise<{ message: string; images: PiImageContent[] }> {
     const blocks: string[] = [];
     if (isRecallEnabled()) {
-      const recall = await buildRecallContext(input.input, { currentThreadId: threadId });
+      const recall = await buildRecallContext(input.input, {
+        currentThreadId: threadId,
+        timings: recallTimings
+      });
       if (recall) blocks.push(recall);
     }
     const files = await buildFilesContext();

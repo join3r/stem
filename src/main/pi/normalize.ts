@@ -25,10 +25,78 @@ export interface TurnContext {
   errored: boolean;
   aborted: boolean;
   errorMessage?: string;
+  /**
+   * Per-turn latency marks (ms epoch / durations), populated by PiRuntime — NOT by
+   * the normalizer, which stays pure. Used to log a one-line breakdown at turn end
+   * so we can see whether the lag is pre-send (recall/build) or the model itself.
+   */
+  startedAt?: number; // foreground work began (before ensureStarted)
+  promptSentAt?: number; // just before the `prompt` RPC is written
+  firstActivityAt?: number; // first streamed event of any kind (thinking/tool/text)
+  firstTokenAt?: number; // first answer text delta
+  endedAt?: number; // agent_end
+  ensureMs?: number; // ensureStarted cost (process spawn on a cold turn)
+  buildMs?: number; // buildMessage total (recall + files + attachments)
+  recall?: { facts?: number; embed?: number; rerank?: number; search?: number; total?: number };
+  /**
+   * Approximate wall-time split, accumulated by PiRuntime: each inter-event
+   * interval is attributed to the phase that was active. These do NOT sum to the
+   * total — the pre-first-event wait (TTFT) and build/recall time are in no bucket.
+   */
+  thinkingMs: number;
+  toolMs: number;
+  answerMs: number;
+  phase: 'pending' | 'thinking' | 'tool' | 'answer';
+  lastEventAt?: number; // epoch ms of the last normalized event, for interval attribution
+  timing?: TurnTimingBreakdown; // stashed by reportTurnTiming so recordTurnEntry can persist it
+}
+
+/** The breakdown object PiRuntime.reportTurnTiming builds and emits as `turn/timing`. */
+export interface TurnTimingBreakdown {
+  threadId: string;
+  turnId: string;
+  ensureMs: number;
+  buildMs: number | null;
+  recall: { total: number | null; facts: number | null; embed: number | null; rerank: number | null; search: number | null };
+  thinkingMs: number;
+  toolMs: number;
+  answerMs: number;
+  sendToFirstActivityMs: number | null;
+  sendToFirstTokenMs: number | null;
+  firstTokenToEndMs: number | null;
+  totalMs: number | null;
 }
 
 export function newTurnContext(threadId: string, turnId: string): TurnContext {
-  return { threadId, turnId, assistantText: '', errored: false, aborted: false };
+  return {
+    threadId,
+    turnId,
+    assistantText: '',
+    errored: false,
+    aborted: false,
+    thinkingMs: 0,
+    toolMs: 0,
+    answerMs: 0,
+    phase: 'pending'
+  };
+}
+
+/**
+ * Classify a batch of normalized events into the phase they represent, for the
+ * thinking/tool/answer wall-time split. Answer (text) wins over thinking/tool when
+ * a batch carries several, so streaming text isn't mis-attributed.
+ */
+export function phaseOfEvents(events: NormalizedEvent[]): TurnContext['phase'] | undefined {
+  let next: TurnContext['phase'] | undefined;
+  for (const e of events) {
+    if (e.method === 'item/agentMessage/delta') return 'answer';
+    if (e.method === 'item/started') {
+      const type = (e.params as { item?: { type?: string } }).item?.type;
+      if (type === 'reasoning') next = 'thinking';
+      else if (type && type !== 'agentMessage') next = 'tool';
+    }
+  }
+  return next;
 }
 
 interface AssistantMessageEvent {

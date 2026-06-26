@@ -13,6 +13,26 @@ export interface MessageMeta {
 }
 
 /**
+ * Per-turn answer-time breakdown shown on an assistant message. `totalMs` is the
+ * headline (send→end). `thinkingMs`/`toolMs`/`answerMs` are measured wall-time
+ * sub-segments and intentionally do NOT sum to the total — pre-first-token wait
+ * and recall/build time sit in no segment. Persisted in recall.sqlite keyed by
+ * the final assistant entry id so it survives reopen.
+ */
+export interface TurnTiming {
+  totalMs: number | null;
+  thinkingMs: number;
+  toolMs: number;
+  answerMs: number;
+  /** Send → first answer token (time-to-first-token). */
+  ttftMs?: number | null;
+  /** Pre-send context build (recall + files + attachments). */
+  buildMs?: number | null;
+  /** Recall context assembly portion of buildMs. */
+  recallMs?: number | null;
+}
+
+/**
  * A user attachment as shown in the chat bubble. Images carry a `dataUrl` for an inline
  * `<img>` thumbnail; non-image files render as a chip with just a `name`. Distinct from
  * the send-time {@link TurnAttachment} — this is the display/replay shape.
@@ -39,6 +59,8 @@ export interface ChatMessage {
    * turn for rollback/fork. Absent on optimistic bubbles until their turn resolves.
    */
   turnId?: string;
+  /** Assistant messages only: how long the answer took (total + thinking/tools). */
+  timing?: TurnTiming;
 }
 
 // ---- Runtime status (staged: binary -> health -> auth -> ready) ----
@@ -177,6 +199,22 @@ export interface ItemEventParams {
 export interface TurnCompletedParams {
   threadId: string;
   turn: { id: string; status: string; durationMs?: number | null };
+}
+
+/** `turn/timing` — per-turn latency breakdown emitted when a turn ends. */
+export interface TurnTimingParams {
+  threadId: string;
+  turnId: string;
+  ensureMs: number;
+  buildMs: number | null;
+  recall: { total: number | null; facts?: number | null; embed?: number | null; rerank?: number | null; search?: number | null };
+  thinkingMs: number;
+  toolMs: number;
+  answerMs: number;
+  sendToFirstActivityMs: number | null;
+  sendToFirstTokenMs: number | null;
+  firstTokenToEndMs: number | null;
+  totalMs: number | null;
 }
 
 /** `account/rateLimits/updated`. */

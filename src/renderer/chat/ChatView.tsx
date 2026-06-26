@@ -19,9 +19,12 @@ import {
   X,
   RotateCcw,
   Pencil,
-  GitBranch
+  GitBranch,
+  Copy,
+  Check,
+  Trash2
 } from 'lucide-react';
-import type { ChatMessage, ModelSummary, TurnAttachment } from '../../shared/types';
+import type { ChatMessage, ModelSummary, TurnAttachment, TurnTiming } from '../../shared/types';
 import { MdxView } from './MdxView';
 import { ShortcutHint, useShortcut } from '../shortcuts';
 import { MdxActionContext } from '../mdx/ActionContext';
@@ -69,6 +72,8 @@ interface ChatViewProps {
   onEdit: (turnId: string, newText: string) => void;
   /** Branch the conversation into a new chat ending at this turn. */
   onFork: (turnId: string) => void;
+  /** Delete this turn and everything after it (truncate, no re-send). */
+  onDelete: (turnId: string) => void;
   models: ModelSummary[];
   model: ModelSummary | null;
   effort: string | null;
@@ -92,6 +97,19 @@ function metaTooltip(meta: ChatMessage['meta'], models: ModelSummary[]): string 
   return parts.length ? parts.join(' · ') : undefined;
 }
 
+// Build the answer-time label: "12.4s · 8.1s thinking · 2.0s tools". Total is the
+// headline; thinking/tools are appended only when measurable (≥100ms) so trivial
+// turns just show the total. The parts intentionally don't sum to the total —
+// time-to-first-token and recall/build time sit outside any phase bucket.
+function formatTiming(t: TurnTiming): string | undefined {
+  const sec = (ms: number): string => `${(ms / 1000).toFixed(1)}s`;
+  const parts: string[] = [];
+  if (t.totalMs != null) parts.push(sec(t.totalMs));
+  if (t.thinkingMs >= 100) parts.push(`${sec(t.thinkingMs)} thinking`);
+  if (t.toolMs >= 100) parts.push(`${sec(t.toolMs)} tools`);
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
 export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({
   messages,
   running,
@@ -102,6 +120,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   onRetry,
   onEdit,
   onFork,
+  onDelete,
   models,
   model,
   effort,
@@ -118,6 +137,17 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   // Which user message is being edited inline, and its working text.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
+  // Transient per-message UI: which bubble just got copied (check icon), and which
+  // delete button is armed (first click → red; second click within 2.5s deletes).
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const copyMessage = useCallback((m: ChatMessage) => {
+    void navigator.clipboard.writeText(m.content).then(() => {
+      setCopiedId(m.id);
+      window.setTimeout(() => setCopiedId((c) => (c === m.id ? null : c)), 1500);
+    });
+  }, []);
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesRef = useAutoHideScroll<HTMLDivElement>();
@@ -305,6 +335,11 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 <div className="message-who">
                   {a.label}
                   {metaText && <span className="message-meta">{metaText}</span>}
+                  {m.role === 'assistant' && m.timing && formatTiming(m.timing) && (
+                    <span className="message-timing" title="total · thinking · tool execution">
+                      {formatTiming(m.timing)}
+                    </span>
+                  )}
                 </div>
                 {isEditing ? (
                   <div className="message-edit">
@@ -365,6 +400,14 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 )}
                 {canAct && !isEditing && (
                   <div className="message-actions">
+                    <button
+                      type="button"
+                      className="message-action"
+                      title={copiedId === m.id ? 'Copied' : 'Copy message'}
+                      onClick={() => copyMessage(m)}
+                    >
+                      {copiedId === m.id ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
                     {m.role === 'assistant' && (
                       <button
                         type="button"
@@ -392,6 +435,29 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                       onClick={() => onFork(m.turnId!)}
                     >
                       <GitBranch size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`message-action${confirmDeleteId === m.id ? ' danger' : ''}`}
+                      title={
+                        confirmDeleteId === m.id
+                          ? 'Click again to delete this turn and everything after it'
+                          : 'Delete from here'
+                      }
+                      onClick={() => {
+                        if (confirmDeleteId === m.id) {
+                          setConfirmDeleteId(null);
+                          onDelete(m.turnId!);
+                        } else {
+                          setConfirmDeleteId(m.id);
+                          window.setTimeout(
+                            () => setConfirmDeleteId((c) => (c === m.id ? null : c)),
+                            2500
+                          );
+                        }
+                      }}
+                    >
+                      <Trash2 size={13} />
                     </button>
                   </div>
                 )}

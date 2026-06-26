@@ -601,6 +601,32 @@ export default function App() {
     [chatList, refreshChats, openChat, setThread]
   );
 
+  // Delete this turn and everything after it. Reuses the rollbackToTurn truncation
+  // (same JSONL trim as retry) but does NOT re-send. Deleting the first turn would
+  // hit rollback's "no earlier history" guard, so that case removes the whole chat.
+  const onDeleteFromTurn = useCallback(
+    async (turnId: string) => {
+      const threadId = activeThreadIdRef.current;
+      if (!threadId) return;
+      const slice = threadStatesRef.current[threadId];
+      if (!slice || slice.running) return;
+      const userIdx = slice.messages.findIndex((m) => m.turnId === turnId && m.role === 'user');
+      if (userIdx === -1) return;
+      if (userIdx === 0) {
+        onDeleteChat(threadId);
+        return;
+      }
+      try {
+        await window.stem.rollbackToTurn(threadId, turnId);
+      } catch (e) {
+        setThread(threadId, (s) => appendSystemMessage(s, e));
+        return;
+      }
+      setThread(threadId, (s) => ({ messages: s.messages.slice(0, userIdx) }));
+    },
+    [onDeleteChat, setThread]
+  );
+
   // Unified draggable toolbar wraps every view (window has no native title bar).
   // `toolbar` lets each view supply its own controls; gate/loading show just the title.
   const titleOnly = (
@@ -669,6 +695,7 @@ export default function App() {
           onRetry={onRetry}
           onEdit={onEditMessage}
           onFork={onForkMessage}
+          onDelete={onDeleteFromTurn}
           models={models}
           model={selectedModel}
           effort={effort}
