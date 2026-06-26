@@ -256,6 +256,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     const next = efforts[(efforts.indexOf(effort ?? '') + 1) % efforts.length];
     onChangeEffort(next);
   });
+  useShortcut('toggle-speed', () => {
+    if (running || !hasFast) return;
+    onChangeSpeed(serviceTier === 'priority' ? null : 'priority');
+  });
   useShortcut('toggle-format', () => {
     if (running) return;
     onChangeFormat(format === 'mdx' ? 'md' : 'mdx');
@@ -494,6 +498,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
           )}
           {hasFast && (
             <div className="seg-ctl compact" role="group" aria-label="Speed">
+              <ShortcutHint id="toggle-speed" />
               <button
                 type="button"
                 className={serviceTier === 'priority' ? '' : 'active'}

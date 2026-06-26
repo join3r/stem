@@ -111,6 +111,21 @@ export async function writeNativeSearchGate(enabled: boolean): Promise<void> {
 }
 
 /**
+ * Per-turn gate the bridge's service-tier hook reads to decide whether to inject the
+ * OpenAI `service_tier` field on the next request. Like the web-search gate, the main
+ * process rewrites it just before each prompt (main vs Quick Chat share one pi process).
+ */
+export function piServiceTierPath(): string {
+  return join(piHome(), 'service-tier.json');
+}
+
+/** Write the `{ tier }` gate: 'priority' = Fast; null = Standard (omit service_tier). */
+export async function writeServiceTierGate(tier: string | null): Promise<void> {
+  await mkdir(piHome(), { recursive: true });
+  await writeFile(piServiceTierPath(), JSON.stringify({ tier }, null, 2), 'utf8');
+}
+
+/**
  * OAuth tokens for remote MCP servers, keyed by server name. Written by
  * PiRuntime.mcpLogin after a browser sign-in; the bridge reads it to inject the
  * bearer header and rewrites it when it refreshes an expired token.

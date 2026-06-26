@@ -327,6 +327,27 @@ function makeNativeSearchGate(nsPath) {
   };
 }
 
+/**
+ * Returns `tier()` reading the `{ tier }` gate in service-tier.json with an mtime cache,
+ * mirroring makeNativeSearchGate. Returns the requested OpenAI service tier ('priority')
+ * or null. A missing/corrupt file defaults to null (Standard — no service_tier sent).
+ */
+function makeServiceTierGate(stPath) {
+  let cache = { mtime: -1, tier: null };
+  return () => {
+    try {
+      const mtime = statSync(stPath).mtimeMs;
+      if (mtime !== cache.mtime) {
+        const data = JSON.parse(readFileSync(stPath, 'utf8'));
+        cache = { mtime, tier: data && typeof data.tier === 'string' ? data.tier : null };
+      }
+    } catch {
+      cache = { mtime: -1, tier: null };
+    }
+    return cache.tier;
+  };
+}
+
 // ---- Lazy MCP router ----
 //
 // Re-registering every server's tools as native pi tools puts all their JSON input
@@ -560,18 +581,36 @@ export default async function stemMcpBridge(pi) {
   // Stem self-management tools (list/add/remove MCP servers). Always available.
   registerAdminTools(pi, cfgPath);
 
-  // Restore native web search by injecting the provider's server-side tool into
-  // each outgoing request (gated per provider by native-search.json next to mcp.json).
+  // Mutate each outgoing request to (a) restore native web search by injecting the
+  // provider's server-side tool, and (b) apply the OpenAI service tier ("Fast"). Both
+  // are gated per turn by sibling files (native-search.json / service-tier.json) that
+  // the main process rewrites before each prompt, since main and Quick Chat share one
+  // pi process and the hook can't tell them apart.
   if (typeof pi.on === 'function') {
     const nativeSearchEnabled = makeNativeSearchGate(join(dirname(cfgPath), 'native-search.json'));
+    const serviceTier = makeServiceTierGate(join(dirname(cfgPath), 'service-tier.json'));
     pi.on('before_provider_request', (event) => {
       const p = event && event.payload;
-      if (!nativeSearchEnabled()) return undefined;
-      const tool = nativeSearchToolFor(p);
-      if (!tool) return undefined;
-      const tools = Array.isArray(p.tools) ? p.tools : [];
-      if (tools.some((t) => t && t.type === tool.type)) return undefined; // idempotent
-      return { ...p, tools: [...tools, tool] };
+      if (!p || typeof p !== 'object') return undefined;
+      let next; // lazily cloned on first mutation; undefined => no change
+
+      // (a) Native web search: add the provider's server-side tool.
+      if (nativeSearchEnabled()) {
+        const tool = nativeSearchToolFor(p);
+        const tools = Array.isArray(p.tools) ? p.tools : [];
+        if (tool && !tools.some((t) => t && t.type === tool.type)) {
+          next = { ...p, tools: [...tools, tool] };
+        }
+      }
+
+      // (b) Service tier: openai-codex responses accept service_tier:'priority' only.
+      const tier = serviceTier();
+      const isCodexBody = Array.isArray(p.input) && typeof p.instructions === 'string';
+      if (tier === 'priority' && isCodexBody && !p.service_tier) {
+        next = { ...(next ?? p), service_tier: tier };
+      }
+
+      return next;
     });
   }
 }

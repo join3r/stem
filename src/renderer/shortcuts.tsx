@@ -25,6 +25,7 @@ export type ShortcutId =
   | 'new-conversation'
   | 'toggle-inspector'
   | 'cycle-effort'
+  | 'toggle-speed'
   | 'toggle-format'
   | 'attach'
   | 'stop'
@@ -47,6 +48,7 @@ export const BINDINGS: Binding[] = [
   { id: 'new-conversation', glyphs: '⌘N', match: (e) => mod(e) && !e.shiftKey && isKey(e, 'n') },
   { id: 'toggle-inspector', glyphs: '⌘\\', match: (e) => mod(e) && isKey(e, '\\') },
   { id: 'cycle-effort', glyphs: '⌘E', match: (e) => mod(e) && !e.shiftKey && isKey(e, 'e') },
+  { id: 'toggle-speed', glyphs: '⌘⇧F', match: (e) => mod(e) && e.shiftKey && isKey(e, 'f') },
   { id: 'toggle-format', glyphs: '⌘⇧M', match: (e) => mod(e) && e.shiftKey && isKey(e, 'm') },
   { id: 'attach', glyphs: '⌘U', match: (e) => mod(e) && !e.shiftKey && isKey(e, 'u') },
   { id: 'stop', glyphs: '⌘.', match: (e) => mod(e) && isKey(e, '.') },

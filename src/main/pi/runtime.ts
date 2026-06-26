@@ -12,6 +12,7 @@ import type {
   McpLoginResult,
   McpServerInput,
   MessageAttachment,
+  ModelServiceTier,
   ModelSummary,
   RuntimeStatus,
   StartTurnInput,
@@ -31,7 +32,8 @@ import {
   piMcpStatusPath,
   readMcpConfig,
   saveOAuthToken,
-  writeNativeSearchGate
+  writeNativeSearchGate,
+  writeServiceTierGate
 } from './mcp-config';
 import { authorizeMcp } from './oauth';
 import { piMcpConfigPath } from '../workspace/paths';
@@ -107,17 +109,24 @@ interface PiModel {
   thinkingLevelMap?: Record<string, string | null> | null;
 }
 
-// The effort levels the UI can display, lowest→highest. We deliberately stick to these
-// four; pi also has 'off'/'minimal' but Stem doesn't surface them.
-const DISPLAY_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+// The effort levels the UI can display, lowest→highest. 'off' disables reasoning
+// entirely; 'xhigh' is opt-in per model via thinkingLevelMap. (pi also has 'minimal',
+// which Stem doesn't surface.)
+const DISPLAY_EFFORTS = ['off', 'low', 'medium', 'high', 'xhigh'] as const;
 // Levels every reasoning model is assumed to support unless its thinkingLevelMap opts out.
-const BASE_EFFORTS = new Set(['low', 'medium', 'high']);
+const BASE_EFFORTS = new Set(['off', 'low', 'medium', 'high']);
 
 /** Resolve which display efforts a model supports from pi's thinkingLevelMap. */
 function effortsFor(m: PiModel): string[] {
   if (!m.reasoning) return [];
   const map = m.thinkingLevelMap ?? {};
   return DISPLAY_EFFORTS.filter((lvl) => (lvl in map ? map[lvl] !== null : BASE_EFFORTS.has(lvl)));
+}
+
+// openai-codex models accept service_tier:'priority' (1.5× speed); other providers have none.
+function serviceTiersFor(m: PiModel): ModelServiceTier[] {
+  if (m.provider !== 'openai-codex') return [];
+  return [{ id: 'priority', name: 'Fast', description: '1.5× speed, increased usage' }];
 }
 
 interface SessionFile {
@@ -281,6 +290,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // Gate native web search for THIS turn (main vs Quick Chat share one process,
         // so the bridge can't tell them apart — we set the gate just before the prompt).
         await writeNativeSearchGate(input.webSearch ?? true).catch(() => undefined);
+        await writeServiceTierGate(input.serviceTier ?? null).catch(() => undefined);
 
         const buildStart = Date.now();
         const { message, images } = await this.buildMessage(input, threadId, turn.recall);
@@ -346,7 +356,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         supportsNativeWebSearch: PROVIDER_NATIVE_SEARCH.has(m.provider),
         supportedEfforts: efforts,
         defaultEffort: efforts.includes('medium') ? 'medium' : efforts[0] ?? 'medium',
-        serviceTiers: [],
+        serviceTiers: serviceTiersFor(m),
         isDefault: m.provider === DEFAULT_PROVIDER && m.id === DEFAULT_MODEL
       };
     });

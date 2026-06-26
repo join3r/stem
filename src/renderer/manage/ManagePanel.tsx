@@ -826,13 +826,20 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
   // "Same as main" (empty) has no concrete model here, so offer all levels.
   const qcModel = qc.defaultModel ? models.find((m) => m.id === qc.defaultModel) : undefined;
   const qcEfforts = qcModel?.supportedEfforts.length ? qcModel.supportedEfforts : ['low', 'medium', 'high', 'xhigh'];
+  // Only models with a priority (Fast) tier can default to Fast. With no concrete model
+  // ("Same as main"), offer it — the runtime ignores Fast on models that don't support it.
+  const qcHasFast = qcModel ? qcModel.serviceTiers.some((t) => t.id === 'priority') : true;
 
-  // Switch the default model, clamping a now-unsupported saved effort into range.
+  // Switch the default model, clamping a now-unsupported saved effort/speed into range.
   function selectQcModel(id: string | null) {
     const m = id ? models.find((x) => x.id === id) : undefined;
     const efforts = m?.supportedEfforts.length ? m.supportedEfforts : ['low', 'medium', 'high', 'xhigh'];
     const patch: Partial<QuickChatSettings> = { defaultModel: id };
     if (qc && !efforts.includes(qc.defaultEffort)) patch.defaultEffort = m?.defaultEffort ?? efforts[0];
+    // Drop a saved Fast default when the new model has no priority tier.
+    if (qc?.defaultServiceTier === 'priority' && m && !m.serviceTiers.some((t) => t.id === 'priority')) {
+      patch.defaultServiceTier = null;
+    }
     update(patch);
   }
 
@@ -923,6 +930,27 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
             ))}
           </div>
         </div>
+
+        {qcHasFast && (
+          <div className="set-block">
+            <span className="set-sub">Default speed</span>
+            <div className="seg-ctl">
+              <button
+                className={qc.defaultServiceTier === 'priority' ? '' : 'active'}
+                onClick={() => update({ defaultServiceTier: null })}
+              >
+                Standard
+              </button>
+              <button
+                className={qc.defaultServiceTier === 'priority' ? 'active' : ''}
+                onClick={() => update({ defaultServiceTier: 'priority' })}
+                title="1.5× speed, increased usage"
+              >
+                Fast
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="set-row">
           <span className="set-label">
