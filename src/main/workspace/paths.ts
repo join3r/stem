@@ -33,7 +33,11 @@ export function piMcpConfigPath(): string {
 }
 
 export function skillsRoot(): string {
-  return join(piHome(), 'skills');
+  // STEM_SKILLS_DIR lets probe/verification scripts and unit tests point at a
+  // throwaway folder (and avoids touching Electron's `app` when run outside the
+  // app). In the running app this is unset in the main process, so it resolves to
+  // the pi-home skills dir; the bridge subprocess is handed the resolved path.
+  return process.env.STEM_SKILLS_DIR ?? join(piHome(), 'skills');
 }
 
 /** The controlled cwd we spawn the backend in — empty/app-owned. */

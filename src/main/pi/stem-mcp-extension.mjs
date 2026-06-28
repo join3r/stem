@@ -11,7 +11,7 @@
 // spawned from the in-repo path (like recall/mcp-server.mjs).
 
 import { spawn } from 'node:child_process';
-import { chmodSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 // Stem's internal recall server stays EAGER (its one tool is used every turn);
@@ -636,6 +636,13 @@ export default async function stemMcpBridge(pi) {
   // Stem self-management tools (list/add/remove MCP servers). Always available.
   registerAdminTools(pi, cfgPath);
 
+  // Stem self-authored skills: let the assistant create/patch/remove its own
+  // SKILL.md procedures. Writes are silent (no approval card) and take effect on
+  // the next reload — Stem detects the change and restarts at the end of the turn,
+  // which also keeps the prompt cache valid (no mid-conversation skill edits).
+  const skillsDir = process.env.STEM_SKILLS_DIR;
+  if (skillsDir) registerSkillTools(pi, skillsDir);
+
   // Mutate each outgoing request to (a) restore native web search by injecting the
   // provider's server-side tool, and (b) apply the OpenAI service tier ("Fast"). Both
   // are gated per turn by sibling files (native-search.json / service-tier.json) that
@@ -860,6 +867,168 @@ function registerAdminTools(pi, cfgPath) {
       delete config.servers[name];
       writeSecretSync(cfgPath, JSON.stringify(config, null, 2));
       return { content: [{ type: 'text', text: `Removed MCP server "${name}". It will stop being available after Stem reloads.` }], details: {} };
+    }
+  });
+}
+
+// ---- Stem skills: assistant self-authors reusable SKILL.md procedures ----
+
+// Keep skills small and human-readable (matches the pi/agentskills convention).
+const SKILL_MAX_BYTES = 15_000;
+const SKILL_VALID_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+
+function skillOk(text) {
+  return { content: [{ type: 'text', text }], details: {} };
+}
+function skillErr(text) {
+  return { content: [{ type: 'text', text }], details: {}, isError: true };
+}
+function skillNowIso() {
+  return new Date().toISOString();
+}
+
+/** Derive a filesystem slug from a free-text skill name. */
+function slugifySkill(name) {
+  return String(name || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+/**
+ * Compose a SKILL.md. Scalars are JSON-stringified, which is valid YAML for
+ * strings (a double-quoted scalar) and safely escapes colons/quotes/newlines —
+ * so the bridge needs no YAML dependency to write well-formed front-matter.
+ */
+function composeSkillMd({ name, description, body, version, created, updated }) {
+  const fm = [
+    '---',
+    `name: ${JSON.stringify(name)}`,
+    `description: ${JSON.stringify(description)}`,
+    'metadata:',
+    '  stem:',
+    '    source: agent',
+    `    version: ${version}`,
+    `    created: ${JSON.stringify(created)}`,
+    `    updated: ${JSON.stringify(updated)}`,
+    '---'
+  ].join('\n');
+  return `${fm}\n\n${String(body).trim()}\n`;
+}
+
+/** On any skill write, touch a revision file so the main process notices and reloads. */
+function bumpSkillsRev(skillsDir) {
+  try {
+    writeFileSync(join(skillsDir, '.skills-rev'), String(Date.now()));
+  } catch {
+    // best-effort: worst case the skill activates on the next backend restart
+  }
+}
+
+function createSkill(skillsDir, params) {
+  const name = String((params && params.name) || '').trim();
+  const description = String((params && params.description) || '').trim();
+  const body = String((params && params.content) || '');
+  if (!name) return skillErr('A skill needs a name.');
+  if (!description) return skillErr('A skill needs a one-line description (what it does and when to use it).');
+  if (!body.trim()) return skillErr('A skill needs content (the step-by-step body, with a verification step).');
+  const slug = slugifySkill(name);
+  if (!SKILL_VALID_SLUG.test(slug)) return skillErr('Could not derive a valid skill name from that — use letters and numbers.');
+  const file = join(skillsDir, slug, 'SKILL.md');
+  if (existsSync(file)) return skillErr(`A skill "${slug}" already exists. Use action "patch" to change it.`);
+  const ts = skillNowIso();
+  const md = composeSkillMd({ name, description, body, version: 1, created: ts, updated: ts });
+  if (Buffer.byteLength(md, 'utf8') > SKILL_MAX_BYTES) return skillErr(`Skill is too large (limit ${SKILL_MAX_BYTES} bytes). Keep it concise.`);
+  mkdirSync(join(skillsDir, slug), { recursive: true });
+  writeFileSync(file, md, 'utf8');
+  bumpSkillsRev(skillsDir);
+  return skillOk(`Created skill "${slug}". It becomes active after Stem reloads (at the end of this turn).`);
+}
+
+/** Bump version and refresh the `updated` timestamp in a SKILL.md's front-matter. */
+function bumpSkillFrontMatter(text) {
+  let out = text.replace(/(\n\s*version:\s*)(\d+)/, (_m, p, n) => `${p}${parseInt(n, 10) + 1}`);
+  out = out.replace(/(\n\s*updated:\s*)("?[^\n]*"?)/, `$1${JSON.stringify(skillNowIso())}`);
+  return out;
+}
+
+function patchSkill(skillsDir, params) {
+  const name = String((params && params.name) || '').trim();
+  const oldStr = params && typeof params.old_string === 'string' ? params.old_string : '';
+  const newStr = params && typeof params.new_string === 'string' ? params.new_string : '';
+  if (!name) return skillErr('Specify which skill to patch (its name or slug).');
+  if (!oldStr) return skillErr('Provide old_string — the exact text to replace.');
+  const slug = slugifySkill(name);
+  const file = join(skillsDir, slug, 'SKILL.md');
+  if (!existsSync(file)) return skillErr(`No skill "${slug}". Use action "create" to add it.`);
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    return skillErr(`Cannot read skill "${slug}": ${(e && e.message) || e}`);
+  }
+  const occurrences = text.split(oldStr).length - 1;
+  if (occurrences === 0) return skillErr('old_string was not found in the skill — quote it exactly.');
+  if (occurrences > 1) return skillErr('old_string appears multiple times; include more surrounding context so it is unique.');
+  const next = bumpSkillFrontMatter(text.replace(oldStr, newStr));
+  if (Buffer.byteLength(next, 'utf8') > SKILL_MAX_BYTES) return skillErr(`The patched skill would exceed ${SKILL_MAX_BYTES} bytes.`);
+  writeFileSync(file, next, 'utf8');
+  bumpSkillsRev(skillsDir);
+  return skillOk(`Patched skill "${slug}". The update activates after Stem reloads.`);
+}
+
+function removeSkill(skillsDir, params) {
+  const name = String((params && params.name) || '').trim();
+  if (!name) return skillErr('Specify which skill to remove.');
+  const slug = slugifySkill(name);
+  const dir = join(skillsDir, slug);
+  const file = join(dir, 'SKILL.md');
+  if (!existsSync(file)) return skillErr(`No skill "${slug}".`);
+  let text = '';
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    // fall through — an unreadable file is treated as not-agent-authored below
+  }
+  // Only auto-created skills are removable here; user/bundled skills are managed in the app.
+  if (!/\n\s*source:\s*agent\b/.test(text)) {
+    return skillErr(`"${slug}" is not an auto-created skill, so it can't be removed this way — remove it from the app instead.`);
+  }
+  rmSync(dir, { recursive: true, force: true });
+  bumpSkillsRev(skillsDir);
+  return skillOk(`Removed skill "${slug}". It stops loading after Stem reloads.`);
+}
+
+function registerSkillTools(pi, skillsDir) {
+  pi.registerTool({
+    name: 'manage_skill',
+    label: 'Manage skill',
+    description:
+      'Create, patch, or remove one of your own reusable skills (a SKILL.md procedure). Use action "create" after you work out a non-trivial, repeatable procedure worth keeping (give a short slug-like name, a one-line description of what it does AND when to use it, and a step-by-step body ending with a verification step). Use action "patch" to fix or extend an existing skill via an exact string replacement (old_string → new_string). Use action "remove" to delete an auto-created skill that is no longer useful. Writes are silent and apply after Stem reloads at the end of the turn; you do not need the user\'s approval.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['create', 'patch', 'remove'], description: 'create, patch, or remove a skill.' },
+        name: { type: 'string', description: 'The skill name/slug (lowercase words; spaces become dashes).' },
+        description: { type: 'string', description: 'create: one line — what the skill does and when to use it.' },
+        content: { type: 'string', description: 'create: the full skill body in Markdown (numbered steps + a verification step).' },
+        old_string: { type: 'string', description: 'patch: the exact existing text to replace (must occur exactly once).' },
+        new_string: { type: 'string', description: 'patch: the replacement text.' }
+      },
+      required: ['action', 'name']
+    },
+    async execute(_id, params) {
+      const action = String((params && params.action) || '').trim();
+      try {
+        if (action === 'create') return createSkill(skillsDir, params);
+        if (action === 'patch') return patchSkill(skillsDir, params);
+        if (action === 'remove') return removeSkill(skillsDir, params);
+        return skillErr(`Unknown action "${action}". Use create, patch, or remove.`);
+      } catch (e) {
+        return skillErr(`manage_skill failed: ${(e && e.message) || e}`);
+      }
     }
   });
 }

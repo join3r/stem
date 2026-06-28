@@ -36,7 +36,7 @@ import {
   writeServiceTierGate
 } from './mcp-config';
 import { authorizeMcp } from './oauth';
-import { piMcpConfigPath } from '../workspace/paths';
+import { piMcpConfigPath, skillsRoot } from '../workspace/paths';
 import { findPiPath } from './locate';
 import { PiProcess, type PiEvent } from './rpc';
 import {
@@ -189,6 +189,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private adminApprovals = new Set<string>();
   /** Set when an admin add/remove was approved; reloads MCP servers at turn end. */
   private pendingMcpReload = false;
+  /** Set when a skill was written this turn (or by the curator); reloads at turn end. */
+  private pendingSkillReload = false;
+  /** The skills revision marker captured at turn start, to detect in-turn skill writes. */
+  private skillsRevAtTurnStart = '';
 
   constructor(private readonly options: RuntimeOptions) {
     super();
@@ -288,6 +292,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       turn.ensureMs = ensureMs;
       turn.recall = {};
       this.currentTurn = turn;
+      this.skillsRevAtTurnStart = this.readSkillsRev();
       this.foreground.claimTurn();
 
       try {
@@ -776,6 +781,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       turn.endedAt = now;
       this.advancePhase(turn, [], now); // flush the trailing segment
       this.reportTurnTiming(turn);
+      // The assistant may have created/patched a skill via manage_skill this turn;
+      // detect it (the bridge bumps the rev marker) and reload at turn end.
+      if (this.readSkillsRev() !== this.skillsRevAtTurnStart) {
+        this.pendingSkillReload = true;
+        this.emitEvent('skills/changed');
+      }
       this.finishTurn();
       // Map this live turn's minted id to its persisted entry id so a later
       // fork/edit targets the right pi entry — and persist the turn's timing.
@@ -888,12 +899,37 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private finishTurn(): void {
     this.currentTurn = null;
     this.foreground.finishTurn();
-    // An approved MCP add/remove takes effect by reloading the bridge after the
-    // turn (restarting mid-turn would kill the in-flight conversation).
-    if (this.pendingMcpReload) {
+    // An approved MCP add/remove, or a skill written this turn, takes effect by
+    // reloading the bridge after the turn (restarting mid-turn would kill the
+    // in-flight conversation, and deferring keeps the prompt cache valid).
+    if (this.pendingMcpReload || this.pendingSkillReload) {
       this.pendingMcpReload = false;
+      this.pendingSkillReload = false;
       void this.configMcpServerReload().catch(() => undefined);
     }
+  }
+
+  /** Read the skills revision marker the bridge bumps on every skill write. */
+  private readSkillsRev(): string {
+    try {
+      return readFileSync(join(skillsRoot(), '.skills-rev'), 'utf8');
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Apply skill changes made out-of-band (the background curator writes SKILL.md
+   * files directly). Reloads now when idle, or defers to turn end if a turn is
+   * mid-flight. Also notifies the UI so the skills list refreshes.
+   */
+  async requestSkillReload(): Promise<void> {
+    this.emitEvent('skills/changed');
+    if (this.currentTurn) {
+      this.pendingSkillReload = true;
+      return;
+    }
+    await this.restart();
   }
 
   /**
@@ -1214,6 +1250,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     env.PI_SKIP_VERSION_CHECK = '1';
     // Tell the bridge extension where Stem's MCP config lives.
     env.STEM_MCP_CONFIG = piMcpConfigPath();
+    // Tell the bridge extension where the assistant's self-authored skills live.
+    env.STEM_SKILLS_DIR = skillsRoot();
     return env;
   }
 }

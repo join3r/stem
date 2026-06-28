@@ -9,6 +9,9 @@ const DISABLED_MARKER = '.disabled';
 interface FrontMatter {
   name?: string;
   description?: string;
+  source?: 'agent' | 'user';
+  version?: number;
+  updated?: string;
 }
 
 /** Parse the leading `---` YAML front-matter block of a SKILL.md. */
@@ -17,9 +20,14 @@ function parseFrontMatter(text: string): FrontMatter {
   if (!match) return {};
   try {
     const data = parseYaml(match[1]) as Record<string, unknown> | null;
+    // `metadata.stem` carries Stem's own bookkeeping for auto-authored skills.
+    const stem = ((data?.metadata as Record<string, unknown> | undefined)?.stem ?? {}) as Record<string, unknown>;
     return {
       name: typeof data?.name === 'string' ? data.name : undefined,
-      description: typeof data?.description === 'string' ? data.description : undefined
+      description: typeof data?.description === 'string' ? data.description : undefined,
+      source: stem.source === 'agent' ? 'agent' : 'user',
+      version: typeof stem.version === 'number' ? stem.version : undefined,
+      updated: typeof stem.updated === 'string' ? stem.updated : undefined
     };
   } catch {
     return {};
@@ -48,7 +56,10 @@ export async function listSkills(): Promise<SkillSummary[]> {
         name: fm.name ?? slug,
         description: fm.description ?? '',
         enabled: !(await exists(join(dir, DISABLED_MARKER))),
-        path: dir
+        path: dir,
+        source: fm.source ?? 'user',
+        version: fm.version,
+        updatedAt: fm.updated
       });
     } catch {
       // No SKILL.md — not a skill directory; skip.

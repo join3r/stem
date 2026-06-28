@@ -15,6 +15,7 @@ import type {
   QuickChatSettings,
   QuickChatSessionStarted,
   QuickChatStatus,
+  SkillsModelSettings,
   StartTurnInput,
   StemApi
 } from '../shared/types';
@@ -36,6 +37,12 @@ const api: StemApi = {
 
   listSkills: () => ipcRenderer.invoke('skills:list'),
   setSkillEnabled: (slug: string, enabled: boolean) => ipcRenderer.invoke('skills:setEnabled', slug, enabled),
+  curateSkills: () => ipcRenderer.invoke('skills:curate'),
+  onSkillsChanged: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on('skills:changed', handler);
+    return () => ipcRenderer.removeListener('skills:changed', handler);
+  },
 
   listFiles: () => ipcRenderer.invoke('files:list'),
   addFiles: (paths: string[], subdir?: string) => ipcRenderer.invoke('files:add', paths, subdir),
@@ -100,6 +107,8 @@ const api: StemApi = {
     ipcRenderer.invoke('settings:updateNativeWebSearch', patch),
   updateMemorySettings: (patch: Partial<MemoryModelSettings>) =>
     ipcRenderer.invoke('settings:updateMemory', patch),
+  updateSkillsSettings: (patch: Partial<SkillsModelSettings>) =>
+    ipcRenderer.invoke('settings:updateSkills', patch),
   updateRetrievalSettings: (patch: PartialRetrievalSettings) =>
     ipcRenderer.invoke('settings:updateRetrieval', patch),
   testRetrievalEndpoint: (stage: RetrievalStage) => ipcRenderer.invoke('settings:testRetrieval', stage),

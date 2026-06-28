@@ -33,6 +33,7 @@ import { captureFromEvent } from './recall/capture';
 import { getEmbeddingCacheStats, getEpisodicStats } from './recall/store';
 import { distillNewMessages, shouldConsolidate } from './recall/distill';
 import { consolidateFacts } from './recall/consolidate';
+import { curateSkills } from './skills/curate';
 import { setRetrievalClients } from './recall/retrieval';
 import { createHttpEmbeddingsClient } from './recall/embeddings';
 import { createHttpRerankClient } from './recall/rerank';
@@ -42,7 +43,8 @@ import {
   updateMemorySettings,
   updateNativeWebSearch,
   updateQuickChat,
-  updateRetrievalSettings
+  updateRetrievalSettings,
+  updateSkillsSettings
 } from './workspace/settings';
 import {
   createFolder,
@@ -64,6 +66,7 @@ import type {
   PartialRetrievalSettings,
   RetrievalStage,
   RetrievalTestResult,
+  SkillsModelSettings,
   QuickChatHandoff,
   QuickChatPrompt,
   QuickChatSettings,
@@ -545,6 +548,16 @@ function registerIpc(): void {
 
   ipcMain.handle('skills:list', () => listSkills());
   ipcMain.handle('skills:setEnabled', (_e, slug: string, enabled: boolean) => setSkillEnabled(slug, enabled));
+  ipcMain.handle('skills:curate', async () => {
+    // Same hidden one-shot seam the curator uses; `force` bypasses the size floor
+    // so a manual "Tidy up" always runs. Reload so pi rescans the updated skills.
+    const llm: LlmClient = {
+      complete: async (prompt) => runtime!.complete(prompt, { model: (await readSettings()).skills.model })
+    };
+    await curateSkills(llm, { force: true });
+    await runtime!.requestSkillReload();
+    return listSkills();
+  });
 
   ipcMain.handle('files:list', () => listFiles());
   ipcMain.handle('files:add', (_e, paths: string[], subdir?: string) => addFiles(paths, subdir));
@@ -694,6 +707,11 @@ function registerIpc(): void {
     // each memory turn, so the change applies to the next distill/tidy-up.
     return updateMemorySettings(patch);
   });
+  ipcMain.handle('settings:updateSkills', async (_e, patch: Partial<SkillsModelSettings>) => {
+    // Just persist — the curator's LlmClient reads the model fresh from settings on
+    // each pass, so the change applies to the next curation run.
+    return updateSkillsSettings(patch);
+  });
   ipcMain.handle('settings:updateRetrieval', async (_e, patch: PartialRetrievalSettings) => {
     // Just persist — the embeddings/rerank clients read their config fresh from
     // settings on each turn, so the change applies to the next fact-ranking pass.
@@ -824,6 +842,13 @@ app.whenReady().then(async () => {
     complete: async (prompt) => runtime!.complete(prompt, { model: (await readSettings()).memory.model })
   };
 
+  // The skills curator gets its OWN model setting (separate from memory) — curation
+  // can be a harder task than fact distillation, so it can be pointed at a stronger
+  // model. Read fresh each pass so a Settings change applies to the next run.
+  const skillsLlm: LlmClient = {
+    complete: async (prompt) => runtime!.complete(prompt, { model: (await readSettings()).skills.model })
+  };
+
   // Stem Recall relevance ranking: embeddings + reranker HTTP endpoints (e.g. a
   // local Ollama + a /rerank server). Config is read fresh each turn, so toggling
   // or repointing them in Settings takes effect on the next fact-ranking pass with
@@ -863,6 +888,27 @@ app.whenReady().then(async () => {
     }, delayMs);
   };
 
+  // Skills curator: the Level-2 cleanup of self-authored skills (merge duplicates,
+  // patch sloppy bodies, archive stale ones), mirroring fact consolidation. Uses the
+  // same hidden LlmClient seam, and is gated by the memory toggle since it's the same
+  // kind of background self-improvement pass. On any change, reload so pi rescans skills.
+  let curating = false;
+  const runCurate = async (): Promise<void> => {
+    if (curating || !isRecallEnabled()) return;
+    curating = true;
+    try {
+      const res = await curateSkills(skillsLlm);
+      if (res.merged || res.patched || res.archived) await runtime!.requestSkillReload();
+    } catch {
+      // non-fatal
+    } finally {
+      curating = false;
+    }
+  };
+  // A pass shortly after startup, then a low-frequency recurring pass while idle.
+  setTimeout(() => void runCurate(), 90_000);
+  setInterval(() => void runCurate(), 24 * 60 * 60_000);
+
   // Forward backend events to the main window. Registered once (not per-window) so
   // recreating the window can't double-subscribe.
   runtime.on('event', (event) => {
@@ -876,6 +922,11 @@ app.whenReady().then(async () => {
     if (event.method === 'mcp/changed') {
       mainWindow?.webContents.send('mcp:changed');
       quickChatWindow?.webContents.send('mcp:changed');
+      return;
+    }
+    if (event.method === 'skills/changed') {
+      mainWindow?.webContents.send('skills:changed');
+      quickChatWindow?.webContents.send('skills:changed');
       return;
     }
     if (event.method === 'mcp/status') {

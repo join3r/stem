@@ -23,7 +23,7 @@ import type {
  *     `item/agentMessage/delta`, `item/started`, `item/completed`,
  *     `turn/completed`, `turn/failed`, `turn/aborted`, `process/exit`,
  *     plus the side channels `mcp/login/url`, `mcp/changed`, `mcp/status`,
- *     `mcp/admin/approvalRequest`. Deltas and the completed item for one turn
+ *     `mcp/admin/approvalRequest`, `skills/changed`. Deltas and the completed item for one turn
  *     share a `turnId` (the renderer keys bubbles `assistant-${turnId}`).
  *  2. A new backend that lacks a feature in the method surface below should
  *     degrade gracefully (e.g. emit nothing) rather than change these shapes.
@@ -64,4 +64,8 @@ export interface ChatBackend extends EventEmitter {
   getMcpStatus(): Record<string, { status: string; error: string | null }>;
   resolveAdminApproval(id: number | string, accept: boolean): void;
   configMcpServerReload(): Promise<void>;
+
+  // Skills: apply out-of-band skill changes (the background curator) by reloading
+  // the backend, deferring to turn end if a turn is in flight.
+  requestSkillReload(): Promise<void>;
 }

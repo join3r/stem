@@ -90,7 +90,7 @@ export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: Ma
       <div className="manage-body">
         {tab === 'chats' && <ChatList {...chatProps} />}
         {tab === 'memory' && <MemoryTab models={models} />}
-        {tab === 'mcp' && <McpSkillsTab />}
+        {tab === 'mcp' && <McpSkillsTab models={models} />}
         {tab === 'settings' && (
           <SettingsTab models={models} modelId={modelId} onSelectModel={onSelectModel} />
         )}
@@ -470,7 +470,7 @@ function FactsTab({ models }: { models: ModelSummary[] }) {
           emptyLabel="Default (recommended)"
           ariaLabel="Memory model"
         />
-        <p className="muted">Used to distill and tidy up memories in the background.</p>
+        <p className="muted">Used to distill and tidy up memories in the background. The skills curator has its own model (under MCP &amp; Skills → Skills).</p>
         <div className="set-block fg-divider">
           <span className="set-sub">Tidy up automatically</span>
           <div className="seg-ctl">
@@ -633,39 +633,96 @@ function FactsTab({ models }: { models: ModelSummary[] }) {
   );
 }
 
-function SkillsTab() {
+function SkillsTab({ models }: { models: ModelSummary[] }) {
   const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [tidying, setTidying] = useState(false);
+  // null => use the backend default model for the curator.
+  const [curatorModel, setCuratorModel] = useState<string | null>(null);
   useEffect(() => {
     window.stem.listSkills().then(setSkills);
+    window.stem.getSettings().then((s) => setCuratorModel(s.skills.model));
+    // Refresh when the assistant auto-creates/patches a skill or the curator runs.
+    return window.stem.onSkillsChanged(() => {
+      window.stem.listSkills().then(setSkills);
+    });
   }, []);
+
+  function selectCuratorModel(id: string | null) {
+    setCuratorModel(id);
+    window.stem.updateSkillsSettings({ model: id }).then((s) => setCuratorModel(s.skills.model));
+  }
 
   async function toggle(slug: string, enabled: boolean) {
     setSkills(await window.stem.setSkillEnabled(slug, enabled));
   }
 
-  if (skills.length === 0) {
-    return <p className="muted">No skills yet. Drop a SKILL.md folder into the skills directory.</p>;
+  async function tidy() {
+    setTidying(true);
+    try {
+      setSkills(await window.stem.curateSkills());
+    } finally {
+      setTidying(false);
+    }
   }
+
+  // Stem auto-authors and tidies skills; a manual "Tidy up" runs the curator now.
+  const hasAgentSkills = skills.some((s) => s.source === 'agent');
 
   return (
     <div>
-      <div className="grp-head">Skills</div>
-      <div className="group">
-        {skills.map((s) => (
-          <div key={s.slug} className="group-row">
-            <span className="row-main">
-              <strong>{s.name}</strong>
-              <em>{s.description}</em>
-            </span>
-            <button
-              className={`switch${s.enabled ? ' on' : ''}`}
-              role="switch"
-              aria-checked={s.enabled}
-              aria-label={s.name}
-              onClick={() => toggle(s.slug, !s.enabled)}
-            />
-          </div>
-        ))}
+      <div className="grp-head">
+        Skills
+        {hasAgentSkills && (
+          <span className="memory-view-actions">
+            <button className="link-btn" onClick={tidy} disabled={tidying} title="Merge duplicates and archive stale auto-created skills now">
+              <Wand2 size={13} /> {tidying ? 'Tidying…' : 'Tidy up'}
+            </button>
+          </span>
+        )}
+      </div>
+      {skills.length === 0 ? (
+        <p className="muted">No skills yet. Stem saves reusable procedures it works out, or you can drop a SKILL.md folder into the skills directory.</p>
+      ) : (
+        <div className="group">
+          {skills.map((s) => (
+            <div key={s.slug} className="group-row">
+              <span className="row-main">
+                <strong>
+                  {s.name}
+                  {s.source === 'agent' && (
+                    <span className="muted" style={{ marginLeft: 6, fontWeight: 400, fontSize: '0.8em' }}>
+                      auto{s.version && s.version > 1 ? ` · v${s.version}` : ''}
+                    </span>
+                  )}
+                </strong>
+                <em>{s.description}</em>
+              </span>
+              <button
+                className={`switch${s.enabled ? ' on' : ''}`}
+                role="switch"
+                aria-checked={s.enabled}
+                aria-label={s.name}
+                onClick={() => toggle(s.slug, !s.enabled)}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="grp-head">Curator model</div>
+      <div className="formgroup">
+        <ModelPicker
+          models={models}
+          value={curatorModel}
+          onChange={selectCuratorModel}
+          emptyLabel="Default (recommended)"
+          ariaLabel="Skills curator model"
+        />
+        <p className="muted">
+          Runs the background skills curator — merging duplicate skills, sharpening sloppy ones, and
+          archiving stale ones. Separate from the memory model so you can give curation a stronger
+          model. New skills are still written by the model you chat with; this only affects upkeep.
+        </p>
       </div>
     </div>
   );
@@ -990,7 +1047,7 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
 }
 
 // Combined panel: MCP servers and Skills live under the same icon as two sub-tabs.
-function McpSkillsTab() {
+function McpSkillsTab({ models }: { models: ModelSummary[] }) {
   const [sub, setSub] = useState<'mcp' | 'skills'>('mcp');
   return (
     <div>
@@ -1002,7 +1059,7 @@ function McpSkillsTab() {
           Skills
         </button>
       </div>
-      {sub === 'mcp' ? <McpTab /> : <SkillsTab />}
+      {sub === 'mcp' ? <McpTab /> : <SkillsTab models={models} />}
     </div>
   );
 }

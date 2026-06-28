@@ -248,6 +248,12 @@ export interface SkillSummary {
   description: string;
   enabled: boolean;
   path: string;
+  /** 'agent' = auto-authored by Stem via manage_skill; 'user' = dropped in / bundled. */
+  source: 'agent' | 'user';
+  /** Version bumped on each agent patch/curate (auto-authored skills only). */
+  version?: number;
+  /** ISO timestamp of the last agent write (auto-authored skills only). */
+  updatedAt?: string;
 }
 
 // ---- Files (the persistent drop-place the assistant can read) ----
@@ -508,6 +514,12 @@ export interface MemoryModelSettings {
   model: string | null;
 }
 
+/** Model used for the background skills curator (merge/patch/archive of auto-created skills). */
+export interface SkillsModelSettings {
+  /** `provider/model` id; null = the backend default. */
+  model: string | null;
+}
+
 /**
  * One HTTP retrieval endpoint (embeddings or reranker). Free-text — Stem just
  * makes the call — so it works with Ollama, vLLM, LM Studio, TEI, or a hosted API.
@@ -562,6 +574,7 @@ export interface AppSettings {
   quickChat: QuickChatSettings;
   nativeWebSearch: NativeWebSearchSettings;
   memory: MemoryModelSettings;
+  skills: SkillsModelSettings;
   retrieval: RetrievalSettings;
 }
 
@@ -640,6 +653,10 @@ export interface StemApi {
 
   listSkills(): Promise<SkillSummary[]>;
   setSkillEnabled(slug: string, enabled: boolean): Promise<SkillSummary[]>;
+  /** Run the skills curator now (merge duplicates, patch, archive). Returns fresh list. */
+  curateSkills(): Promise<SkillSummary[]>;
+  /** Fired after skills change (auto-create/patch by the assistant, or the curator). */
+  onSkillsChanged(listener: () => void): () => void;
 
   // Files: the persistent drop-place. Mutations return the fresh listing.
   listFiles(): Promise<FilesListing>;
@@ -711,6 +728,7 @@ export interface StemApi {
   updateNativeWebSearch(patch: Partial<NativeWebSearchSettings>): Promise<AppSettings>;
   /** Set the model used for memory distillation/tidy-up ({ model: null } = default). */
   updateMemorySettings(patch: Partial<MemoryModelSettings>): Promise<AppSettings>;
+  updateSkillsSettings(patch: Partial<SkillsModelSettings>): Promise<AppSettings>;
   /** Update the embeddings/reranker retrieval endpoints (deep-merged per stage). */
   updateRetrievalSettings(patch: PartialRetrievalSettings): Promise<AppSettings>;
   /** Live-probe a retrieval endpoint with the current settings (Settings "Test" button). */

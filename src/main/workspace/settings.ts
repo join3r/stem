@@ -7,7 +7,8 @@ import type {
   PartialRetrievalSettings,
   QuickChatSettings,
   RetrievalEndpointSettings,
-  RetrievalSettings
+  RetrievalSettings,
+  SkillsModelSettings
 } from '../../shared/types';
 import { settingsStorePath } from './paths';
 
@@ -32,6 +33,9 @@ const DEFAULTS: AppSettings = {
   nativeWebSearch: { main: true, quickChat: true },
   // Memory distillation/tidy-up model; null = the backend default.
   memory: { model: null },
+  // Background skills-curator model; null = the backend default. Separate from the
+  // memory model so curation (which can be a harder task) can use a stronger model.
+  skills: { model: null },
   // Embeddings + reranker endpoints for relevance-ranking facts at inject time.
   // Off by default: until the user points these at a server, fact selection stays
   // recency-based (no network). Default URL/model match a local Ollama setup.
@@ -66,6 +70,10 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
   const mem: MemoryModelSettings = {
     model: typeof rawMem.model === 'string' && rawMem.model.trim() ? rawMem.model : null
   };
+  const rawSkills = (parsed?.skills ?? {}) as Partial<SkillsModelSettings>;
+  const skills: SkillsModelSettings = {
+    model: typeof rawSkills.model === 'string' && rawSkills.model.trim() ? rawSkills.model : null
+  };
   const rawRet = (parsed?.retrieval ?? {}) as Partial<RetrievalSettings>;
   const retrieval: RetrievalSettings = {
     embeddings: coerceEndpoint(rawRet.embeddings, DEFAULTS.retrieval.embeddings),
@@ -87,6 +95,7 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
     },
     nativeWebSearch: nws,
     memory: mem,
+    skills,
     retrieval
   };
 }
@@ -144,6 +153,16 @@ export function updateMemorySettings(patch: Partial<MemoryModelSettings>): Promi
   return enqueue(async () => {
     const cur = await readSettings();
     const next = coerce({ ...cur, memory: { ...cur.memory, ...patch } });
+    await writeSettings(next);
+    return next;
+  });
+}
+
+/** Patch the skills-curator model setting and persist; returns the full settings. */
+export function updateSkillsSettings(patch: Partial<SkillsModelSettings>): Promise<AppSettings> {
+  return enqueue(async () => {
+    const cur = await readSettings();
+    const next = coerce({ ...cur, skills: { ...cur.skills, ...patch } });
     await writeSettings(next);
     return next;
   });
