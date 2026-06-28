@@ -838,6 +838,15 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .chat-row .chat-caret { visibility: hidden; }
 .group-row.drop-target, .group.drop-target { background: var(--sel); }
 .group.chats-group { min-height: 40px; }
+.chat-date-head {
+  font-size: var(--fs-10);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 10px 12px 4px;
+  user-select: none;
+}
 .chat-edit {
   width: 100%;
   font: inherit;

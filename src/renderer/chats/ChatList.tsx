@@ -31,6 +31,25 @@ export interface ChatListProps {
 const CHAT_MIME = 'application/x-stem-chat';
 const FOLDER_MIME = 'application/x-stem-folder';
 
+// Normalize Unix-seconds (real chats) vs ms (optimistic pending rows), then bucket
+// by updatedAt the way ChatGPT/Claude group their sidebars.
+function dateBucket(ts: number, now: number): { key: string; label: string } {
+  const ms = ts < 1e12 ? ts * 1000 : ts;
+  const d = new Date(ms);
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const day = 86400000;
+  const startMs = startOfToday.getTime();
+  if (ms >= startMs) return { key: 'today', label: 'Today' };
+  if (ms >= startMs - day) return { key: 'yesterday', label: 'Yesterday' };
+  if (ms >= startMs - 7 * day) return { key: 'last7', label: 'Previous 7 Days' };
+  if (ms >= startMs - 30 * day) return { key: 'last30', label: 'Previous 30 Days' };
+  const nowYear = new Date(now).getFullYear();
+  if (d.getFullYear() === nowYear)
+    return { key: `m-${d.getMonth()}`, label: d.toLocaleString(undefined, { month: 'long' }) };
+  return { key: `y-${d.getFullYear()}`, label: String(d.getFullYear()) };
+}
+
 const STATUS_LABEL: Record<ThreadStatus, string> = {
   idle: '',
   running: 'Generating…',
@@ -293,7 +312,24 @@ export function ChatList(props: ChatListProps) {
           </div>
         )}
         {childFolders(null).map((f) => renderFolder(f, 0))}
-        {folderChats(null).map((c) => renderChat(c, 0))}
+        {(() => {
+          const now = Date.now();
+          let lastKey: string | null = null;
+          const rows: React.ReactNode[] = [];
+          for (const c of folderChats(null)) {
+            const b = dateBucket(c.updatedAt, now);
+            if (b.key !== lastKey) {
+              rows.push(
+                <div key={`h-${b.key}`} className="chat-date-head">
+                  {b.label}
+                </div>
+              );
+              lastKey = b.key;
+            }
+            rows.push(renderChat(c, 0));
+          }
+          return rows;
+        })()}
         {creating && creating.parentId === null && renderCreateRow(0)}
       </div>
       {menu && (
