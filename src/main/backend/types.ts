@@ -49,6 +49,8 @@ export interface ChatBackend extends EventEmitter {
   // `opts.model` is a `provider/model` id (null/undefined => the backend default).
   complete(prompt: string, opts?: { model?: string | null; timeoutMs?: number }): Promise<string>;
   isInternalThread(threadId: string): boolean;
+  /** True when the active turn read a memorize:false connected folder → skip Recall capture. */
+  isCaptureSuppressed(threadId: string): boolean;
 
   // thread CRUD
   listThreads(): Promise<ChatSummary[]>;

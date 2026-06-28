@@ -279,6 +279,34 @@ export interface FilesListing {
   files: FileEntry[];
 }
 
+// ---- Connected folders (external folders the assistant reads in place) ----
+
+/**
+ * One external folder the user has connected so the assistant can read it where
+ * it lives on disk (never copied). `mode` governs write protection (read-only is
+ * enforced at the tool-call layer), `memorize` whether content read from it may
+ * enter Stem's cross-chat memory (off = private; the client vault default).
+ */
+export interface ConnectedFolder {
+  /** Stable id (randomUUID), used for update/remove. */
+  id: string;
+  /** Absolute path on disk. */
+  path: string;
+  /** Display name (defaults to the folder's basename). */
+  label: string;
+  /** 'read' = the assistant may read but not modify; 'readwrite' = may also edit. */
+  mode: 'read' | 'readwrite';
+  /** When false, content read from this folder is kept out of Stem Recall. */
+  memorize: boolean;
+  /** Optional one-line description, injected so the assistant knows what it is. */
+  note?: string;
+  /** Computed on list: the path no longer exists on disk. Not persisted. */
+  missing?: boolean;
+}
+
+/** The mutable fields of a connected folder (label/mode/memorize/note). */
+export type ConnectedFolderPatch = Partial<Pick<ConnectedFolder, 'label' | 'mode' | 'memorize' | 'note'>>;
+
 // ---- MCP servers ----
 
 /** stdio = local `command` + `args`; http = remote streamable-HTTP `url`. */
@@ -682,6 +710,22 @@ export interface StemApi {
   revealFiles(): Promise<void>;
   /** Read an on-disk image → `data:` URL for a bubble thumbnail (null if not an image). */
   previewImage(path: string): Promise<string | null>;
+
+  // Connected folders: external folders the assistant reads in place. Mutations
+  // return the fresh list.
+  listConnectedFolders(): Promise<ConnectedFolder[]>;
+  /** Register one or more external folders (absolute paths). Returns fresh list. */
+  addConnectedFolders(paths: string[]): Promise<ConnectedFolder[]>;
+  /** Patch a folder's label/mode/memorize/note. Returns fresh list. */
+  updateConnectedFolder(id: string, patch: ConnectedFolderPatch): Promise<ConnectedFolder[]>;
+  /** Forget a connected folder (does not touch the folder on disk). Returns fresh list. */
+  removeConnectedFolder(id: string): Promise<ConnectedFolder[]>;
+  /** Open a connected folder in the OS file manager. */
+  revealConnectedFolder(id: string): Promise<void>;
+  /** Open Stem's own workspace folder (containing the Files place) in the OS file manager. */
+  openWorkspaceFolder(): Promise<void>;
+  /** Open a native directory picker; returns chosen absolute paths ([] if canceled). */
+  pickDirectory(): Promise<string[]>;
 
   listMcpServers(): Promise<McpServerSummary[]>;
   /** Live per-server connection status (keyed by name) from the running app-server. */

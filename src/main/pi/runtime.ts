@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { access, copyFile, mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import type {
   BackendEventEnvelope,
   ChatMessage,
@@ -22,6 +22,8 @@ import { PLAIN_MD_DIRECTIVE, STEM_ASSISTANT_INSTRUCTIONS } from '../workspace/bo
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
 import { buildRecallContext, type RecallTimings } from '../recall/inject';
 import { buildFilesContext } from '../files/inject';
+import { buildConnectedFoldersContext } from '../connected-folders/inject';
+import { getPrivateRoots } from '../workspace/connected-folders';
 import { resolveAttachments, type PiImageContent } from './attachments';
 import { captureUserMessage } from '../recall/capture';
 import type { ChatBackend } from '../backend/types';
@@ -87,6 +89,35 @@ const MAX_AUTO_TITLE = 80;
 function titleFromInput(input: string): string {
   const line = input.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
   return line.length > MAX_AUTO_TITLE ? `${line.slice(0, MAX_AUTO_TITLE - 1).trimEnd()}…` : line;
+}
+
+// Argument keys a built-in file tool (read/grep/find/ls/edit/write) carries its
+// target path under. Probed on the raw pi event for the memory-taint check.
+const TOOL_PATH_KEYS = ['path', 'file_path', 'filename'] as const;
+
+/** Pull the target file/dir path out of a raw pi tool_execution_start event, if any. */
+function readToolPath(ev: PiEvent): string | null {
+  const nested = (ev.toolInput ?? ev.args ?? ev.input ?? ev.arguments ?? ev.params) as
+    | Record<string, unknown>
+    | undefined;
+  const probe = (src: Record<string, unknown> | undefined): string | null => {
+    if (!src) return null;
+    for (const key of TOOL_PATH_KEYS) {
+      const v = src[key];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    return null;
+  };
+  return probe(ev as unknown as Record<string, unknown>) ?? probe(nested);
+}
+
+/** True when `target` (resolved against cwd if relative) is at/inside any of `roots`. */
+function pathInsideAny(target: string, roots: string[], cwd: string): boolean {
+  const abs = resolve(cwd, target);
+  return roots.some((root) => {
+    const r = resolve(root);
+    return abs === r || abs.startsWith(r + sep);
+  });
 }
 
 interface RuntimeOptions {
@@ -291,6 +322,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       turn.startedAt = startedAt;
       turn.ensureMs = ensureMs;
       turn.recall = {};
+      // Folders connected memorize:false: if the assistant reads inside one this turn,
+      // we suppress capturing its reply into Recall (see onPiEvent / isCaptureSuppressed).
+      turn.privateRoots = await getPrivateRoots().catch(() => []);
       this.currentTurn = turn;
       this.skillsRevAtTurnStart = this.readSkillsRev();
       this.foreground.claimTurn();
@@ -375,6 +409,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // complete() runs in a separate ephemeral process, so the foreground stream
     // never carries internal threads — nothing to suppress.
     return false;
+  }
+
+  /**
+   * True when the active turn read inside a memorize:false connected folder, so its
+   * assistant reply must be kept out of Recall. The `item/completed` agentMessage is
+   * emitted before agent_end clears currentTurn, so the flag is still live at capture.
+   */
+  isCaptureSuppressed(threadId: string): boolean {
+    return this.currentTurn?.threadId === threadId && this.currentTurn.memoryTainted === true;
   }
 
   /**
@@ -713,13 +756,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       cwd: this.options.workspaceRoot,
       env: this.sanitizedEnv(),
       args: [
-        // Filesystem access: keep pi's read/edit/write/grep/find/ls built-ins so the
-        // assistant can open AND create/modify files in the Files folder (files/<name>) —
-        // the per-turn listing + system prompt both point it there. Exclude only `bash`
-        // (arbitrary shell is a much larger surface and not needed for a chat assistant).
-        // `--exclude-tools` (not `--no-builtin-tools` or a `--tools` allowlist) is
-        // deliberate: it leaves the extension-bridged tools (stem-recall, stem-admin,
-        // user MCP, web_search) enabled.
+        // Filesystem access: keep pi's read/edit/write built-ins (so the assistant can
+        // open AND create/modify files in the Files folder). Exclude only `bash`
+        // (arbitrary shell — a much larger surface, not needed for a chat assistant).
+        // `--exclude-tools` (a denylist) is deliberate over a `--tools` allowlist: pi's
+        // allowlist gates EXTENSION/custom tools too (verified in pi's agent-session.js
+        // isAllowedTool), so `--tools` would silently drop stem-recall, the MCP router,
+        // web_search, and the skills/admin tools. The browse tools grep/find/ls (which
+        // pi leaves OFF by default, needed to explore connected folders) are instead
+        // turned on at session_start via pi.setActiveTools in the bridge extension —
+        // they stay registered under the denylist, just inactive until activated.
         '--exclude-tools',
         'bash',
         '-e',
@@ -767,6 +813,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
     if (!this.currentTurn) return;
     const turn = this.currentTurn;
+    // Memory privacy: if this turn reads inside a memorize:false connected folder,
+    // taint it so its assistant reply never enters Recall. Checked on the RAW event
+    // (the normalizer truncates the path to a basename, losing the dir for matching).
+    if (!turn.memoryTainted && turn.privateRoots?.length && ev.type === 'tool_execution_start') {
+      const p = readToolPath(ev);
+      if (p && pathInsideAny(p, turn.privateRoots, this.options.workspaceRoot)) turn.memoryTainted = true;
+    }
     const { events, done } = normalizePiEvent(ev, turn);
     const now = Date.now();
     if (events.length) {
@@ -1029,6 +1082,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
     const files = await buildFilesContext();
     if (files) blocks.push(files);
+    const connected = await buildConnectedFoldersContext();
+    if (connected) blocks.push(connected);
     // Cheap names+signatures catalog of routed MCP tools (schemas fetched on demand
     // via describe_tool). Keeps the prompt floor flat as more servers are added.
     const catalog = buildMcpCatalogContext();

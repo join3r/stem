@@ -46,6 +46,13 @@ export interface TurnContext {
   thinkingMs: number;
   toolMs: number;
   answerMs: number;
+  /**
+   * Canonical absolute roots of connected folders flagged memorize:false, captured
+   * at turn start. If the assistant reads inside any of them this turn, the turn is
+   * marked `memoryTainted` so its reply is kept out of Recall (see PiRuntime).
+   */
+  privateRoots?: string[];
+  memoryTainted?: boolean;
   phase: 'pending' | 'thinking' | 'tool' | 'answer';
   lastEventAt?: number; // epoch ms of the last normalized event, for interval attribution
   timing?: TurnTimingBreakdown; // stashed by reportTurnTiming so recordTurnEntry can persist it

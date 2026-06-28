@@ -17,6 +17,15 @@ import { createBackend, type ChatBackend } from './backend';
 import { ensureWorkspace } from './workspace/bootstrap';
 import { listSkills, setSkillEnabled } from './workspace/skills';
 import { addFiles, listFiles, removeFile, revealFiles } from './files/store';
+import {
+  addConnectedFolders,
+  connectedFolderPath,
+  listConnectedFolders,
+  publishProtectedRootsNow,
+  removeConnectedFolder,
+  updateConnectedFolder
+} from './workspace/connected-folders';
+import { workspaceRoot } from './workspace/paths';
 import { imagePreviewDataUrl } from './pi/attachments';
 import * as piMcp from './pi/mcp';
 import {
@@ -60,6 +69,7 @@ import {
 import { activityLabel } from '../shared/activity';
 import type {
   ChatListResult,
+  ConnectedFolderPatch,
   ItemEventParams,
   McpServerInput,
   MemoryModelSettings,
@@ -646,6 +656,25 @@ function registerIpc(): void {
   ipcMain.handle('files:reveal', () => revealFiles());
   ipcMain.handle('files:preview', (_e, path: string) => imagePreviewDataUrl(path));
 
+  // ---- connected folders (external folders the assistant reads in place) ----
+  // Distinct `cfolders:*` namespace — `folders:*` is the chat-folder tree above.
+  ipcMain.handle('cfolders:list', () => listConnectedFolders());
+  ipcMain.handle('cfolders:add', (_e, paths: string[]) => addConnectedFolders(paths));
+  ipcMain.handle('cfolders:update', (_e, id: string, patch: ConnectedFolderPatch) =>
+    updateConnectedFolder(id, patch)
+  );
+  ipcMain.handle('cfolders:remove', (_e, id: string) => removeConnectedFolder(id));
+  ipcMain.handle('cfolders:reveal', async (_e, id: string) => {
+    const path = await connectedFolderPath(id);
+    if (path) await shell.openPath(path);
+  });
+  ipcMain.handle('cfolders:revealWorkspace', () => shell.openPath(workspaceRoot()));
+  ipcMain.handle('dialog:openDirectory', () =>
+    dialog
+      .showOpenDialog(mainWindow!, { properties: ['openDirectory', 'multiSelections'] })
+      .then((r) => (r.canceled ? [] : r.filePaths))
+  );
+
   ipcMain.handle('mcp:list', () => piMcp.listMcpServers());
   ipcMain.handle('mcp:status', () => runtime!.getMcpStatus());
   ipcMain.handle('mcp:add', (_e, input: McpServerInput) => piMcp.addMcpServer(input));
@@ -922,6 +951,9 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   await ensureWorkspace();
+  // Publish the read-only connected-folder roots so the backend extension enforces
+  // them from the first turn (also rewritten on every Folders-tab mutation).
+  await publishProtectedRootsNow().catch(() => undefined);
   // pi is the only backend; it satisfies ChatBackend so everything below is
   // backend-agnostic.
   runtime = createBackend();
@@ -1047,7 +1079,12 @@ app.whenReady().then(async () => {
       noteMainThreadEvent(event.method, threadId);
     }
     if (isRecallEnabled()) {
-      captureFromEvent(event); // tap assistant replies into Stem Recall (all threads)
+      // Skip capture when the turn read inside a memorize:false connected folder, so
+      // its (potentially confidential) reply never enters Recall. scheduleDistill still
+      // runs — it only processes already-captured messages.
+      if (!(threadId && runtime!.isCaptureSuppressed(threadId))) {
+        captureFromEvent(event); // tap assistant replies into Stem Recall (all threads)
+      }
       if (event.method === 'turn/completed') scheduleDistill();
     }
   });

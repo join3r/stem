@@ -70,6 +70,25 @@ export function chatStorePath(): string {
 }
 
 /**
+ * Stem-owned registry of external "connected folders" the assistant may read in
+ * place (e.g. an Obsidian vault). Holds only absolute paths + per-folder mode and
+ * memorize flags — the folders themselves stay where they live on disk.
+ */
+export function connectedFoldersStorePath(): string {
+  return join(userDataRoot(), 'connected-folders.json');
+}
+
+/**
+ * Gate file the bridge extension reads to enforce read-only connected folders:
+ * the absolute paths of folders connected in 'read' mode. Lives next to mcp.json
+ * under the pi home so the extension can read it (mtime-cached) like the other
+ * per-turn gate files. Rewritten by the main process whenever the registry changes.
+ */
+export function protectedRootsPath(): string {
+  return join(piHome(), 'protected-roots.json');
+}
+
+/**
  * Stem-owned app settings (e.g. the global Quick Chat shortcut + its defaults).
  * Held in the main process because some of it — the global accelerator — can
  * only be registered from main, not the renderer.

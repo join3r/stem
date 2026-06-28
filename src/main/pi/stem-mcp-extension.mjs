@@ -12,7 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 // Stem's internal recall server stays EAGER (its one tool is used every turn);
 // every other server goes behind the lazy router (invoke_tool/describe_tool) so
@@ -349,6 +349,36 @@ function makeNativeSearchGate(nsPath) {
 }
 
 /**
+ * Returns `roots()` reading the absolute paths of read-only connected folders from
+ * protected-roots.json (mtime-cached). The main process rewrites this whenever the
+ * Folders registry changes; a missing/corrupt file means "nothing protected".
+ */
+export function makeProtectedRootsGate(prPath) {
+  let cache = { mtime: -1, roots: [] };
+  return () => {
+    try {
+      const mtime = statSync(prPath).mtimeMs;
+      if (mtime !== cache.mtime) {
+        const data = JSON.parse(readFileSync(prPath, 'utf8'));
+        cache = { mtime, roots: Array.isArray(data && data.roots) ? data.roots.filter((r) => typeof r === 'string') : [] };
+      }
+    } catch {
+      cache = { mtime: -1, roots: [] };
+    }
+    return cache.roots;
+  };
+}
+
+/** True when `target` is at or inside `root` (lexical containment, both absolute). */
+// Exported for scripts/cfolders-verify.mjs (and makeProtectedRootsGate below); pi
+// only consumes the default export, so these named exports are inert at load time.
+export function isInside(target, root) {
+  const rel = resolve(root) + sep;
+  const t = resolve(target);
+  return t === resolve(root) || t.startsWith(rel);
+}
+
+/**
  * Returns `tier()` reading the `{ tier }` gate in service-tier.json with an mtime cache,
  * mirroring makeNativeSearchGate. Returns the requested OpenAI service tier ('priority')
  * or null. A missing/corrupt file defaults to null (Standard — no service_tier sent).
@@ -651,6 +681,57 @@ export default async function stemMcpBridge(pi) {
   if (typeof pi.on === 'function') {
     const nativeSearchEnabled = makeNativeSearchGate(join(dirname(cfgPath), 'native-search.json'));
     const serviceTier = makeServiceTierGate(join(dirname(cfgPath), 'service-tier.json'));
+
+    // Turn ON pi's read-only browse tools grep/find/ls — they're registered but
+    // INACTIVE by default, and the assistant needs them to explore connected folders
+    // (an Obsidian vault is far too large to list in the prompt; it must ls/find/grep
+    // on demand). We can't enable them via the CLI without an allowlist that would also
+    // drop our extension tools, so we activate them here. Done on session_start (the
+    // pattern pi's own plan-mode extension uses to control active tools): it fires
+    // post-bind so getActiveTools reflects every built-in + extension tool, and it sets
+    // the session's tools BEFORE the first turn computes its tool list (turn_start is
+    // too late). Re-fires on new/switch/fork. We merge in idempotently, clobbering nothing.
+    if (typeof pi.setActiveTools === 'function' && typeof pi.getActiveTools === 'function') {
+      const enableBrowseTools = () => {
+        try {
+          const active = pi.getActiveTools();
+          if (!(active.includes('grep') && active.includes('find') && active.includes('ls'))) {
+            pi.setActiveTools([...new Set([...active, 'grep', 'find', 'ls'])]);
+          }
+          // Publish the resulting active set (like mcp-status.json) so Stem can confirm
+          // the browse tools are live without spawning a turn.
+          try {
+            writeFileSync(join(dirname(cfgPath), 'active-tools.json'), JSON.stringify({ active: pi.getActiveTools() }, null, 2));
+          } catch {
+            // best-effort diagnostic
+          }
+        } catch {
+          // best-effort: worst case the assistant falls back to `read` on known paths
+        }
+      };
+      pi.on('session_start', enableBrowseTools);
+      // Backstop: also enable right before each turn, in case session_start didn't fire
+      // for an already-active session (e.g. a hot runtime reload mid-session).
+      pi.on('turn_start', enableBrowseTools);
+    }
+
+    // Enforce read-only connected folders: block any write/edit whose target path
+    // falls inside a folder the user connected read-only (paths from the main
+    // process via protected-roots.json). Relative paths resolve against pi's cwd
+    // (Stem's workspace), which is never inside a connected folder, so only an
+    // absolute write into a protected root trips this. Reads are never blocked.
+    const protectedRoots = makeProtectedRootsGate(join(dirname(cfgPath), 'protected-roots.json'));
+    pi.on('tool_call', (event) => {
+      if (!event || (event.toolName !== 'write' && event.toolName !== 'edit')) return undefined;
+      const p = event.input && typeof event.input.path === 'string' ? event.input.path : null;
+      if (!p) return undefined;
+      const abs = isAbsolute(p) ? p : resolve(process.cwd(), p);
+      const roots = protectedRoots();
+      if (roots.some((root) => isInside(abs, root))) {
+        return { block: true, reason: 'This folder is connected to Stem read-only — editing it is not allowed. Ask the user to switch it to read & write in the Folders tab.' };
+      }
+      return undefined;
+    });
     pi.on('before_provider_request', (event) => {
       const p = event && event.payload;
       if (!p || typeof p !== 'object') return undefined;

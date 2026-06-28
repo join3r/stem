@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   BackendEventEnvelope,
+  ConnectedFolderPatch,
   McpAdminProposal,
   McpServerInput,
   McpServerStatus,
@@ -49,6 +50,15 @@ const api: StemApi = {
   removeFile: (rel: string) => ipcRenderer.invoke('files:remove', rel),
   revealFiles: () => ipcRenderer.invoke('files:reveal'),
   previewImage: (path: string) => ipcRenderer.invoke('files:preview', path),
+
+  listConnectedFolders: () => ipcRenderer.invoke('cfolders:list'),
+  addConnectedFolders: (paths: string[]) => ipcRenderer.invoke('cfolders:add', paths),
+  updateConnectedFolder: (id: string, patch: ConnectedFolderPatch) =>
+    ipcRenderer.invoke('cfolders:update', id, patch),
+  removeConnectedFolder: (id: string) => ipcRenderer.invoke('cfolders:remove', id),
+  revealConnectedFolder: (id: string) => ipcRenderer.invoke('cfolders:reveal', id),
+  openWorkspaceFolder: () => ipcRenderer.invoke('cfolders:revealWorkspace'),
+  pickDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
 
   listMcpServers: () => ipcRenderer.invoke('mcp:list'),
   getMcpStatus: () => ipcRenderer.invoke('mcp:status'),
