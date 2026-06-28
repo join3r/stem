@@ -298,6 +298,57 @@ describe('Stem Recall — fact relevance ranking', () => {
     retrieval.setRetrievalClients({ embeddings: null, rerank: null });
   });
 
+  it('lexical BM25 fallback surfaces a buried keyword fact with NO embeddings configured', async () => {
+    store.resetFacts();
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null }); // no model at all
+
+    store.upsertFact('The user once met a pangolin in Borneo', 'distilled'); // oldest → dropped by recency cap
+    for (let i = 0; i < 45; i++) store.upsertFact(`The user has misc preference ${i}`, 'distilled');
+    expect(store.getAllFacts().length).toBeGreaterThan(store.getFactThreshold());
+
+    const ctx = (await inject.buildRecallContext('tell me about the pangolin', {})) ?? '';
+    expect(ctx).toMatch(/durable facts/i);
+    expect(ctx).toMatch(/pangolin/); // lexical match pulls the buried oldest fact back in — no embeddings used
+  });
+
+  it('lexical fallback degrades to plain recency when the query shares no terms with any fact', async () => {
+    store.resetFacts();
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+    for (let i = 0; i < 50; i++) store.upsertFact(`The user holds opinion number ${i}`, 'distilled');
+
+    // "what do I think" → only searchable token is "think", which no fact contains.
+    const ctx = (await inject.buildRecallContext('what do I think', {})) ?? '';
+    expect(ctx).toMatch(/durable facts/i); // still injected, via the recency floor
+  });
+
+  it('trigram substring fallback recalls a partial-word match the term index misses', async () => {
+    store.resetFacts();
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+    if (!store.factsTrigramAvailable()) return; // skip where the trigram tokenizer is unavailable
+
+    store.upsertFact('The user is optimizing the reranking stage of their pipeline', 'distilled');
+    for (let i = 0; i < 45; i++) store.upsertFact(`The user dislikes vegetable ${i}`, 'distilled');
+
+    // "rank" is no unicode61 token in "reranking", but it is a trigram substring of it.
+    const ctx = (await inject.buildRecallContext('how does rank work here', {})) ?? '';
+    expect(ctx).toMatch(/reranking stage/);
+  });
+
+  it('recencyWeight decays monotonically from 1 to ~0', () => {
+    expect(search.recencyWeight(0)).toBeCloseTo(1, 10);
+    expect(search.recencyWeight(30)).toBeLessThan(search.recencyWeight(0));
+    expect(search.recencyWeight(3650)).toBeLessThan(0.01);
+    expect(search.recencyWeight(-5)).toBeCloseTo(1, 10); // negative age clamps to "fresh"
+  });
+
+  it('rankFactsLexically prefers an exact-term match over a recency-only candidate', () => {
+    store.resetFacts();
+    store.upsertFact('The user kayaks every summer', 'distilled');
+    store.upsertFact('The user prefers tea over coffee', 'distilled');
+    const ranked = search.rankFactsLexically('do I drink coffee', 3);
+    expect(ranked[0]?.text).toMatch(/tea over coffee/); // lexical hit ranks first
+  });
+
   it('caches vectors as BLOBs and re-flags them missing on a model change', () => {
     store.resetFacts();
     store.upsertFact('The user keeps a fact for the vector round-trip test', 'distilled');

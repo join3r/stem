@@ -9,7 +9,7 @@ import {
   getFactRerankK,
   type Fact
 } from './store';
-import { searchMemory } from './search';
+import { searchMemory, rankFactsLexically } from './search';
 import { getEmbeddingsClient, getRerankClient } from './retrieval';
 import { dot, magnitude } from './vector';
 
@@ -21,9 +21,10 @@ import { dot, magnitude } from './vector';
 // Facts selection: at or below a threshold we inject every fact (cheap, no
 // network). Above it we rank ALL facts by relevance to the current message —
 // embed the query, cosine-shortlist, then rerank — so growth past the old
-// 100-row cap no longer silently drops the oldest facts. Any failure (endpoint
-// disabled/unreachable/error) falls back to recency injection so a turn never
-// breaks.
+// 100-row cap no longer silently drops the oldest facts. If embeddings are
+// disabled/unreachable, we fall back to a model-free lexical (BM25 + trigram)
+// tier that is still query-aware; only when even that finds no signal do we
+// fall all the way back to recency injection — so a turn never breaks.
 
 const MAX_HITS = 3;
 // bm25 returns negative scores; more-negative = better. Drop weak matches so we
@@ -115,8 +116,17 @@ async function chooseFacts(userText: string, timings?: RecallTimings): Promise<F
   try {
     return await selectRelevantFacts(userText, all, timings);
   } catch {
-    // Endpoint disabled/unreachable/error → recency fallback (never break a turn).
-    return getFacts(threshold);
+    // Embeddings disabled/unreachable/error → lexical (BM25) fallback tier: still
+    // query-aware, but local and model-free. Lexically-relevant facts go first (so a
+    // relevant *old* fact is never silently dropped by the recency cap), then recent
+    // facts fill the remaining budget to hedge BM25's synonym/cross-lingual blind
+    // spots. Same total count as the old recency-only path; pure recency only when
+    // there's no lexical signal at all. Never breaks a turn.
+    const lexical = rankFactsLexically(userText, threshold);
+    if (lexical.length === 0) return getFacts(threshold);
+    const seen = new Set(lexical.map((f) => f.id));
+    const recent = getFacts(threshold).filter((f) => !seen.has(f.id));
+    return [...lexical, ...recent].slice(0, threshold);
   }
 }
 

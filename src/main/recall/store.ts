@@ -55,6 +55,8 @@ export interface Fact {
 }
 
 let db: DatabaseSync | null = null;
+// Whether the optional facts_trigram index was created successfully (see open()).
+let factsTrigram = false;
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
@@ -114,6 +116,27 @@ function open(): DatabaseSync {
       updated_at INTEGER NOT NULL
     );
 
+    -- Lexical (BM25) index over facts: the no-embeddings relevance tier. Mirrors
+    -- messages_fts so fact ranking is query-aware with zero model/network. Kept in
+    -- lockstep with facts via triggers — and because facts mutate (corrections,
+    -- consolidation), an UPDATE trigger is needed too, unlike append-mostly messages.
+    CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+      text,
+      content='facts',
+      content_rowid='id',
+      tokenize='unicode61'
+    );
+    CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
+      INSERT INTO facts_fts(rowid, text) VALUES (new.id, new.text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
+      INSERT INTO facts_fts(facts_fts, rowid, text) VALUES ('delete', old.id, old.text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN
+      INSERT INTO facts_fts(facts_fts, rowid, text) VALUES ('delete', old.id, old.text);
+      INSERT INTO facts_fts(rowid, text) VALUES (new.id, new.text);
+    END;
+
     -- Cached embedding per (fact, model) for relevance ranking at inject time.
     -- Keyed by model so swapping the embeddings model just recomputes; stale rows
     -- under an old model are never read. Vectors are invalidated (deleted) whenever
@@ -149,6 +172,54 @@ function open(): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS idx_turn_timings_thread ON turn_timings(thread_id);
   `);
+
+  // Optional trigram index over facts: a substring/morphology recall booster for
+  // the lexical tier (catches inflected SK/DE forms and partial words the unicode61
+  // term index misses). Created separately and guarded because the trigram tokenizer
+  // needs a recent SQLite/FTS5 build; if it's unavailable we silently run term-only.
+  try {
+    handle.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS facts_trigram USING fts5(
+        text,
+        content='facts',
+        content_rowid='id',
+        tokenize='trigram'
+      );
+      CREATE TRIGGER IF NOT EXISTS facts_trig_ai AFTER INSERT ON facts BEGIN
+        INSERT INTO facts_trigram(rowid, text) VALUES (new.id, new.text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS facts_trig_ad AFTER DELETE ON facts BEGIN
+        INSERT INTO facts_trigram(facts_trigram, rowid, text) VALUES ('delete', old.id, old.text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS facts_trig_au AFTER UPDATE ON facts BEGIN
+        INSERT INTO facts_trigram(facts_trigram, rowid, text) VALUES ('delete', old.id, old.text);
+        INSERT INTO facts_trigram(rowid, text) VALUES (new.id, new.text);
+      END;
+    `);
+    factsTrigram = true;
+  } catch {
+    factsTrigram = false;
+  }
+
+  // One-time backfill: rows that predate the fact indexes aren't in them yet
+  // (triggers only fire on future mutations). Rebuild once, gated by a meta flag so
+  // it never runs on a populated, already-indexed DB. The flag is read/written via
+  // the local handle to avoid re-entering open() before `db` is assigned.
+  const built = handle.prepare(`SELECT value FROM meta WHERE key = 'facts_index_built'`).get() as
+    | { value: string }
+    | undefined;
+  if (built?.value !== '1') {
+    try {
+      handle.exec(`INSERT INTO facts_fts(facts_fts) VALUES('rebuild')`);
+      if (factsTrigram) handle.exec(`INSERT INTO facts_trigram(facts_trigram) VALUES('rebuild')`);
+    } catch {
+      // A rebuild failure must never block startup; triggers still keep new facts synced.
+    }
+    handle
+      .prepare(`INSERT INTO meta(key, value) VALUES('facts_index_built', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`)
+      .run();
+  }
+
   db = handle;
   return handle;
 }
@@ -376,6 +447,79 @@ export function deleteFact(id: number): void {
   // No FK cascade (foreign_keys isn't globally enabled), so drop the vector by hand.
   handle.prepare(`DELETE FROM fact_vectors WHERE fact_id = ?`).run(id);
   handle.prepare(`DELETE FROM facts WHERE id = ?`).run(id);
+}
+
+// ---- lexical fact ranking (Level 1 no-embeddings fallback tier) ----
+
+/** A fact plus its lexical match score (bm25; lower = better). */
+export interface ScoredFact extends Fact {
+  score: number;
+}
+
+/** True when the optional trigram fact index is available this session. */
+export function factsTrigramAvailable(): boolean {
+  open();
+  return factsTrigram;
+}
+
+function mapScoredFact(r: Record<string, unknown>): ScoredFact {
+  return {
+    id: r.id as number,
+    text: r.text as string,
+    source: r.source as string,
+    updatedAt: r.updatedAt as number,
+    score: r.score as number
+  };
+}
+
+/**
+ * BM25 term ranking of facts for a prebuilt FTS5 MATCH expression. Returns up to
+ * `limit`, best (most-negative bm25) first, with the raw score so callers can blend
+ * in recency. Empty on no match or malformed query — search.ts builds the MATCH.
+ */
+export function factTermSearch(match: string, limit: number): ScoredFact[] {
+  if (!match.trim() || limit <= 0) return [];
+  const handle = open();
+  try {
+    const rows = handle
+      .prepare(
+        `SELECT f.id AS id, f.text AS text, f.source AS source, f.updated_at AS updatedAt,
+                bm25(facts_fts) AS score
+         FROM facts_fts JOIN facts f ON f.id = facts_fts.rowid
+         WHERE facts_fts MATCH ?
+         ORDER BY score
+         LIMIT ?`
+      )
+      .all(match, limit) as Array<Record<string, unknown>>;
+    return rows.map(mapScoredFact);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Trigram substring match of facts (morphology/partial-word recall the term index
+ * misses). Guarded: returns [] when the trigram index isn't available. Ordered by
+ * recency since bm25 over trigram carries little ranking signal; score is left 0.
+ */
+export function factTrigramSearch(match: string, limit: number): ScoredFact[] {
+  if (!factsTrigram || !match.trim() || limit <= 0) return [];
+  const handle = open();
+  try {
+    const rows = handle
+      .prepare(
+        `SELECT f.id AS id, f.text AS text, f.source AS source, f.updated_at AS updatedAt,
+                0 AS score
+         FROM facts_trigram JOIN facts f ON f.id = facts_trigram.rowid
+         WHERE facts_trigram MATCH ?
+         ORDER BY f.updated_at DESC
+         LIMIT ?`
+      )
+      .all(match, limit) as Array<Record<string, unknown>>;
+    return rows.map(mapScoredFact);
+  } catch {
+    return [];
+  }
 }
 
 // ---- embedding cache (Level 1 relevance ranking) ----
