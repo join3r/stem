@@ -14,3 +14,6 @@ out/
 # Playwright E2E artifacts
 test-results/
 playwright-report/
+
+# External folders connected for in-place reading (separate repos)
+.external/
