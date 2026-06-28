@@ -31,13 +31,18 @@ export function StatusHud() {
 
   if (!status) return null;
   const finished = status.phase === 'finished';
-  // Prompt with the real summon key when one is bound; otherwise the pill is
-  // still clickable, so fall back to that.
-  const hint = status.shortcut ? `${formatAccelerator(status.shortcut)} open` : 'click to open';
+  // The follow-me pill (reveal === 'main') tracks a main-window thread, so it
+  // raises the main window and prompts a plain click; the overlay pill prompts
+  // the real summon key when one is bound.
+  const toMain = status.reveal === 'main';
+  const hint = !toMain && status.shortcut ? `${formatAccelerator(status.shortcut)} open` : 'click to open';
 
   return (
     <div className="hud-root">
-      <button className={`hud-pill${finished ? ' finished' : ''}`} onClick={() => window.stem.revealQuickChat()}>
+      <button
+        className={`hud-pill${finished ? ' finished' : ''}`}
+        onClick={() => (toMain ? window.stem.revealMain() : window.stem.revealQuickChat())}
+      >
         {finished ? (
           <span className="hud-check" aria-hidden="true">
             <Check size={13} />

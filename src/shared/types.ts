@@ -494,6 +494,14 @@ export interface QuickChatSettings {
    * continue the existing session).
    */
   newThreadTimeoutMs: number;
+  /**
+   * Show the bottom-left progress pill for main-window threads whenever the main
+   * window loses focus (you switch Spaces or apps), so an active thread's progress
+   * stays visible. Hidden again when the main window regains focus.
+   */
+  followAcrossSpaces: boolean;
+  /** Play a macOS chime when a turn finishes while the progress pill is visible. */
+  finishSound: boolean;
 }
 
 /**
@@ -603,6 +611,12 @@ export type QuickChatStatusPhase = 'working' | 'answering' | 'finished';
 export interface QuickChatStatus {
   phase: QuickChatStatusPhase;
   label: string;
+  /**
+   * Where clicking the pill should go: 'overlay' (default) re-summons the Quick
+   * Chat overlay; 'main' raises the main window (used by the follow-me pill that
+   * tracks a main-window thread across Spaces).
+   */
+  reveal?: 'overlay' | 'main';
   /**
    * The currently-registered global accelerator (e.g. 'Alt+Space'), so the
    * "finished" pill can prompt the user with the real key that re-summons the
@@ -744,6 +758,8 @@ export interface StemApi {
   handoffQuickChat(payload: QuickChatHandoff): Promise<void>;
   /** Re-summon the overlay (same path as the global shortcut); used by the HUD. */
   revealQuickChat(): Promise<void>;
+  /** Raise the main window; used by the follow-me HUD pill (reveal === 'main'). */
+  revealMain(): Promise<void>;
   /** Hide the overlay (Escape from within it). */
   hideQuickChat(): Promise<void>;
   /** Overlay: fired each time the overlay is summoned; `reset` => fresh session. */

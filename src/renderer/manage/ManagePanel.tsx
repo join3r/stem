@@ -1023,6 +1023,34 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
           />
         </div>
 
+        <div className="set-row">
+          <span className="set-label">
+            <strong>Show progress on other Spaces</strong>
+            <em>Float the progress pill when the main window loses focus &amp; a thread is running</em>
+          </span>
+          <button
+            className={`switch${qc.followAcrossSpaces ? ' on' : ''}`}
+            role="switch"
+            aria-checked={qc.followAcrossSpaces}
+            aria-label="Show progress on other Spaces"
+            onClick={() => update({ followAcrossSpaces: !qc.followAcrossSpaces })}
+          />
+        </div>
+
+        <div className="set-row">
+          <span className="set-label">
+            <strong>Sound when finished</strong>
+            <em>Play a chime when a turn finishes while the progress pill is visible</em>
+          </span>
+          <button
+            className={`switch${qc.finishSound ? ' on' : ''}`}
+            role="switch"
+            aria-checked={qc.finishSound}
+            aria-label="Sound when finished"
+            onClick={() => update({ finishSound: !qc.finishSound })}
+          />
+        </div>
+
         <div className="set-block">
           <span className="set-sub">New thread after idle</span>
           <div className="seg-ctl">

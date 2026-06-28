@@ -26,7 +26,12 @@ const DEFAULTS: AppSettings = {
     defaultServiceTier: 'priority',
     showOnAllDisplays: true,
     // After 5 minutes idle, re-summoning the overlay starts a fresh thread.
-    newThreadTimeoutMs: 5 * 60_000
+    newThreadTimeoutMs: 5 * 60_000,
+    // Show the progress pill for main-window threads when the main window loses
+    // focus (switch Spaces/apps), so an active thread stays visible.
+    followAcrossSpaces: true,
+    // Opt-in chime when a turn finishes while the pill is visible.
+    finishSound: false
   },
   // Native web search defaults on for both contexts; surfaced in the UI only when
   // the relevant model's provider supports it (currently ChatGPT/openai-codex).
@@ -91,7 +96,9 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
       newThreadTimeoutMs:
         typeof qc.newThreadTimeoutMs === 'number' && qc.newThreadTimeoutMs >= 0
           ? qc.newThreadTimeoutMs
-          : d.newThreadTimeoutMs
+          : d.newThreadTimeoutMs,
+      followAcrossSpaces: typeof qc.followAcrossSpaces === 'boolean' ? qc.followAcrossSpaces : d.followAcrossSpaces,
+      finishSound: typeof qc.finishSound === 'boolean' ? qc.finishSound : d.finishSound
     },
     nativeWebSearch: nws,
     memory: mem,

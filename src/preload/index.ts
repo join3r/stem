@@ -117,6 +117,7 @@ const api: StemApi = {
   newQuickChatThread: () => ipcRenderer.invoke('quickchat:newThread'),
   handoffQuickChat: (payload: QuickChatHandoff) => ipcRenderer.invoke('quickchat:handoff', payload),
   revealQuickChat: () => ipcRenderer.invoke('quickchat:reveal'),
+  revealMain: () => ipcRenderer.invoke('main:reveal'),
   hideQuickChat: () => ipcRenderer.invoke('quickchat:hide'),
   onQuickChatFocus: (listener: (focus: QuickChatFocus) => void) => {
     const handler = (_e: unknown, focus: QuickChatFocus) => listener(focus);

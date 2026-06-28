@@ -12,6 +12,7 @@ import {
 } from 'electron';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import { createBackend, type ChatBackend } from './backend';
 import { ensureWorkspace } from './workspace/bootstrap';
 import { listSkills, setSkillEnabled } from './workspace/skills';
@@ -71,6 +72,7 @@ import type {
   QuickChatPrompt,
   QuickChatSettings,
   QuickChatStatus,
+  QuickChatStatusPhase,
   RuntimeStatus,
   StartTurnInput,
   StartTurnResult
@@ -157,6 +159,22 @@ let overlayTurnRunning = false;
 /** Whether the in-flight overlay turn has started streaming text (HUD phase). */
 let hudTextSeen = false;
 
+// ---- Follow-me status pill (main-window threads) ----
+//
+// The bottom-left pill is shared between Quick Chat and the main app. While the
+// main window is unfocused (you switched Spaces/apps) and a main-window thread is
+// running, the pill mirrors that progress so you don't lose sight of it.
+/** Show the pill for main threads when the main window loses focus. */
+let followAcrossSpaces = true;
+/** Play a chime when a turn finishes while the pill is visible. */
+let finishSound = false;
+/** Main-window threads currently running (working/answering), keyed by threadId. */
+const runningMainThreads = new Set<string>();
+/** Who currently owns the shared pill, so Quick Chat and follow-me never stomp. */
+let hudOwner: 'none' | 'quickchat' | 'main' = 'none';
+/** Last phase pushed to the pill, so the chime fires only on entering 'finished'. */
+let lastHudPhase: QuickChatStatusPhase | null = null;
+
 // True for the brief window around summoning the overlay. Showing the overlay
 // activates the app, which fires `app.on('activate')`; without this guard that
 // handler would recreate a previously-closed main window (and macOS would surface
@@ -201,6 +219,13 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // Follow-me pill: surface a running main-window thread's progress when you leave
+  // the main window (switch Spaces/apps), and dismiss it when you return.
+  mainWindow.on('blur', syncMainHud);
+  mainWindow.on('focus', () => {
+    if (hudOwner === 'main') hideHud();
   });
 
   const devUrl = process.env.ELECTRON_RENDERER_URL;
@@ -335,8 +360,22 @@ function createHudWindow(): void {
   }
 }
 
-/** Show the HUD pill (bottom-left of the display under the cursor) and push status. */
-function showHud(status: QuickChatStatus): void {
+/** Play a macOS finish chime (built-in system sound; no bundled asset). */
+function playFinishChime(): void {
+  if (process.platform !== 'darwin') return;
+  try {
+    spawn('afplay', ['/System/Library/Sounds/Glass.aiff'], { stdio: 'ignore' }).unref();
+  } catch {
+    // Sound is best-effort; never let it break the turn lifecycle.
+  }
+}
+
+/**
+ * Show the HUD pill (bottom-left of the display under the cursor) and push status.
+ * `owner` records whether Quick Chat or the follow-me path is driving it. The chime
+ * fires once, on the transition into 'finished' while the pill is visible.
+ */
+function showHud(status: QuickChatStatus, owner: 'quickchat' | 'main'): void {
   if (!hudWindow || hudWindow.isDestroyed()) createHudWindow();
   const win = hudWindow!;
   if (!win.isVisible()) {
@@ -349,12 +388,17 @@ function showHud(status: QuickChatStatus): void {
     });
     win.showInactive(); // show without stealing focus
   }
+  hudOwner = owner;
   // Stamp the live accelerator so the pill prompts the real summon key, not Enter.
   win.webContents.send('quickchat:status', { ...status, shortcut: currentShortcut });
+  if (status.phase === 'finished' && lastHudPhase !== 'finished' && finishSound) playFinishChime();
+  lastHudPhase = status.phase;
 }
 
 function hideHud(): void {
   if (hudWindow && !hudWindow.isDestroyed() && hudWindow.isVisible()) hudWindow.hide();
+  hudOwner = 'none';
+  lastHudPhase = null;
 }
 
 /**
@@ -371,13 +415,13 @@ function driveHud(event: { method: string; params: unknown }): void {
       const item = (event.params as ItemEventParams)?.item;
       const type = item?.type;
       if (type && type !== 'agentMessage' && !hudTextSeen)
-        showHud({ phase: 'working', label: activityLabel(type, item?.name, item?.detail) });
+        showHud({ phase: 'working', label: activityLabel(type, item?.name, item?.detail) }, 'quickchat');
       break;
     }
     case 'item/agentMessage/delta': {
       if (!hudTextSeen) {
         hudTextSeen = true;
-        showHud({ phase: 'answering', label: 'Answering…' });
+        showHud({ phase: 'answering', label: 'Answering…' }, 'quickchat');
       }
       break;
     }
@@ -392,11 +436,48 @@ function driveHud(event: { method: string; params: unknown }): void {
             : 'Stopped';
       overlayTurnRunning = false;
       overlayLastActivityAt = Date.now();
-      showHud({ phase: 'finished', label });
+      showHud({ phase: 'finished', label }, 'quickchat');
       break;
     }
     default:
       break;
+  }
+}
+
+/**
+ * Follow-me pill: while the main window is unfocused (you switched Spaces/apps)
+ * and a main-window thread is running, mirror its progress in the shared pill.
+ * No-ops while Quick Chat owns the pill (it takes priority) or the feature is off.
+ */
+function syncMainHud(): void {
+  if (!followAcrossSpaces) {
+    if (hudOwner === 'main') hideHud();
+    return;
+  }
+  if (hudOwner === 'quickchat') return;
+  const blurred = !!mainWindow && !mainWindow.isDestroyed() && !mainWindow.isFocused();
+  const running = runningMainThreads.size > 0;
+  if (running && blurred) {
+    showHud({ phase: 'working', label: 'Working…', reveal: 'main' }, 'main');
+  }
+}
+
+/**
+ * Track which main-window threads are running and drive the follow-me pill. The
+ * 'finished' transition (and its chime) only fires when the pill is already
+ * shown for the main app (hudOwner === 'main') — i.e. the user is away.
+ */
+function noteMainThreadEvent(method: string, threadId: string): void {
+  if (method === 'item/started' || method === 'item/agentMessage/delta') {
+    runningMainThreads.add(threadId);
+    syncMainHud(); // handles a thread that starts while you're already away
+  } else if (method === 'turn/completed' || method === 'turn/failed' || method === 'turn/aborted') {
+    runningMainThreads.delete(threadId);
+    if (hudOwner === 'main' && runningMainThreads.size === 0) {
+      const label =
+        method === 'turn/completed' ? 'Answer ready' : method === 'turn/failed' ? 'Request failed' : 'Stopped';
+      showHud({ phase: 'finished', label, reveal: 'main' }, 'main');
+    }
   }
 }
 
@@ -695,6 +776,11 @@ function registerIpc(): void {
       applyOverlayWorkspaceVisibility();
     }
     if ('newThreadTimeoutMs' in patch) newThreadTimeoutMs = next.quickChat.newThreadTimeoutMs;
+    if ('followAcrossSpaces' in patch) {
+      followAcrossSpaces = next.quickChat.followAcrossSpaces;
+      if (!followAcrossSpaces && hudOwner === 'main') hideHud();
+    }
+    if ('finishSound' in patch) finishSound = next.quickChat.finishSound;
     return next;
   });
   ipcMain.handle('settings:updateNativeWebSearch', async (_e, patch: Partial<NativeWebSearchSettings>) => {
@@ -756,7 +842,7 @@ function registerIpc(): void {
     // not promote the main window. The HUD is non-focusable, so it never steals
     // focus from whatever app the user is in.
     hideOverlayWindow();
-    showHud({ phase: 'working', label: 'Working…' });
+    showHud({ phase: 'working', label: 'Working…' }, 'quickchat');
 
     try {
       const continuing = !!prompt.threadId && prompt.threadId === overlayThreadId && !overlayHandedOff;
@@ -788,7 +874,7 @@ function registerIpc(): void {
       // HUD straight to finished.
       if (result.handled) {
         overlayTurnRunning = false;
-        showHud({ phase: 'finished', label: 'Answer ready' });
+        showHud({ phase: 'finished', label: 'Answer ready' }, 'quickchat');
       }
       return result;
     } catch (e) {
@@ -824,6 +910,10 @@ function registerIpc(): void {
   ipcMain.handle('quickchat:reveal', () => {
     if (!quickChatWindow?.isVisible()) toggleQuickChat();
   });
+
+  // Raise the main window (follow-me pill click). Returning focus to the main
+  // window fires the 'focus' handler, which hides the pill.
+  ipcMain.handle('main:reveal', () => revealMainWindow());
 
   ipcMain.handle('quickchat:hide', () => {
     dismissQuickChat();
@@ -946,11 +1036,15 @@ app.whenReady().then(async () => {
       driveHud(event);
     } else if (!threadId) {
       // Process-level events (e.g. process/exit) carry no threadId — let both
-      // windows clear their run state.
+      // windows clear their run state, and clear the follow-me pill so a backend
+      // crash never leaves a stuck "Working…" pill.
       mainWindow?.webContents.send('backend:event', event);
       quickChatWindow?.webContents.send('backend:event', event);
+      runningMainThreads.clear();
+      if (hudOwner === 'main') hideHud();
     } else {
       mainWindow?.webContents.send('backend:event', event);
+      noteMainThreadEvent(event.method, threadId);
     }
     if (isRecallEnabled()) {
       captureFromEvent(event); // tap assistant replies into Stem Recall (all threads)
@@ -1000,6 +1094,8 @@ app.whenReady().then(async () => {
   const initialSettings = await readSettings();
   overlayOnAllDisplays = initialSettings.quickChat.showOnAllDisplays;
   newThreadTimeoutMs = initialSettings.quickChat.newThreadTimeoutMs;
+  followAcrossSpaces = initialSettings.quickChat.followAcrossSpaces;
+  finishSound = initialSettings.quickChat.finishSound;
   createQuickChatWindow();
   createHudWindow();
   applyQuickChatShortcut(initialSettings.quickChat.shortcut);
