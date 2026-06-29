@@ -105,6 +105,57 @@ describe('chatState reducer', () => {
     expect(applyProcessExitToThread(done).status).toBe('done');
   });
 
+  it('attaches per-turn usage to the assistant message', () => {
+    const completed = applyBackendEventToThread(
+      EMPTY_STATE,
+      event('item/completed', {
+        threadId: 't1',
+        turnId: 'turn1',
+        item: { type: 'agentMessage', id: 'turn1', text: 'hi' }
+      })
+    )!;
+    const withUsage = applyBackendEventToThread(
+      completed,
+      event('turn/usage', {
+        threadId: 't1',
+        turnId: 'turn1',
+        input: 26459,
+        output: 1339,
+        cacheRead: 1920,
+        cacheWrite: 0,
+        totalTokens: 29718,
+        cost: 0.17
+      })
+    )!;
+
+    expect(withUsage.messages[0].usage).toEqual({
+      input: 26459,
+      output: 1339,
+      cacheRead: 1920,
+      cacheWrite: 0,
+      totalTokens: 29718,
+      cost: 0.17
+    });
+  });
+
+  it('ignores usage for a turn with no assistant bubble', () => {
+    expect(
+      applyBackendEventToThread(
+        EMPTY_STATE,
+        event('turn/usage', {
+          threadId: 't1',
+          turnId: 'missing',
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: null
+        })
+      )
+    ).toBeNull();
+  });
+
   it('extracts thread ids from event params', () => {
     expect(backendEventThreadId(event('turn/completed', { threadId: 't1' }))).toBe('t1');
     expect(backendEventThreadId(event('process/exit', { code: 1 }))).toBeUndefined();
