@@ -48,7 +48,11 @@ and Stem's `ensurePiHome()` auto-seeds that into the (throwaway) pi-home the fir
 time it starts — so the real backend works with your existing auth while the stores
 stay isolated. `tests/e2e/real-backend.spec.ts` exercises this — real auth status,
 a live `listModels` RPC, and a full turn (type → send → streamed reply renders).
-The whole file is skipped unless `STEM_E2E_REAL` is set.
+`tests/e2e/message-actions.spec.ts` covers the per-message operations — copy,
+edit (cancel + save & run), retry, fork, and delete-from-here (arm + confirm) —
+since each needs a real turn to produce a message with a backend `turnId` and to
+exercise the real `rollbackToTurn`/`forkThread` thread ops. Both files are skipped
+unless `STEM_E2E_REAL` is set.
 
 Use real mode for local verification of pi-dependent flows. Keep it OUT of CI: real
 turns hit the network, consume Claude Max / ChatGPT quota, and are non-deterministic.
