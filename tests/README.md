@@ -31,6 +31,16 @@ throwaway userData dir and drives it through Playwright.
   path, driven via `window.stem`.
 - `tests/e2e/manage-panel.spec.ts` — real UI clicks: open the Memory tab, assert
   the empty state, click a tidy-up preset and confirm it persists to the store.
+- `tests/e2e/tasks.spec.ts` — scheduled-tasks subsystem through the real store →
+  IPC → renderer path: seeds tasks via `launchApp({ seedTasks })` (which writes the
+  isolated `STEM_TASKS_STORE` before launch), then asserts the Tasks tab renders
+  them and that pause/delete persist through real IPC. Hermetic — it seeds only
+  non-due tasks so no (faked) turns are dispatched. The flood regression itself
+  (a once-due run re-enqueued every ~250ms while in-flight) is guarded
+  deterministically at the unit layer by `tests/unit/scheduler.test.ts`; the e2e
+  proves the surrounding wiring. Note: under `STEM_E2E` the scheduler is started on
+  did-finish-load (the only thing the seam adds beyond a healthy `runtime:status`)
+  so the subsystem is reachable without a live backend.
 
 ### The `STEM_E2E` seam
 

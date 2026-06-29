@@ -995,13 +995,13 @@ function registerTaskTools(pi) {
     name: 'schedule_task',
     label: 'Schedule task',
     description:
-      'Schedule the CURRENT conversation to re-run a prompt automatically on a schedule. Each run is a full autonomous turn appended to this same chat; no human watches it live, so the run should call notify_user only if it finds something the user should see. Provide EITHER `cron` (a standard 5-field cron expression, in local time, for a recurring task) OR `at` (an ISO 8601 datetime for a one-time task) — not both. Examples: cron "0 8 * * 1-5" = weekday mornings at 08:00; cron "*/30 * * * *" = every 30 minutes.',
+      'Schedule the CURRENT conversation to re-run a prompt automatically on a schedule. Each run is a full autonomous turn appended to this same chat; no human watches it live, so the run should call notify_user only if it finds something the user should see. Provide EITHER `cron` (a standard 5-field cron expression, in local time, for a recurring task) OR `at` (an ISO 8601 datetime for a one-time task) — not both. The `at` time is interpreted in the user\'s LOCAL time and must be in the future; write it without a trailing "Z" (e.g. 2026-07-01T08:00:00) so it is not misread as UTC. Examples: cron "0 8 * * 1-5" = weekday mornings at 08:00; cron "*/30 * * * *" = every 30 minutes.',
     parameters: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'What to do on each run, e.g. "Check the news page and summarize anything new about LLM releases."' },
         cron: { type: 'string', description: 'A 5-field cron expression (minute hour day-of-month month day-of-week) for a recurring task.' },
-        at: { type: 'string', description: 'An ISO 8601 datetime (e.g. 2026-07-01T08:00:00) for a one-time task.' }
+        at: { type: 'string', description: 'A future ISO 8601 datetime in the user\'s local time, without a "Z" suffix (e.g. 2026-07-01T08:00:00), for a one-time task.' }
       },
       required: ['prompt']
     },

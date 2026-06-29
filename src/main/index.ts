@@ -1176,7 +1176,13 @@ app.whenReady().then(async () => {
   // not signed in (status() is cheap and never spawns). did-finish-load keeps the
   // spawn + MCP child processes off the first-paint path. Fire-and-forget; races
   // harmlessly with the renderer's listModels warm (ensureStarted is idempotent).
-  if (!E2E) {
+  if (E2E) {
+    // The backend is faked, so there's no prewarm and no sign-in gate — but the
+    // scheduler subsystem (store → IPC → renderer) is still real and worth
+    // exercising end-to-end. Start it so seeded tasks load and the Tasks tab is
+    // reachable. (E2E specs seed only non-due tasks, so no turns are dispatched.)
+    mainWindow?.webContents.once('did-finish-load', () => void scheduler?.start());
+  } else {
     mainWindow?.webContents.once('did-finish-load', () => {
       void runtime!
         .status()

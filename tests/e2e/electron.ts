@@ -2,10 +2,11 @@
 // state (a throwaway userData dir + STEM_* store overrides), so tests never touch
 // the real workspace, recall DB, or pi auth. Each test gets its own app instance.
 import { _electron as electron, test as base, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { ScheduledTask } from '../../src/shared/types';
 
 // Launch via the project ROOT (not dist/main/index.js directly) so Electron
 // resolves `main` from package.json AND app.getAppPath() returns the repo root.
@@ -15,7 +16,7 @@ const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 /** The real app opens three windows (main, Quick Chat overlay, HUD); only the
  *  overlay/HUD carry a `quickchat`/`hud` query flag. Pick the bare main window. */
-async function mainWindowOf(app: ElectronApplication): Promise<Page> {
+export async function mainWindowOf(app: ElectronApplication): Promise<Page> {
   for (let i = 0; i < 50; i++) {
     for (const win of app.windows()) {
       const url = win.url();
@@ -38,23 +39,56 @@ type Fixtures = {
 // quota and are non-deterministic, so CI uses the hermetic STEM_E2E seam.
 export const REAL_BACKEND = !!process.env.STEM_E2E_REAL;
 
+export interface LaunchOptions {
+  /** Tasks written to the isolated tasks.json BEFORE launch, so the scheduler
+   *  loads them at start() — the only way to seed the subsystem (creation is
+   *  otherwise driven by the assistant's tool through a live backend turn). */
+  seedTasks?: ScheduledTask[];
+  /** Force real/hermetic backend regardless of STEM_E2E_REAL (default: follow env). */
+  real?: boolean;
+  /** Extra env overrides for the launch. */
+  env?: Record<string, string>;
+}
+
+export interface LaunchedApp {
+  app: ElectronApplication;
+  userDataDir: string;
+  tasksStorePath: string;
+}
+
+/** Launch the built app with fully isolated state. Seeds the tasks store first
+ *  when `seedTasks` is given. Caller is responsible for app.close() + cleanup
+ *  (the `electronApp` fixture does this automatically; standalone callers use
+ *  the returned dir). */
+export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> {
+  const userDataDir = mkdtempSync(join(tmpdir(), 'stem-e2e-'));
+  const tasksStorePath = join(userDataDir, 'tasks.json');
+  if (opts.seedTasks) {
+    writeFileSync(tasksStorePath, JSON.stringify({ version: 1, tasks: opts.seedTasks }, null, 2));
+  }
+  const real = opts.real ?? REAL_BACKEND;
+  const app = await electron.launch({
+    args: [PROJECT_ROOT, `--user-data-dir=${userDataDir}`],
+    env: {
+      ...process.env,
+      // Isolate the Stem-owned stores onto throwaway paths (same seam the unit
+      // tests and the old probes use).
+      STEM_RECALL_DB: join(userDataDir, 'recall.sqlite'),
+      STEM_FILES_DIR: join(userDataDir, 'files'),
+      STEM_TASKS_STORE: tasksStorePath,
+      // Default: report a healthy backend without spawning pi, so tests reach
+      // the real UI past the sign-in gate (see the STEM_E2E seam in
+      // src/main/index.ts). In real-backend mode the seam is off and pi runs.
+      ...(real ? {} : { STEM_E2E: '1' }),
+      ...opts.env
+    }
+  });
+  return { app, userDataDir, tasksStorePath };
+}
+
 export const test = base.extend<Fixtures>({
   electronApp: async ({}, use) => {
-    const userDataDir = mkdtempSync(join(tmpdir(), 'stem-e2e-'));
-    const app = await electron.launch({
-      args: [PROJECT_ROOT, `--user-data-dir=${userDataDir}`],
-      env: {
-        ...process.env,
-        // Isolate the Stem-owned stores onto throwaway paths (same seam the unit
-        // tests and the old probes use).
-        STEM_RECALL_DB: join(userDataDir, 'recall.sqlite'),
-        STEM_FILES_DIR: join(userDataDir, 'files'),
-        // Default: report a healthy backend without spawning pi, so tests reach
-        // the real UI past the sign-in gate (see the STEM_E2E seam in
-        // src/main/index.ts). In real-backend mode the seam is off and pi runs.
-        ...(REAL_BACKEND ? {} : { STEM_E2E: '1' })
-      }
-    });
+    const { app, userDataDir } = await launchApp();
     await use(app);
     await app.close().catch(() => {});
     rmSync(userDataDir, { recursive: true, force: true });

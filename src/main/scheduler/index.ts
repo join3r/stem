@@ -58,6 +58,9 @@ export class TaskScheduler {
       if (due) overdue.push(task);
       else task.nextRunAt = this.computeNextRunAt(task, now);
     }
+    // Claim each overdue task's NEXT run BEFORE enqueuing it, so the run that is
+    // about to fire is no longer itself detected as due (see advanceSchedule).
+    for (const task of overdue) this.advanceSchedule(task);
     await saveTasks(this.tasks);
     this.opts.onChange(this.snapshot());
 
@@ -165,6 +168,13 @@ export class TaskScheduler {
     }
     const at = new Date(req.at!.trim());
     if (Number.isNaN(at.getTime())) return { ok: false, error: `Invalid datetime "${req.at}". Use an ISO 8601 timestamp.` };
+    // A one-time task in the past would fire the instant it is created — almost
+    // always a timezone/clock mistake in the caller. Reject it so the mistake
+    // surfaces rather than firing immediately. (Catch-up of a *persisted* missed
+    // run is handled separately in start(); this guards new tasks only.)
+    if (at.getTime() <= Date.now() + DUE_SLOP_MS) {
+      return { ok: false, error: `One-time datetime "${req.at}" is in the past. Provide a future ISO 8601 datetime in local time (e.g. with no "Z"/offset, or the correct offset).` };
+    }
     return { ok: true, value: { kind: 'once', at: at.toISOString() } };
   }
 
@@ -203,9 +213,27 @@ export class TaskScheduler {
     const due = this.tasks.filter(
       (t) => t.enabled && t.nextRunAt && new Date(t.nextRunAt).getTime() <= now + DUE_SLOP_MS
     );
+    // Advance each due task's schedule SYNCHRONOUSLY before enqueuing its run.
+    // The run itself is async (awaits the whole turn), so if we left nextRunAt
+    // pointing at the now-past fire time, the re-arm below would see the task as
+    // still due and re-enqueue it every ~250ms until the run settled — a runaway
+    // flood of duplicate runs. Claiming the next slot here makes a task fire once.
+    for (const task of due) this.advanceSchedule(task);
     for (const task of due) this.enqueueRun(task.id, 'scheduled');
-    // Re-arm for whatever is next (the runs themselves recompute their own nextRunAt).
-    this.arm();
+    if (due.length) void this.persistAndArm();
+    else this.arm();
+  }
+
+  // Move a task to its NEXT scheduled run, called the moment a run is dispatched.
+  // once → null (fires exactly once); cron → the next occurrence after now. The
+  // actual run outcome (lastRunAt/lastStatus) is recorded later in runTask.
+  private advanceSchedule(task: ScheduledTask): void {
+    if (task.schedule.kind === 'once') {
+      task.nextRunAt = null;
+      return;
+    }
+    const next = nextAfter(task.schedule.expr, new Date());
+    task.nextRunAt = next ? next.toISOString() : null;
   }
 
   private async persistAndArm(): Promise<void> {
@@ -226,6 +254,10 @@ export class TaskScheduler {
   private async runTask(id: string): Promise<void> {
     const task = this.tasks.find((t) => t.id === id);
     if (!task) return;
+    // Defense in depth: a task disabled (paused/deleted) after this run was queued
+    // must not fire. Scheduled/catch-up enqueues are only for enabled tasks; this
+    // catches a pause that lands while the run sits in the queue.
+    if (!task.enabled) return;
 
     // Guard: the originating chat may have been deleted. Running would spawn a new
     // empty session (ensureActive falls back to newSession), so disable instead.
@@ -262,7 +294,8 @@ export class TaskScheduler {
     }
 
     task.lastRunAt = atIso;
-    task.nextRunAt = this.computeNextRunAt(task, new Date());
+    // nextRunAt was already claimed (advanced) at dispatch time for scheduled and
+    // catch-up runs; a manual runNow deliberately leaves the schedule untouched.
     await this.persistAndArm();
   }
 

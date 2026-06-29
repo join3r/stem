@@ -30,7 +30,7 @@ class FakeRuntime extends EventEmitter {
   }
 }
 
-function makeScheduler(runtime: FakeRuntime) {
+function makeScheduler(runtime: EventEmitter) {
   const changes: ScheduledTask[][] = [];
   const runs: unknown[] = [];
   const scheduler = new TaskScheduler({
@@ -70,6 +70,10 @@ describe('TaskScheduler.create', () => {
     expect((await scheduler.create({ prompt: 'x', cron: '0 8 * * *', at: '2030-01-01T00:00:00Z' }, 't1')).ok).toBe(false);
     expect((await scheduler.create({ prompt: 'x' }, 't1')).ok).toBe(false);
     expect((await scheduler.create({ prompt: '', cron: '0 8 * * *' }, 't1')).ok).toBe(false);
+    // A one-time datetime in the past would fire immediately — reject it.
+    expect((await scheduler.create({ prompt: 'x', at: new Date(Date.now() - 60_000).toISOString() }, 't1')).ok).toBe(false);
+    // A future one-time datetime is accepted.
+    expect((await scheduler.create({ prompt: 'x', at: new Date(Date.now() + 60_000).toISOString() }, 't1')).ok).toBe(true);
     scheduler.stop();
   });
 });
@@ -131,6 +135,69 @@ describe('TaskScheduler catch-up', () => {
     scheduler.stop();
   });
 });
+
+describe('TaskScheduler does not flood', () => {
+  // Regression for the runaway-duplicate-runs bug. The defect: tick() enqueued a
+  // run but left the task's nextRunAt at its (now-past) fire time, so the re-arm
+  // kept re-detecting it as due and re-enqueuing every ~250ms while the run was
+  // in-flight. Runs serialize through one queue, so the duplicates surfaced one
+  // turn-settle apart — an unstoppable trickle of repeat runs + notifications.
+  //
+  // To catch it the run must settle SLOWER than the ~250ms re-arm interval (so the
+  // buggy tick re-enqueues before nextRunAt is cleared), and we must observe long
+  // enough for the queue to drain a SECOND run. The task is also armed to fire via
+  // the live timer (not the catch-up path, which only ever enqueues once).
+  it('fires a due task exactly once even when the run settles slowly', async () => {
+    class SlowRuntime extends EventEmitter {
+      starts: StartTurnInput[] = [];
+      async startTurn(input: StartTurnInput) {
+        this.starts.push(input);
+        const turnId = `turn-${this.starts.length}`;
+        // Settle after 600ms — longer than the re-arm interval, so a buggy tick has
+        // multiple chances to re-enqueue this still-"due" task before it clears.
+        setTimeout(
+          () => this.emit('event', { method: 'turn/completed', params: { threadId: input.threadId, turn: { id: turnId } } }),
+          600
+        );
+        return { threadId: input.threadId, turnId };
+      }
+      async listThreads() {
+        return [{ threadId: 't1', title: '', folderId: null, createdAt: 0, updatedAt: 0 }];
+      }
+    }
+
+    // A one-time task armed ~1.2s out: comfortably past the catch-up slop (so start()
+    // arms the live timer instead of running it immediately), but soon enough to keep
+    // the test short. A once-task also dodges cron's minute-boundary variability.
+    const at = new Date(Date.now() + 1200).toISOString();
+    await saveTasks([
+      {
+        id: 'flood',
+        threadId: 't1',
+        prompt: 'ping',
+        schedule: { kind: 'once', at },
+        enabled: true,
+        createdAt: new Date().toISOString(),
+        nextRunAt: at,
+        title: 'ping'
+      }
+    ]);
+
+    const runtime = new SlowRuntime();
+    const { scheduler } = makeScheduler(runtime);
+    await scheduler.start();
+    // Observe past the point where a buggy second run would have started: first run
+    // dispatches ~1.45s, settles ~2.05s, and the buggy re-enqueue's run would start
+    // right after. By 2.5s the duplicate would be visible; the fix keeps it at one.
+    await new Promise((r) => setTimeout(r, 2500));
+
+    expect(runtime.starts).toHaveLength(1);
+    // The once-task was claimed (nextRunAt nulled) at dispatch, so nothing re-arms it.
+    expect(scheduler.snapshot()[0].nextRunAt).toBeNull();
+    expect(scheduler.snapshot()[0].lastRunAt).toBeTruthy();
+    scheduler.stop();
+  });
+}, 10_000);
 
 describe('TaskScheduler.runNow + management', () => {
   it('runs a task immediately and records the outcome', async () => {
