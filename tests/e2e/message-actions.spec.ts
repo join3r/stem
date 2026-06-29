@@ -109,11 +109,13 @@ test.describe('message actions (real backend)', () => {
     await userMsg.hover();
     await userMsg.getByTitle('Fork into a new chat from here').click();
 
-    // A second chat row appears and becomes the active (selected) one, replaying
-    // the forked history (the BLUE exchange). The original is left in place.
-    await expect(mainWindow.locator('.chat-row')).toHaveCount(2, { timeout: 20_000 });
-    await expect(mainWindow.locator('.chat-row.selected')).toHaveCount(1);
+    // Fork branches into a new chat that opens with the history up to this turn
+    // replayed (the BLUE exchange). The new chat is written lazily — it only joins
+    // the sidebar list once a turn runs in it — so we assert on the replayed
+    // history, not on a row count. The original chat is left untouched.
     await expect(mainWindow.locator('.messages')).toContainText('BLUE');
+    await expect(mainWindow.locator('.message-user')).toHaveCount(1);
+    await expect(mainWindow.locator('.chat-row')).toHaveCount(1);
   });
 
   test('delete-from-here arms on first click and truncates on the second', async ({ mainWindow }) => {
