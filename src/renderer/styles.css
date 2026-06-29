@@ -793,14 +793,16 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   z-index: var(--z-sticky);
 }
 .insp-seg {
-  display: inline-flex;
+  display: flex;
+  width: 100%;
   background: color-mix(in srgb, var(--ink) 7%, var(--panel));
   border-radius: var(--radius);
   padding: 2px;
   gap: var(--sp-1);
 }
 .insp-seg button {
-  width: 54px;
+  flex: 1;
+  min-width: 0;
   height: 26px;
   border: none;
   background: none;
@@ -814,6 +816,8 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .insp-seg button.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16); }
 
 .manage-body { padding: 14px; }
+/* Chats list runs close to the panel edges so rows/selection use the full width. */
+.manage-body.chats { padding: 14px 4px; }
 
 .muted { color: var(--muted); font-size: var(--fs-12); }
 .error { color: var(--danger); font-size: var(--fs-12); }
@@ -871,7 +875,16 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .chat-caret.open { transform: rotate(90deg); }
 .chat-row .chat-caret { visibility: hidden; }
 .group-row.drop-target, .group.drop-target { background: var(--sel); }
-.group.chats-group { min-height: 40px; }
+/* Chats list sits flat on the panel — no surface card — so it reads like a
+   native sidebar and uses the full panel width. Selection still tints the row. */
+.group.chats-group {
+  min-height: 40px;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+.chats-group .group-row + .group-row { border-top: 0; }
 .chat-date-head {
   font-size: var(--fs-10);
   font-weight: 700;

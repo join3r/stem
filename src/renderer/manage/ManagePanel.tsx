@@ -91,7 +91,7 @@ export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: Ma
           ))}
         </div>
       </div>
-      <div className="manage-body">
+      <div className={`manage-body${tab === 'chats' ? ' chats' : ''}`}>
         {tab === 'chats' && <ChatList {...chatProps} />}
         {tab === 'memory' && <MemoryTab models={models} />}
         {tab === 'mcp' && <McpSkillsTab models={models} />}
