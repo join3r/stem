@@ -84,6 +84,8 @@ interface ChatViewProps {
   format: 'md' | 'mdx';
   /** Name of the folder a fresh draft will be saved in, or null for root / a real thread. */
   draftFolderName: string | null;
+  /** Show the context-fill meter in the controls row. Off in Quick Chat (too narrow). */
+  showContextMeter?: boolean;
   onChangeEffort: (effort: string) => void;
   onChangeSpeed: (serviceTier: string | null) => void;
   onChangeFormat: (format: 'md' | 'mdx') => void;
@@ -163,6 +165,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   serviceTier,
   format,
   draftFolderName,
+  showContextMeter = true,
   onChangeEffort,
   onChangeSpeed,
   onChangeFormat
@@ -602,7 +605,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
               MD
             </button>
           </div>
-          <ContextMeter messages={messages} model={model} />
+          {showContextMeter && <ContextMeter messages={messages} model={model} />}
         </div>
         <div
           className={`composer-field${dragOver ? ' drag-over' : ''}`}

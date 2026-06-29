@@ -352,6 +352,7 @@ export function QuickChat() {
           serviceTier={serviceTier}
           format={format}
           draftFolderName={null}
+          showContextMeter={false}
             onChangeEffort={setEffort}
             onChangeSpeed={setServiceTier}
             onChangeFormat={setFormat}
