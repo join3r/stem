@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ChevronRight,
+  Clock,
   Folder as FolderIcon,
   FolderOpen,
   FolderPlus,
@@ -14,6 +15,8 @@ export interface ChatListProps {
   activeThreadId: string | null;
   /** Per-thread run state → drives the status dot on each row. */
   statuses: Record<string, ThreadStatus>;
+  /** Thread ids that own at least one scheduled task → show a clock badge. */
+  scheduledThreadIds?: ReadonlySet<string>;
   onOpen: (threadId: string) => void;
   /** Open a fresh draft targeted at this folder (null = root). */
   onNewChat: (folderId: string | null) => void;
@@ -259,6 +262,11 @@ export function ChatList(props: ChatListProps) {
             <strong>{chat.title}</strong>
           )}
         </span>
+        {!isEditing && props.scheduledThreadIds?.has(chat.threadId) && (
+          <span className="chat-sched-badge" title="Has a scheduled task" aria-label="Has a scheduled task">
+            <Clock size={11} />
+          </span>
+        )}
       </div>
     );
   };

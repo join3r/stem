@@ -1,4 +1,5 @@
 import type { PiEvent } from './rpc';
+import type { TurnUsage } from '../../shared/types';
 
 // Translate pi's RPC event stream into Stem's canonical backend events (the
 // { method, params } envelopes the renderer/HUD/recall consume).
@@ -121,6 +122,40 @@ interface PiMessage {
   content?: ContentBlock[] | string;
   stopReason?: string;
   errorMessage?: string;
+  /** Token usage on assistant messages; pi also persists this in the session JSONL. */
+  usage?: PiUsage;
+}
+
+/** pi's per-turn usage object (assistant messages). `cost.total` is the dollar cost. */
+export interface PiUsage {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
+  cost?: { total?: number } | null;
+}
+
+/**
+ * Normalize pi's raw usage object into Stem's {@link TurnUsage}. Returns null when there's
+ * no usage at all. `totalTokens` falls back to the component sum, matching pi's own
+ * `calculateContextTokens`. Shared by the live event path and the history-parse path.
+ */
+export function toTurnUsage(usage: PiUsage | undefined | null): TurnUsage | null {
+  if (!usage) return null;
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const totalTokens = usage.totalTokens ?? input + output + cacheRead + cacheWrite;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    cost: typeof usage.cost?.total === 'number' ? usage.cost.total : null
+  };
 }
 
 /** Map a pi tool name onto the item-type vocabulary `activityLabel` knows. */
@@ -251,6 +286,11 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
           method: 'item/completed',
           params: { item: { type: 'agentMessage', id: turnId, text: ctx.assistantText }, threadId, turnId }
         });
+      }
+      // Per-turn token usage (context fill) — absent on errored/aborted turns.
+      if (!ctx.errored && !ctx.aborted) {
+        const usage = toTurnUsage(msg.usage);
+        if (usage) out.push({ method: 'turn/usage', params: { threadId, turnId, ...usage } });
       }
       break;
     }

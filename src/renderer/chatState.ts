@@ -7,7 +7,9 @@ import type {
   ThreadStatus,
   TurnCompletedParams,
   TurnTiming,
-  TurnTimingParams
+  TurnTimingParams,
+  TurnUsage,
+  TurnUsageParams
 } from '../shared/types';
 import { agentMessageText } from '../shared/types';
 import { activityLabel } from '../shared/activity';
@@ -98,6 +100,21 @@ export function applyBackendEventToThread(
         recallMs: p.recall?.total ?? null
       };
       return { ...state, messages: state.messages.map((m, i) => (i === idx ? { ...m, timing } : m)) };
+    }
+    case 'turn/usage': {
+      const p = event.params as TurnUsageParams;
+      const id = `assistant-${p.turnId}`;
+      const idx = state.messages.findIndex((m) => m.id === id);
+      if (idx === -1) return null; // errored/aborted turn with no assistant bubble
+      const usage: TurnUsage = {
+        input: p.input,
+        output: p.output,
+        cacheRead: p.cacheRead,
+        cacheWrite: p.cacheWrite,
+        totalTokens: p.totalTokens,
+        cost: p.cost
+      };
+      return { ...state, messages: state.messages.map((m, i) => (i === idx ? { ...m, usage } : m)) };
     }
     case 'turn/completed':
     case 'turn/failed':

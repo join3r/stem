@@ -26,6 +26,7 @@ import {
   updateConnectedFolder
 } from './workspace/connected-folders';
 import { workspaceRoot } from './workspace/paths';
+import { TaskScheduler } from './scheduler';
 import { imagePreviewDataUrl } from './pi/attachments';
 import * as piMcp from './pi/mcp';
 import {
@@ -84,8 +85,10 @@ import type {
   QuickChatStatus,
   QuickChatStatusPhase,
   RuntimeStatus,
+  ScheduledTask,
   StartTurnInput,
-  StartTurnResult
+  StartTurnResult,
+  TaskSchedulePatch
 } from '../shared/types';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -146,6 +149,8 @@ let quickChatWindow: BrowserWindow | null = null;
 /** Bottom-left status pill shown while the overlay is hidden and a turn runs. */
 let hudWindow: BrowserWindow | null = null;
 let runtime: ChatBackend | null = null;
+/** Scheduled-tasks engine (cron/once → autonomous turns). Created in whenReady. */
+let scheduler: TaskScheduler | null = null;
 /** The currently-registered global accelerator, so we can unregister on change. */
 let currentShortcut: string | null = null;
 /** Cached "show overlay on all Spaces" setting, applied once per overlay window. */
@@ -621,7 +626,13 @@ function registerIpc(): void {
     }
     return runtime!.status();
   });
-  ipcMain.handle('runtime:login', () => runtime!.login());
+  ipcMain.handle('runtime:login', async () => {
+    const status = await runtime!.login();
+    // Signing in mid-session: start the scheduler now (idempotent) so tasks load and
+    // catch-up runs without waiting for a restart.
+    if (status.ok) void scheduler?.start();
+    return status;
+  });
   ipcMain.handle('backend:startTurn', async (_e, input: StartTurnInput) => {
     // Main-window turns honor the main native-web-search toggle (the backend no-ops
     // it for providers without native search).
@@ -669,6 +680,17 @@ function registerIpc(): void {
     if (path) await shell.openPath(path);
   });
   ipcMain.handle('cfolders:revealWorkspace', () => shell.openPath(workspaceRoot()));
+
+  // Scheduled tasks. Mutations return the fresh list (like the cfolders handlers).
+  ipcMain.handle('tasks:list', (): ScheduledTask[] => scheduler?.snapshot() ?? []);
+  ipcMain.handle('tasks:setEnabled', (_e, id: string, enabled: boolean) =>
+    scheduler ? scheduler.setEnabled(id, enabled) : []
+  );
+  ipcMain.handle('tasks:runNow', (_e, id: string) => scheduler?.runNow(id) ?? []);
+  ipcMain.handle('tasks:delete', (_e, id: string) => (scheduler ? scheduler.remove(id) : []));
+  ipcMain.handle('tasks:updateSchedule', (_e, id: string, patch: TaskSchedulePatch) =>
+    scheduler ? scheduler.updateSchedule(id, patch.schedule) : []
+  );
   ipcMain.handle('dialog:openDirectory', () =>
     dialog
       .showOpenDialog(mainWindow!, { properties: ['openDirectory', 'multiSelections'] })
@@ -769,7 +791,13 @@ function registerIpc(): void {
   ipcMain.handle('chats:rename', (_e, threadId: string, name: string) => runtime!.renameThread(threadId, name));
   ipcMain.handle('chats:delete', async (_e, threadId: string) => {
     // Independent stores (pi session file vs. folder-assignment JSON) — run concurrently.
-    await Promise.all([runtime!.deleteThread(threadId), removeChat(threadId)]);
+    // Also drop any scheduled tasks bound to this chat (they'd otherwise run into a
+    // missing thread; the scheduler guards against that too, but cleaning up is tidier).
+    await Promise.all([
+      runtime!.deleteThread(threadId),
+      removeChat(threadId),
+      scheduler?.removeForThread(threadId) ?? Promise.resolve()
+    ]);
   });
   ipcMain.handle('chats:setFolder', async (_e, threadId: string, folderId: string | null) => {
     await setChatFolder(threadId, folderId);
@@ -958,6 +986,37 @@ app.whenReady().then(async () => {
   // backend-agnostic.
   runtime = createBackend();
 
+  // Scheduled tasks: re-run a chat's prompt as an autonomous turn on a cron/once
+  // schedule. The scheduler owns timing + execution; the backend routes the
+  // assistant's schedule_task/notify_user tools to it via the TaskBridge below.
+  scheduler = new TaskScheduler({
+    runtime,
+    onChange: (tasks) => mainWindow?.webContents.send('tasks:changed', tasks),
+    onRun: (run) => mainWindow?.webContents.send('tasks:run', run)
+  });
+  runtime.setTaskBridge({
+    schedule: (req, threadId) => scheduler!.create(req, threadId),
+    listForThread: async (threadId) => scheduler!.listForThread(threadId),
+    cancel: async (taskId) => {
+      const before = scheduler!.snapshot().length;
+      await scheduler!.remove(taskId);
+      return scheduler!.snapshot().length < before ? { ok: true } : { ok: false, error: 'No such task.' };
+    },
+    // notify_user: surface a prominent in-app alert — raise + focus the main window,
+    // bounce the dock, and show the alert modal. Native OS notifications were judged
+    // not prominent enough for watch-style tasks.
+    notify: async ({ title, message }, threadId) => {
+      revealMainWindow();
+      app.dock?.bounce('critical');
+      mainWindow?.webContents.send('tasks:notify', {
+        threadId,
+        title,
+        message,
+        at: new Date().toISOString()
+      });
+    }
+  });
+
   // Stem Recall: distill durable facts via a hidden backend turn (the swappable
   // LlmClient seam). Debounced so it runs ~after the user goes idle.
   const recallLlm: LlmClient = {
@@ -1121,7 +1180,14 @@ app.whenReady().then(async () => {
     mainWindow?.webContents.once('did-finish-load', () => {
       void runtime!
         .status()
-        .then((s) => (s.ok ? runtime!.prewarm() : undefined))
+        .then((s) => {
+          if (!s.ok) return;
+          // Start the scheduler only once signed in — runs are turns, which need a
+          // working backend. This also runs any tasks missed while Stem was closed
+          // (catch-up), exactly once each.
+          void scheduler?.start();
+          return runtime!.prewarm();
+        })
         .catch(() => {});
     });
   }
@@ -1156,6 +1222,7 @@ app.on('before-quit', (event) => {
   if (quitting || !runtime) return;
   event.preventDefault();
   quitting = true;
+  scheduler?.stop();
   runtime.shutdown().finally(() => app.exit(0));
 });
 

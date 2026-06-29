@@ -7,6 +7,8 @@ import type {
   MessageMeta,
   ModelSummary,
   RuntimeStatus,
+  ScheduledTask,
+  TaskNotifyPayload,
   TurnAttachment,
   ThreadStatus
 } from '../shared/types';
@@ -16,6 +18,7 @@ import { ShortcutHint, useShortcut } from './shortcuts';
 import { ManagePanel } from './manage/ManagePanel';
 import { McpApprovalCard } from './manage/McpApprovalCard';
 import { DeleteThreadDialog } from './DeleteThreadDialog';
+import { TaskAlertModal } from './TaskAlertModal';
 import { DropOverlay } from './files/DropOverlay';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
 import {
@@ -53,6 +56,9 @@ export default function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   // The active thread queued for deletion behind the ⌃X confirm popup (null = closed).
   const [pendingDelete, setPendingDelete] = useState<{ threadId: string; title: string } | null>(null);
+  // Scheduled tasks: the full list (drives chat badges) + a queued notify_user alert.
+  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
+  const [taskAlert, setTaskAlert] = useState<TaskNotifyPayload | null>(null);
   // Display-only mirror of pendingDraftFolderRef so the empty-state welcome can
   // tell the user which folder a new draft will be saved in (the ref itself is
   // non-reactive, used only on the send path).
@@ -78,6 +84,11 @@ export default function App() {
   threadStatesRef.current = threadStates;
   const activeThreadIdRef = useRef(activeThreadId);
   activeThreadIdRef.current = activeThreadId;
+  // Threads whose next open must reload from disk: a scheduled run streamed into a
+  // thread the user never opened this session, so any slice built from background
+  // events is partial (just the run, no prior history). Forcing a reload rebuilds
+  // the full transcript — including the run, collapsed via its persisted marker.
+  const forceReloadRef = useRef<Set<string>>(new Set());
   // Bumped every time the DRAFT slice is reset (New chat / Quick Chat). Captured
   // at send time so a turn that resolves late only adopts its real thread id when
   // the draft it was sent for is still the current one — otherwise the user has
@@ -137,6 +148,9 @@ export default function App() {
     const extras = Object.values(pendingChats).filter((c) => !known.has(c.threadId));
     return extras.length ? { chats: [...extras, ...chatList.chats], folders: chatList.folders } : chatList;
   }, [chatList, pendingChats]);
+
+  // Thread ids that own at least one scheduled task → a clock badge on those chat rows.
+  const scheduledThreadIds = useMemo(() => new Set(tasks.map((t) => t.threadId)), [tasks]);
 
   // Folder name shown on the new-chat welcome screen — only while a fresh draft is
   // current (activeThreadId === null) and it targets a folder.
@@ -262,6 +276,41 @@ export default function App() {
       });
     });
   }, []);
+
+  // Scheduled tasks: keep the list in sync (drives chat badges + the Tasks tab),
+  // insert a collapsed run row into an open thread when a run starts, and raise the
+  // alert modal when a run calls notify_user.
+  useEffect(() => {
+    window.stem.listTasks().then(setTasks);
+    const offChanged = window.stem.onTasksChanged(setTasks);
+    const offRun = window.stem.onScheduledRun((run) => {
+      // If the thread isn't loaded, don't seed a partial slice from background events —
+      // mark it so the next open reloads the full transcript from disk (where the run
+      // is persisted with its collapse marker).
+      if (!threadStatesRef.current[run.threadId]) {
+        forceReloadRef.current.add(run.threadId);
+        return;
+      }
+      setThread(run.threadId, (s) => {
+        const id = `user-sched-${run.turnId}`;
+        if (s.messages.some((m) => m.id === id)) return {};
+        const bubble = {
+          id,
+          role: 'user' as const,
+          content: run.prompt,
+          turnId: run.turnId,
+          scheduled: { at: run.at }
+        };
+        return { messages: [...s.messages, bubble] };
+      });
+    });
+    const offNotify = window.stem.onTaskNotify(setTaskAlert);
+    return () => {
+      offChanged();
+      offRun();
+      offNotify();
+    };
+  }, [setThread]);
 
   const onSend = useCallback(
     async (text: string, attachments: TurnAttachment[] = []) => {
@@ -450,10 +499,15 @@ export default function App() {
   const openChat = useCallback(
     async (threadId: string) => {
       const existing = threadStatesRef.current[threadId];
+      // A scheduled run streamed into this thread while it was never open → its slice
+      // is partial. Reload from disk unless a turn is actively streaming (which we'd
+      // clobber); clear the flag once consumed.
+      const forceReload = forceReloadRef.current.has(threadId) && !existing?.running;
+      if (forceReload) forceReloadRef.current.delete(threadId);
       // If we already hold a live or hydrated slice (e.g. a chat that ran in the
       // background), just switch to it — reloading from disk would clobber the
       // in-flight stream. Opening clears the unread (done) dot.
-      if (existing && (existing.running || existing.messages.length > 0)) {
+      if (!forceReload && existing && (existing.running || existing.messages.length > 0)) {
         setActiveThreadId(threadId);
         setThread(threadId, (s) => ({ status: s.status === 'done' ? 'idle' : s.status }));
         return;
@@ -713,6 +767,7 @@ export default function App() {
             data={displayList}
             activeThreadId={activeThreadId}
             statuses={threadStatuses}
+            scheduledThreadIds={scheduledThreadIds}
             models={models}
             modelId={modelId}
             onSelectModel={onSelectModel}
@@ -735,6 +790,16 @@ export default function App() {
           title={pendingDelete.title}
           onConfirm={confirmDeleteThread}
           onCancel={() => setPendingDelete(null)}
+        />
+      )}
+      {taskAlert && (
+        <TaskAlertModal
+          payload={taskAlert}
+          onOpenChat={(threadId) => {
+            setTaskAlert(null);
+            void openChat(threadId);
+          }}
+          onDismiss={() => setTaskAlert(null)}
         />
       )}
     </div>,

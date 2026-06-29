@@ -33,6 +33,22 @@ export interface TurnTiming {
 }
 
 /**
+ * Per-turn token usage for an assistant reply, as reported by the backend. `totalTokens`
+ * is the headline "context fill" — what the next turn's prompt will roughly carry — and is
+ * what the context meter divides by the model's window. `input`/`output`/`cacheRead`/
+ * `cacheWrite` are the components; `cost` is the turn's dollar cost (null when unknown).
+ * Persisted directly on the session message, so it survives reopen without a separate store.
+ */
+export interface TurnUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: number | null;
+}
+
+/**
  * A user attachment as shown in the chat bubble. Images carry a `dataUrl` for an inline
  * `<img>` thumbnail; non-image files render as a chip with just a `name`. Distinct from
  * the send-time {@link TurnAttachment} — this is the display/replay shape.
@@ -61,6 +77,15 @@ export interface ChatMessage {
   turnId?: string;
   /** Assistant messages only: how long the answer took (total + thinking/tools). */
   timing?: TurnTiming;
+  /** Assistant messages only: token usage (context fill + cost) for this turn. */
+  usage?: TurnUsage;
+  /**
+   * Set on the user message of a scheduled-task run (and propagated to its reply so
+   * the pair renders as one collapsed "Scheduled run — HH:MM" block). `at` is the
+   * run's ISO timestamp. Derived live from the tasks:run push and on replay from a
+   * persisted marker in the message.
+   */
+  scheduled?: { at: string };
 }
 
 // ---- Runtime status (staged: binary -> health -> auth -> ready) ----
@@ -113,6 +138,13 @@ export interface StartTurnInput {
   webSearch?: boolean;
   /** Files/images attached to this turn. */
   attachments?: TurnAttachment[];
+  /**
+   * Set by the scheduler for a scheduled-task run. The backend prepends an
+   * automated-run preamble (so the agent knows it's running headless and should use
+   * notify_user) plus a replay-detectable marker, and tags the turn's events so the
+   * UI renders the run collapsed. `at` is the run's ISO timestamp.
+   */
+  scheduled?: { at: string; taskId: string };
 }
 
 // ---- Models (backend catalog) ----
@@ -140,6 +172,8 @@ export interface ModelSummary {
   /** Empty => model has no Fast (priority) tier; hide the speed control. */
   serviceTiers: ModelServiceTier[];
   isDefault: boolean;
+  /** Context window size in tokens; denominator of the context meter. Absent => hide it. */
+  contextWindow?: number;
 }
 
 export interface StartTurnResult {
@@ -215,6 +249,12 @@ export interface TurnTimingParams {
   sendToFirstTokenMs: number | null;
   firstTokenToEndMs: number | null;
   totalMs: number | null;
+}
+
+/** `turn/usage` — per-turn token usage emitted when an assistant message completes. */
+export interface TurnUsageParams extends TurnUsage {
+  threadId: string;
+  turnId: string;
 }
 
 /** `account/rateLimits/updated`. */
@@ -306,6 +346,75 @@ export interface ConnectedFolder {
 
 /** The mutable fields of a connected folder (label/mode/memorize/note). */
 export type ConnectedFolderPatch = Partial<Pick<ConnectedFolder, 'label' | 'mode' | 'memorize' | 'note'>>;
+
+// ---- Scheduled tasks ----
+//
+// A scheduled task re-runs a prompt as a full autonomous agent turn on a schedule.
+// It is created conversationally (the assistant's `schedule_task` tool) and bound
+// to the originating chat: every run appends a turn to that thread. Runs are silent
+// by default; the agent calls `notify_user` when a run produces something worth
+// surfacing (a prominent in-app modal). Stem-owned (the pi backend has no concept
+// of schedules), persisted as tasks.json under userData.
+
+/** When a task fires: a recurring cron expression, or a one-time ISO datetime. */
+export type TaskSchedule =
+  | { kind: 'cron'; expr: string }
+  | { kind: 'once'; at: string };
+
+export interface ScheduledTask {
+  /** Stable id (randomUUID). */
+  id: string;
+  /** The chat this task belongs to; each run appends a turn here. */
+  threadId: string;
+  /** The prompt re-run on each firing. */
+  prompt: string;
+  schedule: TaskSchedule;
+  /** Paused tasks stay in the list but never fire. */
+  enabled: boolean;
+  /** ISO timestamp the task was created. */
+  createdAt: string;
+  /** ISO timestamp of the last completed run (for catch-up + the UI). */
+  lastRunAt?: string;
+  /** ISO timestamp of the next scheduled firing (computed; null once a `once` task is done). */
+  nextRunAt?: string | null;
+  /** Outcome of the most recent run. */
+  lastStatus?: 'ok' | 'failed' | 'running';
+  /** Short human label derived from the prompt, for the list + chat badge. */
+  title: string;
+}
+
+/** What the assistant's `schedule_task` tool passes (exactly one of cron/at). */
+export interface ScheduleTaskRequest {
+  prompt: string;
+  /** A 5-field cron expression for a recurring task. */
+  cron?: string;
+  /** An ISO datetime for a one-time task. */
+  at?: string;
+}
+
+/** Editable fields when updating a task's schedule from the Tasks tab. */
+export type TaskSchedulePatch = { schedule: TaskSchedule };
+
+/** Main → renderer: a scheduled run just started (insert a collapsed run row live). */
+export interface ScheduledRunPayload {
+  threadId: string;
+  turnId: string;
+  taskId: string;
+  /** The prompt being run (shown as the run's user bubble). */
+  prompt: string;
+  /** ISO timestamp the run started (the "Scheduled run — HH:MM" label). */
+  at: string;
+}
+
+/** Main → renderer: the agent called notify_user during a run; show the alert modal. */
+export interface TaskNotifyPayload {
+  threadId: string;
+  taskId?: string;
+  title?: string;
+  message: string;
+  /** ISO timestamp the notification fired. */
+  at: string;
+}
 
 // ---- MCP servers ----
 
@@ -726,6 +835,23 @@ export interface StemApi {
   openWorkspaceFolder(): Promise<void>;
   /** Open a native directory picker; returns chosen absolute paths ([] if canceled). */
   pickDirectory(): Promise<string[]>;
+
+  // Scheduled tasks. Mutations return the fresh list (like the folders APIs).
+  listTasks(): Promise<ScheduledTask[]>;
+  /** Pause/resume a task without deleting it. Returns the fresh list. */
+  setTaskEnabled(id: string, enabled: boolean): Promise<ScheduledTask[]>;
+  /** Run a task immediately (off-schedule). Returns the fresh list. */
+  runTaskNow(id: string): Promise<ScheduledTask[]>;
+  /** Delete a task. Returns the fresh list. */
+  deleteTask(id: string): Promise<ScheduledTask[]>;
+  /** Replace a task's schedule (cron/once). Returns the fresh list. */
+  updateTaskSchedule(id: string, patch: TaskSchedulePatch): Promise<ScheduledTask[]>;
+  /** Fired whenever the task list changes (created/updated/run/deleted). */
+  onTasksChanged(listener: (tasks: ScheduledTask[]) => void): () => void;
+  /** Fired when a scheduled run starts, so the open thread can show a collapsed run row. */
+  onScheduledRun(listener: (run: ScheduledRunPayload) => void): () => void;
+  /** Fired when the agent calls notify_user during a run — show the prominent alert modal. */
+  onTaskNotify(listener: (payload: TaskNotifyPayload) => void): () => void;
 
   listMcpServers(): Promise<McpServerSummary[]>;
   /** Live per-server connection status (keyed by name) from the running app-server. */

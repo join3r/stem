@@ -437,6 +437,40 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 
 /* effort + speed controls above the field */
 .composer-controls { display: flex; gap: var(--sp-4); margin: 0 2px 8px; }
+
+/* Context-fill meter: pushed to the right edge of the controls row. Mini bar + compact
+   token text; the fill color shifts neutral → amber → red via .warn/.danger as it nears
+   the window (mirroring pi's auto-compaction threshold). */
+.context-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-left: auto;
+  align-self: center;
+  font-size: var(--fs-11);
+  color: var(--muted);
+  cursor: default;
+}
+.context-meter-bar {
+  width: 56px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 10%, var(--surface));
+  overflow: hidden;
+}
+.context-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width var(--motion-fast) ease;
+}
+.context-meter.warn .context-meter-fill { background: var(--warn); }
+.context-meter.danger .context-meter-fill { background: var(--danger); }
+.context-meter.warn .context-meter-text { color: var(--warn); }
+.context-meter.danger .context-meter-text { color: var(--danger); }
+.context-meter-text { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
 .seg-ctl.compact { position: relative; padding: 2px; align-self: flex-start; }
 .seg-ctl.compact button { flex: 0 0 auto; padding: 3px 9px; font-size: var(--fs-11); }
 .seg-ctl button:disabled { opacity: 0.5; cursor: default; }
@@ -1492,6 +1526,39 @@ body.hud-body { background: transparent; }
 }
 .cfolder-opt .switch { display: inline-block; }
 
+/* ---- Scheduled tasks (Tasks tab) ---- */
+.task-item { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+.task-item + .task-item { border-top: 0.5px solid var(--hair); }
+.task-item.paused { opacity: 0.6; }
+.task-head { display: flex; align-items: center; gap: var(--sp-3); }
+.task-head .row-main em { font-family: var(--font-mono, ui-monospace, monospace); }
+.task-meta { font-size: var(--fs-11); padding-left: 2px; }
+.task-running { color: var(--accent); }
+
+/* Clock badge on a chat row that owns a scheduled task. */
+.chat-sched-badge { flex: none; display: inline-flex; align-items: center; color: var(--muted); margin-left: 6px; }
+
+/* ---- Collapsed scheduled-run group in the transcript ---- */
+.sched-run { margin: 6px 0; border: 0.5px solid var(--hair); border-radius: var(--radius-md); overflow: hidden; }
+.sched-run-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  background: var(--surface);
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  text-align: left;
+}
+.sched-run-head:hover { background: var(--sel); color: var(--ink); }
+.sched-run-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched-run-chevron { transition: transform 0.12s ease; flex: none; }
+.sched-run.open .sched-run-chevron { transform: rotate(90deg); }
+.sched-run-body { padding: 4px 10px 8px; }
+
 /* ---- Assistant-proposed MCP change: confirm card ---- */
 .mcp-approval-backdrop {
   position: fixed;
@@ -1519,6 +1586,7 @@ body.hud-body { background: transparent; }
   margin-bottom: 12px;
 }
 .mcp-approval-head .row-icon { color: var(--accent); display: inline-flex; }
+.task-alert-message { margin: 0 0 4px; font-size: var(--fs-13); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .mcp-approval-detail {
   display: grid;
   grid-template-columns: max-content 1fr;

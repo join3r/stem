@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Brain, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, Check, FolderOpen, FolderTree, Trash2, Wand2 } from 'lucide-react';
+import { Brain, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, Check, FolderOpen, FolderTree, Trash2, Wand2, CalendarClock, Play, Pause, ExternalLink } from 'lucide-react';
 import type {
   BackendEventEnvelope,
   McpLoginUrlParams,
@@ -11,6 +11,7 @@ import type {
   MemoryContents,
   MemorySettings,
   ConnectedFolder,
+  ScheduledTask,
   ModelSummary,
   NativeWebSearchSettings,
   QuickChatSettings,
@@ -25,13 +26,14 @@ import { ChatList, type ChatListProps } from '../chats/ChatList';
 import { ModelPicker } from '../ui/ModelPicker';
 import { EFFORT_LABELS } from '../modelLabels';
 
-type Tab = 'chats' | 'memory' | 'mcp' | 'folders' | 'settings';
+type Tab = 'chats' | 'memory' | 'mcp' | 'folders' | 'tasks' | 'settings';
 
 const TABS: { id: Tab; label: string; icon: typeof Brain }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'mcp', label: 'MCP & Skills', icon: Plug },
   { id: 'folders', label: 'Folders', icon: FolderTree },
+  { id: 'tasks', label: 'Tasks', icon: CalendarClock },
   { id: 'settings', label: 'Settings', icon: Settings }
 ];
 
@@ -94,6 +96,7 @@ export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: Ma
         {tab === 'memory' && <MemoryTab models={models} />}
         {tab === 'mcp' && <McpSkillsTab models={models} />}
         {tab === 'folders' && <FoldersTab />}
+        {tab === 'tasks' && <TasksTab onOpenChat={chatProps.onOpen} />}
         {tab === 'settings' && (
           <SettingsTab models={models} modelId={modelId} onSelectModel={onSelectModel} />
         )}
@@ -820,6 +823,114 @@ function FoldersTab() {
                   <span>Memorize</span>
                   <span className={`switch${f.memorize ? ' on' : ''}`} />
                 </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Tasks tab: scheduled autonomous re-runs ----
+
+/** Human-readable schedule, e.g. "cron 0 8 * * 1-5" or "once · Jul 1, 08:00". */
+function describeSchedule(task: ScheduledTask): string {
+  if (task.schedule.kind === 'cron') return `cron · ${task.schedule.expr}`;
+  return `once · ${formatWhen(task.schedule.at)}`;
+}
+
+/** Compact local datetime, e.g. "Jul 1, 08:00". */
+function formatWhen(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function TasksTab({ onOpenChat }: { onOpenChat: (threadId: string) => void }) {
+  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
+
+  useEffect(() => {
+    window.stem.listTasks().then(setTasks);
+    // Stay in sync as runs fire / the assistant schedules new tasks.
+    return window.stem.onTasksChanged(setTasks);
+  }, []);
+
+  const toggle = async (t: ScheduledTask) => setTasks(await window.stem.setTaskEnabled(t.id, !t.enabled));
+  const runNow = async (t: ScheduledTask) => setTasks(await window.stem.runTaskNow(t.id));
+  const remove = async (t: ScheduledTask) => setTasks(await window.stem.deleteTask(t.id));
+
+  return (
+    <div>
+      <div className="grp-head">Scheduled tasks</div>
+      {tasks.length === 0 ? (
+        <p className="muted">
+          No scheduled tasks yet. Ask Stem in a chat to do something on a schedule — “every weekday
+          at 8, summarize my unread email” or “check this page hourly and let me know if it changes”.
+          The task runs in that chat and only interrupts you when there’s something worth seeing.
+        </p>
+      ) : (
+        <div className="group">
+          {tasks.map((t) => (
+            <div key={t.id} className={`task-item${t.enabled ? '' : ' paused'}`}>
+              <div className="task-head">
+                <span className="row-main">
+                  <strong>{t.title}</strong>
+                  <em>{describeSchedule(t)}</em>
+                </span>
+                <button
+                  className="icon-action sm"
+                  onClick={() => onOpenChat(t.threadId)}
+                  title="Open the chat this task runs in"
+                  aria-label="Open chat"
+                >
+                  <ExternalLink size={14} />
+                </button>
+                <button
+                  className="icon-action sm"
+                  onClick={() => runNow(t)}
+                  title="Run now"
+                  aria-label="Run now"
+                  disabled={t.lastStatus === 'running'}
+                >
+                  <Play size={14} />
+                </button>
+                <button
+                  className="icon-action sm"
+                  onClick={() => toggle(t)}
+                  title={t.enabled ? 'Pause' : 'Resume'}
+                  aria-label={t.enabled ? 'Pause' : 'Resume'}
+                >
+                  {t.enabled ? <Pause size={14} /> : <Play size={14} />}
+                </button>
+                <button
+                  className="icon-action sm"
+                  onClick={() => remove(t)}
+                  title="Delete task"
+                  aria-label="Delete task"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              <div className="task-meta muted">
+                {t.lastStatus === 'running' ? (
+                  <span className="task-running">Running now…</span>
+                ) : (
+                  <>
+                    {t.enabled ? (
+                      <span>Next: {formatWhen(t.nextRunAt)}</span>
+                    ) : (
+                      <span>Paused</span>
+                    )}
+                    {t.lastRunAt && (
+                      <span>
+                        {' · '}Last: {formatWhen(t.lastRunAt)}
+                        {t.lastStatus === 'failed' ? ' (failed)' : ''}
+                      </span>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           ))}

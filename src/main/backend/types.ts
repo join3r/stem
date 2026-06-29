@@ -5,9 +5,31 @@ import type {
   McpLoginResult,
   ModelSummary,
   RuntimeStatus,
+  ScheduleTaskRequest,
+  ScheduledTask,
   StartTurnInput,
   StartTurnResult
 } from '../../shared/types';
+
+/**
+ * The seam the backend uses to reach the scheduled-tasks subsystem (which lives in
+ * main, not the backend). The assistant's `schedule_task` / `notify_user` tools run
+ * inside the pi process; PiRuntime intercepts them and routes here, supplying the
+ * authoritative current threadId. A backend with no scheduler can leave it unset.
+ */
+export interface TaskBridge {
+  /** Create a task bound to `threadId` from the assistant's schedule_task tool. */
+  schedule(
+    req: ScheduleTaskRequest,
+    threadId: string
+  ): Promise<{ ok: true; task: ScheduledTask } | { ok: false; error: string }>;
+  /** Tasks bound to `threadId` (so the assistant can list/cancel its own). */
+  listForThread(threadId: string): Promise<ScheduledTask[]>;
+  /** Cancel a task the assistant created. */
+  cancel(taskId: string): Promise<{ ok: boolean; error?: string }>;
+  /** Surface a prominent in-app alert (the agent decided this run is worth showing). */
+  notify(payload: { title?: string; message: string }, threadId: string): Promise<void>;
+}
 
 /**
  * The single seam between Stem and whatever hosts the agent loop. PiRuntime
@@ -70,4 +92,8 @@ export interface ChatBackend extends EventEmitter {
   // Skills: apply out-of-band skill changes (the background curator) by reloading
   // the backend, deferring to turn end if a turn is in flight.
   requestSkillReload(): Promise<void>;
+
+  // Scheduled tasks: wire the bridge the assistant's schedule_task/notify_user
+  // tools route through. Pass null to detach. No-op on a backend without scheduling.
+  setTaskBridge(bridge: TaskBridge | null): void;
 }

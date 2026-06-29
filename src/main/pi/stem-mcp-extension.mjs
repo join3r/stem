@@ -666,6 +666,12 @@ export default async function stemMcpBridge(pi) {
   // Stem self-management tools (list/add/remove MCP servers). Always available.
   registerAdminTools(pi, cfgPath);
 
+  // Scheduled tasks: let the assistant schedule a prompt to re-run autonomously, and
+  // surface a run's result prominently (notify_user). All routed to the main process
+  // (which owns the scheduler) via a ctx.ui.input round-trip; main supplies the
+  // current thread id, so a task is always bound to the conversation it's created in.
+  registerTaskTools(pi);
+
   // Stem self-authored skills: let the assistant create/patch/remove its own
   // SKILL.md procedures. Writes are silent (no approval card) and take effect on
   // the next reload — Stem detects the change and restarts at the end of the turn,
@@ -948,6 +954,116 @@ function registerAdminTools(pi, cfgPath) {
       delete config.servers[name];
       writeSecretSync(cfgPath, JSON.stringify(config, null, 2));
       return { content: [{ type: 'text', text: `Removed MCP server "${name}". It will stop being available after Stem reloads.` }], details: {} };
+    }
+  });
+}
+
+// ---- Scheduled tasks: assistant schedules autonomous re-runs + surfaces results ----
+
+// Sentinel title for the ctx.ui.input round-trip PiRuntime intercepts (it never
+// shows UI for this title — it runs the op and answers with a JSON result string).
+const TASK_BRIDGE_TITLE = 'stem-task-bridge';
+
+/** Round-trip one task op through PiRuntime; returns the parsed result (or an error object). */
+async function taskBridge(ctx, payload) {
+  if (!ctx || !ctx.ui || typeof ctx.ui.input !== 'function') {
+    return { ok: false, error: 'Scheduled tasks are unavailable in this context.' };
+  }
+  const raw = await ctx.ui.input(TASK_BRIDGE_TITLE, JSON.stringify(payload));
+  if (typeof raw !== 'string') return { ok: false, error: 'No response from Stem.' };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { ok: false, error: 'Malformed response from Stem.' };
+  }
+}
+
+function taskOk(text) {
+  return { content: [{ type: 'text', text }], details: {} };
+}
+function taskErr(text) {
+  return { content: [{ type: 'text', text }], details: {}, isError: true };
+}
+
+function describeSchedule(task) {
+  if (!task || !task.schedule) return '';
+  return task.schedule.kind === 'cron' ? `cron "${task.schedule.expr}"` : `once at ${task.schedule.at}`;
+}
+
+function registerTaskTools(pi) {
+  pi.registerTool({
+    name: 'schedule_task',
+    label: 'Schedule task',
+    description:
+      'Schedule the CURRENT conversation to re-run a prompt automatically on a schedule. Each run is a full autonomous turn appended to this same chat; no human watches it live, so the run should call notify_user only if it finds something the user should see. Provide EITHER `cron` (a standard 5-field cron expression, in local time, for a recurring task) OR `at` (an ISO 8601 datetime for a one-time task) — not both. Examples: cron "0 8 * * 1-5" = weekday mornings at 08:00; cron "*/30 * * * *" = every 30 minutes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'What to do on each run, e.g. "Check the news page and summarize anything new about LLM releases."' },
+        cron: { type: 'string', description: 'A 5-field cron expression (minute hour day-of-month month day-of-week) for a recurring task.' },
+        at: { type: 'string', description: 'An ISO 8601 datetime (e.g. 2026-07-01T08:00:00) for a one-time task.' }
+      },
+      required: ['prompt']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const res = await taskBridge(ctx, { op: 'schedule', prompt: params?.prompt, cron: params?.cron, at: params?.at });
+      if (!res.ok) return taskErr(res.error || 'Could not schedule the task.');
+      return taskOk(`Scheduled this conversation to run ${describeSchedule(res.task)}. Manage it in the Tasks tab.`);
+    }
+  });
+
+  pi.registerTool({
+    name: 'list_tasks',
+    label: 'List scheduled tasks',
+    description: 'List the scheduled tasks attached to the CURRENT conversation, with their ids and schedules.',
+    parameters: { type: 'object', properties: {} },
+    async execute(_id, _params, _signal, _onUpdate, ctx) {
+      const res = await taskBridge(ctx, { op: 'list' });
+      if (!res.ok) return taskErr(res.error || 'Could not list tasks.');
+      const tasks = res.tasks || [];
+      if (!tasks.length) return taskOk('No scheduled tasks for this conversation.');
+      const lines = tasks.map(
+        (t) => `- ${t.id} — ${describeSchedule(t)}${t.enabled ? '' : ' (paused)'}: ${t.title}`
+      );
+      return taskOk(`Scheduled tasks for this conversation:\n${lines.join('\n')}`);
+    }
+  });
+
+  pi.registerTool({
+    name: 'cancel_task',
+    label: 'Cancel scheduled task',
+    description: 'Cancel (delete) a scheduled task by its id. Use list_tasks first to find the id.',
+    parameters: {
+      type: 'object',
+      properties: { taskId: { type: 'string', description: 'The exact task id to cancel.' } },
+      required: ['taskId']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const res = await taskBridge(ctx, { op: 'cancel', taskId: params?.taskId });
+      if (!res.ok) return taskErr(res.error || 'Could not cancel the task.');
+      return taskOk('Task cancelled.');
+    }
+  });
+
+  pi.registerTool({
+    name: 'notify_user',
+    label: 'Notify user',
+    description:
+      'Surface a prominent in-app alert to the user. Intended for autonomous scheduled runs: call this ONLY when a run produced something the user should be told about right now (e.g. a watched condition became true). Keep the message short and specific. Does nothing useful during an ordinary interactive chat — just reply normally there.',
+    parameters: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'The short alert message to show the user.' },
+        title: { type: 'string', description: 'Optional short headline for the alert.' }
+      },
+      required: ['message']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const message = String((params && params.message) || '').trim();
+      if (!message) return taskErr('Provide a message to notify the user with.');
+      const res = await taskBridge(ctx, { op: 'notify', message, title: params?.title });
+      if (!res.ok) return taskErr(res.error || 'Could not notify the user.');
+      return taskOk('Notified the user.');
     }
   });
 }

@@ -16,9 +16,13 @@ import type {
   QuickChatSettings,
   QuickChatSessionStarted,
   QuickChatStatus,
+  ScheduledRunPayload,
+  ScheduledTask,
   SkillsModelSettings,
   StartTurnInput,
-  StemApi
+  StemApi,
+  TaskNotifyPayload,
+  TaskSchedulePatch
 } from '../shared/types';
 
 const api: StemApi = {
@@ -59,6 +63,28 @@ const api: StemApi = {
   revealConnectedFolder: (id: string) => ipcRenderer.invoke('cfolders:reveal', id),
   openWorkspaceFolder: () => ipcRenderer.invoke('cfolders:revealWorkspace'),
   pickDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
+
+  listTasks: () => ipcRenderer.invoke('tasks:list'),
+  setTaskEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke('tasks:setEnabled', id, enabled),
+  runTaskNow: (id: string) => ipcRenderer.invoke('tasks:runNow', id),
+  deleteTask: (id: string) => ipcRenderer.invoke('tasks:delete', id),
+  updateTaskSchedule: (id: string, patch: TaskSchedulePatch) =>
+    ipcRenderer.invoke('tasks:updateSchedule', id, patch),
+  onTasksChanged: (listener: (tasks: ScheduledTask[]) => void) => {
+    const handler = (_e: unknown, tasks: ScheduledTask[]) => listener(tasks);
+    ipcRenderer.on('tasks:changed', handler);
+    return () => ipcRenderer.removeListener('tasks:changed', handler);
+  },
+  onScheduledRun: (listener: (run: ScheduledRunPayload) => void) => {
+    const handler = (_e: unknown, run: ScheduledRunPayload) => listener(run);
+    ipcRenderer.on('tasks:run', handler);
+    return () => ipcRenderer.removeListener('tasks:run', handler);
+  },
+  onTaskNotify: (listener: (payload: TaskNotifyPayload) => void) => {
+    const handler = (_e: unknown, payload: TaskNotifyPayload) => listener(payload);
+    ipcRenderer.on('tasks:notify', handler);
+    return () => ipcRenderer.removeListener('tasks:notify', handler);
+  },
 
   listMcpServers: () => ipcRenderer.invoke('mcp:list'),
   getMcpStatus: () => ipcRenderer.invoke('mcp:status'),

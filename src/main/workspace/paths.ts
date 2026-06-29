@@ -89,6 +89,18 @@ export function protectedRootsPath(): string {
 }
 
 /**
+ * Stem-owned registry of scheduled tasks: prompts re-run as autonomous agent turns
+ * on a cron/once schedule, each bound to its originating chat. Holds the task
+ * definitions plus last/next-run bookkeeping; the runs themselves land in the
+ * backend thread like any other turn.
+ */
+export function tasksStorePath(): string {
+  // STEM_TASKS_STORE lets unit tests point at a throwaway file (and avoids touching
+  // Electron's `app` when run outside the app), like the other store path helpers.
+  return process.env.STEM_TASKS_STORE ?? join(userDataRoot(), 'tasks.json');
+}
+
+/**
  * Stem-owned app settings (e.g. the global Quick Chat shortcut + its defaults).
  * Held in the main process because some of it — the global accelerator — can
  * only be registered from main, not the renderer.

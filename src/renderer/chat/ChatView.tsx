@@ -22,9 +22,12 @@ import {
   GitBranch,
   Copy,
   Check,
-  Trash2
+  Trash2,
+  ChevronRight,
+  Clock
 } from 'lucide-react';
 import type { ChatMessage, ModelSummary, TurnAttachment, TurnTiming } from '../../shared/types';
+import { ContextMeter } from './ContextMeter';
 import { MdxView } from './MdxView';
 import { ShortcutHint, useShortcut } from '../shortcuts';
 import { MdxActionContext } from '../mdx/ActionContext';
@@ -110,6 +113,39 @@ function formatTiming(t: TurnTiming): string | undefined {
   return parts.length ? parts.join(' · ') : undefined;
 }
 
+// Local time-of-day for a scheduled run's collapsed header, e.g. "Jun 29, 09:00".
+function formatRunTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'scheduled';
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// One rendered block: either a normal message, or a scheduled-run group (the run's
+// user message plus its reply, collapsed under one foldable row).
+interface TimelineGroup {
+  key: string;
+  scheduledAt?: string;
+  items: ChatMessage[];
+}
+
+// Fold the flat message list into groups. A scheduled user message opens a group
+// that absorbs the messages that follow it (its reply, tool/system rows) until the
+// next user message; everything else is its own single-item group.
+function buildTimelineGroups(messages: ChatMessage[]): TimelineGroup[] {
+  const groups: TimelineGroup[] = [];
+  for (const m of messages) {
+    const open = groups[groups.length - 1];
+    if (m.role === 'user' && m.scheduled) {
+      groups.push({ key: `run-${m.id}`, scheduledAt: m.scheduled.at, items: [m] });
+    } else if (open?.scheduledAt && m.role !== 'user') {
+      open.items.push(m);
+    } else {
+      groups.push({ key: m.id, items: [m] });
+    }
+  }
+  return groups;
+}
+
 export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({
   messages,
   running,
@@ -141,6 +177,16 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   // delete button is armed (first click → red; second click within 2.5s deletes).
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Which scheduled-run groups are expanded (collapsed by default — they're an
+  // audit trail, not the focus). Keyed by the group's stable key.
+  const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<string>>(new Set());
+  const toggleRun = useCallback((key: string) => {
+    setExpandedRuns((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }, []);
 
   const copyMessage = useCallback((m: ChatMessage) => {
     void navigator.clipboard.writeText(m.content).then(() => {
@@ -306,6 +352,159 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
           type: 'conjunction'
         }).format(mdxFeatureLabels)}.`;
 
+  // One message bubble. Extracted so the timeline can render both standalone messages
+  // and the contents of a collapsed scheduled-run group with identical markup.
+  const renderMessage = (m: ChatMessage): ReactNode => {
+    const a = AVATAR[m.role];
+    // Render finalized assistant replies via the MDX renderer. Plain Markdown
+    // (.md) is safe to render live while streaming — it has no JSX to break
+    // mid-tag — so we render it progressively too (once there's content to show).
+    // MDX stays plain-text until complete to avoid flickering half-written tags.
+    const isStreaming = m.id === streamingId;
+    const renderRich =
+      m.role === 'assistant' && (!isStreaming || (format === 'md' && !!m.content));
+    const metaText = m.role === 'assistant' ? metaTooltip(m.meta, models) : undefined;
+    const isEditing = editingId === m.id;
+    // Retry/Edit/Fork need an authoritative turn id and a settled thread.
+    const canAct = !running && !!m.turnId && (m.role === 'user' || m.role === 'assistant');
+    return (
+      <div key={m.id} className={`message message-${m.role}`}>
+        <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
+        <div className="message-body">
+          <div className="message-who">
+            {a.label}
+            {metaText && <span className="message-meta">{metaText}</span>}
+            {m.role === 'assistant' && m.timing && formatTiming(m.timing) && (
+              <span className="message-timing" title="total · thinking · tool execution">
+                {formatTiming(m.timing)}
+              </span>
+            )}
+          </div>
+          {isEditing ? (
+            <div className="message-edit">
+              <textarea
+                autoFocus
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    saveEdit(m.turnId);
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelEdit();
+                  }
+                }}
+                rows={1}
+              />
+              <div className="message-edit-actions">
+                <button type="button" className="push" onClick={cancelEdit}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => saveEdit(m.turnId)}
+                  disabled={!editDraft.trim()}
+                >
+                  Save &amp; run
+                </button>
+              </div>
+            </div>
+          ) : renderRich ? (
+            <MdxView text={m.content} />
+          ) : isStreaming && !m.content && showActivity ? (
+            activityIndicator
+          ) : (
+            <div className="message-plain">{m.content}</div>
+          )}
+          {!isEditing && m.attachments && m.attachments.length > 0 && (
+            <div className="message-attachments">
+              {m.attachments.map((att, i) =>
+                att.kind === 'image' && att.dataUrl ? (
+                  <img
+                    key={i}
+                    className="message-image"
+                    src={att.dataUrl}
+                    alt={att.name ?? 'attachment'}
+                  />
+                ) : (
+                  <span className="attachment-chip" key={i}>
+                    <File size={13} />
+                    <span className="attachment-name">{att.name ?? 'file'}</span>
+                  </span>
+                )
+              )}
+            </div>
+          )}
+          {canAct && !isEditing && (
+            <div className="message-actions">
+              <button
+                type="button"
+                className="message-action"
+                title={copiedId === m.id ? 'Copied' : 'Copy message'}
+                onClick={() => copyMessage(m)}
+              >
+                {copiedId === m.id ? <Check size={13} /> : <Copy size={13} />}
+              </button>
+              {m.role === 'assistant' && (
+                <button
+                  type="button"
+                  className="message-action"
+                  title="Retry — regenerate this reply"
+                  onClick={() => onRetry(m.turnId!)}
+                >
+                  <RotateCcw size={13} />
+                </button>
+              )}
+              {m.role === 'user' && (
+                <button
+                  type="button"
+                  className="message-action"
+                  title="Edit & re-run"
+                  onClick={() => startEdit(m)}
+                >
+                  <Pencil size={13} />
+                </button>
+              )}
+              <button
+                type="button"
+                className="message-action"
+                title="Fork into a new chat from here"
+                onClick={() => onFork(m.turnId!)}
+              >
+                <GitBranch size={13} />
+              </button>
+              <button
+                type="button"
+                className={`message-action${confirmDeleteId === m.id ? ' danger' : ''}`}
+                title={
+                  confirmDeleteId === m.id
+                    ? 'Click again to delete this turn and everything after it'
+                    : 'Delete from here'
+                }
+                onClick={() => {
+                  if (confirmDeleteId === m.id) {
+                    setConfirmDeleteId(null);
+                    onDelete(m.turnId!);
+                  } else {
+                    setConfirmDeleteId(m.id);
+                    window.setTimeout(
+                      () => setConfirmDeleteId((c) => (c === m.id ? null : c)),
+                      2500
+                    );
+                  }
+                }}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <MdxActionContext.Provider value={mdxActions}>
     <div className="chat">
@@ -319,153 +518,17 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             )}
           </div>
         )}
-        {messages.map((m) => {
-          const a = AVATAR[m.role];
-          // Render finalized assistant replies via the MDX renderer. Plain Markdown
-          // (.md) is safe to render live while streaming — it has no JSX to break
-          // mid-tag — so we render it progressively too (once there's content to show).
-          // MDX stays plain-text until complete to avoid flickering half-written tags.
-          const isStreaming = m.id === streamingId;
-          const renderRich =
-            m.role === 'assistant' && (!isStreaming || (format === 'md' && !!m.content));
-          const metaText = m.role === 'assistant' ? metaTooltip(m.meta, models) : undefined;
-          const isEditing = editingId === m.id;
-          // Retry/Edit/Fork need an authoritative turn id and a settled thread.
-          const canAct = !running && !!m.turnId && (m.role === 'user' || m.role === 'assistant');
+        {buildTimelineGroups(messages).map((g) => {
+          if (!g.scheduledAt) return g.items.map(renderMessage);
+          const open = expandedRuns.has(g.key);
           return (
-            <div key={m.id} className={`message message-${m.role}`}>
-              <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
-              <div className="message-body">
-                <div className="message-who">
-                  {a.label}
-                  {metaText && <span className="message-meta">{metaText}</span>}
-                  {m.role === 'assistant' && m.timing && formatTiming(m.timing) && (
-                    <span className="message-timing" title="total · thinking · tool execution">
-                      {formatTiming(m.timing)}
-                    </span>
-                  )}
-                </div>
-                {isEditing ? (
-                  <div className="message-edit">
-                    <textarea
-                      autoFocus
-                      value={editDraft}
-                      onChange={(e) => setEditDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          saveEdit(m.turnId);
-                        } else if (e.key === 'Escape') {
-                          e.preventDefault();
-                          cancelEdit();
-                        }
-                      }}
-                      rows={1}
-                    />
-                    <div className="message-edit-actions">
-                      <button type="button" className="push" onClick={cancelEdit}>
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        className="primary"
-                        onClick={() => saveEdit(m.turnId)}
-                        disabled={!editDraft.trim()}
-                      >
-                        Save &amp; run
-                      </button>
-                    </div>
-                  </div>
-                ) : renderRich ? (
-                  <MdxView text={m.content} />
-                ) : isStreaming && !m.content && showActivity ? (
-                  activityIndicator
-                ) : (
-                  <div className="message-plain">{m.content}</div>
-                )}
-                {!isEditing && m.attachments && m.attachments.length > 0 && (
-                  <div className="message-attachments">
-                    {m.attachments.map((att, i) =>
-                      att.kind === 'image' && att.dataUrl ? (
-                        <img
-                          key={i}
-                          className="message-image"
-                          src={att.dataUrl}
-                          alt={att.name ?? 'attachment'}
-                        />
-                      ) : (
-                        <span className="attachment-chip" key={i}>
-                          <File size={13} />
-                          <span className="attachment-name">{att.name ?? 'file'}</span>
-                        </span>
-                      )
-                    )}
-                  </div>
-                )}
-                {canAct && !isEditing && (
-                  <div className="message-actions">
-                    <button
-                      type="button"
-                      className="message-action"
-                      title={copiedId === m.id ? 'Copied' : 'Copy message'}
-                      onClick={() => copyMessage(m)}
-                    >
-                      {copiedId === m.id ? <Check size={13} /> : <Copy size={13} />}
-                    </button>
-                    {m.role === 'assistant' && (
-                      <button
-                        type="button"
-                        className="message-action"
-                        title="Retry — regenerate this reply"
-                        onClick={() => onRetry(m.turnId!)}
-                      >
-                        <RotateCcw size={13} />
-                      </button>
-                    )}
-                    {m.role === 'user' && (
-                      <button
-                        type="button"
-                        className="message-action"
-                        title="Edit & re-run"
-                        onClick={() => startEdit(m)}
-                      >
-                        <Pencil size={13} />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="message-action"
-                      title="Fork into a new chat from here"
-                      onClick={() => onFork(m.turnId!)}
-                    >
-                      <GitBranch size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      className={`message-action${confirmDeleteId === m.id ? ' danger' : ''}`}
-                      title={
-                        confirmDeleteId === m.id
-                          ? 'Click again to delete this turn and everything after it'
-                          : 'Delete from here'
-                      }
-                      onClick={() => {
-                        if (confirmDeleteId === m.id) {
-                          setConfirmDeleteId(null);
-                          onDelete(m.turnId!);
-                        } else {
-                          setConfirmDeleteId(m.id);
-                          window.setTimeout(
-                            () => setConfirmDeleteId((c) => (c === m.id ? null : c)),
-                            2500
-                          );
-                        }
-                      }}
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                )}
-              </div>
+            <div key={g.key} className={`sched-run${open ? ' open' : ''}`}>
+              <button type="button" className="sched-run-head" onClick={() => toggleRun(g.key)}>
+                <ChevronRight size={13} className="sched-run-chevron" />
+                <Clock size={13} />
+                <span className="sched-run-title">Scheduled run — {formatRunTime(g.scheduledAt)}</span>
+              </button>
+              {open && <div className="sched-run-body">{g.items.map(renderMessage)}</div>}
             </div>
           );
         })}
@@ -539,6 +602,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
               MD
             </button>
           </div>
+          <ContextMeter messages={messages} model={model} />
         </div>
         <div
           className={`composer-field${dragOver ? ' drag-over' : ''}`}

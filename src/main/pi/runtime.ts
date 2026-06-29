@@ -26,7 +26,7 @@ import { buildConnectedFoldersContext } from '../connected-folders/inject';
 import { getPrivateRoots } from '../workspace/connected-folders';
 import { resolveAttachments, type PiImageContent } from './attachments';
 import { captureUserMessage } from '../recall/capture';
-import type { ChatBackend } from '../backend/types';
+import type { ChatBackend, TaskBridge } from '../backend/types';
 import {
   buildMcpCatalogContext,
   ensureMcpConfig,
@@ -45,7 +45,9 @@ import {
   newTurnContext,
   normalizePiEvent,
   phaseOfEvents,
+  toTurnUsage,
   type NormalizedEvent,
+  type PiUsage,
   type TurnContext,
   type TurnTimingBreakdown
 } from './normalize';
@@ -80,6 +82,29 @@ const ADMIN_APPROVAL_TITLE = 'stem-admin-approval';
 const CONTEXT_OPEN = '<!--stem:context-->';
 const CONTEXT_CLOSE = '<!--/stem:context-->';
 const CONTEXT_STRIP_RE = /^<!--stem:context-->[\s\S]*?<!--\/stem:context-->\n+/;
+
+// Scheduled-task runs prepend a fenced preamble (model-visible: it tells the agent
+// it's running headless and how to surface results) that doubles as a replay marker.
+// Like the context fence it's stripped from the rendered user bubble, but it also
+// flags the turn as a scheduled run (with its ISO timestamp) so the UI collapses it.
+const SCHED_CLOSE = '<!--/stem:scheduled-->';
+const SCHED_STRIP_RE = /^<!--stem:scheduled at="([^"]*)"-->[\s\S]*?<!--\/stem:scheduled-->\n+/;
+
+/** The model-visible scheduled-run preamble, fenced for replay stripping + detection. */
+function scheduledPreamble(at: string): string {
+  return [
+    `<!--stem:scheduled at="${at}"-->`,
+    'This is an automated scheduled run — no human is reading the reply live. Carry out the task.',
+    'If, and only if, the result is something the user should be told about, call the notify_user tool with a short message.',
+    'Otherwise just finish quietly. Do not ask the user questions — there is no one to answer.',
+    SCHED_CLOSE
+  ].join('\n');
+}
+
+// Sentinel title the bridge's scheduled-task tools (schedule_task / notify_user /
+// list_tasks / cancel_task) use for their ctx.ui.input round-trip to PiRuntime. The
+// placeholder carries a JSON op payload; PiRuntime answers with a JSON result string.
+const TASK_BRIDGE_TITLE = 'stem-task-bridge';
 
 // Max length for an auto-derived chat title; longer first messages are
 // truncated (the sidebar ellipsizes anyway).
@@ -131,6 +156,8 @@ interface PiModel {
   name?: string;
   provider: string;
   reasoning?: boolean;
+  /** Context window size in tokens (pi defaults to 128000 when a model omits it). */
+  contextWindow?: number;
   /**
    * Per-model thinking-level capability/override map from pi. A key present with a
    * non-null value means that level is supported (pi maps it to the provider value
@@ -218,6 +245,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private currentTurn: TurnContext | null = null;
   /** Pending stem-admin approvals, keyed by the bridge's extension_ui_request id. */
   private adminApprovals = new Set<string>();
+  /** Wired by main to route the assistant's schedule_task/notify_user tools. */
+  private taskBridge: TaskBridge | null = null;
   /** Set when an admin add/remove was approved; reloads MCP servers at turn end. */
   private pendingMcpReload = false;
   /** Set when a skill was written this turn (or by the curator); reloads at turn end. */
@@ -400,7 +429,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         supportedEfforts: efforts,
         defaultEffort: efforts.includes('medium') ? 'medium' : efforts[0] ?? 'medium',
         serviceTiers: serviceTiersFor(m),
-        isDefault: m.provider === DEFAULT_PROVIDER && m.id === DEFAULT_MODEL
+        isDefault: m.provider === DEFAULT_PROVIDER && m.id === DEFAULT_MODEL,
+        ...(typeof m.contextWindow === 'number' ? { contextWindow: m.contextWindow } : {})
       };
     });
   }
@@ -535,7 +565,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         type?: string;
         id?: string;
         name?: string;
-        message?: { role?: string; content?: unknown };
+        message?: { role?: string; content?: unknown; usage?: PiUsage };
       };
       try {
         entry = JSON.parse(line);
@@ -548,7 +578,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
       if (entry.type !== 'message' || !entry.message) continue;
       const role = entry.message.role;
-      const { text: content, images } = this.contentToParts(entry.message.content);
+      const { text: content, images, scheduled } = this.contentToParts(entry.message.content);
       if (role === 'user') {
         lastUserId = entry.id ?? lastUserId;
         if (content.trim() || images.length)
@@ -557,17 +587,20 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             role: 'user',
             content,
             turnId: entry.id,
-            ...(images.length ? { attachments: images } : {})
+            ...(images.length ? { attachments: images } : {}),
+            ...(scheduled ? { scheduled } : {})
           });
       } else if (role === 'assistant') {
         if (content.trim()) {
           const timing = entry.id ? timings.get(entry.id) : undefined;
+          const usage = toTurnUsage(entry.message.usage);
           messages.push({
             id: `assistant-${entry.id}`,
             role: 'assistant',
             content,
             turnId: lastUserId || entry.id,
-            ...(timing ? { timing } : {})
+            ...(timing ? { timing } : {}),
+            ...(usage ? { usage } : {})
           });
         }
       }
@@ -730,6 +763,60 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     await this.restart();
   }
 
+  setTaskBridge(bridge: TaskBridge | null): void {
+    this.taskBridge = bridge;
+  }
+
+  /**
+   * Handle a scheduled-task tool's ctx.ui.input round-trip (sentinel TASK_BRIDGE_TITLE).
+   * The placeholder is a JSON op payload; we run it against the wired TaskBridge using
+   * the CURRENT turn's threadId (the only authoritative source — the extension can't
+   * know Stem's thread id) and answer with a JSON result string the tool returns.
+   */
+  private handleTaskBridgeRequest(id: string, payload: string | undefined): void {
+    const respond = (value: unknown): void =>
+      this.proc?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    const threadId = this.currentTurn?.threadId;
+    void (async () => {
+      try {
+        const bridge = this.taskBridge;
+        if (!bridge) return respond({ ok: false, error: 'Scheduled tasks are unavailable.' });
+        if (!threadId) return respond({ ok: false, error: 'No active conversation to attach the task to.' });
+        const req = JSON.parse(payload ?? '{}') as {
+          op?: string;
+          prompt?: string;
+          cron?: string;
+          at?: string;
+          taskId?: string;
+          title?: string;
+          message?: string;
+        };
+        switch (req.op) {
+          case 'schedule': {
+            const res = await bridge.schedule({ prompt: req.prompt ?? '', cron: req.cron, at: req.at }, threadId);
+            return respond(res);
+          }
+          case 'list': {
+            const tasks = await bridge.listForThread(threadId);
+            return respond({ ok: true, tasks });
+          }
+          case 'cancel': {
+            const res = await bridge.cancel(req.taskId ?? '');
+            return respond(res);
+          }
+          case 'notify': {
+            await bridge.notify({ title: req.title, message: req.message ?? '' }, threadId);
+            return respond({ ok: true });
+          }
+          default:
+            return respond({ ok: false, error: `Unknown task op "${req.op}".` });
+        }
+      } catch (e) {
+        respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+  }
+
   // ---- internals ----
 
   private emitEvent(method: string, params?: unknown): void {
@@ -803,6 +890,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // The bridge's MCP add/remove approval → route to Stem's McpApprovalCard.
       if (ev.method === 'confirm' && ev.title === ADMIN_APPROVAL_TITLE) {
         this.handleAdminApproval(id, ev.message as string | undefined);
+        return;
+      }
+      // A scheduled-task tool round-trip (schedule_task / notify_user / …). The op
+      // payload rides in `placeholder` (ctx.ui.input's second arg); we never show UI.
+      if (ev.method === 'input' && ev.title === TASK_BRIDGE_TITLE) {
+        this.handleTaskBridgeRequest(id, ev.placeholder as string | undefined);
         return;
       }
       // No UI for other dialogs yet — dismiss them safely.
@@ -1102,9 +1195,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
     // Fence the injected context so replay can strip it (see CONTEXT_* above): the
     // model still sees it inline, but the stored user bubble renders only userText.
-    const message = blocks.length
+    const body = blocks.length
       ? `${CONTEXT_OPEN}\n${blocks.join('\n\n')}\n\n---\n${CONTEXT_CLOSE}\n\n${userText}`
       : userText;
+    // A scheduled run prepends its fenced preamble (before the context fence) so the
+    // model knows it's running headless and the persisted message carries the marker.
+    const message = input.scheduled ? `${scheduledPreamble(input.scheduled.at)}\n\n${body}` : body;
     return { message, images };
   }
 
@@ -1204,14 +1300,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const raw = (res.data as { messages?: { role?: string; content?: unknown }[] } | undefined)?.messages ?? [];
     const messages: ChatMessage[] = [];
     for (const m of raw) {
-      const { text: content, images } = this.contentToParts(m.content);
+      const { text: content, images, scheduled } = this.contentToParts(m.content);
       if (!content.trim() && !images.length) continue;
       if (m.role === 'user')
         messages.push({
           id: `user-${messages.length}`,
           role: 'user',
           content,
-          ...(images.length ? { attachments: images } : {})
+          ...(images.length ? { attachments: images } : {}),
+          ...(scheduled ? { scheduled } : {})
         });
       else if (m.role === 'assistant')
         messages.push({ id: `assistant-${messages.length}`, role: 'assistant', content });
@@ -1235,8 +1332,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * stores images as `{type:'image', data, mimeType}` blocks alongside text blocks, so
    * replay rebuilds thumbnails straight from the session JSONL.
    */
-  private contentToParts(content: unknown): { text: string; images: MessageAttachment[] } {
-    if (typeof content === 'string') return { text: content, images: [] };
+  private contentToParts(content: unknown): {
+    text: string;
+    images: MessageAttachment[];
+    scheduled?: { at: string };
+  } {
+    if (typeof content === 'string') return this.stripMarkers(content, []);
     if (!Array.isArray(content)) return { text: '', images: [] };
     const texts: string[] = [];
     const images: MessageAttachment[] = [];
@@ -1250,10 +1351,23 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         images.push({ kind: 'image', mime, dataUrl: `data:${mime};base64,${part.data}` });
       }
     }
-    // Drop any fenced recall/files/format context we prepended at send time so the
-    // replayed user bubble shows only what the user actually typed. No-op on turns
-    // with no injection and on assistant messages (markers never appear there).
-    return { text: texts.join('').replace(CONTEXT_STRIP_RE, ''), images };
+    return this.stripMarkers(texts.join(''), images);
+  }
+
+  /**
+   * Strip the fenced scheduled-run preamble and recall/files/format context we
+   * prepended at send time so the replayed user bubble shows only what was actually
+   * asked. The scheduled fence also flags the turn (with its timestamp) so the UI
+   * renders it collapsed. No-op on turns with no injection and on assistant messages.
+   */
+  private stripMarkers(raw: string, images: MessageAttachment[]): {
+    text: string;
+    images: MessageAttachment[];
+    scheduled?: { at: string };
+  } {
+    const sched = raw.match(SCHED_STRIP_RE);
+    const text = raw.replace(SCHED_STRIP_RE, '').replace(CONTEXT_STRIP_RE, '');
+    return sched ? { text, images, scheduled: { at: sched[1] } } : { text, images };
   }
 
   /** Providers Stem has credentials for (from the isolated auth.json). */
