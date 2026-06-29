@@ -296,6 +296,15 @@ export class TaskScheduler {
     task.lastRunAt = atIso;
     // nextRunAt was already claimed (advanced) at dispatch time for scheduled and
     // catch-up runs; a manual runNow deliberately leaves the schedule untouched.
+    // A one-time task that has fired its scheduled slot is finished — drop it from
+    // the list entirely so it stops showing in the Tasks tab and clears the owning
+    // chat's scheduled badge (scheduledThreadIds is derived from the task list).
+    // advanceSchedule nulls nextRunAt for once-tasks at dispatch (scheduled/catch-up);
+    // a manual runNow of a still-pending once-task leaves nextRunAt set, so it
+    // survives here until its real fire time.
+    if (task.schedule.kind === 'once' && !task.nextRunAt) {
+      this.tasks = this.tasks.filter((t) => t.id !== task.id);
+    }
     await this.persistAndArm();
   }
 

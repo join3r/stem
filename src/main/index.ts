@@ -27,6 +27,7 @@ import {
 } from './workspace/connected-folders';
 import { workspaceRoot } from './workspace/paths';
 import { TaskScheduler } from './scheduler';
+import { createE2ESchedulerBackend } from './scheduler/e2e-backend';
 import { imagePreviewDataUrl } from './pi/attachments';
 import * as piMcp from './pi/mcp';
 import {
@@ -990,7 +991,10 @@ app.whenReady().then(async () => {
   // schedule. The scheduler owns timing + execution; the backend routes the
   // assistant's schedule_task/notify_user tools to it via the TaskBridge below.
   scheduler = new TaskScheduler({
-    runtime,
+    // Under STEM_E2E the real pi backend can't dispatch a turn, so the scheduler
+    // gets a hermetic shim that settles turns instantly — letting e2e specs seed a
+    // due task and observe it fire + clean up (see scheduler/e2e-backend.ts).
+    runtime: E2E ? createE2ESchedulerBackend() : runtime,
     onChange: (tasks) => mainWindow?.webContents.send('tasks:changed', tasks),
     onRun: (run) => mainWindow?.webContents.send('tasks:run', run)
   });

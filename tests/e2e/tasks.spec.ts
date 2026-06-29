@@ -79,6 +79,45 @@ test('pausing a task persists enabled=false and clears the next run through real
   expect(task.nextRunAt).toBeNull();
 });
 
+// A one-time task armed in the past: the scheduler runs it once on start() (the
+// catch-up path) and, now that it has fired, removes it from the list entirely —
+// so it stops showing in the Tasks tab and clears the owning chat's scheduled
+// badge (which is derived from the task list). The hermetic E2E backend settles
+// the catch-up turn instantly (see src/main/scheduler/e2e-backend.ts).
+function seedDueOnce(id: string, prompt: string): ScheduledTask {
+  const past = new Date('2020-01-01T00:00:00').toISOString();
+  return {
+    id,
+    threadId: `thread-${id}`,
+    prompt,
+    schedule: { kind: 'once', at: past },
+    enabled: true,
+    createdAt: new Date('2026-01-01T00:00:00').toISOString(),
+    title: prompt,
+    nextRunAt: past
+  };
+}
+
+test('a fired one-time task removes itself, leaving the recurring task', async () => {
+  // Seed a due once-task alongside a far-future recurring one. boot()'s
+  // poll-to-length doesn't fit here (the once-task self-removes), so launch directly.
+  launched = await launchApp({
+    seedTasks: [seedDueOnce('once', 'One-time ping'), seedTask('keep', 'Daily standup')],
+    real: false
+  });
+  const win = await mainWindowOf(launched.app);
+  await win.waitForLoadState('domcontentloaded');
+
+  // The once-task fires on start() and drops out; only the recurring task remains.
+  await expect
+    .poll(() => win.evaluate(() => (window as any).stem.listTasks().then((t: any[]) => t.map((x) => x.id))))
+    .toEqual(['keep']);
+
+  await win.getByRole('button', { name: 'Tasks' }).click();
+  await expect(win.getByText('Daily standup')).toBeVisible();
+  await expect(win.getByText('One-time ping')).toBeHidden();
+});
+
 test('deleting a task removes it from the store, leaving the others', async () => {
   const win = await boot([seedTask('a', 'Summarize my unread email'), seedTask('b', 'Check the release page')]);
   await expect(win.getByText('Summarize my unread email')).toBeVisible();

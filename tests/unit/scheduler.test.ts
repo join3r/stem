@@ -192,9 +192,10 @@ describe('TaskScheduler does not flood', () => {
     await new Promise((r) => setTimeout(r, 2500));
 
     expect(runtime.starts).toHaveLength(1);
-    // The once-task was claimed (nextRunAt nulled) at dispatch, so nothing re-arms it.
-    expect(scheduler.snapshot()[0].nextRunAt).toBeNull();
-    expect(scheduler.snapshot()[0].lastRunAt).toBeTruthy();
+    // A fired one-time task is removed from the list, so it stops showing in the
+    // Tasks tab and clears the owning chat's scheduled badge.
+    expect(scheduler.snapshot()).toHaveLength(0);
+    expect(await readTasks()).toHaveLength(0);
     scheduler.stop();
   });
 }, 10_000);
