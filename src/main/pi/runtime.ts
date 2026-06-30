@@ -565,6 +565,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         type?: string;
         id?: string;
         name?: string;
+        timestamp?: string;
         message?: { role?: string; content?: unknown; usage?: PiUsage };
       };
       try {
@@ -587,6 +588,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             role: 'user',
             content,
             turnId: entry.id,
+            ...(entry.timestamp ? { createdAt: entry.timestamp } : {}),
             ...(images.length ? { attachments: images } : {}),
             ...(scheduled ? { scheduled } : {})
           });

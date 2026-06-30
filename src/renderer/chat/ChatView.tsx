@@ -115,6 +115,14 @@ function formatTiming(t: TurnTiming): string | undefined {
   return parts.length ? parts.join(' · ') : undefined;
 }
 
+// Hover-revealed authored time on a user bubble, e.g. "Jun 28, 14:09". The full
+// localized date/time rides in the span's title attribute.
+function formatStamp(iso: string): string | undefined {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 // Local time-of-day for a scheduled run's collapsed header, e.g. "Jun 29, 09:00".
 function formatRunTime(iso: string): string {
   const d = new Date(iso);
@@ -380,6 +388,11 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             {m.role === 'assistant' && m.timing && formatTiming(m.timing) && (
               <span className="message-timing" title="total · thinking · tool execution">
                 {formatTiming(m.timing)}
+              </span>
+            )}
+            {m.role === 'user' && m.createdAt && formatStamp(m.createdAt) && (
+              <span className="message-meta" title={new Date(m.createdAt).toLocaleString()}>
+                {formatStamp(m.createdAt)}
               </span>
             )}
           </div>

@@ -80,6 +80,12 @@ export interface ChatMessage {
   /** Assistant messages only: token usage (context fill + cost) for this turn. */
   usage?: TurnUsage;
   /**
+   * ISO timestamp the message was authored. Surfaced as a hover-revealed label on
+   * user bubbles (mirroring the assistant model/timing reveal). Read from the pi
+   * session entry on replay; stamped optimistically when the user sends.
+   */
+  createdAt?: string;
+  /**
    * Set on the user message of a scheduled-task run (and propagated to its reply so
    * the pair renders as one collapsed "Scheduled run — HH:MM" block). `at` is the
    * run's ISO timestamp. Derived live from the tasks:run push and on replay from a

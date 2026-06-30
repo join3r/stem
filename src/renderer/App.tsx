@@ -325,7 +325,10 @@ export default function App() {
       // resolves — that's what makes Edit/Fork work on a just-sent user message.
       const userMsgId = `user-${Date.now()}`;
       setThread(sendKey, (s) => ({
-        messages: [...s.messages, { id: userMsgId, role: 'user', content: text, attachments: msgAttachments }],
+        messages: [
+          ...s.messages,
+          { id: userMsgId, role: 'user', content: text, attachments: msgAttachments, createdAt: new Date().toISOString() }
+        ],
         running: true,
         activity: null,
         status: 'running'
