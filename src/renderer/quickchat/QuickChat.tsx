@@ -342,6 +342,10 @@ export function QuickChat() {
           activity={activity}
           onSend={onSend}
           onInterrupt={onInterrupt}
+          escapeAction="off"
+          onRetractActiveTurn={() => {}}
+          pendingRestore={null}
+          onRestoreConsumed={() => {}}
           onRetry={onRetry}
           onEdit={onEdit}
           onFork={onFork}

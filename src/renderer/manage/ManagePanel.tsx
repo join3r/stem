@@ -11,6 +11,7 @@ import type {
   MemoryContents,
   MemorySettings,
   ConnectedFolder,
+  EscapeAction,
   ScheduledTask,
   ModelSummary,
   NativeWebSearchSettings,
@@ -1072,14 +1073,24 @@ function ShortcutRecorder({
 function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
   const [qc, setQc] = useState<QuickChatSettings | null>(null);
   const [nws, setNws] = useState<NativeWebSearchSettings>({ main: true, quickChat: true });
+  const [escapeAction, setEscapeAction] = useState<EscapeAction>('off');
   const selectedModel = models.find((m) => m.id === modelId) ?? null;
 
   useEffect(() => {
     window.stem.getSettings().then((s) => {
       setQc(s.quickChat);
       setNws(s.nativeWebSearch);
+      setEscapeAction(s.escapeAction);
     });
   }, []);
+
+  function selectEscapeAction(action: EscapeAction) {
+    setEscapeAction(action); // optimistic; persist + reconcile from the saved settings
+    // Notify the main window's composer (App) so the new mode applies immediately,
+    // without waiting for a window focus cycle.
+    window.dispatchEvent(new CustomEvent('stem:escape-action', { detail: action }));
+    window.stem.updateEscapeAction(action).then((s) => setEscapeAction(s.escapeAction));
+  }
 
   function update(patch: Partial<QuickChatSettings>) {
     window.stem.updateQuickChat(patch).then((s) => setQc(s.quickChat));
@@ -1155,6 +1166,40 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
           >
             <FolderOpen size={16} />
           </button>
+        </div>
+      </div>
+
+      <div className="grp-head">Input</div>
+      <div className="formgroup">
+        <div className="set-block">
+          <span className="set-sub">Escape key</span>
+          <div className="seg-ctl">
+            <button
+              className={escapeAction === 'off' ? 'active' : ''}
+              onClick={() => selectEscapeAction('off')}
+              title="Escape does nothing in the composer"
+            >
+              Off
+            </button>
+            <button
+              className={escapeAction === 'single' ? 'active' : ''}
+              onClick={() => selectEscapeAction('single')}
+              title="One Escape stops the turn and pulls your message back into the composer"
+            >
+              Single
+            </button>
+            <button
+              className={escapeAction === 'twoStage' ? 'active' : ''}
+              onClick={() => selectEscapeAction('twoStage')}
+              title="First Escape stops the turn; a second Escape retracts your message"
+            >
+              Two-stage
+            </button>
+          </div>
+          <p className="muted">
+            While a reply is streaming, Escape can stop it and return your just-sent message to the composer to edit
+            — as if you never sent it.
+          </p>
         </div>
       </div>
 

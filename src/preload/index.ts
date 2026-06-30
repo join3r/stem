@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   BackendEventEnvelope,
   ConnectedFolderPatch,
+  EscapeAction,
   McpAdminProposal,
   McpServerInput,
   McpServerStatus,
@@ -141,6 +142,7 @@ const api: StemApi = {
   updateQuickChat: (patch: Partial<QuickChatSettings>) => ipcRenderer.invoke('settings:updateQuickChat', patch),
   updateNativeWebSearch: (patch: Partial<NativeWebSearchSettings>) =>
     ipcRenderer.invoke('settings:updateNativeWebSearch', patch),
+  updateEscapeAction: (action: EscapeAction) => ipcRenderer.invoke('settings:updateEscapeAction', action),
   updateMemorySettings: (patch: Partial<MemoryModelSettings>) =>
     ipcRenderer.invoke('settings:updateMemory', patch),
   updateSkillsSettings: (patch: Partial<SkillsModelSettings>) =>

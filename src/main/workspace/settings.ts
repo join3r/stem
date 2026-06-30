@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import type {
   AppSettings,
+  EscapeAction,
   MemoryModelSettings,
   NativeWebSearchSettings,
   PartialRetrievalSettings,
@@ -47,8 +48,12 @@ const DEFAULTS: AppSettings = {
   retrieval: {
     embeddings: { baseUrl: 'http://localhost:11434', model: 'qwen3-embedding:8b', apiKey: null, enabled: false },
     reranker: { baseUrl: 'http://localhost:8080', model: '', apiKey: null, enabled: false }
-  }
+  },
+  // Escape-to-retract is opt-in: off until the user picks single/two-stage.
+  escapeAction: 'off'
 };
+
+const ESCAPE_ACTIONS: readonly EscapeAction[] = ['off', 'single', 'twoStage'];
 
 function coerceEndpoint(
   raw: Partial<RetrievalEndpointSettings> | undefined,
@@ -84,6 +89,9 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
     embeddings: coerceEndpoint(rawRet.embeddings, DEFAULTS.retrieval.embeddings),
     reranker: coerceEndpoint(rawRet.reranker, DEFAULTS.retrieval.reranker)
   };
+  const escapeAction: EscapeAction = ESCAPE_ACTIONS.includes(parsed?.escapeAction as EscapeAction)
+    ? (parsed!.escapeAction as EscapeAction)
+    : DEFAULTS.escapeAction;
   return {
     quickChat: {
       shortcut: typeof qc.shortcut === 'string' && qc.shortcut.trim() ? qc.shortcut : null,
@@ -103,7 +111,8 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
     nativeWebSearch: nws,
     memory: mem,
     skills,
-    retrieval
+    retrieval,
+    escapeAction
   };
 }
 
@@ -150,6 +159,16 @@ export function updateNativeWebSearch(patch: Partial<NativeWebSearchSettings>): 
   return enqueue(async () => {
     const cur = await readSettings();
     const next = coerce({ ...cur, nativeWebSearch: { ...cur.nativeWebSearch, ...patch } });
+    await writeSettings(next);
+    return next;
+  });
+}
+
+/** Set the main-composer Escape-to-retract behavior and persist; returns full settings. */
+export function updateEscapeAction(action: EscapeAction): Promise<AppSettings> {
+  return enqueue(async () => {
+    const cur = await readSettings();
+    const next = coerce({ ...cur, escapeAction: action });
     await writeSettings(next);
     return next;
   });

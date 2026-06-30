@@ -26,7 +26,7 @@ import {
   ChevronRight,
   Clock
 } from 'lucide-react';
-import type { ChatMessage, ModelSummary, TurnAttachment, TurnTiming } from '../../shared/types';
+import type { ChatMessage, EscapeAction, ModelSummary, TurnAttachment, TurnTiming } from '../../shared/types';
 import { ContextMeter } from './ContextMeter';
 import { MdxView } from './MdxView';
 import { ShortcutHint, useShortcut } from '../shortcuts';
@@ -69,6 +69,15 @@ interface ChatViewProps {
   activity: string | null;
   onSend: (text: string, attachments: TurnAttachment[]) => void;
   onInterrupt: () => void;
+  /** Escape-key behavior in the composer (off / single / two-stage). */
+  escapeAction: EscapeAction;
+  /** Stop the running turn and retract its message; the text/attachments come back
+   *  via `pendingRestore`. */
+  onRetractActiveTurn: () => void | Promise<void>;
+  /** Text/attachments to refill the composer with after a retract (nonce-keyed). */
+  pendingRestore: { text: string; attachments: TurnAttachment[]; nonce: number } | null;
+  /** Called once a `pendingRestore` has been consumed (or intentionally skipped). */
+  onRestoreConsumed: () => void;
   /** Regenerate the reply for a turn (assistant message). */
   onRetry: (turnId: string) => void;
   /** Edit a user message's text and re-run from that turn. */
@@ -163,6 +172,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   activity,
   onSend,
   onInterrupt,
+  escapeAction,
+  onRetractActiveTurn,
+  pendingRestore,
+  onRestoreConsumed,
   onRetry,
   onEdit,
   onFork,
@@ -181,6 +194,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<TurnAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  // Two-stage Escape: after the first Escape stops the turn, `armed` lets a second
+  // Escape retract the just-stopped message. Cleared the moment the user acts
+  // (types, sends, blurs); a chat switch remounts ChatView, resetting it too.
+  const [armed, setArmed] = useState(false);
   // Which user message is being edited inline, and its working text.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
@@ -233,9 +250,25 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     resizeComposer();
   }, [draft, resizeComposer]);
 
+  // Apply a retract's restored text/attachments to the composer. Skips clobbering a
+  // follow-up the user began typing during streaming (the turn is still removed —
+  // we just drop the restored text in that case). Nonce-guarded so it applies once.
+  const lastRestoreNonce = useRef<number | null>(null);
+  useEffect(() => {
+    if (!pendingRestore || lastRestoreNonce.current === pendingRestore.nonce) return;
+    lastRestoreNonce.current = pendingRestore.nonce;
+    if (!draft.trim() && attachments.length === 0) {
+      setDraft(pendingRestore.text);
+      setAttachments(pendingRestore.attachments);
+      textareaRef.current?.focus();
+    }
+    onRestoreConsumed();
+  }, [pendingRestore, draft, attachments, onRestoreConsumed]);
+
   function submit() {
     const text = draft.trim();
     if ((!text && attachments.length === 0) || running) return;
+    setArmed(false);
     onSend(text, attachments);
     setDraft('');
     setAttachments([]);
@@ -655,13 +688,42 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             <textarea
               ref={textareaRef}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                if (armed) setArmed(false); // any edit disarms the second-Escape retract
+              }}
+              onBlur={() => {
+                if (armed) setArmed(false);
+              }}
               onPaste={onPaste}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   submit();
+                  return;
                 }
+                if (e.key !== 'Escape') return;
+                if (escapeAction === 'single') {
+                  // One Escape stops the running turn and retracts the message.
+                  if (running) {
+                    e.preventDefault();
+                    setArmed(false);
+                    void onRetractActiveTurn();
+                  }
+                } else if (escapeAction === 'twoStage') {
+                  if (running && !armed) {
+                    // First Escape: stop only; the message stays, like ⌘.
+                    e.preventDefault();
+                    onInterrupt();
+                    setArmed(true);
+                  } else if (armed) {
+                    // Second Escape: retract the just-stopped message.
+                    e.preventDefault();
+                    setArmed(false);
+                    void onRetractActiveTurn();
+                  }
+                }
+                // escapeAction === 'off' → leave Escape alone.
               }}
               placeholder="Ask Stem…"
               rows={1}

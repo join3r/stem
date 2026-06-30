@@ -721,12 +721,25 @@ export interface RetrievalTestResult {
   detail: string;
 }
 
+/**
+ * What the Escape key does in the main composer while a turn is running:
+ * - `off`      — nothing (default; legacy behavior).
+ * - `single`   — one Escape stops the turn AND retracts the just-sent message
+ *                (text + attachments) back into the composer, dropping it from
+ *                the chat and pi's session, as if it was never sent.
+ * - `twoStage` — first Escape stops the turn (message stays, like ⌘.); a second
+ *                Escape then retracts it. Armed only until the user acts.
+ */
+export type EscapeAction = 'off' | 'single' | 'twoStage';
+
 export interface AppSettings {
   quickChat: QuickChatSettings;
   nativeWebSearch: NativeWebSearchSettings;
   memory: MemoryModelSettings;
   skills: SkillsModelSettings;
   retrieval: RetrievalSettings;
+  /** Escape-to-retract behavior in the main composer. */
+  escapeAction: EscapeAction;
 }
 
 /**
@@ -916,6 +929,8 @@ export interface StemApi {
   updateQuickChat(patch: Partial<QuickChatSettings>): Promise<AppSettings>;
   /** Enable/disable native web search per context (e.g. { quickChat: false }). */
   updateNativeWebSearch(patch: Partial<NativeWebSearchSettings>): Promise<AppSettings>;
+  /** Set the main-composer Escape-to-retract behavior. */
+  updateEscapeAction(action: EscapeAction): Promise<AppSettings>;
   /** Set the model used for memory distillation/tidy-up ({ model: null } = default). */
   updateMemorySettings(patch: Partial<MemoryModelSettings>): Promise<AppSettings>;
   updateSkillsSettings(patch: Partial<SkillsModelSettings>): Promise<AppSettings>;

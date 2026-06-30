@@ -4,10 +4,12 @@ import type {
   ChatListResult,
   ChatSummary,
   BackendEventEnvelope,
+  EscapeAction,
   MessageMeta,
   ModelSummary,
   RuntimeStatus,
   ScheduledTask,
+  StartTurnResult,
   TaskNotifyPayload,
   TurnAttachment,
   ThreadStatus
@@ -100,6 +102,25 @@ export default function App() {
   // Threads deleted this session — late backend events for them are ignored so a
   // dying turn can't resurrect a removed chat's slice.
   const deletedThreadsRef = useRef(new Set<string>());
+  // The most recent send per thread key, kept so Escape-to-retract can recover the
+  // turn id (and the original text/attachments) even before startTurn resolves —
+  // the id/activeTurnId aren't known until then. Keyed by thread key (DRAFT for a
+  // new chat, re-keyed to the real id once it's assigned). `isNewChat` marks a send
+  // that created the chat, so retract knows to delete it rather than roll back.
+  const pendingSendsRef = useRef(
+    new Map<
+      string,
+      {
+        promise: Promise<StartTurnResult>;
+        turnId: string | null;
+        /** Real thread id, set on resolution (refs lag a commit behind the await). */
+        threadId: string | null;
+        isNewChat: boolean;
+        text: string;
+        attachments: TurnAttachment[];
+      }
+    >()
+  );
 
   // The currently visible slice. DRAFT when no real thread is open yet.
   const activeKey = activeThreadId ?? DRAFT;
@@ -174,6 +195,36 @@ export default function App() {
     () => (localStorage.getItem('stem.format') === 'md' ? 'md' : 'mdx')
   );
   const selectedModel = models.find((m) => m.id === modelId) ?? null;
+
+  // Escape-to-retract behavior (Settings → Input). Read from persisted settings;
+  // re-read on window focus so a change in the Settings tab applies without a restart.
+  const [escapeAction, setEscapeAction] = useState<EscapeAction>('off');
+  useEffect(() => {
+    const load = () => {
+      if (window.stem) window.stem.getSettings().then((s) => setEscapeAction(s.escapeAction));
+    };
+    load();
+    // Re-read on focus (covers external edits) and on the in-window event the
+    // Settings tab fires when the user changes the mode, so it applies immediately.
+    const onChanged = (e: Event) => setEscapeAction((e as CustomEvent<EscapeAction>).detail);
+    window.addEventListener('focus', load);
+    window.addEventListener('stem:escape-action', onChanged as EventListener);
+    return () => {
+      window.removeEventListener('focus', load);
+      window.removeEventListener('stem:escape-action', onChanged as EventListener);
+    };
+  }, []);
+
+  // A retract request hands its captured text/attachments here; ChatView applies it
+  // to the composer on the next render. Routed through App (not a direct setDraft)
+  // because retracting a brand-new chat deletes it and remounts ChatView — the
+  // restore must survive that remount, so whichever instance is mounted picks it up.
+  const [pendingRestore, setPendingRestore] = useState<{
+    text: string;
+    attachments: TurnAttachment[];
+    nonce: number;
+  } | null>(null);
+  const restoreNonceRef = useRef(0);
 
   const [bridgeError, setBridgeError] = useState<string | null>(null);
 
@@ -333,17 +384,31 @@ export default function App() {
         activity: null,
         status: 'running'
       }));
+      // Register this send so Escape-to-retract can find its turn id (and the
+      // original text/attachments) even before startTurn resolves. Held under the
+      // send key, re-keyed to the real id on a new-chat migration below.
+      const startPromise = window.stem.startTurn({
+        input: text,
+        threadId: activeThreadId ?? undefined,
+        model: modelId ?? undefined,
+        effort: effort ?? undefined,
+        serviceTier,
+        format,
+        attachments: attachments.length ? attachments : undefined
+      });
+      const pending = {
+        promise: startPromise,
+        turnId: null as string | null,
+        threadId: null as string | null,
+        isNewChat: sendKey === DRAFT,
+        text,
+        attachments
+      };
+      pendingSendsRef.current.set(sendKey, pending);
       try {
-        const result = await window.stem.startTurn({
-          input: text,
-          threadId: activeThreadId ?? undefined,
-          model: modelId ?? undefined,
-          effort: effort ?? undefined,
-          serviceTier,
-          format,
-          attachments: attachments.length ? attachments : undefined
-        });
+        const result = await startPromise;
         if (result.handled) {
+          pendingSendsRef.current.delete(sendKey); // no real turn to retract
           setThread(sendKey, (s) => ({
             messages: result.assistantMessage
               ? [...s.messages, { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage as string }]
@@ -354,6 +419,7 @@ export default function App() {
           }));
           return;
         }
+        pending.turnId = result.turnId ?? null;
         if (result.turnId) {
           turnMetaRef.current.set(result.turnId, { model: modelId ?? undefined, effort: effort ?? undefined, serviceTier });
         }
@@ -362,6 +428,11 @@ export default function App() {
           // still the current one — i.e. the user hasn't opened another chat and
           // hasn't pressed New chat again since we sent.
           const realId = result.threadId;
+          // Follow the slice onto the real id so a retract keyed by the active
+          // thread id (now realId) still finds this send.
+          pending.threadId = realId;
+          pendingSendsRef.current.delete(DRAFT);
+          pendingSendsRef.current.set(realId, pending);
           const stillMine = draftSeqRef.current === sendSeq && activeThreadIdRef.current === null;
           setThreadStates((prev) => {
             const next = { ...prev };
@@ -409,6 +480,7 @@ export default function App() {
           else refreshChats();
         } else {
           // Existing thread: record the turn id and stamp it onto the user bubble.
+          pending.threadId = sendKey;
           setThread(sendKey, (s) => ({
             activeTurnId: result.turnId ?? null,
             messages: s.messages.map((m) =>
@@ -417,6 +489,7 @@ export default function App() {
           }));
         }
       } catch (e) {
+        pendingSendsRef.current.delete(sendKey);
         setThread(sendKey, (s) => appendSystemMessage(s, e));
       }
     },
@@ -684,6 +757,84 @@ export default function App() {
     [onDeleteChat, setThread]
   );
 
+  // Escape-to-retract: stop the running turn and pull the just-sent message back
+  // into the composer, dropping it from the chat AND pi's session — as if it was
+  // never sent. Captures the original text/attachments and hands them to ChatView
+  // via `pendingRestore` (which survives the remount when a new chat is deleted).
+  // The turn id may not be stamped yet if Escape lands right after Enter, so we
+  // fall back to awaiting the in-flight send to learn it (and the real thread id).
+  const onRetractActiveTurn = useCallback(async () => {
+    const key = activeThreadIdRef.current ?? DRAFT;
+    const pending = pendingSendsRef.current.get(key);
+    let turnId = threadStatesRef.current[key]?.activeTurnId ?? pending?.turnId ?? null;
+    if (!turnId && pending) {
+      // Escape beat startTurn's resolution — wait for it to learn the turn id.
+      await pending.promise.catch(() => undefined);
+      turnId = pending.turnId;
+    }
+    // Restore payload comes from the original send (lossless), falling back to the
+    // last user bubble's text when there's no pending entry (attachments are lost).
+    const restore = pending
+      ? { text: pending.text, attachments: pending.attachments }
+      : (() => {
+          const slice = threadStatesRef.current[key];
+          const last = slice ? [...slice.messages].reverse().find((m) => m.role === 'user') : undefined;
+          return last ? { text: last.content, attachments: [] as TurnAttachment[] } : null;
+        })();
+    const queueRestore = () => {
+      if (restore) setPendingRestore({ ...restore, nonce: ++restoreNonceRef.current });
+    };
+
+    // Stop the turn (idempotent if a prior Escape already did in two-stage mode).
+    if (turnId) await window.stem.interruptTurn(turnId);
+
+    // A new chat's only turn has no earlier history to roll back to — delete the
+    // whole chat (which also aborts it backend-side) and return to a fresh draft.
+    if (pending?.isNewChat) {
+      const realId = pending.threadId ?? activeThreadIdRef.current;
+      pendingSendsRef.current.delete(key);
+      if (realId) {
+        pendingSendsRef.current.delete(realId);
+        onDeleteChat(realId);
+      } else {
+        setThread(DRAFT, () => ({ ...EMPTY_STATE }));
+      }
+      queueRestore();
+      return;
+    }
+
+    const threadId = pending?.threadId ?? activeThreadIdRef.current;
+    if (!threadId || !turnId) {
+      // No backend turn to roll back; just stop locally and restore the text.
+      setThread(key, () => ({ running: false, streamingId: null, activity: null, activeTurnId: null, status: 'idle' }));
+      pendingSendsRef.current.delete(key);
+      queueRestore();
+      return;
+    }
+    try {
+      await window.stem.rollbackToTurn(threadId, turnId);
+    } catch (e) {
+      // Surface the failure rather than silently dropping the message.
+      setThread(threadId, (s) => appendSystemMessage(s, e));
+      return;
+    }
+    // Drop the user message + its partial reply from the visible slice.
+    setThreadStates((prev) => {
+      const slice = prev[threadId];
+      if (!slice) return prev;
+      const idx = slice.messages.findIndex((m) => m.turnId === turnId && m.role === 'user');
+      if (idx === -1) {
+        return { ...prev, [threadId]: { ...slice, running: false, streamingId: null, activity: null, activeTurnId: null, status: 'idle' } };
+      }
+      return {
+        ...prev,
+        [threadId]: { ...slice, messages: slice.messages.slice(0, idx), running: false, streamingId: null, activity: null, activeTurnId: null, status: 'idle' }
+      };
+    });
+    pendingSendsRef.current.delete(threadId);
+    queueRestore();
+  }, [onDeleteChat, setThread]);
+
   // Unified draggable toolbar wraps every view (window has no native title bar).
   // `toolbar` lets each view supply its own controls; gate/loading show just the title.
   const titleOnly = (
@@ -749,6 +900,10 @@ export default function App() {
           activity={cur.activity}
           onSend={onSend}
           onInterrupt={onInterrupt}
+          escapeAction={escapeAction}
+          onRetractActiveTurn={onRetractActiveTurn}
+          pendingRestore={pendingRestore}
+          onRestoreConsumed={() => setPendingRestore(null)}
           onRetry={onRetry}
           onEdit={onEditMessage}
           onFork={onForkMessage}

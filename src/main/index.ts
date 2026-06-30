@@ -52,6 +52,7 @@ import { createHttpRerankClient } from './recall/rerank';
 import type { LlmClient } from './recall/llm';
 import {
   readSettings,
+  updateEscapeAction,
   updateMemorySettings,
   updateNativeWebSearch,
   updateQuickChat,
@@ -72,6 +73,7 @@ import { activityLabel } from '../shared/activity';
 import type {
   ChatListResult,
   ConnectedFolderPatch,
+  EscapeAction,
   ItemEventParams,
   McpServerInput,
   MemoryModelSettings,
@@ -845,6 +847,11 @@ function registerIpc(): void {
     // Just persist — the value is applied per turn (the runtime writes the gate the
     // bridge reads, based on the originating context), so no restart/file write here.
     return updateNativeWebSearch(patch);
+  });
+  ipcMain.handle('settings:updateEscapeAction', async (_e, action: EscapeAction) => {
+    // Just persist — the renderer reads escapeAction fresh from settings (mount +
+    // window focus) and acts on it locally in the composer.
+    return updateEscapeAction(action);
   });
   ipcMain.handle('settings:updateMemory', async (_e, patch: Partial<MemoryModelSettings>) => {
     // Just persist — the LlmClient closures read the model fresh from settings on
