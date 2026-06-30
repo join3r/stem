@@ -9,7 +9,11 @@ test('opens the Memory tab and shows the empty state on a fresh workspace', asyn
   // distinct from the Memory on/off switch which is role="switch").
   await mainWindow.getByRole('button', { name: 'Memory' }).click();
 
-  await expect(mainWindow.getByText('Stored memory')).toBeVisible();
+  // "Stored memory" is a collapsible section that starts collapsed; expand it
+  // (the toggle button) to reveal the empty state.
+  const toggle = mainWindow.getByRole('button', { name: /Stored memory/ });
+  await expect(toggle).toBeVisible();
+  await toggle.click();
   await expect(mainWindow.getByText('No memories stored yet', { exact: false })).toBeVisible();
 });
 
