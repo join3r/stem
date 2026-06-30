@@ -866,9 +866,9 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .row-action { flex: none; border: none; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; display: inline-flex; align-items: center; opacity: 0; transition: opacity var(--motion-fast) ease; }
 .chats-panel .group-row:hover .row-action { opacity: 1; }
 .row-action:hover { color: var(--ink); }
-.chats-panel .group-row { cursor: pointer; user-select: none; }
+.chats-panel .group-row { cursor: pointer; user-select: none; padding: 4px 12px; gap: var(--sp-3); }
 .chats-panel .row-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chats-panel .row-icon { width: 22px; height: 22px; box-shadow: none; }
+.chats-panel .row-icon { width: 22px; height: 18px; box-shadow: none; }
 .chats-panel .row-icon.folder { background: transparent; color: var(--accent); }
 .chats-panel .row-icon.chat { background: transparent; color: var(--muted); }
 .chat-caret { color: var(--muted); flex: none; transition: transform var(--motion-fast) ease; }
