@@ -1093,6 +1093,40 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   padding: 0;
 }
 .link-btn:disabled { color: var(--muted); cursor: default; }
+/* Compact icon-only variant for the Stored-memory action row (preview/tidy/refresh). */
+.link-btn.icon-only {
+  padding: 4px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  transition: color var(--motion-fast) ease, background var(--motion-fast) ease;
+}
+.link-btn.icon-only:hover:not(:disabled) { color: var(--accent); background: var(--sel); }
+.link-btn.icon-only.on { color: var(--accent); background: var(--sel); }
+.link-btn.icon-only .spin { animation: link-btn-spin 0.9s linear infinite; }
+@keyframes link-btn-spin { to { transform: rotate(360deg); } }
+/* Instant hover label (the row is too narrow for inline text). Anchored to the
+   button, opens below-right so it never clips at the panel's top edge. */
+.link-btn.icon-only { position: relative; }
+.link-btn.icon-only[data-label]::after {
+  content: attr(data-label);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  white-space: nowrap;
+  padding: 3px 7px;
+  font-size: var(--fs-11);
+  color: var(--ink);
+  background: var(--surface);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  opacity: 0;
+  transform: translateY(-2px);
+  pointer-events: none;
+  transition: opacity var(--motion-fast) ease, transform var(--motion-fast) ease;
+  z-index: var(--z-popover);
+}
+.link-btn.icon-only[data-label]:hover::after { opacity: 1; transform: translateY(0); }
 .link-btn.danger { color: var(--danger); }
 .link-btn.danger:disabled { color: var(--muted); }
 .memory-doc { margin-top: 12px; }
@@ -1145,6 +1179,21 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   border: 0.5px solid var(--line);
   border-radius: var(--radius-pill);
 }
+.memory-note .chip + .chip { margin-left: 6px; }
+
+/* Active facts: injected last turn (accent) or in the draft preview (warm). The
+   left edge marks the row so the grouping reads at a glance when scrolling. */
+.memory-note.active { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.memory-note .chip.active-injected {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.memory-note .chip.active-draft {
+  color: var(--warning, #d28e00);
+  border-color: color-mix(in srgb, var(--warning, #d28e00) 50%, var(--line));
+}
+.active-facts-summary { margin: 8px 0 0; font-size: var(--fs-11); }
+.link-btn.on { color: var(--accent); font-weight: 600; }
 
 /* Technical native memory: collapsed behind a disclosure by default. */
 .memory-tech { margin-top: 16px; }

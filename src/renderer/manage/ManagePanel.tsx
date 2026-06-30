@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Brain, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, Check, FolderOpen, FolderTree, Trash2, Wand2, CalendarClock, Play, Pause, ExternalLink } from 'lucide-react';
+import { Brain, Plug, Globe, HardDrive, Plus, Minus, ChevronRight, MessageSquare, Settings, X, Check, FolderOpen, FolderTree, Trash2, Wand2, CalendarClock, Play, Pause, ExternalLink, Eye, RefreshCw } from 'lucide-react';
 import type {
   BackendEventEnvelope,
   McpLoginUrlParams,
@@ -20,7 +20,9 @@ import type {
   RetrievalSettings,
   RetrievalStage,
   RetrievalTestResult,
-  SkillSummary
+  SkillSummary,
+  ActiveFacts,
+  FactTier
 } from '../../shared/types';
 import { MdxView } from '../chat/MdxView';
 import { ChatList, type ChatListProps } from '../chats/ChatList';
@@ -71,9 +73,40 @@ interface ModelTabProps {
   onSelectModel: (id: string) => void;
 }
 
-export type ManagePanelProps = ChatListProps & ModelTabProps;
+// Active-facts debug surface, fed from App. Lets the Memory→Facts tab show which
+// durable facts this chat injected last turn (and preview the current draft).
+interface ActiveFactsViewProps {
+  /** The open chat, or null for a fresh draft (no last-turn set yet). */
+  activeThreadId: string | null;
+  /** Active chat's running flag — flips drive a refetch of the last injected set. */
+  activeRunning: boolean;
+  /** Whether draft preview is toggled on (owned by App so it resets on send). */
+  previewActive: boolean;
+  /** Live draft text, mirrored from the composer while preview is on. */
+  previewDraft: string;
+  onTogglePreview: () => void;
+}
 
-export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: ManagePanelProps) {
+export type ManagePanelProps = ChatListProps & ModelTabProps & ActiveFactsViewProps;
+
+export function ManagePanel({
+  models,
+  modelId,
+  onSelectModel,
+  activeThreadId,
+  activeRunning,
+  previewActive,
+  previewDraft,
+  onTogglePreview,
+  ...chatProps
+}: ManagePanelProps) {
+  const activeFacts: ActiveFactsViewProps = {
+    activeThreadId,
+    activeRunning,
+    previewActive,
+    previewDraft,
+    onTogglePreview
+  };
   const [tab, setTab] = useState<Tab>('chats');
   return (
     <div className="manage">
@@ -93,8 +126,8 @@ export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: Ma
         </div>
       </div>
       <div className={`manage-body${tab === 'chats' ? ' chats' : ''}`}>
-        {tab === 'chats' && <ChatList {...chatProps} />}
-        {tab === 'memory' && <MemoryTab models={models} />}
+        {tab === 'chats' && <ChatList {...chatProps} activeThreadId={activeThreadId} />}
+        {tab === 'memory' && <MemoryTab models={models} activeFacts={activeFacts} />}
         {tab === 'mcp' && <McpSkillsTab models={models} />}
         {tab === 'folders' && <FoldersTab />}
         {tab === 'tasks' && <TasksTab onOpenChat={chatProps.onOpen} />}
@@ -109,7 +142,7 @@ export function ManagePanel({ models, modelId, onSelectModel, ...chatProps }: Ma
 // Memory lives under the Brain icon as two sub-tabs: durable facts (Level 1) and
 // the episodic recall store (Level 2, shown as metadata only — it's searched, not
 // browsed). Mirrors the MCP + Skills sub-tab pattern below.
-function MemoryTab({ models }: { models: ModelSummary[] }) {
+function MemoryTab({ models, activeFacts }: { models: ModelSummary[]; activeFacts: ActiveFactsViewProps }) {
   const [sub, setSub] = useState<'facts' | 'recall'>('facts');
   return (
     <div>
@@ -121,7 +154,7 @@ function MemoryTab({ models }: { models: ModelSummary[] }) {
           Recall
         </button>
       </div>
-      {sub === 'facts' ? <FactsTab models={models} /> : <EpisodicTab />}
+      {sub === 'facts' ? <FactsTab models={models} activeFacts={activeFacts} /> : <EpisodicTab />}
     </div>
   );
 }
@@ -353,11 +386,61 @@ function RetrievalFields({
   );
 }
 
-function FactsTab({ models }: { models: ModelSummary[] }) {
+/** Human label for a fact-selection tier, shown in the active-facts summary. */
+function tierLabel(t: FactTier): string {
+  switch (t) {
+    case 'all':
+      return 'all (under threshold)';
+    case 'embedding':
+      return 'embedding + rerank';
+    case 'lexical':
+      return 'lexical (BM25)';
+    case 'recency':
+      return 'recency';
+  }
+}
+
+function FactsTab({ models, activeFacts }: { models: ModelSummary[]; activeFacts: ActiveFactsViewProps }) {
+  const { activeThreadId, activeRunning, previewActive, previewDraft, onTogglePreview } = activeFacts;
   const [settings, setSettings] = useState<MemorySettings | null>(null);
   const [contents, setContents] = useState<MemoryContents | null>(null);
   const [showTech, setShowTech] = useState(false);
   const [showMemories, setShowMemories] = useState(false);
+  // Durable facts injected on this chat's last turn, and (when toggled) the set the
+  // current draft would inject. Both annotate + sort the stored-facts list below.
+  const [lastTurn, setLastTurn] = useState<ActiveFacts | null>(null);
+  const [preview, setPreview] = useState<ActiveFacts | null>(null);
+
+  // Refetch the last injected set when the chat changes or finishes a turn (the row
+  // is written at turn start, so a running-flag flip means a fresh set is available).
+  useEffect(() => {
+    let cancelled = false;
+    window.stem.getActiveFacts(activeThreadId).then((r) => {
+      if (!cancelled) setLastTurn(r);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeThreadId, activeRunning]);
+
+  // Reveal the stored list when preview turns on, so the re-sorted badges are visible.
+  useEffect(() => {
+    if (previewActive) setShowMemories(true);
+  }, [previewActive]);
+
+  // Debounced draft preview — only runs the (embedding/rerank) selection while the
+  // toggle is on; clears immediately when off so stale draft badges don't linger.
+  useEffect(() => {
+    if (!previewActive) {
+      setPreview(null);
+      return;
+    }
+    const text = previewDraft;
+    const t = setTimeout(() => {
+      window.stem.previewFacts(text).then(setPreview);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [previewActive, previewDraft]);
   const [consolidating, setConsolidating] = useState(false);
   const [consolidateMsg, setConsolidateMsg] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -448,6 +531,22 @@ function FactsTab({ models }: { models: ModelSummary[] }) {
 
   const notes = contents?.files.filter((f) => f.kind === 'note' && f.content.trim()) ?? [];
   const techFiles = contents?.files.filter((f) => f.kind === 'native' && f.exists && f.content.trim()) ?? [];
+
+  // Which facts are "active": injected last turn, and (when preview is on) the set the
+  // current draft would inject. Sort active facts to the top — draft above last-turn —
+  // preserving recency order within each group, and badge each row accordingly.
+  const lastIds = new Set((lastTurn?.facts ?? []).map((f) => f.id));
+  const draftIds = previewActive ? new Set((preview?.facts ?? []).map((f) => f.id)) : null;
+  const groupOf = (id?: number): number => {
+    if (id == null) return 2;
+    if (draftIds?.has(id)) return 0;
+    if (lastIds.has(id)) return 1;
+    return 2;
+  };
+  const orderedNotes = notes
+    .map((f, i) => ({ f, i, g: groupOf(f.id) }))
+    .sort((a, b) => a.g - b.g || a.i - b.i)
+    .map((x) => x.f);
 
   return (
     <div>
@@ -555,40 +654,74 @@ function FactsTab({ models }: { models: ModelSummary[] }) {
           </button>
           <span className="memory-view-actions">
             <button
-              className="link-btn"
+              className={`link-btn icon-only${previewActive ? ' on' : ''}`}
+              onClick={onTogglePreview}
+              data-label="Preview draft"
+              aria-label="Preview which facts your current draft would inject"
+              aria-pressed={previewActive}
+            >
+              <Eye size={15} />
+            </button>
+            <button
+              className="link-btn icon-only"
               onClick={consolidate}
               disabled={consolidating || !settings.enabled || notes.length < 2}
-              title="Merge duplicates and drop stale facts now"
+              data-label={consolidating ? 'Tidying…' : 'Tidy up'}
+              aria-label="Tidy up: merge duplicates and drop stale facts"
             >
-              <Wand2 size={13} /> {consolidating ? 'Tidying…' : 'Tidy up'}
+              <Wand2 size={15} className={consolidating ? 'spin' : undefined} />
             </button>
-            <button className="link-btn" onClick={loadContents}>Refresh</button>
+            <button
+              className="link-btn icon-only"
+              onClick={loadContents}
+              data-label="Refresh"
+              aria-label="Refresh facts"
+            >
+              <RefreshCw size={15} />
+            </button>
           </span>
         </div>
+        {activeThreadId && lastTurn && (
+          <p className="muted active-facts-summary">
+            Last turn: {lastTurn.facts.length} {lastTurn.facts.length === 1 ? 'fact' : 'facts'} via{' '}
+            {tierLabel(lastTurn.tier)}.
+          </p>
+        )}
+        {previewActive && (
+          <p className="muted active-facts-summary">
+            {preview
+              ? `Draft preview: ${preview.facts.length} ${preview.facts.length === 1 ? 'fact' : 'facts'} via ${tierLabel(preview.tier)}.`
+              : 'Draft preview: computing…'}
+          </p>
+        )}
         {consolidateMsg && <p className="muted">{consolidateMsg}</p>}
         {!contents && <p className="muted">Loading…</p>}
         {showMemories && contents && notes.length === 0 && (
           <p className="muted">No memories stored yet — Stem builds these as you chat.</p>
         )}
         {showMemories &&
-          notes.map((f) => (
-            <div key={f.name} className="memory-note">
-              <div className="memory-note-body">
-                {f.statement ? <p className="statement">{f.statement}</p> : <MdxView text={f.content} />}
-                {f.source && <span className="chip">{f.source}</span>}
+          orderedNotes.map((f) => {
+            const active = f.id != null && draftIds?.has(f.id) ? 'draft' : f.id != null && lastIds.has(f.id) ? 'injected' : null;
+            return (
+              <div key={f.name} className={`memory-note${active ? ' active' : ''}`}>
+                <div className="memory-note-body">
+                  {f.statement ? <p className="statement">{f.statement}</p> : <MdxView text={f.content} />}
+                  {active && <span className={`chip active-${active}`}>{active}</span>}
+                  {f.source && <span className="chip">{f.source}</span>}
+                </div>
+                {f.id != null && (
+                  <button
+                    className="memory-note-forget"
+                    title="Forget this"
+                    aria-label="Forget this memory"
+                    onClick={() => forget(f.id!)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
-              {f.id != null && (
-                <button
-                  className="memory-note-forget"
-                  title="Forget this"
-                  aria-label="Forget this memory"
-                  onClick={() => forget(f.id!)}
-                >
-                  <Trash2 size={14} />
-                </button>
-              )}
-            </div>
-          ))}
+            );
+          })}
 
         {techFiles.length > 0 && (
           <div className="memory-tech">

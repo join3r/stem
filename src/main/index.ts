@@ -42,7 +42,9 @@ import {
   setTidyUpThreshold
 } from './workspace/memory';
 import { captureFromEvent } from './recall/capture';
-import { getEmbeddingCacheStats, getEpisodicStats } from './recall/store';
+import { getEmbeddingCacheStats, getEpisodicStats, getActiveFactIds, getFactsByIds } from './recall/store';
+import { previewFacts } from './recall/inject';
+import type { ActiveFacts } from '../shared/types';
 import { distillNewMessages, shouldConsolidate } from './recall/distill';
 import { consolidateFacts } from './recall/consolidate';
 import { curateSkills } from './skills/curate';
@@ -735,6 +737,17 @@ function registerIpc(): void {
   ipcMain.handle('memory:embeddingStats', async () =>
     getEmbeddingCacheStats((await readSettings()).retrieval.embeddings.model)
   );
+  ipcMain.handle('memory:activeFacts', (_e, threadId: string | null): ActiveFacts | null => {
+    if (!threadId) return null;
+    const rec = getActiveFactIds(threadId);
+    if (!rec) return null;
+    const facts = getFactsByIds(rec.factIds).map((f) => ({ id: f.id, text: f.text, source: f.source }));
+    return { facts, tier: rec.tier };
+  });
+  ipcMain.handle('memory:previewFacts', async (_e, text: string): Promise<ActiveFacts> => {
+    const { facts, tier } = await previewFacts(text ?? '');
+    return { facts: facts.map((f) => ({ id: f.id, text: f.text, source: f.source })), tier };
+  });
   ipcMain.handle('memory:setEpisodicLimit', (_e, bytes: number) => setEpisodicLimit(bytes));
   ipcMain.handle('memory:setTidyThreshold', (_e, n: number) => setTidyUpThreshold(n));
   ipcMain.handle('memory:consolidate', async () => {

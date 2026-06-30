@@ -65,6 +65,10 @@ export default function App() {
   // tell the user which folder a new draft will be saved in (the ref itself is
   // non-reactive, used only on the send path).
   const [draftFolderId, setDraftFolderId] = useState<string | null>(null);
+  // Memory debug: when on, the Facts tab previews which facts the current draft
+  // would inject. Reset on send (the draft is consumed) and mirrors the live draft.
+  const [previewActive, setPreviewActive] = useState(false);
+  const [previewDraft, setPreviewDraft] = useState('');
   const [chatList, setChatList] = useState<ChatListResult>({ chats: [], folders: [] });
   // Optimistic rows for chats created this session that the backend's thread/list hasn't
   // returned yet (a brand-new thread isn't listed until its first turn persists).
@@ -366,6 +370,8 @@ export default function App() {
   const onSend = useCallback(
     async (text: string, attachments: TurnAttachment[] = []) => {
       const msgAttachments = attachments.length ? await toMessageAttachments(attachments) : undefined;
+      // The draft is consumed — drop back to showing this chat's last injected set.
+      setPreviewActive(false);
       // Where this turn's state lives: the open thread, or DRAFT for a new chat.
       const sendKey = activeThreadId ?? DRAFT;
       // Snapshot the draft identity + folder target so a late resolution can tell
@@ -917,6 +923,8 @@ export default function App() {
           onChangeEffort={setEffort}
           onChangeSpeed={setServiceTier}
           onChangeFormat={setFormat}
+          reportDraft={previewActive}
+          onDraftChange={setPreviewDraft}
         />
       </main>
       {showInspector && (
@@ -938,6 +946,10 @@ export default function App() {
             onRenameChat={onRenameChat}
             onDeleteChat={onDeleteChat}
             onMoveChat={onMoveChat}
+            activeRunning={cur.running}
+            previewActive={previewActive}
+            previewDraft={previewDraft}
+            onTogglePreview={() => setPreviewActive((v) => !v)}
           />
         </aside>
       )}

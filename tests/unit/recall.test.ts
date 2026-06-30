@@ -402,3 +402,77 @@ describe('Stem Recall — fact relevance ranking', () => {
     store.setConsolidateChunkSize(store.DEFAULT_CONSOLIDATE_CHUNK);
   });
 });
+
+// Active-facts debug surface: previewFacts reports the chosen set + the tier that
+// produced it, and the per-thread store round-trips the injected ids (dropping any
+// since deleted). Shares the same DB; resetFacts() makes each case deterministic.
+describe('Stem Recall — active facts', () => {
+  function keywordEmbeddings(key: RegExp) {
+    return {
+      available: async () => true,
+      modelId: async () => 'fake-model',
+      embed: async (texts: string[]) => texts.map((t) => Float32Array.from(key.test(t) ? [1, 0] : [0, 1]))
+    };
+  }
+
+  it('previewFacts reports tier "all" below the threshold and returns every fact', async () => {
+    store.resetFacts();
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+    store.upsertFact('The user lives in Bratislava', 'distilled');
+    store.upsertFact('The user has a dog named Rex', 'distilled');
+    const r = await inject.previewFacts('where do I live');
+    expect(r.tier).toBe('all');
+    expect(r.facts.length).toBe(2);
+  });
+
+  it('previewFacts reports tier "embedding" when ranking past the threshold', async () => {
+    store.resetFacts();
+    retrieval.setRetrievalClients({ embeddings: keywordEmbeddings(/pangolin/i), rerank: null });
+    store.upsertFact('The user once met a pangolin in Borneo', 'distilled');
+    for (let i = 0; i < 45; i++) store.upsertFact(`The user has misc preference ${i}`, 'distilled');
+    const r = await inject.previewFacts('tell me about the pangolin');
+    expect(r.tier).toBe('embedding');
+    expect(r.facts.some((f) => /pangolin/i.test(f.text))).toBe(true);
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+  });
+
+  it('previewFacts reports tier "lexical" when embeddings are off but a term matches', async () => {
+    store.resetFacts();
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+    store.upsertFact('The user once met a pangolin in Borneo', 'distilled');
+    for (let i = 0; i < 45; i++) store.upsertFact(`The user has misc preference ${i}`, 'distilled');
+    const r = await inject.previewFacts('tell me about the pangolin');
+    expect(r.tier).toBe('lexical');
+    expect(r.facts.some((f) => /pangolin/i.test(f.text))).toBe(true);
+  });
+
+  it('previewFacts reports tier "recency" when nothing matches lexically', async () => {
+    store.resetFacts();
+    retrieval.setRetrievalClients({ embeddings: null, rerank: null });
+    for (let i = 0; i < 50; i++) store.upsertFact(`The user holds opinion number ${i}`, 'distilled');
+    const r = await inject.previewFacts('what do I think');
+    expect(r.tier).toBe('recency');
+    expect(r.facts.length).toBeGreaterThan(0);
+  });
+
+  it('setActiveFacts/getActiveFactIds round-trip; getFactsByIds drops deleted ids in order', () => {
+    store.resetFacts();
+    store.upsertFact('Fact one for the active set', 'distilled');
+    store.upsertFact('Fact two for the active set', 'distilled');
+    const [a, b] = store.getAllFacts();
+    const missing = 999999; // never assigned
+
+    store.setActiveFacts('THREAD-X', [b.id, missing, a.id], 'embedding');
+    const rec = store.getActiveFactIds('THREAD-X');
+    expect(rec).toEqual({ factIds: [b.id, missing, a.id], tier: 'embedding' });
+
+    const resolved = store.getFactsByIds(rec!.factIds);
+    expect(resolved.map((f) => f.id)).toEqual([b.id, a.id]); // order preserved, missing dropped
+
+    // Upsert replaces the row for the same thread.
+    store.setActiveFacts('THREAD-X', [a.id], 'all');
+    expect(store.getActiveFactIds('THREAD-X')).toEqual({ factIds: [a.id], tier: 'all' });
+
+    expect(store.getActiveFactIds('NO-SUCH-THREAD')).toBeNull();
+  });
+});

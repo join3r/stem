@@ -98,6 +98,10 @@ interface ChatViewProps {
   onChangeEffort: (effort: string) => void;
   onChangeSpeed: (serviceTier: string | null) => void;
   onChangeFormat: (format: 'md' | 'mdx') => void;
+  /** When true, mirror the live draft upward so the Memory tab can preview which
+   *  facts it would inject. Off by default; the normal compose path is unaffected. */
+  reportDraft?: boolean;
+  onDraftChange?: (text: string) => void;
 }
 
 // Build the inline meta label: "Claude Opus · High". Resolves the model id to its
@@ -189,7 +193,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   showContextMeter = true,
   onChangeEffort,
   onChangeSpeed,
-  onChangeFormat
+  onChangeFormat,
+  reportDraft = false,
+  onDraftChange
 }: ChatViewProps, ref) {
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<TurnAttachment[]>([]);
@@ -249,6 +255,12 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   useEffect(() => {
     resizeComposer();
   }, [draft, resizeComposer]);
+
+  // Mirror the live draft to the Memory tab's fact preview while it's toggled on
+  // (and once when it flips on). No-op on the normal compose path.
+  useEffect(() => {
+    if (reportDraft && onDraftChange) onDraftChange(draft);
+  }, [draft, reportDraft, onDraftChange]);
 
   // Apply a retract's restored text/attachments to the composer. Skips clobbering a
   // follow-up the user began typing during streaming (the turn is still removed —

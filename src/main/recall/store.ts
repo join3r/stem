@@ -171,6 +171,17 @@ function open(): DatabaseSync {
       created_at    INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_turn_timings_thread ON turn_timings(thread_id);
+
+    -- The durable facts injected on a thread's most recent turn — surfaced in the
+    -- Memory UI so you can see what the model actually "knew about you". Keyed by
+    -- thread so reopening an old chat still shows its last injected set. fact_ids is
+    -- a JSON array (injected order); tier records which selection path chose them.
+    CREATE TABLE IF NOT EXISTS active_facts (
+      thread_id  TEXT PRIMARY KEY,
+      fact_ids   TEXT NOT NULL,
+      tier       TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
 
   // Optional trigram index over facts: a substring/morphology recall booster for
@@ -327,6 +338,64 @@ export function getTurnTimingsByThread(threadId: string): Map<string, TurnTiming
     });
   }
   return out;
+}
+
+/** Which selection path chose a turn's facts (see chooseFacts in inject.ts). */
+export type FactTier = 'all' | 'embedding' | 'lexical' | 'recency';
+
+/** Record the durable facts injected on `threadId`'s latest turn. Best-effort. */
+export function setActiveFacts(threadId: string, factIds: number[], tier: FactTier): void {
+  const handle = open();
+  handle
+    .prepare(
+      `INSERT INTO active_facts (thread_id, fact_ids, tier, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(thread_id) DO UPDATE SET
+         fact_ids = excluded.fact_ids,
+         tier = excluded.tier,
+         updated_at = excluded.updated_at`
+    )
+    .run(threadId, JSON.stringify(factIds), tier, nowSeconds());
+}
+
+/** Read a thread's last injected fact ids + tier, or null if none recorded. */
+export function getActiveFactIds(threadId: string): { factIds: number[]; tier: FactTier } | null {
+  const handle = open();
+  const row = handle
+    .prepare(`SELECT fact_ids AS factIds, tier FROM active_facts WHERE thread_id = ?`)
+    .get(threadId) as { factIds: string; tier: string } | undefined;
+  if (!row) return null;
+  let factIds: number[] = [];
+  try {
+    const parsed = JSON.parse(row.factIds);
+    if (Array.isArray(parsed)) factIds = parsed.filter((n): n is number => typeof n === 'number');
+  } catch {
+    // Corrupt JSON — treat as no recorded set rather than throwing.
+  }
+  return { factIds, tier: row.tier as FactTier };
+}
+
+/**
+ * Resolve fact ids to their current rows, preserving the given order and silently
+ * dropping ids whose fact has since been deleted or merged away by consolidation.
+ */
+export function getFactsByIds(ids: number[]): Fact[] {
+  if (ids.length === 0) return [];
+  const handle = open();
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = handle
+    .prepare(`SELECT id, text, source, updated_at AS updatedAt FROM facts WHERE id IN (${placeholders})`)
+    .all(...ids) as Array<Record<string, unknown>>;
+  const byId = new Map<number, Fact>();
+  for (const r of rows) {
+    byId.set(r.id as number, {
+      id: r.id as number,
+      text: r.text as string,
+      source: r.source as string,
+      updatedAt: r.updatedAt as number
+    });
+  }
+  return ids.map((id) => byId.get(id)).filter((f): f is Fact => !!f);
 }
 
 /**

@@ -51,7 +51,13 @@ import {
   type TurnContext,
   type TurnTimingBreakdown
 } from './normalize';
-import { getTurnTimingsByThread, upsertTurnTiming } from '../recall/store';
+import {
+  getTurnTimingsByThread,
+  upsertTurnTiming,
+  setActiveFacts,
+  type Fact,
+  type FactTier
+} from '../recall/store';
 import { ForegroundSessionGate } from './session-gate';
 
 // Default provider/model. openai-codex is the user's working ChatGPT subscription
@@ -1169,11 +1175,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   ): Promise<{ message: string; images: PiImageContent[] }> {
     const blocks: string[] = [];
     if (isRecallEnabled()) {
+      const chosen: { facts: Fact[]; tier: FactTier } = { facts: [], tier: 'all' };
       const recall = await buildRecallContext(input.input, {
         currentThreadId: threadId,
-        timings: recallTimings
+        timings: recallTimings,
+        chosen
       });
       if (recall) blocks.push(recall);
+      // Record what was injected so the Memory UI can show this chat's active facts.
+      try {
+        setActiveFacts(threadId, chosen.facts.map((f) => f.id), chosen.tier);
+      } catch {
+        // Debug surface only — never let it break a turn.
+      }
     }
     const files = await buildFilesContext();
     if (files) blocks.push(files);

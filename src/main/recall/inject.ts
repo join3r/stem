@@ -7,7 +7,8 @@ import {
   getFactThreshold,
   getFactCosineM,
   getFactRerankK,
-  type Fact
+  type Fact,
+  type FactTier
 } from './store';
 import { searchMemory, rankFactsLexically } from './search';
 import { getEmbeddingsClient, getRerankClient } from './retrieval';
@@ -108,13 +109,20 @@ async function selectRelevantFacts(userText: string, facts: Fact[], timings?: Re
   return candidates.slice(0, k);
 }
 
-/** Choose which durable facts to inject this turn (see module header). */
-async function chooseFacts(userText: string, timings?: RecallTimings): Promise<Fact[]> {
+/**
+ * Choose which durable facts to inject this turn (see module header). Returns the
+ * chosen facts plus the `tier` that produced them, so callers/debug UI can explain
+ * why a given set was injected.
+ */
+async function chooseFacts(
+  userText: string,
+  timings?: RecallTimings
+): Promise<{ facts: Fact[]; tier: FactTier }> {
   const all = getAllFacts();
   const threshold = getFactThreshold();
-  if (all.length <= threshold) return all; // cheap path: inject everything
+  if (all.length <= threshold) return { facts: all, tier: 'all' }; // cheap path: inject everything
   try {
-    return await selectRelevantFacts(userText, all, timings);
+    return { facts: await selectRelevantFacts(userText, all, timings), tier: 'embedding' };
   } catch {
     // Embeddings disabled/unreachable/error → lexical (BM25) fallback tier: still
     // query-aware, but local and model-free. Lexically-relevant facts go first (so a
@@ -123,11 +131,19 @@ async function chooseFacts(userText: string, timings?: RecallTimings): Promise<F
     // spots. Same total count as the old recency-only path; pure recency only when
     // there's no lexical signal at all. Never breaks a turn.
     const lexical = rankFactsLexically(userText, threshold);
-    if (lexical.length === 0) return getFacts(threshold);
+    if (lexical.length === 0) return { facts: getFacts(threshold), tier: 'recency' };
     const seen = new Set(lexical.map((f) => f.id));
     const recent = getFacts(threshold).filter((f) => !seen.has(f.id));
-    return [...lexical, ...recent].slice(0, threshold);
+    return { facts: [...lexical, ...recent].slice(0, threshold), tier: 'lexical' };
   }
+}
+
+/**
+ * Run only the fact-selection stage for `userText` — no episodic search, no
+ * injection. Powers the Memory UI's "what would be injected for this draft" preview.
+ */
+export async function previewFacts(userText: string): Promise<{ facts: Fact[]; tier: FactTier }> {
+  return chooseFacts(userText);
 }
 
 export interface BuildContextOptions {
@@ -135,6 +151,8 @@ export interface BuildContextOptions {
   currentThreadId?: string | null;
   /** Optional sink: filled with the per-stage latency breakdown of this call. */
   timings?: RecallTimings;
+  /** Optional sink: filled with the durable facts chosen this turn + their tier. */
+  chosen?: { facts: Fact[]; tier: FactTier };
 }
 
 /**
@@ -150,8 +168,12 @@ export async function buildRecallContext(
   const totalStart = Date.now();
 
   const factsStart = Date.now();
-  const facts = await chooseFacts(userText, timings);
+  const { facts, tier } = await chooseFacts(userText, timings);
   if (timings) timings.facts = Date.now() - factsStart;
+  if (options.chosen) {
+    options.chosen.facts = facts;
+    options.chosen.tier = tier;
+  }
 
   const searchStart = Date.now();
   const hits = searchMemory(userText, {

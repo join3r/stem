@@ -557,6 +557,15 @@ export interface MemoryContents {
   isEmpty: boolean;
 }
 
+/** Which selection path chose a turn's durable facts (see chooseFacts in recall/inject). */
+export type FactTier = 'all' | 'embedding' | 'lexical' | 'recency';
+
+/** The durable facts injected on a turn (last turn or a draft preview), plus their tier. */
+export interface ActiveFacts {
+  facts: Array<{ id: number; text: string; source: string }>;
+  tier: FactTier;
+}
+
 /** Outcome of a manual consolidation pass, plus the refreshed memory list. */
 export interface MemoryConsolidateResult {
   merged: number;
@@ -893,6 +902,10 @@ export interface StemApi {
   getMemorySettings(): Promise<MemorySettings>;
   setMemoryEnabled(enabled: boolean): Promise<MemorySettings>;
   readMemory(): Promise<MemoryContents>;
+  /** Durable facts injected on `threadId`'s last turn, or null if none recorded. */
+  getActiveFacts(threadId: string | null): Promise<ActiveFacts | null>;
+  /** Facts that WOULD be injected for `text` right now (draft preview; no side effects). */
+  previewFacts(text: string): Promise<ActiveFacts>;
   /** Delete one durable fact; returns the refreshed memory list. */
   forgetMemory(id: number): Promise<MemoryContents>;
   /** Wipe durable facts (Level 1); keeps episodic + toggle. Returns the empty fact list. */
