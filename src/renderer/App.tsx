@@ -19,6 +19,7 @@ import { ChatView, type ChatViewHandle } from './chat/ChatView';
 import { ShortcutHint, useShortcut } from './shortcuts';
 import { ManagePanel } from './manage/ManagePanel';
 import { McpApprovalCard } from './manage/McpApprovalCard';
+import { InstructionsApprovalCard } from './manage/InstructionsApprovalCard';
 import { DeleteThreadDialog } from './DeleteThreadDialog';
 import { TaskAlertModal } from './TaskAlertModal';
 import { DropOverlay } from './files/DropOverlay';
@@ -955,6 +956,7 @@ export default function App() {
       )}
       <DropOverlay onDropToChat={onDropToChat} />
       <McpApprovalCard />
+      <InstructionsApprovalCard />
       {pendingDelete && (
         <DeleteThreadDialog
           title={pendingDelete.title}

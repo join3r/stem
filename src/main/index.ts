@@ -54,6 +54,7 @@ import { createHttpRerankClient } from './recall/rerank';
 import type { LlmClient } from './recall/llm';
 import {
   readSettings,
+  updateCustomInstructions,
   updateEscapeAction,
   updateMemorySettings,
   updateNativeWebSearch,
@@ -75,6 +76,7 @@ import { activityLabel } from '../shared/activity';
 import type {
   ChatListResult,
   ConnectedFolderPatch,
+  CustomInstructionsSettings,
   EscapeAction,
   ItemEventParams,
   McpServerInput,
@@ -642,7 +644,13 @@ function registerIpc(): void {
     // Main-window turns honor the main native-web-search toggle (the backend no-ops
     // it for providers without native search).
     const settings = await readSettings();
-    return runtime!.startTurn({ ...input, webSearch: settings.nativeWebSearch.main });
+    // Main-window turns get the Main custom instructions (which also cover Quick Chat
+    // by inheritance; Quick Chat's own turns add their extra on top — see quickchat:run).
+    return runtime!.startTurn({
+      ...input,
+      webSearch: settings.nativeWebSearch.main,
+      instructions: settings.customInstructions.main
+    });
   });
   ipcMain.handle('backend:interruptTurn', (_e, turnId: string) => runtime!.interruptTurn(turnId));
   ipcMain.handle('backend:newConversation', () => runtime!.newConversation());
@@ -713,6 +721,15 @@ function registerIpc(): void {
   ipcMain.handle('mcp:adminDecision', (_e, id: number | string, accept: boolean) => {
     runtime!.resolveAdminApproval(id, accept);
   });
+  ipcMain.handle(
+    'instructions:resolveApproval',
+    async (_e, id: number | string, accept: boolean, surface: 'main' | 'quickChat', text: string) => {
+      // Main is the sole writer of settings.json: apply the card's final text BEFORE
+      // releasing the held tool call, so the assistant only proceeds once it's persisted.
+      if (accept) await updateCustomInstructions({ [surface]: text });
+      runtime!.resolveInstructionsApproval(id, accept);
+    }
+  );
   ipcMain.handle('runtime:restart', async () => {
     await runtime!.restart();
     return runtime!.status();
@@ -876,6 +893,11 @@ function registerIpc(): void {
     // each pass, so the change applies to the next curation run.
     return updateSkillsSettings(patch);
   });
+  ipcMain.handle('settings:updateCustomInstructions', async (_e, patch: Partial<CustomInstructionsSettings>) => {
+    // Just persist — startTurn/quickchat:run read the instructions fresh per turn, so
+    // the change applies to the next turn with no restart.
+    return updateCustomInstructions(patch);
+  });
   ipcMain.handle('settings:updateRetrieval', async (_e, patch: PartialRetrievalSettings) => {
     // Just persist — the embeddings/rerank clients read their config fresh from
     // settings on each turn, so the change applies to the next fact-ranking pass.
@@ -936,6 +958,8 @@ function registerIpc(): void {
         });
       }
 
+      const qcSettings = await readSettings();
+      const ci = qcSettings.customInstructions;
       const result = await runtime!.startTurn({
         input: prompt.input,
         threadId,
@@ -944,7 +968,9 @@ function registerIpc(): void {
         serviceTier: prompt.serviceTier,
         format: prompt.format,
         // Quick Chat turns honor the Quick Chat native-web-search toggle.
-        webSearch: (await readSettings()).nativeWebSearch.quickChat,
+        webSearch: qcSettings.nativeWebSearch.quickChat,
+        // Quick Chat inherits the Main instructions and appends its own extra.
+        instructions: [ci.main, ci.quickChat].map((s) => s.trim()).filter(Boolean).join('\n'),
         attachments: prompt.attachments
       });
       overlayLastActivityAt = Date.now();
@@ -1122,6 +1148,11 @@ app.whenReady().then(async () => {
     if (event.method === 'mcp/admin/approvalRequest') {
       mainWindow?.webContents.send('mcp:adminApproval', event.params);
       quickChatWindow?.webContents.send('mcp:adminApproval', event.params);
+      return;
+    }
+    if (event.method === 'instructions/approvalRequest') {
+      mainWindow?.webContents.send('instructions:approvalRequest', event.params);
+      quickChatWindow?.webContents.send('instructions:approvalRequest', event.params);
       return;
     }
     if (event.method === 'mcp/changed') {

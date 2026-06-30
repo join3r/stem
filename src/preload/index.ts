@@ -2,7 +2,9 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   BackendEventEnvelope,
   ConnectedFolderPatch,
+  CustomInstructionsSettings,
   EscapeAction,
+  InstructionsProposal,
   McpAdminProposal,
   McpServerInput,
   McpServerStatus,
@@ -102,6 +104,13 @@ const api: StemApi = {
   },
   respondMcpAdminApproval: (id: number | string, accept: boolean) =>
     ipcRenderer.invoke('mcp:adminDecision', id, accept),
+  onInstructionsApproval: (listener: (proposal: InstructionsProposal) => void) => {
+    const handler = (_e: unknown, proposal: InstructionsProposal) => listener(proposal);
+    ipcRenderer.on('instructions:approvalRequest', handler);
+    return () => ipcRenderer.removeListener('instructions:approvalRequest', handler);
+  },
+  respondInstructionsApproval: (id: number | string, accept: boolean, surface: 'main' | 'quickChat', text: string) =>
+    ipcRenderer.invoke('instructions:resolveApproval', id, accept, surface, text),
   onMcpChanged: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on('mcp:changed', handler);
@@ -147,6 +156,8 @@ const api: StemApi = {
   updateEscapeAction: (action: EscapeAction) => ipcRenderer.invoke('settings:updateEscapeAction', action),
   updateMemorySettings: (patch: Partial<MemoryModelSettings>) =>
     ipcRenderer.invoke('settings:updateMemory', patch),
+  updateCustomInstructions: (patch: Partial<CustomInstructionsSettings>) =>
+    ipcRenderer.invoke('settings:updateCustomInstructions', patch),
   updateSkillsSettings: (patch: Partial<SkillsModelSettings>) =>
     ipcRenderer.invoke('settings:updateSkills', patch),
   updateRetrievalSettings: (patch: PartialRetrievalSettings) =>

@@ -142,6 +142,14 @@ export interface StartTurnInput {
    * this is a no-op. Defaults to enabled when omitted.
    */
   webSearch?: boolean;
+  /**
+   * The user's standing custom instructions, already resolved per surface by the
+   * caller (main window → `customInstructions.main`; Quick Chat → main + quickChat).
+   * Injected as an authoritative high-priority block in the turn's context. Empty/
+   * omitted → no block. Internal turns (distill/consolidate via `complete()`) never
+   * set this.
+   */
+  instructions?: string;
   /** Files/images attached to this turn. */
   attachments?: TurnAttachment[];
   /**
@@ -507,6 +515,23 @@ export interface McpAdminProposal {
   name?: string;
 }
 
+/**
+ * The assistant proposed a change to the user's custom instructions (via the
+ * `set_custom_instructions` tool). Surfaced as a confirm card where the user edits
+ * the resulting text and picks the target surface before it's applied. `id` is the
+ * bridge's elicitation id — pass it back to apply/cancel.
+ */
+export interface InstructionsProposal {
+  id: number | string;
+  threadId: string;
+  /** What the assistant asked for; the card computes the resulting text from it. */
+  action: 'append' | 'replace' | 'clear';
+  /** The text the assistant wants to append/replace with ('' for clear). */
+  incomingText: string;
+  /** The surface the assistant hinted at; the card defaults to it but the user decides. */
+  suggestedSurface?: 'main' | 'quickChat';
+}
+
 /** `mcp/login/url` — the OAuth authorize URL, streamed mid-login as a fallback link. */
 export interface McpLoginUrlParams {
   name: string;
@@ -681,6 +706,19 @@ export interface SkillsModelSettings {
 }
 
 /**
+ * The user's standing custom instructions (response-style directives, format/tone
+ * rules, etc.) — an authoritative channel injected into every user-facing turn,
+ * distinct from recalled facts. Quick Chat INHERITS Main and appends its own extra:
+ * a Main turn injects `main`; a Quick Chat turn injects `main` + `quickChat`.
+ */
+export interface CustomInstructionsSettings {
+  /** Applies to every surface (main window AND Quick Chat). */
+  main: string;
+  /** Quick-Chat-only extra, appended on top of `main` for overlay turns. */
+  quickChat: string;
+}
+
+/**
  * One HTTP retrieval endpoint (embeddings or reranker). Free-text — Stem just
  * makes the call — so it works with Ollama, vLLM, LM Studio, TEI, or a hosted API.
  * Disabled by default; until enabled+configured, fact selection stays recency-based.
@@ -749,6 +787,8 @@ export interface AppSettings {
   retrieval: RetrievalSettings;
   /** Escape-to-retract behavior in the main composer. */
   escapeAction: EscapeAction;
+  /** Standing custom instructions, separate for Main and Quick Chat (QC inherits Main). */
+  customInstructions: CustomInstructionsSettings;
 }
 
 /**
@@ -947,6 +987,20 @@ export interface StemApi {
   /** Set the model used for memory distillation/tidy-up ({ model: null } = default). */
   updateMemorySettings(patch: Partial<MemoryModelSettings>): Promise<AppSettings>;
   updateSkillsSettings(patch: Partial<SkillsModelSettings>): Promise<AppSettings>;
+  /** Patch the standing custom instructions (e.g. { main } or { quickChat }). */
+  updateCustomInstructions(patch: Partial<CustomInstructionsSettings>): Promise<AppSettings>;
+  /** Assistant proposed a custom-instructions change; fired so the UI can show a card. */
+  onInstructionsApproval(listener: (proposal: InstructionsProposal) => void): () => void;
+  /**
+   * Apply/cancel an assistant-proposed custom-instructions change. On accept, main
+   * writes `{ [surface]: text }` (the card's final full text) before releasing the tool.
+   */
+  respondInstructionsApproval(
+    id: number | string,
+    accept: boolean,
+    surface: 'main' | 'quickChat',
+    text: string
+  ): Promise<void>;
   /** Update the embeddings/reranker retrieval endpoints (deep-merged per stage). */
   updateRetrievalSettings(patch: PartialRetrievalSettings): Promise<AppSettings>;
   /** Live-probe a retrieval endpoint with the current settings (Settings "Test" button). */

@@ -35,6 +35,7 @@ Rules:
 - Only state facts the USER revealed about themselves — directly, or via information retrieved on their behalf (e.g. their own emails). Such personal details ARE wanted; do not omit, redact, or soften them.
 - CRITICAL: Never turn the ASSISTANT's own words into a user fact. The assistant's disclaimers, caution, hedging, redactions, or self-imposed behavior ("I left out identifiers", "I ignored spam") are NOT user preferences. Only record a preference or instruction if the USER explicitly stated it.
 - Include only things likely still true in future conversations. EXCLUDE one-off task details, ephemeral context, and anything already obvious.
+- Do NOT record standing behavioral directives or response-style preferences (how long or short replies should be, tone, output format, language style, whether to use components). Those are managed separately as the user's custom instructions, NOT as facts — leave them out entirely.
 - If the user corrected an earlier assumption, state the corrected truth.
 - Do NOT restate facts already in "Known facts" below; output only NEW facts or corrections to existing ones.
 - Never include CREDENTIALS (passwords, PINs, API keys, tokens, card numbers, seed/recovery phrases). Ordinary personal identifiers (national ID / birth number, address, phone, email) are allowed.

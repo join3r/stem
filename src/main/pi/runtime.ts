@@ -8,6 +8,7 @@ import type {
   BackendEventEnvelope,
   ChatMessage,
   ChatSummary,
+  InstructionsProposal,
   McpAdminProposal,
   McpLoginResult,
   McpServerInput,
@@ -78,6 +79,11 @@ const providerName = (p: string): string => PROVIDER_NAMES[p] ?? p;
 // Sentinel title the bridge uses for an MCP add/remove approval (see
 // stem-mcp-extension.mjs). The message is a JSON McpAdminProposal payload.
 const ADMIN_APPROVAL_TITLE = 'stem-admin-approval';
+
+// Sentinel title the bridge uses for a custom-instructions change approval (see
+// stem-mcp-extension.mjs). The message is a JSON { action, incomingText, surface? }
+// payload; main shows the InstructionsApprovalCard and writes settings on accept.
+const INSTRUCTIONS_APPROVAL_TITLE = 'stem-instructions-approval';
 
 // pi has no per-turn context channel, so recall/files/format context is prepended
 // into the user's prompt message — which pi then PERSISTS in the session JSONL. To
@@ -251,6 +257,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private currentTurn: TurnContext | null = null;
   /** Pending stem-admin approvals, keyed by the bridge's extension_ui_request id. */
   private adminApprovals = new Set<string>();
+  /** Pending custom-instructions approvals, keyed by the bridge's extension_ui_request id. */
+  private instructionsApprovals = new Set<string>();
   /** Wired by main to route the assistant's schedule_task/notify_user tools. */
   private taskBridge: TaskBridge | null = null;
   /** Set when an admin add/remove was approved; reloads MCP servers at turn end. */
@@ -767,6 +775,18 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (accept) this.pendingMcpReload = true;
   }
 
+  /**
+   * Release a held custom-instructions approval. Unlike the admin path, MAIN has
+   * already written settings.json (the IPC handler does it before calling this), so
+   * there's nothing to reload — the next turn reads the instructions fresh.
+   */
+  resolveInstructionsApproval(id: number | string, accept: boolean): void {
+    const key = String(id);
+    if (!this.instructionsApprovals.has(key)) return;
+    this.instructionsApprovals.delete(key);
+    this.proc?.send({ type: 'extension_ui_response', id: key, confirmed: accept });
+  }
+
   async configMcpServerReload(): Promise<void> {
     await this.restart();
   }
@@ -898,6 +918,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // The bridge's MCP add/remove approval → route to Stem's McpApprovalCard.
       if (ev.method === 'confirm' && ev.title === ADMIN_APPROVAL_TITLE) {
         this.handleAdminApproval(id, ev.message as string | undefined);
+        return;
+      }
+      // The bridge's custom-instructions approval → route to the InstructionsApprovalCard.
+      if (ev.method === 'confirm' && ev.title === INSTRUCTIONS_APPROVAL_TITLE) {
+        this.handleInstructionsApproval(id, ev.message as string | undefined);
         return;
       }
       // A scheduled-task tool round-trip (schedule_task / notify_user / …). The op
@@ -1119,6 +1144,41 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }, 120_000);
   }
 
+  /**
+   * The bridge asked (via a sentinel confirm) to apply an assistant-proposed
+   * custom-instructions change. Hold the request open and surface it as the
+   * InstructionsApprovalCard; resolveInstructionsApproval answers once the user
+   * decides (or a timeout declines). Main writes settings.json on accept.
+   */
+  private handleInstructionsApproval(id: string, message: string | undefined): void {
+    let proposal: { action?: string; incomingText?: string; surface?: string } | null = null;
+    try {
+      proposal = JSON.parse(message ?? '{}');
+    } catch {
+      // malformed
+    }
+    const action = proposal?.action;
+    if (action !== 'append' && action !== 'replace' && action !== 'clear') {
+      this.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
+      return;
+    }
+    this.instructionsApprovals.add(id);
+    const card: InstructionsProposal = {
+      id,
+      threadId: this.currentTurn?.threadId ?? '',
+      action,
+      incomingText: typeof proposal?.incomingText === 'string' ? proposal.incomingText : '',
+      suggestedSurface: proposal?.surface === 'quickChat' ? 'quickChat' : proposal?.surface === 'main' ? 'main' : undefined
+    };
+    this.emitEvent('instructions/approvalRequest', card);
+    setTimeout(() => {
+      if (this.instructionsApprovals.has(id)) {
+        this.instructionsApprovals.delete(id);
+        this.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
+      }
+    }, 120_000);
+  }
+
   /** Start a fresh session on the foreground process; returns its sessionId. */
   private async newSession(): Promise<string> {
     await this.proc!.request({ type: 'new_session' });
@@ -1174,6 +1234,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     recallTimings?: RecallTimings
   ): Promise<{ message: string; images: PiImageContent[] }> {
     const blocks: string[] = [];
+    // The user's standing custom instructions — an AUTHORITATIVE block, first and
+    // distinct from recall (which is explicitly "not instructions"). Already resolved
+    // per surface by the caller (main vs Quick Chat). Empty → no block.
+    const standing = input.instructions?.trim();
+    if (standing) {
+      blocks.push(
+        `Standing instructions from the user (high-priority directives — follow them in every reply; ` +
+          `they override your default behavior for verbosity, output format, and component usage; only the ` +
+          `user's current message and safety take precedence):\n${standing}`
+      );
+    }
     if (isRecallEnabled()) {
       const chosen: { facts: Fact[]; tier: FactTier } = { facts: [], tier: 'all' };
       const recall = await buildRecallContext(input.input, {

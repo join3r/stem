@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import type {
   AppSettings,
+  CustomInstructionsSettings,
   EscapeAction,
   MemoryModelSettings,
   NativeWebSearchSettings,
@@ -50,7 +51,9 @@ const DEFAULTS: AppSettings = {
     reranker: { baseUrl: 'http://localhost:8080', model: '', apiKey: null, enabled: false }
   },
   // Escape-to-retract is opt-in: off until the user picks single/two-stage.
-  escapeAction: 'off'
+  escapeAction: 'off',
+  // Standing custom instructions; empty until the user (or Stem) sets them.
+  customInstructions: { main: '', quickChat: '' }
 };
 
 const ESCAPE_ACTIONS: readonly EscapeAction[] = ['off', 'single', 'twoStage'];
@@ -92,6 +95,11 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
   const escapeAction: EscapeAction = ESCAPE_ACTIONS.includes(parsed?.escapeAction as EscapeAction)
     ? (parsed!.escapeAction as EscapeAction)
     : DEFAULTS.escapeAction;
+  const rawCi = (parsed?.customInstructions ?? {}) as Partial<CustomInstructionsSettings>;
+  const customInstructions: CustomInstructionsSettings = {
+    main: typeof rawCi.main === 'string' ? rawCi.main : DEFAULTS.customInstructions.main,
+    quickChat: typeof rawCi.quickChat === 'string' ? rawCi.quickChat : DEFAULTS.customInstructions.quickChat
+  };
   return {
     quickChat: {
       shortcut: typeof qc.shortcut === 'string' && qc.shortcut.trim() ? qc.shortcut : null,
@@ -112,7 +120,8 @@ function coerce(parsed: Partial<AppSettings> | null): AppSettings {
     memory: mem,
     skills,
     retrieval,
-    escapeAction
+    escapeAction,
+    customInstructions
   };
 }
 
@@ -179,6 +188,16 @@ export function updateMemorySettings(patch: Partial<MemoryModelSettings>): Promi
   return enqueue(async () => {
     const cur = await readSettings();
     const next = coerce({ ...cur, memory: { ...cur.memory, ...patch } });
+    await writeSettings(next);
+    return next;
+  });
+}
+
+/** Patch the standing custom instructions (per surface) and persist; returns full settings. */
+export function updateCustomInstructions(patch: Partial<CustomInstructionsSettings>): Promise<AppSettings> {
+  return enqueue(async () => {
+    const cur = await readSettings();
+    const next = coerce({ ...cur, customInstructions: { ...cur.customInstructions, ...patch } });
     await writeSettings(next);
     return next;
   });

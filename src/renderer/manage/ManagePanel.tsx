@@ -11,6 +11,7 @@ import type {
   MemoryContents,
   MemorySettings,
   ConnectedFolder,
+  CustomInstructionsSettings,
   EscapeAction,
   ScheduledTask,
   ModelSummary,
@@ -1207,6 +1208,10 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
   const [qc, setQc] = useState<QuickChatSettings | null>(null);
   const [nws, setNws] = useState<NativeWebSearchSettings>({ main: true, quickChat: true });
   const [escapeAction, setEscapeAction] = useState<EscapeAction>('off');
+  const [ci, setCi] = useState<CustomInstructionsSettings>({ main: '', quickChat: '' });
+  // Per-field debounce so typing doesn't spam the atomic settings writer.
+  const ciMainTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ciQuickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedModel = models.find((m) => m.id === modelId) ?? null;
 
   useEffect(() => {
@@ -1214,8 +1219,21 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
       setQc(s.quickChat);
       setNws(s.nativeWebSearch);
       setEscapeAction(s.escapeAction);
+      setCi(s.customInstructions);
     });
   }, []);
+
+  function saveCiMain(value: string) {
+    setCi((c) => ({ ...c, main: value }));
+    if (ciMainTimer.current) clearTimeout(ciMainTimer.current);
+    ciMainTimer.current = setTimeout(() => void window.stem.updateCustomInstructions({ main: value }), 400);
+  }
+
+  function saveCiQuick(value: string) {
+    setCi((c) => ({ ...c, quickChat: value }));
+    if (ciQuickTimer.current) clearTimeout(ciQuickTimer.current);
+    ciQuickTimer.current = setTimeout(() => void window.stem.updateCustomInstructions({ quickChat: value }), 400);
+  }
 
   function selectEscapeAction(action: EscapeAction) {
     setEscapeAction(action); // optimistic; persist + reconcile from the saved settings
@@ -1332,6 +1350,24 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
           <p className="muted">
             While a reply is streaming, Escape can stop it and return your just-sent message to the composer to edit
             — as if you never sent it.
+          </p>
+        </div>
+      </div>
+
+      <div className="grp-head">Custom instructions</div>
+      <div className="formgroup">
+        <div className="set-block">
+          <span className="set-sub">Standing instructions</span>
+          <textarea
+            className="ci-textarea"
+            value={ci.main}
+            onChange={(e) => saveCiMain(e.target.value)}
+            rows={5}
+            placeholder="e.g. Reply briefly and to the point. Use plain Markdown unless I ask for components."
+          />
+          <p className="muted">
+            High-priority directives Stem follows in every reply — in the main app and in Quick Chat. Stem can also
+            update these itself when you ask it to.
           </p>
         </div>
       </div>
@@ -1455,6 +1491,18 @@ function SettingsTab({ models, modelId, onSelectModel }: ModelTabProps) {
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="set-block">
+          <span className="set-sub">Extra instructions</span>
+          <textarea
+            className="ci-textarea"
+            value={ci.quickChat}
+            onChange={(e) => saveCiQuick(e.target.value)}
+            rows={4}
+            placeholder="e.g. Be even more terse here — one or two sentences."
+          />
+          <p className="muted">Layered on top of your main custom instructions, only in the Quick Chat overlay.</p>
         </div>
       </div>
       <p className="muted" style={{ marginTop: 'var(--sp-5)' }}>

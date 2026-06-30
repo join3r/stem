@@ -87,6 +87,8 @@ export interface ChatBackend extends EventEmitter {
   mcpLogin(name: string): Promise<McpLoginResult>;
   getMcpStatus(): Record<string, { status: string; error: string | null }>;
   resolveAdminApproval(id: number | string, accept: boolean): void;
+  /** Release a held custom-instructions approval (main has already written settings). */
+  resolveInstructionsApproval(id: number | string, accept: boolean): void;
   configMcpServerReload(): Promise<void>;
 
   // Skills: apply out-of-band skill changes (the background curator) by reloading

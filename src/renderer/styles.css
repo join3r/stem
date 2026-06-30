@@ -1665,3 +1665,24 @@ body.hud-body { background: transparent; }
   gap: var(--sp-4);
   margin-top: 14px;
 }
+
+/* Custom-instructions textareas (Settings + approval card). */
+.ci-textarea,
+.instructions-approval-text {
+  font: inherit;
+  width: 100%;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  line-height: 1.5;
+}
+.ci-textarea:focus,
+.instructions-approval-text:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+.instructions-approval-text { margin-top: 10px; }

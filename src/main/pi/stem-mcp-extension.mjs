@@ -666,6 +666,11 @@ export default async function stemMcpBridge(pi) {
   // Stem self-management tools (list/add/remove MCP servers). Always available.
   registerAdminTools(pi, cfgPath);
 
+  // Self-editable standing custom instructions. The tool only PROPOSES; the user
+  // approves in a card (editing the text + choosing the surface) and the MAIN process
+  // writes settings.json — the extension never touches it. Applies on the next turn.
+  registerInstructionsTool(pi);
+
   // Scheduled tasks: let the assistant schedule a prompt to re-run autonomously, and
   // surface a run's result prominently (notify_user). All routed to the main process
   // (which owns the scheduler) via a ctx.ui.input round-trip; main supplies the
@@ -801,6 +806,56 @@ async function requestAdminApproval(ctx, proposal) {
   if (!ctx || !ctx.ui || typeof ctx.ui.confirm !== 'function') return false;
   // The "message" carries the JSON proposal; PiRuntime parses it to build the card.
   return ctx.ui.confirm(ADMIN_APPROVAL_TITLE, JSON.stringify(proposal));
+}
+
+// Sentinel title so PiRuntime routes a custom-instructions approval to the
+// InstructionsApprovalCard (and MAIN writes settings.json on accept).
+const INSTRUCTIONS_APPROVAL_TITLE = 'stem-instructions-approval';
+
+function registerInstructionsTool(pi) {
+  pi.registerTool({
+    name: 'set_custom_instructions',
+    label: 'Set custom instructions',
+    description:
+      "Update the user's standing custom instructions — durable, high-priority directives that shape EVERY reply (response length, tone, output format, language style, component usage), kept separate from recalled facts. Use this when the user asks you to adopt a STANDING BEHAVIORAL RULE (\"always answer briefly\", \"from now on reply in plain markdown\", \"stop using callouts\") — NOT for one-off requests, and NOT for facts about the user (those are remembered automatically). The user must approve in a card where they edit the final text and CHOOSE THE SURFACE — do not assume the surface yourself. Surfaces: \"main\" applies everywhere including Quick Chat; \"quickChat\" is an extra layered only on the Quick Chat overlay (Quick Chat inherits main). Actions: \"append\" adds a line, \"replace\" overwrites that surface's text, \"clear\" empties it. Pass `surface` only as a hint when the user clearly meant one; the card lets them change it.",
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['append', 'replace', 'clear'],
+          description: 'append a line / replace the whole text / clear it.'
+        },
+        text: { type: 'string', description: 'Instruction text to append or replace with. Omit/empty for clear.' },
+        surface: {
+          type: 'string',
+          enum: ['main', 'quickChat'],
+          description: 'Optional hint; the user confirms in the card. "main" = everywhere; "quickChat" = overlay-only extra.'
+        }
+      },
+      required: ['action']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const action = params && params.action;
+      if (action !== 'append' && action !== 'replace' && action !== 'clear') {
+        return { content: [{ type: 'text', text: 'Invalid action; use append, replace, or clear.' }], details: {}, isError: true };
+      }
+      const text = params && typeof params.text === 'string' ? params.text : '';
+      if ((action === 'append' || action === 'replace') && !text.trim()) {
+        return { content: [{ type: 'text', text: 'Provide non-empty text for append/replace.' }], details: {}, isError: true };
+      }
+      if (!ctx || !ctx.ui || typeof ctx.ui.confirm !== 'function') {
+        return { content: [{ type: 'text', text: 'Cannot request approval in this context.' }], details: {}, isError: true };
+      }
+      const surface = params && (params.surface === 'main' || params.surface === 'quickChat') ? params.surface : undefined;
+      const proposal = { action, incomingText: action === 'clear' ? '' : text, surface };
+      // PiRuntime parses this JSON, shows the card, and (on accept) MAIN writes settings.
+      const approved = await ctx.ui.confirm(INSTRUCTIONS_APPROVAL_TITLE, JSON.stringify(proposal));
+      return approved
+        ? { content: [{ type: 'text', text: 'Custom instructions updated. They take effect on your next reply.' }], details: {} }
+        : { content: [{ type: 'text', text: 'The user declined the custom-instructions change.' }], details: {} };
+    }
+  });
 }
 
 function buildServerEntry(params) {
