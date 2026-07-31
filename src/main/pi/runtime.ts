@@ -65,7 +65,8 @@ import {
   writeServiceTierGate
 } from './mcp-config';
 import { authorizeMcp } from './oauth';
-import { syncModelsConfig } from './models-config';
+import { readModelsConfig, syncModelsConfig } from './models-config';
+import { refreshXaiTokenIfNeeded, syncXaiModelsConfig } from './xai-oauth';
 import {
   buildWebSearchContext,
   piWebAccessPath,
@@ -363,6 +364,19 @@ interface SessionFile {
   cwd: string | null;
   createdAt: number;
   updatedAt: number;
+}
+
+/**
+ * Refresh the xAI OAuth token if stored and near-expiry, then update models.json.
+ * Safe to call unconditionally — a no-op when xAI isn't configured.
+ */
+async function refreshXaiAccessToken(): Promise<void> {
+  try {
+    const token = await refreshXaiTokenIfNeeded();
+    if (token) await syncXaiModelsConfig(token.accessToken);
+  } catch {
+    // Non-fatal: xAI models simply won't be available until the next refresh.
+  }
 }
 
 /**
@@ -1433,6 +1447,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // mode reads the file once at startup and never again.
     this.lastLocalSyncAt = Date.now();
     await syncModelsConfig().catch(() => undefined);
+    // Keep xAI's access token current in models.json (short-lived OAuth tokens).
+    await refreshXaiAccessToken();
     // Same deal for web search: pi-web-access reads its workflow setting once at
     // extension-init, so the config file has to be correct BEFORE the spawn.
     const settings = await readSettings().catch(() => null);
@@ -2082,15 +2098,33 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   /**
    * The app-level default model: the persisted post-onboarding choice (matched to
    * the provider the user signed in with), else the built-in codex constant.
+   * Validates that a stored model's provider is still available — a stale default
+   * from a disconnected/removed provider would crash pi at startup.
    */
   private async resolveDefaultModel(): Promise<{ provider: string; modelId: string }> {
     try {
       const { defaults } = await readSettings();
-      if (defaults.model) return this.parseModel(defaults.model);
+      if (defaults.model) {
+        const parsed = this.parseModel(defaults.model);
+        const valid = await this.isProviderAvailable(parsed.provider);
+        if (valid) return parsed;
+      }
     } catch {
       // settings unreadable → constant
     }
     return { provider: DEFAULT_PROVIDER, modelId: DEFAULT_MODEL };
+  }
+
+  /** True when pi will recognise this provider (builtin or present in models.json). */
+  private async isProviderAvailable(provider: string): Promise<boolean> {
+    const builtins = new Set(['openai-codex', 'anthropic', 'openai', 'openrouter']);
+    if (builtins.has(provider)) return true;
+    try {
+      const config = await readModelsConfig();
+      return provider in config.providers;
+    } catch {
+      return false;
+    }
   }
 
   /** Assemble the prompt: prepend recall/files/format context (pi has no per-turn context field). */
@@ -2397,47 +2431,56 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
   }
 
-  /** Providers Stem has credentials for (from the isolated auth.json). */
+  /** Providers Stem has credentials for (from the isolated auth.json + xAI store). */
   private async authProviders(): Promise<Set<string>> {
+    const providers = new Set<string>();
     try {
       const raw = await readFile(join(this.options.piHome, 'auth.json'), 'utf8');
       const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return new Set();
-      const providers = new Set<string>();
-      const apiKeyProviders = new Set<string>([...API_KEY_PROVIDER_IDS, ...LOCAL_PROVIDER_IDS]);
-      const oauthProviders = new Set<string>(AUTH_PROVIDER_IDS);
-      for (const [provider, value] of Object.entries(parsed as Record<string, unknown>)) {
-        if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
-        const credential = value as {
-          type?: unknown;
-          key?: unknown;
-          access?: unknown;
-          refresh?: unknown;
-          expires?: unknown;
-        };
-        const hasApiKey =
-          apiKeyProviders.has(provider) &&
-          credential.type === 'api_key' &&
-          typeof credential.key === 'string' &&
-          credential.key.trim().length > 0;
-        const accessUsable = typeof credential.access === 'string' && credential.access.trim().length > 0;
-        const refreshUsable = typeof credential.refresh === 'string' && credential.refresh.trim().length > 0;
-        const expiry = typeof credential.expires === 'number' && Number.isFinite(credential.expires)
-          ? credential.expires
-          : null;
-        const hasOAuth =
-          oauthProviders.has(provider) &&
-          credential.type === 'oauth' &&
-          accessUsable &&
-          typeof credential.refresh === 'string' &&
-          expiry !== null &&
-          (expiry > Date.now() || refreshUsable);
-        if (hasApiKey || hasOAuth) providers.add(provider);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const apiKeyProviders = new Set<string>([...API_KEY_PROVIDER_IDS, ...LOCAL_PROVIDER_IDS]);
+        const oauthProviders = new Set<string>(AUTH_PROVIDER_IDS);
+        for (const [provider, value] of Object.entries(parsed as Record<string, unknown>)) {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+          const credential = value as {
+            type?: unknown;
+            key?: unknown;
+            access?: unknown;
+            refresh?: unknown;
+            expires?: unknown;
+          };
+          const hasApiKey =
+            apiKeyProviders.has(provider) &&
+            credential.type === 'api_key' &&
+            typeof credential.key === 'string' &&
+            credential.key.trim().length > 0;
+          const accessUsable = typeof credential.access === 'string' && credential.access.trim().length > 0;
+          const refreshUsable = typeof credential.refresh === 'string' && credential.refresh.trim().length > 0;
+          const expiry = typeof credential.expires === 'number' && Number.isFinite(credential.expires)
+            ? credential.expires
+            : null;
+          const hasOAuth =
+            oauthProviders.has(provider) &&
+            credential.type === 'oauth' &&
+            accessUsable &&
+            typeof credential.refresh === 'string' &&
+            expiry !== null &&
+            (expiry > Date.now() || refreshUsable);
+          if (hasApiKey || hasOAuth) providers.add(provider);
+        }
       }
-      return providers;
     } catch {
-      return new Set();
+      // auth.json missing or corrupt — fall through
     }
+    // xAI credentials live in a separate store (not pi's auth.json).
+    try {
+      const { readXaiToken } = await import('./xai-oauth');
+      const xaiToken = await readXaiToken();
+      if (xaiToken?.accessToken) providers.add('xai');
+    } catch {
+      // non-fatal
+    }
+    return providers;
   }
 
   /**

@@ -801,6 +801,8 @@ function chooseDefaultModel(models: ModelSummary[]): string | null {
     models.find((m) => m.provider === 'openai-codex' && m.id.endsWith('gpt-5.3-codex-spark')) ??
     models.find((m) => m.provider === 'anthropic' && /sonnet/i.test(m.id)) ??
     models.find((m) => m.provider === 'anthropic') ??
+    models.find((m) => m.provider === 'xai' && /grok-4/.test(m.id)) ??
+    models.find((m) => m.provider === 'xai') ??
     models[0];
   return pick?.id ?? null;
 }

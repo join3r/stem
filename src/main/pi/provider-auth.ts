@@ -2,6 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { shell } from 'electron';
 import type { AuthProviderId, ApiKeyProviderId, AuthUiEvent, LocalProviderId } from '../../shared/types';
+import {
+  xaiLogin,
+  readXaiToken,
+  deleteXaiToken,
+  syncXaiModelsConfig,
+  removeXaiModelsConfig,
+  refreshXaiTokenIfNeeded
+} from './xai-oauth';
 
 // In-app provider sign-in. pi's TUI is NOT required for login: since pi 0.80.8
 // the package exports ModelRuntime, the credential/auth facade that owns the
@@ -69,6 +77,10 @@ export class ProviderAuth {
     const controller = new AbortController();
     const active: ActiveLogin = { controller, pending: new Map() };
     this.active = active;
+
+    // xAI uses a Stem-managed OAuth flow (not pi's ModelRuntime).
+    if (providerId === 'xai') return this.loginXai(active, controller);
+
     try {
       const { readStoredCredential } = await this.loadPi();
       const before = JSON.stringify(readStoredCredential(providerId, this.authPath) ?? null);
@@ -108,6 +120,34 @@ export class ProviderAuth {
     } catch (e) {
       const error = describeError(e);
       this.emit({ kind: 'done', ok: false, provider: providerId, error });
+      return { ok: false, error };
+    } finally {
+      if (this.active === active) this.active = null;
+    }
+  }
+
+  /**
+   * xAI login — runs the PKCE flow directly (not through pi's ModelRuntime) and
+   * writes the token to its own store + models.json so pi can use it.
+   */
+  private async loginXai(
+    active: ActiveLogin,
+    controller: AbortController
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const token = await xaiLogin({
+        signal: controller.signal,
+        onAuthUrl: (url) => {
+          this.emit({ kind: 'auth-url', url });
+        }
+      });
+      // Register xAI in models.json so pi can route requests to it.
+      await syncXaiModelsConfig(token.accessToken);
+      this.emit({ kind: 'done', ok: true, provider: 'xai' });
+      return { ok: true };
+    } catch (e) {
+      const error = describeError(e);
+      this.emit({ kind: 'done', ok: false, provider: 'xai', error });
       return { ok: false, error };
     } finally {
       if (this.active === active) this.active = null;
@@ -159,6 +199,11 @@ export class ProviderAuth {
 
   /** Remove a provider's stored credential (Disconnect). Missing entries are a no-op. */
   async removeProvider(provider: string): Promise<void> {
+    if (provider === 'xai') {
+      await deleteXaiToken();
+      await removeXaiModelsConfig();
+      return;
+    }
     const { readStoredCredential } = await this.loadPi();
     const runtime = await this.createRuntime();
     try {
@@ -172,7 +217,11 @@ export class ProviderAuth {
   async listProviders(): Promise<string[]> {
     const runtime = await this.createRuntime();
     const credentials = await runtime.listCredentials();
-    return credentials.map((c) => c.providerId);
+    const ids = credentials.map((c) => c.providerId);
+    // Include xAI if it has a stored token (managed outside pi's auth.json).
+    const xaiToken = await readXaiToken();
+    if (xaiToken) ids.push('xai');
+    return ids;
   }
 
   /**
@@ -188,6 +237,10 @@ export class ProviderAuth {
    * re-auth screen has a "Back to chat" escape.
    */
   async isAlive(provider: string): Promise<boolean> {
+    if (provider === 'xai') {
+      const token = await refreshXaiTokenIfNeeded();
+      return token !== null;
+    }
     const { readStoredCredential } = await this.loadPi();
     const stored = readStoredCredential(provider, this.authPath);
     if (!stored) return false;

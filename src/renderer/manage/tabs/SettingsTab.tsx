@@ -179,12 +179,14 @@ function ShortcutRecorder({
 
 const OAUTH_CHOICES: { id: AuthProviderId; hint: string }[] = [
   { id: 'openai-codex', hint: 'Sign in with a ChatGPT Plus or Pro subscription.' },
-  { id: 'anthropic', hint: 'Sign in with a Claude Pro or Max subscription.' }
+  { id: 'anthropic', hint: 'Sign in with a Claude Pro or Max subscription.' },
+  { id: 'xai', hint: 'Sign in with a SuperGrok or X Premium+ subscription.' }
 ];
 
 /** How a connected provider signed in — shown as the row's secondary line. */
 function providerKind(id: string): string {
   if (id === 'openai-codex') return 'ChatGPT subscription';
+  if (id === 'xai') return 'Grok subscription';
   if (isLocalProviderId(id)) return 'Server';
   return 'API key / subscription';
 }

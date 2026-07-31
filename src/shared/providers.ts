@@ -7,6 +7,7 @@ import type { AuthProviderId, ApiKeyProviderId, LocalProviderId } from './types'
 export const PROVIDER_NAMES: Record<string, string> = {
   'openai-codex': 'ChatGPT',
   anthropic: 'Claude',
+  xai: 'Grok',
   openai: 'OpenAI',
   openrouter: 'OpenRouter',
   ollama: 'Ollama',
@@ -17,7 +18,7 @@ export const PROVIDER_NAMES: Record<string, string> = {
 export const providerName = (p: string): string => PROVIDER_NAMES[p] ?? p;
 
 /** Wizard/settings OAuth choices. */
-export const AUTH_PROVIDER_IDS: AuthProviderId[] = ['openai-codex', 'anthropic'];
+export const AUTH_PROVIDER_IDS: AuthProviderId[] = ['openai-codex', 'anthropic', 'xai'];
 
 /** API-key providers offered in the key form. */
 export const API_KEY_PROVIDER_IDS: ApiKeyProviderId[] = ['anthropic', 'openai', 'openrouter'];
