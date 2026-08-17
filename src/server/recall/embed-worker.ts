@@ -1,8 +1,9 @@
-import { existsSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { applyPrefixes } from './embed-catalog';
 import type { LocalEmbedModelSpec } from './embed-catalog';
 import type { LocalRerankModelSpec } from './rerank-catalog';
+import { modelPresent, pathAppearsInMessage } from './embed-files';
 import type { EmbedKind } from './embeddings';
 import type { RerankResult } from './rerank';
 import type { LocalEmbedStatus, LocalRerankStatus } from '../../shared/types';
@@ -117,11 +118,6 @@ function postRerankStatus(status: Omit<LocalRerankStatus, 'model'>): void {
   post({ type: 'rerank-status', status: { model: rerankSpec.id, ...status } });
 }
 
-/** The weights filename transformers.js resolves for each catalog dtype. */
-function weightsFile(dtype: LocalEmbedModelSpec['dtype']): string {
-  return dtype === 'q8' ? 'model_quantized.onnx' : dtype === 'q4' ? 'model_q4.onnx' : 'model.onnx';
-}
-
 /**
  * transformers.js progress events → one throttled status callback. Files
  * download in parallel and each reports independently, so per-file
@@ -169,9 +165,28 @@ function progressAggregator(
  * own healthy cache over it would throw away good bytes.
  */
 function purgeIfCorrupt(message: string, repo: string, cacheDir: string): boolean {
-  if (!/protobuf parsing failed/i.test(message) || !message.includes(join(cacheDir, repo))) return false;
+  if (!/protobuf parsing failed/i.test(message) || !pathAppearsInMessage(message, join(cacheDir, repo))) return false;
   rmSync(join(cacheDir, repo), { recursive: true, force: true });
   return true;
+}
+
+/**
+ * Point transformers.js at our cache and tell it whether the Hub is still needed.
+ * A complete model on disk means no request goes out at all — the machines this
+ * matters for cannot reach huggingface.co, and a hanging DNS lookup is a worse
+ * failure than a missing model. Returns whether the bytes were already there, so
+ * progress events read as loading rather than downloading.
+ */
+function applyHubAccess(
+  env: { cacheDir: string; allowRemoteModels?: boolean },
+  cacheDir: string,
+  repo: string,
+  dtype: LocalEmbedModelSpec['dtype']
+): boolean {
+  env.cacheDir = cacheDir;
+  const present = modelPresent(cacheDir, repo, dtype);
+  env.allowRemoteModels = !present;
+  return present;
 }
 
 async function load(nextSpec: LocalEmbedModelSpec, cacheDir: string): Promise<void> {
@@ -179,8 +194,7 @@ async function load(nextSpec: LocalEmbedModelSpec, cacheDir: string): Promise<vo
   postStatus({ state: 'loading' });
   try {
     const { pipeline, env } = await import('@huggingface/transformers');
-    env.cacheDir = cacheDir;
-    const cached = existsSync(join(cacheDir, nextSpec.repo, 'onnx', weightsFile(nextSpec.dtype)));
+    const cached = applyHubAccess(env, cacheDir, nextSpec.repo, nextSpec.dtype);
     const pipe = (await pipeline('feature-extraction', nextSpec.repo, {
       dtype: nextSpec.dtype,
       progress_callback: progressAggregator(cached, postStatus)
@@ -219,8 +233,7 @@ async function loadRerank(nextSpec: LocalRerankModelSpec, cacheDir: string): Pro
     const { AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM, env } = await import(
       '@huggingface/transformers'
     );
-    env.cacheDir = cacheDir;
-    const cached = existsSync(join(cacheDir, nextSpec.repo, 'onnx', weightsFile(nextSpec.dtype)));
+    const cached = applyHubAccess(env, cacheDir, nextSpec.repo, nextSpec.dtype);
     const onProgress = progressAggregator(cached, postRerankStatus);
     const tokenizer = (await AutoTokenizer.from_pretrained(nextSpec.repo, {
       progress_callback: onProgress
