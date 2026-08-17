@@ -66,3 +66,26 @@ jobs:
           name: playwright-report-${{ matrix.os }}
           path: playwright-report/
           retention-days: 7
+
+  # Windows is where run_command now has the most new behaviour, and the part
+  # that matters most — telling Git for Windows' bash.exe from WSL's launcher —
+  # is only real against a real filesystem: System32\bash.exe exists on these
+  # runners. Unit tests only; the E2E and headless-boot layers stay on the matrix
+  # above, where the app is actually shipped from.
+  unit-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (Vitest)
+        run: npm test

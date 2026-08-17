@@ -80,6 +80,19 @@ Maintainer notes:
   with the button under the list — the same way servers are removed one tab over. Until now the
   switch could only silence a skill: the file stayed, and with Stem on a server it sat in a
   folder on the server that nobody could reach.
+- **Bring your own model files.** Memory search needs a small model, downloaded once from
+  Hugging Face — and on a locked-down work laptop that download is blocked, so the feature never
+  starts. Memory → Facts → Relevance ranking now offers **Import model files**: point Stem at a
+  folder that already holds the model — Stem's own model folder copied from another computer, or
+  a download you made somewhere with an open network — and it copies it into place and loads it.
+  If the folder is missing a piece, Stem says which one instead of failing later. With Stem on a
+  server, you pick the folder on the server.
+- **Windows commands run in Git Bash.** On Windows the assistant's commands now run in Git Bash
+  when Git for Windows is installed, so `ls`, `cat` and `grep` mean what you expect and quoting
+  works the way it does everywhere else; without Git they run in Command Prompt as before.
+  Settings → Chat → Command execution switches between the two. WSL's `bash` is deliberately not
+  used: it runs inside a Linux virtual machine, where Stem cannot tell which of your folders you
+  marked read-only.
 
 ### Fixed
 
