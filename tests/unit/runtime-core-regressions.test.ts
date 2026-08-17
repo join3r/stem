@@ -972,6 +972,34 @@ describe('interactive overflow self-heal', () => {
   });
 });
 
+describe('skills in the activity strip', () => {
+  it('gives each loaded skill one row, on the turn and on the wire', async () => {
+    const { runtime } = await tempRuntime();
+    const events: Array<{ method: string; params?: unknown }> = [];
+    runtime.on('event', (e) => events.push(e as { method: string; params?: unknown }));
+    const turn = newTurnContext('t1', 'turn1');
+    const announce = (
+      runtime as unknown as {
+        announceSkills(t: typeof turn, s: { slug: string; name: string }[]): void;
+      }
+    ).announceSkills.bind(runtime);
+
+    announce(turn, [{ slug: 'brew-coffee', name: 'brew-coffee' }]);
+    // Again with the same skill: a rebuilt prompt must not double the row.
+    announce(turn, [{ slug: 'brew-coffee', name: 'brew-coffee' }]);
+
+    // On the turn, because that copy is what recordTurnEntry persists and
+    // readThread replays — a row that only ever existed on the wire is gone the
+    // moment the chat is reopened.
+    expect(turn.activity).toMatchObject([
+      { kind: 'skill', type: 'skill', name: 'brew-coffee', status: 'ok' }
+    ]);
+    // Started then completed, so the reducer needs no special case for a row
+    // that was never running in the first place.
+    expect(events.map((e) => e.method)).toEqual(['item/started', 'item/completed']);
+  });
+});
+
 // skillSlugForPath and the read-inside-a-skill-folder usage detector were deleted
 // with the retrieval takeover: skill bodies are inlined into the turn now, so no
 // tool ever reads a SKILL.md and there is no path to attribute. Usage is the

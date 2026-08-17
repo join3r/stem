@@ -41,6 +41,17 @@ during upkeep. It may use provider quota.
 
 Keep skills narrow and verifiable. Disable an auto skill to stop Stem using it.
 
+## Seeing a skill in use
+
+Above each reply is a **Used N tools** line. Skills are counted there separately — "Used 2 tools
+and 1 skill" — and expanding the line names the skills Stem loaded for that answer, alongside the
+files it read and the commands it ran. Only skills whose steps were actually put in front of the
+assistant are listed; ones it merely knew existed by name are not.
+
+The **used N×** figure on the Skills list is a different, stricter count: it credits a skill only
+when the turn ran something the skill's steps name. A skill can be loaded into a turn without
+earning that credit.
+
 ## Skills and the machine they run on
 
 A skill is followed later, possibly somewhere else: your library travels with Stem when you

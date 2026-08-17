@@ -66,6 +66,10 @@ Maintainer notes:
   stricter — nothing is pre-approved on a computer, and an "Always allow" you grant applies
   to that computer alone. Every approval card says which machine it is for.
 
+- **You can see when a skill was used.** The "Used N tools" line above a reply now counts skills
+  too, and expanding it names each one Stem loaded for that answer. A skill was invisible before:
+  it is not a tool call, so an answer built on a procedure saved weeks ago looked exactly like one
+  Stem worked out on the spot.
 - **Delete a skill from the app.** Click a skill in Tools → Skills to select it, then delete it
   with the button under the list — the same way servers are removed one tab over. Until now the
   switch could only silence a skill: the file stayed, and with Stem on a server it sat in a

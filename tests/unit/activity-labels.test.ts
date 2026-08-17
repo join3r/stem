@@ -18,6 +18,14 @@ describe('web-search phrasing', () => {
     expect(activityLabel('mcpToolCall', 'ha_search', 'spálňa')).toBe('Using ha_search spálňa…');
   });
 
+  it('names a loaded skill instead of guessing at a tool', () => {
+    // The skill's name is a slug, not a tool name — through labelForTool it would
+    // come out as "Using extract-video-captions…", which reads like a tool call.
+    expect(settledActivityLabel('skill', 'extract-video-captions')).toBe('Used the skill extract-video-captions');
+    expect(activityLabel('skill', 'extract-video-captions')).toBe('Reading the skill extract-video-captions…');
+    expect(settledActivityLabel('skill')).toBe('Used a saved skill');
+  });
+
   it('reads naturally with the parenthesized server-name fallback', () => {
     expect(settledActivityLabel('mcpToolCall', 'ha_get_history', '(homeassistant)')).toBe(
       'Used ha_get_history (homeassistant)'

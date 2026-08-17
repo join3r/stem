@@ -1904,6 +1904,31 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     this.emit('event', event);
   }
 
+  /**
+   * Give the skills this turn loaded a row each in the activity strip.
+   *
+   * Nothing was called — the steps went into the prompt before the model read the
+   * message — but the strip is where a turn accounts for what went into it, and
+   * "this answer came out of a saved procedure" was the one input it could not
+   * show. A skill was invisible everywhere in the chat: no tool call, no bubble,
+   * nothing but a reply that happened to follow steps written weeks ago.
+   *
+   * Started-then-completed, in that order and immediately, so the rows ride the
+   * ordinary reducer instead of earning a special case in it. They are pushed
+   * onto `turn.activity` too, which is the copy `recordTurnEntry` persists and
+   * `readThread` replays — otherwise they would vanish on reopen.
+   */
+  private announceSkills(turn: TurnContext, skills: { slug: string; name: string }[]): void {
+    for (const skill of skills) {
+      const id = `skill-${turn.turnId}-${skill.slug}`;
+      if (turn.activity.some((a) => a.id === id)) continue;
+      turn.activity.push({ id, kind: 'skill', type: 'skill', name: skill.name, status: 'ok' });
+      const params = { threadId: turn.threadId, turnId: turn.turnId };
+      this.emitEvent('item/started', { item: { type: 'skill', id, name: skill.name }, ...params });
+      this.emitEvent('item/completed', { item: { type: 'skill', id, status: 'ok' }, ...params });
+    }
+  }
+
   private ensureStarted(): Promise<void> {
     if (this.proc && this.proc.running) return Promise.resolve();
     if (this.starting) return this.starting;
@@ -2794,7 +2819,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const inlined = selection.inlined.map((s) => s.slug);
         if (inlined.length > 0) {
           recordInjections(inlined);
-          if (this.currentTurn?.threadId === threadId) this.currentTurn.skillsInjected = selection.inlined;
+          if (this.currentTurn?.threadId === threadId) {
+            this.currentTurn.skillsInjected = selection.inlined;
+            this.announceSkills(this.currentTurn, selection.inlined);
+          }
         }
       }
     } catch (error) {

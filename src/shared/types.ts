@@ -61,7 +61,12 @@ export interface TurnUsage {
 export interface ActivityItem {
   /** toolCallId (or the provider's web_search item id). */
   id: string;
-  kind: 'tool' | 'webSearch';
+  /**
+   * `skill` is not a call — nothing was invoked. It is a saved procedure whose
+   * steps were placed in the prompt before the model read the message, and it
+   * earns a row because the strip is where a turn says what went into it.
+   */
+  kind: 'tool' | 'webSearch' | 'skill';
   /** Normalized item type (commandExecution/fileChange/mcpToolCall/webSearch). */
   type: string;
   /** Real tool name ('read', 'grep', an MCP tool) when known. */

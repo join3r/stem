@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, FileText, Globe, Pencil, Shrink, Terminal, Wrench } from 'lucide-react';
+import { ChevronRight, FileText, Globe, GraduationCap, Pencil, Shrink, Terminal, Wrench } from 'lucide-react';
 import type { ActivityItem, SourceRef } from '../../shared/types';
 import { activityLabel, settledActivityLabel } from '../../shared/activity';
 
@@ -8,6 +8,9 @@ import { activityLabel, settledActivityLabel } from '../../shared/activity';
 // rows collapse into a single "Used N tools" summary, expandable on click.
 
 function iconFor(item: ActivityItem) {
+  // The same cap the skills migration dialog uses, so the two surfaces that talk
+  // about skills look like they are talking about the same thing.
+  if (item.kind === 'skill') return <GraduationCap size={13} />;
   if (item.type === 'webSearch') return <Globe size={13} />;
   if (item.type === 'fileChange') return <Pencil size={13} />;
   if (item.type === 'compaction') return <Shrink size={13} />;
@@ -36,7 +39,15 @@ function formatDuration(ms: number): string {
 export function ActivityRows({ items, running }: { items: ActivityItem[]; running: boolean }) {
   const [open, setOpen] = useState(false);
   if (!items.length) return null;
-  const summary = `Used ${items.length} ${items.length === 1 ? 'tool' : 'tools'}`;
+  // Skills are counted apart from tools. Folding them into "Used 3 tools" would
+  // be a lie about a row that is right there saying otherwise, and a turn whose
+  // only row is a skill would read "Used 1 tool" with no tool in sight.
+  const tools = items.filter((i) => i.kind !== 'skill').length;
+  const skills = items.length - tools;
+  const counts: string[] = [];
+  if (tools) counts.push(`${tools} ${tools === 1 ? 'tool' : 'tools'}`);
+  if (skills) counts.push(`${skills} ${skills === 1 ? 'skill' : 'skills'}`);
+  const summary = `Used ${counts.join(' and ')}`;
   const expanded = running || open;
   return (
     <div className={`activity-rows${expanded ? ' open' : ''}`}>

@@ -73,6 +73,27 @@ describe('chatState reducer', () => {
     expect(next.status).toBe('running');
   });
 
+  it('carries a loaded skill as its own kind of row, and onto the reply', () => {
+    // Skills are announced before the model has said anything, so the row has to
+    // survive until the assistant bubble exists to be stamped onto — otherwise a
+    // skill is announced to an empty screen and then lost.
+    const started = applyBackendEventToThread(
+      EMPTY_STATE,
+      event('item/started', { threadId: 't1', turnId: 'turn1', item: { type: 'skill', id: 's1', name: 'brew-coffee' } })
+    )!;
+    const settled = applyBackendEventToThread(
+      started,
+      event('item/completed', { threadId: 't1', turnId: 'turn1', item: { type: 'skill', id: 's1', status: 'ok' } })
+    )!;
+    expect(settled.activities).toMatchObject([{ id: 's1', kind: 'skill', type: 'skill', name: 'brew-coffee', status: 'ok' }]);
+
+    const replying = applyBackendEventToThread(
+      settled,
+      event('item/agentMessage/delta', { threadId: 't1', turnId: 'turn1', itemId: 'turn1', delta: 'here you go' })
+    )!;
+    expect(replying.messages.at(-1)!.activity).toMatchObject([{ id: 's1', kind: 'skill' }]);
+  });
+
   it('marks reasoning-only starts as a live turn before any text delta', () => {
     const next = applyBackendEventToThread(
       EMPTY_STATE,

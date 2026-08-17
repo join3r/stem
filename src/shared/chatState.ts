@@ -264,7 +264,7 @@ export function applyBackendEventToThread(
             ...state.activities,
             {
               id: itemId,
-              kind: type === 'webSearch' ? 'webSearch' : 'tool',
+              kind: type === 'webSearch' ? 'webSearch' : type === 'skill' ? 'skill' : 'tool',
               type,
               name: p.item.name,
               detail: p.item.detail,
