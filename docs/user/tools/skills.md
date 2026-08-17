@@ -22,9 +22,9 @@ Open **Tools → Skills**.
 ## What you can do
 
 - Use the switch to disable a skill without deleting it.
-- The trash icon deletes one for good, after a confirmation in the row. This works
-  on skills you wrote yourself too — on a server install the skills folder is on
-  the server, so this is the only way to reach it.
+- Click a skill to select it, then the trash button under the list deletes it for
+  good — it asks first. This works on skills you wrote yourself too: on a server
+  install the skills folder is on the server, so this is the only way to reach it.
 - **Tidy up** merges duplicate auto skills and archives ones untouched for 90 days.
   Archiving is the same reversible switch as above, so an archived skill can be
   switched back on.

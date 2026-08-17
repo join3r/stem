@@ -66,9 +66,10 @@ Maintainer notes:
   stricter — nothing is pre-approved on a computer, and an "Always allow" you grant applies
   to that computer alone. Every approval card says which machine it is for.
 
-- **Delete a skill from the app.** Tools → Skills has a delete button on every row, with a
-  confirmation. Until now the switch could only silence a skill: the file stayed, and with Stem
-  on a server it sat in a folder on the server that nobody could reach.
+- **Delete a skill from the app.** Click a skill in Tools → Skills to select it, then delete it
+  with the button under the list — the same way servers are removed one tab over. Until now the
+  switch could only silence a skill: the file stayed, and with Stem on a server it sat in a
+  folder on the server that nobody could reach.
 
 ### Fixed
 

@@ -2052,6 +2052,9 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .memory-reset { margin-top: 18px; padding-top: 12px; border-top: 0.5px solid var(--line); }
 .memory-reset-trigger { font-size: var(--fs-11); color: var(--muted); opacity: 0.65; }
 .memory-reset-trigger:hover { color: var(--danger); opacity: 1; }
+/* Skills rows are click-to-select, and the gutter below acts on the selection —
+   the row has no width to spare for an action of its own. */
+.skill-row { cursor: pointer; user-select: none; }
 .memory-reset-confirm { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--sp-6); font-size: var(--fs-11); }
 .memory-reset-confirm .link-btn { font-size: var(--fs-11); }
 

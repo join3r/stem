@@ -27,10 +27,13 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
   // null => skills work follows the model you chat with (see Settings → Models).
   const [skillsModel, setSkillsModel] = useState<string | null>(null);
   const [mode, setMode] = useState<SkillsMode>('ask');
-  // The slug whose delete is waiting to be confirmed, and the last delete that
-  // failed. Deleting is the one action here that cannot be taken back — the
-  // switch beside it is the reversible one — so it asks first, in the row.
-  const [confirming, setConfirming] = useState<string | null>(null);
+  // Select a row, then act on it from the gutter below the list — the same
+  // vocabulary as the MCP servers tab one segment to the left. The row itself
+  // carries no delete button: it is already carrying a name, an origin label, a
+  // usage line, a description and a switch, in a panel narrow enough that the
+  // description clips, and a permanent icon costs that space on every row to
+  // serve an action taken once in a skill's life.
+  const [selected, setSelected] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
   // What "Same as main" resolves to — the model you chat with.
   const [defaults, setDefaults] = useState<DefaultsSettings>({
@@ -72,16 +75,28 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
   }
 
   async function remove(slug: string) {
+    const name = skills.find((s) => s.slug === slug)?.name ?? slug;
+    // The system's own dialog, as in Files. An earlier attempt asked in the row
+    // itself and it was the wrong shape twice over: the question appeared under
+    // the row that raised it, so the list moved under the pointer on the way to
+    // answering it, and both answers were link-sized text in a list of switches.
+    if (
+      !window.confirm(
+        `Delete the skill “${name}”?\n\nIt is removed from disk and Stem stops using it. To stop it being used without deleting it, switch it off instead.`
+      )
+    ) {
+      return;
+    }
     setRemoveError(null);
     try {
       setSkills(await window.stem.removeSkill(slug));
+      setSelected(null);
     } catch (error) {
       // The skills folder is on the server, so this can fail for reasons nobody
       // in front of the app can see — say so rather than leaving the row sitting
       // there looking ignored.
       setRemoveError(error instanceof Error ? error.message : 'Could not delete that skill.');
     }
-    setConfirming(null);
   }
 
   function tidy() {
@@ -149,7 +164,14 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
       ) : (
         <div className="group">
           {skills.map((s) => (
-            <div key={s.slug} className="group-row">
+            <div
+              key={s.slug}
+              className={`group-row skill-row${selected === s.slug ? ' selected' : ''}`}
+              onClick={() => {
+                setRemoveError(null);
+                setSelected(selected === s.slug ? null : s.slug);
+              }}
+            >
               <span className="row-main">
                 <strong>
                   {s.name}
@@ -163,40 +185,32 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
                   </span>
                 </strong>
                 <em>{s.description}</em>
-                {confirming === s.slug && (
-                  <span className="memory-reset-confirm">
-                    <span className="muted">
-                      Delete this skill for good? Switching it off instead keeps it.
-                    </span>
-                    <button className="link-btn danger" onClick={() => remove(s.slug)}>
-                      Delete
-                    </button>
-                    <button className="link-btn" onClick={() => setConfirming(null)}>
-                      Cancel
-                    </button>
-                  </span>
-                )}
               </span>
-              <button
-                className="icon-action sm"
-                onClick={() => {
-                  setRemoveError(null);
-                  setConfirming(confirming === s.slug ? null : s.slug);
-                }}
-                title="Delete skill"
-                aria-label={`Delete ${s.name}`}
-              >
-                <Trash2 size={14} />
-              </button>
               <button
                 className={`switch${s.enabled ? ' on' : ''}`}
                 role="switch"
                 aria-checked={s.enabled}
                 aria-label={s.name}
-                onClick={() => toggle(s.slug, !s.enabled)}
+                title={s.enabled ? 'Stop Stem using this skill' : 'Let Stem use this skill again'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggle(s.slug, !s.enabled);
+                }}
               />
             </div>
           ))}
+        </div>
+      )}
+      {skills.length > 0 && (
+        <div className="gutter">
+          <button
+            title={selected ? 'Delete the selected skill' : 'Select a skill to delete it'}
+            aria-label="Delete the selected skill"
+            onClick={() => selected && remove(selected)}
+            disabled={!selected}
+          >
+            <Trash2 size={15} />
+          </button>
         </div>
       )}
       {removeError && <p className="error">{removeError}</p>}
