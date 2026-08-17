@@ -81,6 +81,70 @@ services:
     secrets:
       - stem_key
 
+  # Ollama, for memory search — OFF unless you ask for it.
+  #
+  #   COMPOSE_PROFILES=ollama          in .env, then the usual `docker compose up -d`
+  #   docker compose exec ollama ollama pull qwen3-embedding:4b
+  #
+  # Then Settings → Memory → Embeddings: base URL `http://ollama:11434`, model
+  # `qwen3-embedding:4b`. That URL is the only thing that changes when the Stem
+  # that used to run on your laptop — where the same server was on localhost —
+  # becomes this one.
+  #
+  # A container of its own rather than a second daemon inside the Stem image:
+  # the weights are a volume nobody has to rebuild, an Ollama upgrade is
+  # `docker compose pull ollama` and touches nothing of Stem's, and a model that
+  # eats the box takes down one container instead of the assistant with it.
+  #
+  # The profile is why this costs nothing to leave here. A deployment that never
+  # sets COMPOSE_PROFILES does not pull the image, does not start the container
+  # and is byte-for-byte the two-container deployment it was — and Stem does not
+  # depend on this service in any sense: an embeddings endpoint that does not
+  # answer degrades fact selection to lexical/recency, it does not fail a turn.
+  # So there is no `depends_on` here and no ordering to get right.
+  #
+  # Nothing in Stem *needs* this. The bundled embedder (Settings → Memory,
+  # "local") runs in Stem's own process, needs no container and no port; this is
+  # for the case where you have measured a bigger model to be better on your own
+  # facts, in your own languages.
+  ollama:
+    profiles: ['ollama']
+    # `latest` because a wrong pin is a failed pull, and there is no lock file
+    # here to tell you which version you were happy with. Once you know: put
+    # STEM_OLLAMA_TAG=<version> in .env. `docker compose pull ollama` is what
+    # moves it either way — `up -d` alone will not replace an image you have.
+    image: ollama/ollama:${STEM_OLLAMA_TAG:-latest}
+    platform: ${STEM_PLATFORM:-linux/amd64}
+    restart: unless-stopped
+    # No `ports:`, exactly as with stem. 11434 is published to the compose
+    # network and nowhere else, which is what makes `http://ollama:11434` safe to
+    # leave unauthenticated: Ollama has no concept of a key, and an 11434 open to
+    # the internet is somebody else's GPU bill.
+    environment:
+      TZ: ${TZ:-UTC}
+      # Both of these are memory, not speed. A VPS runs models on the CPU, and
+      # the failure that matters on a small box is not "slow" but "the kernel
+      # killed something": one model resident, one request at a time.
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      OLLAMA_NUM_PARALLEL: '1'
+      # How long a model stays resident after the last call. Ollama's default is
+      # 5m, which for fact ranking means most turns pay a cold load — the calls
+      # come minutes apart, not seconds. Raise it (`24h`, or `-1` for "never
+      # unload") on a box with the RAM to keep a 4b model parked; leave it on a
+      # box that has other work to do.
+      OLLAMA_KEEP_ALIVE: ${STEM_OLLAMA_KEEP_ALIVE:-5m}
+    volumes:
+      # The weights, and the only reason this container has state at all. A
+      # named volume for the same reason stem-models is one: several GB that
+      # ollama.com will hand back on demand, that no backup should be carrying,
+      # and that must survive `docker compose up -d` after an upgrade.
+      - ollama-models:/root/.ollama
+    # If the box is tight, cap it rather than letting it race Stem for the last
+    # of the RAM — the container is then OOM-killed and restarted on its own,
+    # instead of the kernel picking a victim:
+    #
+    #   mem_limit: 4g
+
   # The front door. TLS, rate limits, access log — see deploy/Caddyfile.
   caddy:
     build:
@@ -119,6 +183,9 @@ secrets:
 volumes:
   stem-models:
   stem-cache:
+  # Only created when the ollama profile is on; `docker compose down -v` removes
+  # it with the rest, and the next `ollama pull` fetches the weights again.
+  ollama-models:
   stem-socket:
   caddy-data:
   caddy-config:

@@ -54,6 +54,12 @@ Maintainer notes:
   demand (`uvx yt-dlp` and the like), and a tool it installs for keeps lands in a folder
   that survives upgrades. Adding a system package of your own is a few lines;
   [Running on a server](docs/running-on-a-server.md) shows the whole ladder.
+- **Ollama can live on the server.** Memory search can be pointed at your own embedding model
+  again after the move: one line in `.env` (`COMPOSE_PROFILES=ollama`) starts Ollama beside Stem
+  in its own container, and Settings → Memory points at `http://ollama:11434`. Before this the
+  only endpoint a server Stem could reach was one you exposed to the internet, or the laptop that
+  used to be the server. It stays off unless you ask for it — nothing is pulled, nothing runs —
+  and the embedder built into Stem still needs none of it.
 - **The assistant knows which computer it is on.** Ask it why a tool is failing and it now says
   which machine is missing the program, instead of assuming everything runs on the computer in
   front of you. It can list your MCP servers with where each one runs; moving one between

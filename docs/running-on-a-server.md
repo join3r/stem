@@ -261,6 +261,51 @@ backup of it before you do.
 
 ---
 
+## Ollama, if memory search used to run on your Mac
+
+Stem's memory search embeds your facts with a small model that runs **inside Stem's own
+process** — nothing to install, nothing to point at, and it is what a fresh Stem uses. You
+only need this section if you had switched Settings → Memory to your own endpoint, because
+the endpoint you switched it to was probably `localhost:11434` on the Mac that used to be
+the server. That machine is not this one, and the setting now points at nothing.
+
+The fix is a third container, off unless you ask for it. In `.env`:
+
+```
+COMPOSE_PROFILES=ollama
+```
+
+Then the ordinary two commands, and one pull:
+
+```
+docker compose up -d
+docker compose exec ollama ollama pull qwen3-embedding:4b
+```
+
+In Stem: **Settings → Memory → Embeddings**, your own endpoint, base URL
+
+```
+http://ollama:11434
+```
+
+and the model name you pulled. `localhost` is the one address that does not work here — on
+this server localhost is Stem's own container, and Ollama is a neighbour with a name.
+
+**What it costs.** ~3 GB of disk for the weights of a 4b embedding model, and roughly the
+same in RAM whenever one is loaded — on top of Stem's own gigabyte, on a box that is
+running the model on its CPU because a VPS has no GPU. On a 2 GB machine, pull
+`qwen3-embedding:0.6b` instead, or leave the bundled embedder alone; it was measured
+against the alternatives and it is not a consolation prize.
+
+**No port is opened.** Ollama listens on 11434 on the private network the containers share,
+and `docker compose ps` shows no published port for it — the same arrangement as Stem
+itself. This matters more than it does at home: Ollama has no authentication of any kind,
+and an 11434 reachable from the internet is a machine other people run models on.
+
+The weights live in a volume (`ollama-models`), so upgrading Stem does not re-download
+them, and `docker compose down -v` does. Ollama itself upgrades separately from Stem, with
+`docker compose pull ollama && docker compose up -d`.
+
 ## Backing up
 
 The state root is a directory on the host — `./state` unless you changed
@@ -298,7 +343,7 @@ docker compose up -d
 ```
 
 Nothing touches the state root, the model cache, what `uvx`/`npx` downloaded, tools
-installed with `uv tool install`, or Caddy's certificates: they are a bind mount and
+installed with `uv tool install`, what Ollama pulled, or Caddy's certificates: they are a bind mount and
 named volumes, and rebuilding an image does not go near them. What *is* lost is anything
 installed with `apt-get` into the running container — that lived in the container's own
 filesystem, which is exactly what an upgrade replaces. Take the backup
@@ -345,5 +390,5 @@ docker compose up -d
 
 **You want to start over.** `docker compose down -v` removes the containers, the socket
 volume, the model cache, the `uvx`/`npx` download cache with any tools installed into it,
-and Caddy's certificates — but not the state root, which is a bind mount on the host and
+anything Ollama had pulled, and Caddy's certificates — but not the state root, which is a bind mount on the host and
 is only ever removed by you.
