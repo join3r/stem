@@ -1,9 +1,9 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { EMBED_CATALOG, type LocalEmbedModelSpec } from './embed-catalog';
 import { RERANK_CATALOG, type LocalRerankModelSpec } from './rerank-catalog';
 import { missingModelFiles, weightsFile, type EmbedDtype } from './embed-files';
-import type { ImportedModelInfo, ImportModelResult } from '../../shared/types';
+import type { CustomImportCandidate, ImportedModelInfo, ImportModelResult } from '../../shared/types';
 
 // Bringing model weights in from a folder the user already has — a colleague's
 // cache, a `huggingface-cli download`, a USB stick. Stem does not ship or
@@ -132,20 +132,127 @@ function filesUnder(root: string): string[] {
  * Copy one model into the cache. Never overwrites: a file already there is left
  * alone, which is both the right answer for a model that is already installed
  * and the reason this cannot fail on Windows, where the ONNX of a loaded model
- * is held open and cannot be replaced.
+ * is held open and cannot be replaced. Returns how many files were new.
  */
-function copyModel(candidate: ImportCandidate, cacheDir: string): ImportedModelInfo {
-  const dest = join(cacheDir, ...candidate.repo.split('/'));
+function copyModelFiles(sourceDir: string, repo: string, cacheDir: string): number {
+  const dest = join(cacheDir, ...repo.split('/'));
   let copied = 0;
-  for (const abs of filesUnder(candidate.sourceDir)) {
-    const target = join(dest, relative(candidate.sourceDir, abs));
+  for (const abs of filesUnder(sourceDir)) {
+    const target = join(dest, relative(sourceDir, abs));
     if (existsSync(target)) continue;
     mkdirSync(dirname(target), { recursive: true });
     copyFileSync(abs, target);
     copied += 1;
   }
+  return copied;
+}
+
+function copyModel(candidate: ImportCandidate, cacheDir: string): ImportedModelInfo {
+  const copied = copyModelFiles(candidate.sourceDir, candidate.repo, cacheDir);
   const { id, stage, repo, label } = candidate;
   return { id, stage, repo, label, copied, alreadyPresent: copied === 0 };
+}
+
+// ---- models Stem has no entry for ----
+//
+// The catalog is a shortlist of models we verified, not a claim about what
+// works: a folder holding some other ONNX embedder is a perfectly good model
+// that Stem simply cannot name. Everything below is about deriving what CAN be
+// derived from such a folder, so the import dialog only has to ask the things a
+// directory listing genuinely cannot answer.
+
+/** The dtype implied by which weights file the folder actually has. */
+function dtypeInDir(dir: string): EmbedDtype | null {
+  for (const dtype of ['q8', 'q4', 'fp32'] as const) {
+    if (existsSync(join(dir, 'onnx', weightsFile(dtype)))) return dtype;
+  }
+  return null;
+}
+
+/** One path segment, reduced to what may name a folder under the model cache. */
+function safeSegment(name: string, fallback: string): string {
+  const cleaned = name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return !cleaned || cleaned === '.' || cleaned === '..' ? fallback : cleaned;
+}
+
+/**
+ * The repo id a model folder implies. A Hub cache writes it into the path
+ * (`models--org--name`) even several levels above the snapshot, so that wins
+ * wherever it appears; otherwise the folder and its parent are the two names
+ * anyone would read as org and model, which is also the layout the Stem cache
+ * and a `huggingface-cli download --local-dir` both produce.
+ */
+export function repoFromPath(dir: string): string {
+  const segments = dir.split(sep).filter(Boolean);
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const hub = /^models--(.+?)--(.+)$/.exec(segments[i]!);
+    if (hub) return `${safeSegment(hub[1]!, 'imported')}/${safeSegment(hub[2]!, 'model')}`;
+  }
+  const name = safeSegment(segments[segments.length - 1] ?? '', 'model');
+  const parent = safeSegment(segments[segments.length - 2] ?? '', 'imported');
+  return `${parent}/${name}`;
+}
+
+/** Roughly how much disk this model takes, for the line under its name in the picker. */
+function approxSizeMB(dir: string): number {
+  let bytes = 0;
+  for (const file of filesUnder(dir)) bytes += statSync(file, { throwIfNoEntry: false })?.size ?? 0;
+  return Math.max(1, Math.round(bytes / (1024 * 1024)));
+}
+
+/**
+ * Model folders under `dir` that no catalog entry claims. A folder qualifies on
+ * the same evidence transformers.js needs to load one at all — a config.json
+ * beside an `onnx/` with weights in it — because there is no other honest test:
+ * nothing in the files says "I am an embedder" or names the repo it came from.
+ */
+export function findCustomImportables(dir: string): CustomImportCandidate[] {
+  const catalog = [...Object.values(EMBED_CATALOG), ...Object.values(RERANK_CATALOG)] as CatalogSpec[];
+  const found = new Map<string, CustomImportCandidate>();
+  for (const candidate of dirsUnder(dir)) {
+    // A folder the catalog recognises belongs to the zero-question path, even
+    // when it turns out to be incomplete — that refusal names the missing file,
+    // which is far more use than being asked to describe it from scratch.
+    if (specForPath(candidate, catalog)) continue;
+    if (!existsSync(join(candidate, 'config.json'))) continue;
+    const dtype = dtypeInDir(candidate);
+    if (!dtype) continue;
+    const repo = repoFromPath(candidate);
+    if (found.has(repo)) continue;
+    found.set(repo, {
+      repo,
+      label: basename(candidate) || repo,
+      dtype,
+      approxSizeMB: approxSizeMB(candidate),
+      sourceDir: candidate
+    });
+  }
+  return [...found.values()];
+}
+
+/**
+ * Copy in a model Stem has no entry for. Same completeness check and same
+ * never-overwrite rule as the catalog path — the description the user gave says
+ * nothing about whether the files are all there, and a load that fails offline
+ * is exactly what import exists to prevent.
+ */
+export function importCustomModel(
+  sourceDir: string,
+  repo: string,
+  dtype: EmbedDtype,
+  cacheDir: string
+): { ok: true; copied: number } | { ok: false; error: string } {
+  if (!statSync(sourceDir, { throwIfNoEntry: false })?.isDirectory()) {
+    return { ok: false, error: `There is nothing at ${sourceDir}.` };
+  }
+  const missing = missingModelFiles(sourceDir, '', dtype);
+  if (missing.length) {
+    return {
+      ok: false,
+      error: `That folder is missing ${missing.join(', ')}. Copy the whole model folder, not just the weights.`
+    };
+  }
+  return { ok: true, copied: copyModelFiles(sourceDir, repo, cacheDir) };
 }
 
 function describeCatalog(): string {
@@ -171,9 +278,14 @@ export function importLocalModels(dir: string, cacheDir: string): ImportModelRes
 
   const candidates = findImportableModels(dir);
   if (!candidates.length) {
+    // Not necessarily a dead end: the folder may hold a perfectly good model
+    // that is simply not one of ours, and the caller can offer to describe it
+    // rather than send the user away to find a model from the list instead.
+    const unknown = findCustomImportables(dir);
     return {
       ok: false,
-      error: `No model Stem knows about is in that folder. ${describeCatalog()}`
+      error: `No model Stem knows about is in that folder. ${describeCatalog()}`,
+      ...(unknown.length ? { unknown } : {})
     };
   }
 

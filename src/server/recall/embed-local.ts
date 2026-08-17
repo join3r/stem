@@ -1,9 +1,9 @@
-import { EMBED_CATALOG, localModelCacheKey } from './embed-catalog';
+import { localModelCacheKey, resolveEmbedSpec } from './embed-catalog';
 import type { LocalEmbedModelSpec } from './embed-catalog';
 import { EmbeddingsUnavailableError } from './embeddings';
 import type { EmbeddingsClient, EmbedKind } from './embeddings';
 import type { EmbedWorkerManager } from './embed-manager';
-import type { EmbeddingsSettings } from '../../shared/types';
+import type { EmbeddingsSettings, RetrievalSettings } from '../../shared/types';
 
 // EmbeddingsClient over the bundled local model. The crucial contract:
 // available() NEVER awaits readiness — it kicks the worker (spawn/download) and
@@ -12,13 +12,16 @@ import type { EmbeddingsSettings } from '../../shared/types';
 // a 120 MB download. Config is read fresh per call (same pattern as the HTTP
 // client) so a settings change applies on the next turn without a restart.
 
+// The whole retrieval config rather than the embeddings half: which model
+// `localModel` names can only be answered together with the list of imported
+// ones (see resolveEmbedSpec).
 export function createLocalEmbeddingsClient(
-  getSettings: () => Promise<EmbeddingsSettings>,
+  getSettings: () => Promise<RetrievalSettings>,
   manager: EmbedWorkerManager
 ): EmbeddingsClient {
   async function spec(): Promise<LocalEmbedModelSpec | null> {
-    const s = await getSettings();
-    return s.mode === 'local' ? EMBED_CATALOG[s.localModel] : null;
+    const r = await getSettings();
+    return r.embeddings.mode === 'local' ? resolveEmbedSpec(r) : null;
   }
 
   return {

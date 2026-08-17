@@ -9,6 +9,8 @@ import {
   markOnboardingCompleted,
   memoryRunFor,
   readSettings,
+  removeCustomModel,
+  saveCustomModel,
   skillsRunFor,
   updateChatsSettings,
   updateDefaultModel,
@@ -606,6 +608,114 @@ describe('reranker settings migration + coercion', () => {
       await updateRetrievalSettings({ reranker: { mode: 'local', localModel: id as LocalRerankModelId } });
       expect((await readSettings()).retrieval.reranker.localModel).toBe(id);
     }
+  });
+});
+
+// Models the user imported that Stem has no catalog entry for. Two things are
+// load-bearing here: a stage may select one (the id is no longer a closed set),
+// and an entry must not be droppable while it is the one in use — coercion would
+// then move the stage to a curated model on the next read, which reads as a
+// model switch the user never made.
+describe('imported (non-catalog) models', () => {
+  const bge = {
+    repo: 'BAAI/bge-small-en-v1.5',
+    label: 'BGE Small',
+    dtype: 'q8',
+    approxSizeMB: 130,
+    dim: null,
+    prefixes: { query: '', passage: '' }
+  };
+
+  it('defaults to no imported models', async () => {
+    const r = (await readSettings()).retrieval;
+    expect(r.customEmbedModels).toEqual([]);
+    expect(r.customRerankModels).toEqual([]);
+  });
+
+  it('saves an entry, derives its id from the repo, and lets a stage select it', async () => {
+    const saved = await saveCustomModel('embed', bge);
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.retrieval.customEmbedModels).toEqual([{ ...bge, id: 'custom:BAAI/bge-small-en-v1.5' }]);
+    await updateRetrievalSettings({ embeddings: { mode: 'local', localModel: 'custom:BAAI/bge-small-en-v1.5' } });
+    expect((await readSettings()).retrieval.embeddings.localModel).toBe('custom:BAAI/bge-small-en-v1.5');
+  });
+
+  it('rejects an id that names neither a catalog model nor an imported one', async () => {
+    await updateRetrievalSettings({ embeddings: { mode: 'local', localModel: 'custom:nobody/nothing' } });
+    expect((await readSettings()).retrieval.embeddings.localModel).toBe('multilingual-e5-small');
+    await updateRetrievalSettings({ reranker: { mode: 'local', localModel: 'custom:nobody/nothing' } });
+    expect((await readSettings()).retrieval.reranker.localModel).toBe('bge-reranker-v2-m3');
+  });
+
+  it('refuses a description with no usable repo id, and one that could climb out of the cache', async () => {
+    for (const repo of ['', 'no-slash', '../../etc', 'a/b/c']) {
+      const result = await saveCustomModel('embed', { ...bge, repo });
+      expect(result.ok).toBe(false);
+    }
+    expect((await readSettings()).retrieval.customEmbedModels).toEqual([]);
+  });
+
+  it('replaces rather than duplicates when the same model is described again', async () => {
+    await saveCustomModel('embed', bge);
+    const again = await saveCustomModel('embed', { ...bge, label: 'BGE (renamed)', dim: 384 });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.retrieval.customEmbedModels).toHaveLength(1);
+    expect(again.retrieval.customEmbedModels[0]).toMatchObject({ label: 'BGE (renamed)', dim: 384 });
+  });
+
+  it('prefills a reranker floor from the curated model with the same scoring mode', async () => {
+    const saved = await saveCustomModel('rerank', {
+      repo: 'me/some-reranker',
+      label: 'Some reranker',
+      dtype: 'q8',
+      approxSizeMB: 400,
+      scoring: 'causal-yes-no'
+    });
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    const qwen = RERANK_CATALOG['qwen3-reranker-0.6b'];
+    expect(saved.retrieval.customRerankModels[0]).toMatchObject({
+      scoring: 'causal-yes-no',
+      minRelevantScore: qwen.minRelevantScore,
+      factGateScore: qwen.factGateScore
+    });
+  });
+
+  it('refuses to remove the entry that is currently selected', async () => {
+    await saveCustomModel('embed', bge);
+    await updateRetrievalSettings({ embeddings: { mode: 'local', localModel: 'custom:BAAI/bge-small-en-v1.5' } });
+    const refused = await removeCustomModel('embed', 'custom:BAAI/bge-small-en-v1.5');
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.error).toContain('selected model');
+    expect((await readSettings()).retrieval.customEmbedModels).toHaveLength(1);
+    // …and succeeds once something else is selected. The weights stay on disk.
+    await updateRetrievalSettings({ embeddings: { localModel: 'multilingual-e5-small' } });
+    const removed = await removeCustomModel('embed', 'custom:BAAI/bge-small-en-v1.5');
+    expect(removed.ok).toBe(true);
+    expect((await readSettings()).retrieval.customEmbedModels).toEqual([]);
+  });
+
+  it('says so when asked to remove a model that is not in the list', async () => {
+    const result = await removeCustomModel('rerank', 'custom:nobody/nothing');
+    expect(result.ok).toBe(false);
+  });
+
+  it('drops a persisted entry that is not describable, and the selection with it', async () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        retrieval: {
+          embeddings: { mode: 'local', localModel: 'custom:BAAI/bge-small-en-v1.5' },
+          customEmbedModels: [{ ...bge, dtype: 'made-up' }]
+        }
+      })
+    );
+    const r = (await readSettings()).retrieval;
+    expect(r.customEmbedModels).toEqual([]);
+    expect(r.embeddings.localModel).toBe('multilingual-e5-small');
   });
 });
 

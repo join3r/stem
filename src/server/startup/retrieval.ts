@@ -1,5 +1,5 @@
 import { host } from '../host';
-import { readSettings } from '../workspace/settings';
+import { readSettings, saveCustomModel } from '../workspace/settings';
 import { embedModelsDir, embedSocketPath, recallDbPath } from '../workspace/paths';
 
 import { embedNewMessages } from '../recall/embed-episodic';
@@ -8,10 +8,10 @@ import { getEmbeddingsClient, setRetrievalClients } from '../recall/retrieval';
 import { startEmbedEndpoint } from '../recall/embed-endpoint';
 import { createHttpEmbeddingsClient, type EmbeddingsClient } from '../recall/embeddings';
 import { createHttpRerankClient } from '../recall/rerank';
-import { EMBED_CATALOG, localModelCacheKey } from '../recall/embed-catalog';
+import { isCustomModelId, localModelCacheKey, resolveEmbedSpec } from '../recall/embed-catalog';
 import { createEmbedWorkerManager, type EmbedWorkerManager } from '../recall/embed-manager';
 import { createEmbeddingsRouter, createLocalEmbeddingsClient } from '../recall/embed-local';
-import { RERANK_CATALOG } from '../recall/rerank-catalog';
+import { resolveRerankSpec } from '../recall/rerank-catalog';
 import { createLocalRerankClient, createRerankRouter } from '../recall/rerank-local';
 import { createRemoteHealthTracker, type RemoteHealthTracker } from '../recall/remote-health';
 import { spawnEmbedWorker } from '../recall/embed-worker-host';
@@ -171,9 +171,10 @@ export function initRetrieval(deps: {
   // in-process implementations if the worker is unavailable (see recall/scan.ts).
   const scanManager = createScanWorkerManager({ spawn: spawnScanWorker, dbPath: () => recallDbPath() });
   setScanWorkerManager(scanManager);
-  const getEmbedSettings = async () => (await readSettings()).retrieval.embeddings;
-  const getRerankSettings = async () => (await readSettings()).retrieval.reranker;
-  const localEmbeddings = createLocalEmbeddingsClient(getEmbedSettings, embedManager);
+  const getRetrieval = async () => (await readSettings()).retrieval;
+  const getEmbedSettings = async () => (await getRetrieval()).embeddings;
+  const getRerankSettings = async () => (await getRetrieval()).reranker;
+  const localEmbeddings = createLocalEmbeddingsClient(getRetrieval, embedManager);
   // Remote endpoints have no lifecycle to stream the way the local worker does,
   // so their health is the recorded outcome of the requests recall makes anyway
   // — the wrappers below write it, and the Memory tab's red markers read it.
@@ -205,7 +206,7 @@ export function initRetrieval(deps: {
     // ready → inject degrades to the cosine ranking.
     rerank: createRerankRouter({
       getMode: async () => (await getRerankSettings()).mode,
-      local: createLocalRerankClient(getRerankSettings, embedManager),
+      local: createLocalRerankClient(getRetrieval, embedManager),
       remote: remoteHealth.wrapRerank(
         createHttpRerankClient(async () => {
           const r = await getRerankSettings();
@@ -242,9 +243,17 @@ export function initRetrieval(deps: {
     if (status.state !== 'ready') return;
     void (async () => {
       try {
-        const e = await getEmbedSettings();
+        const retrieval = await getRetrieval();
+        const e = retrieval.embeddings;
         if (e.mode !== 'local' || e.localModel !== status.model) return;
-        const key = localModelCacheKey(EMBED_CATALOG[e.localModel]);
+        const spec = resolveEmbedSpec(retrieval);
+        // An imported model's dimension is not knowable from its folder, so it
+        // is recorded from the load probe the first time the model comes up —
+        // the only moment anything learns it.
+        if (status.dim && isCustomModelId(spec.id) && spec.dim !== status.dim) {
+          await saveCustomModel('embed', { ...spec, dim: status.dim });
+        }
+        const key = localModelCacheKey(spec);
         const factsGeneration = getFactsGeneration();
         pruneVectorsExceptModel(key);
         const missing = getFactsMissingVector(key);
@@ -300,11 +309,9 @@ export function initRetrieval(deps: {
   // E2E: hermetic runs must not hit the network.
   if (!deps.e2e) {
     setTimeout(() => {
-      void getEmbedSettings().then((e) => {
-        if (e.mode === 'local') embedManager.ensure(EMBED_CATALOG[e.localModel]);
-      });
-      void getRerankSettings().then((r) => {
-        if (r.mode === 'local') embedManager.ensureRerank(RERANK_CATALOG[r.localModel]);
+      void getRetrieval().then((r) => {
+        if (r.embeddings.mode === 'local') embedManager.ensure(resolveEmbedSpec(r));
+        if (r.reranker.mode === 'local') embedManager.ensureRerank(resolveRerankSpec(r));
       });
     }, 1_500);
   }

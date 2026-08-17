@@ -3,7 +3,10 @@ import { readFile, rename, writeFile } from 'node:fs/promises';
 import type {
   ChatsSettings,
   ChatSubjectMode,
+  CustomEmbedModel,
   CustomInstructionsSettings,
+  CustomModelResult,
+  CustomRerankModel,
   DefaultsSettings,
   EmbeddingsMode,
   EmbeddingsSettings,
@@ -11,6 +14,7 @@ import type {
   ExecSettings,
   OnboardingSettings,
   LocalEmbedModelId,
+  LocalModelDtype,
   LocalProviderApi,
   LocalProviderId,
   LocalProviderSettings,
@@ -30,8 +34,8 @@ import type {
 } from '../../shared/types';
 import { type BackgroundRole, resolveRoleEffort } from '../../shared/modelRoles';
 import { DEFAULT_SCRATCH_TTL_DAYS } from '../exec/scratch';
-import { EMBED_CATALOG } from '../recall/embed-catalog';
-import { RERANK_CATALOG } from '../recall/rerank-catalog';
+import { customModelId, EMBED_CATALOG } from '../recall/embed-catalog';
+import { DEFAULT_LOCAL_RERANK_MODEL, RERANK_CATALOG } from '../recall/rerank-catalog';
 import { settingsStorePath } from './paths';
 
 // Stem-owned app settings. Like the chat store, kept deliberately tiny and
@@ -127,7 +131,11 @@ const DEFAULTS: ServerSettings = {
       baseUrl: 'http://localhost:8080',
       model: '',
       apiKey: null
-    }
+    },
+    // Models the user brought themselves that Stem has no catalog entry for.
+    // Empty on every install until somebody imports one.
+    customEmbedModels: [],
+    customRerankModels: []
   },
   // Escape-to-retract is opt-in: off until the user picks single/two-stage.
   escapeAction: 'off',
@@ -168,6 +176,105 @@ function coerceEffort(raw: unknown): string | null {
   return typeof raw === 'string' && EFFORT_LEVELS.includes(raw) ? raw : null;
 }
 
+// ---- imported (non-catalog) models ----
+//
+// Weights the user brought that Stem has no entry for, described once at import
+// time and stored here. Checked as strictly as anything else that comes off
+// disk, and for one extra reason: the repo id names a folder under the model
+// cache, so it is the only settings string that becomes a path.
+
+const DTYPES: readonly LocalModelDtype[] = ['q8', 'q4', 'fp32'];
+const RERANK_SCORINGS: readonly CustomRerankModel['scoring'][] = ['classifier', 'causal-yes-no'];
+
+/** `org/name` and nothing that could climb out of the model cache. */
+function isSafeRepoId(repo: unknown): repo is string {
+  if (typeof repo !== 'string') return false;
+  const parts = repo.split('/');
+  return parts.length === 2 && parts.every((p) => p !== '.' && p !== '..' && /^[A-Za-z0-9._-]+$/.test(p));
+}
+
+/** The fields both kinds share, or null when the entry can't name a model at all. */
+function coerceCustomBase(
+  raw: unknown
+): Pick<CustomEmbedModel, 'id' | 'repo' | 'label' | 'dtype' | 'approxSizeMB'> | null {
+  if (!isRecord(raw) || !isSafeRepoId(raw.repo) || !DTYPES.includes(raw.dtype as LocalModelDtype)) return null;
+  const size = typeof raw.approxSizeMB === 'number' && Number.isFinite(raw.approxSizeMB) ? raw.approxSizeMB : 0;
+  return {
+    // Derived from the repo rather than read: one entry per model folder, and an
+    // id nobody can hand-write into a collision with a catalog model.
+    id: customModelId(raw.repo),
+    repo: raw.repo,
+    label: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : raw.repo,
+    dtype: raw.dtype as LocalModelDtype,
+    approxSizeMB: Math.max(0, Math.round(size))
+  };
+}
+
+/** One imported embedder, or null when it is not describable. */
+export function coerceCustomEmbedModel(raw: unknown): CustomEmbedModel | null {
+  const base = coerceCustomBase(raw);
+  if (!base) return null;
+  const r = raw as Record<string, unknown>;
+  const p = isRecord(r.prefixes) ? r.prefixes : {};
+  return {
+    ...base,
+    // Only ever written by the load probe, so a missing or nonsense value means
+    // "hasn't loaded yet" rather than something to fall back from.
+    dim: typeof r.dim === 'number' && Number.isFinite(r.dim) && r.dim > 0 ? Math.round(r.dim) : null,
+    prefixes: {
+      query: typeof p.query === 'string' ? p.query : '',
+      passage: typeof p.passage === 'string' ? p.passage : ''
+    }
+  };
+}
+
+/**
+ * The curated model that scores the same way, whose floors an imported reranker
+ * starts from. Borrowed, not measured: they are calibrated to another model's
+ * logit scale, which is why the import dialog says so out loud.
+ */
+function curatedRerankFloors(scoring: CustomRerankModel['scoring']): {
+  minRelevantScore: number;
+  factGateScore: number;
+} {
+  const donor =
+    Object.values(RERANK_CATALOG).find((s) => s.scoring === scoring) ?? RERANK_CATALOG[DEFAULT_LOCAL_RERANK_MODEL];
+  return { minRelevantScore: donor.minRelevantScore, factGateScore: donor.factGateScore };
+}
+
+/** One imported reranker, or null when it is not describable. */
+export function coerceCustomRerankModel(raw: unknown): CustomRerankModel | null {
+  const base = coerceCustomBase(raw);
+  if (!base) return null;
+  const r = raw as Record<string, unknown>;
+  const scoring = RERANK_SCORINGS.includes(r.scoring as CustomRerankModel['scoring'])
+    ? (r.scoring as CustomRerankModel['scoring'])
+    : 'classifier';
+  const fallback = curatedRerankFloors(scoring);
+  const instruct = typeof r.instruct === 'string' && r.instruct.trim() ? r.instruct.trim() : null;
+  // The floors are raw logits on an unbounded scale — every finite number is a
+  // legitimate answer, so being one is the whole check.
+  const floor = (v: unknown, def: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : def);
+  return {
+    ...base,
+    scoring,
+    ...(instruct ? { instruct } : {}),
+    minRelevantScore: floor(r.minRelevantScore, fallback.minRelevantScore),
+    factGateScore: floor(r.factGateScore, fallback.factGateScore)
+  };
+}
+
+/** Drop unusable entries; last one wins per model, so re-importing updates rather than duplicates. */
+function coerceCustomModels<T extends { id: string }>(raw: unknown, one: (v: unknown) => T | null): T[] {
+  if (!Array.isArray(raw)) return [];
+  const byId = new Map<string, T>();
+  for (const entry of raw) {
+    const model = one(entry);
+    if (model) byId.set(model.id, model);
+  }
+  return [...byId.values()];
+}
+
 const RERANKER_MODES: readonly RerankerMode[] = ['off', 'local', 'remote'];
 // Derived from the catalog, not written out by hand: a hand-kept copy silently
 // rejected 'qwen3-reranker-0.6b' when it was added everywhere but here, and
@@ -178,7 +285,8 @@ const LOCAL_RERANK_MODELS: readonly LocalRerankModelId[] = Object.keys(
 
 function coerceReranker(
   raw: (Partial<RerankerSettings> & { enabled?: unknown }) | undefined,
-  def: RerankerSettings
+  def: RerankerSettings,
+  custom: CustomRerankModel[]
 ): RerankerSettings {
   const r = raw ?? {};
   // Migration from the pre-mode shape ({ enabled: boolean } + endpoint fields):
@@ -193,9 +301,14 @@ function coerceReranker(
       : def.mode;
   return {
     mode,
-    localModel: LOCAL_RERANK_MODELS.includes(r.localModel as LocalRerankModelId)
-      ? (r.localModel as LocalRerankModelId)
-      : def.localModel,
+    // Catalog ∪ imported: the set is only closed until someone brings their own
+    // weights, and an id that names neither would leave the stage pointing at a
+    // model nothing can describe.
+    localModel:
+      LOCAL_RERANK_MODELS.includes(r.localModel as LocalRerankModelId) ||
+      custom.some((m) => m.id === r.localModel)
+        ? (r.localModel as string)
+        : def.localModel,
     baseUrl: typeof r.baseUrl === 'string' && r.baseUrl.trim() ? r.baseUrl.trim() : def.baseUrl,
     model: typeof r.model === 'string' ? r.model.trim() : def.model,
     apiKey: typeof r.apiKey === 'string' && r.apiKey.trim() ? r.apiKey : null
@@ -210,7 +323,8 @@ const LOCAL_EMBED_MODELS: readonly LocalEmbedModelId[] = Object.keys(
 
 function coerceEmbeddings(
   raw: (Partial<EmbeddingsSettings> & { enabled?: unknown }) | undefined,
-  def: EmbeddingsSettings
+  def: EmbeddingsSettings,
+  custom: CustomEmbedModel[]
 ): EmbeddingsSettings {
   const r = raw ?? {};
   // Migration from the pre-mode shape ({ enabled: boolean } + endpoint fields):
@@ -224,9 +338,11 @@ function coerceEmbeddings(
       : def.mode;
   return {
     mode,
-    localModel: LOCAL_EMBED_MODELS.includes(r.localModel as LocalEmbedModelId)
-      ? (r.localModel as LocalEmbedModelId)
-      : def.localModel,
+    // Catalog ∪ imported — see coerceReranker.
+    localModel:
+      LOCAL_EMBED_MODELS.includes(r.localModel as LocalEmbedModelId) || custom.some((m) => m.id === r.localModel)
+        ? (r.localModel as string)
+        : def.localModel,
     baseUrl: typeof r.baseUrl === 'string' && r.baseUrl.trim() ? r.baseUrl.trim() : def.baseUrl,
     model: typeof r.model === 'string' ? r.model.trim() : def.model,
     apiKey: typeof r.apiKey === 'string' && r.apiKey.trim() ? r.apiKey : null
@@ -378,9 +494,16 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
           : DEFAULTS.exec.windowsShell
   };
   const rawRet = (parsed?.retrieval ?? {}) as Partial<RetrievalSettings>;
+  // Imported models first: they are half of what a stage's model id is allowed
+  // to be, so an entry that doesn't survive coercion must not leave the stage
+  // selecting it.
+  const customEmbedModels = coerceCustomModels(rawRet.customEmbedModels, coerceCustomEmbedModel);
+  const customRerankModels = coerceCustomModels(rawRet.customRerankModels, coerceCustomRerankModel);
   const retrieval: RetrievalSettings = {
-    embeddings: coerceEmbeddings(rawRet.embeddings, DEFAULTS.retrieval.embeddings),
-    reranker: coerceReranker(rawRet.reranker, DEFAULTS.retrieval.reranker)
+    embeddings: coerceEmbeddings(rawRet.embeddings, DEFAULTS.retrieval.embeddings, customEmbedModels),
+    reranker: coerceReranker(rawRet.reranker, DEFAULTS.retrieval.reranker, customRerankModels),
+    customEmbedModels,
+    customRerankModels
   };
   const escapeAction: EscapeAction = ESCAPE_ACTIONS.includes(parsed?.escapeAction as EscapeAction)
     ? (parsed!.escapeAction as EscapeAction)
@@ -741,10 +864,88 @@ export function updateRetrievalSettings(patch: PartialRetrievalSettings): Promis
       ...cur,
       retrieval: {
         embeddings: { ...cur.retrieval.embeddings, ...patch.embeddings },
-        reranker: { ...cur.retrieval.reranker, ...patch.reranker }
+        reranker: { ...cur.retrieval.reranker, ...patch.reranker },
+        // Lists, so replaced wholesale or left alone — there is no field-wise
+        // merge of "which models exist".
+        customEmbedModels: patch.customEmbedModels ?? cur.retrieval.customEmbedModels,
+        customRerankModels: patch.customRerankModels ?? cur.retrieval.customRerankModels
       }
     });
     await writeSettings(next);
     return next;
+  });
+}
+
+/**
+ * Add or replace an imported model's description — the answers the import
+ * dialog collected, or an edit of them later. Keyed by the model's repo, so
+ * importing the same folder twice updates one entry instead of growing a
+ * second. Does NOT select the model: import puts weights on disk and a name in
+ * a list, and switching the stage under the user is a separate decision.
+ */
+export function saveCustomModel(stage: 'embed' | 'rerank', raw: unknown): Promise<CustomModelResult> {
+  return enqueue(async () => {
+    const cur = await readSettings();
+    let retrieval: RetrievalSettings;
+    if (stage === 'embed') {
+      const model = coerceCustomEmbedModel(raw);
+      if (!model) return unusableModel;
+      const rest = cur.retrieval.customEmbedModels.filter((m) => m.id !== model.id);
+      retrieval = { ...cur.retrieval, customEmbedModels: [...rest, model] };
+    } else {
+      const model = coerceCustomRerankModel(raw);
+      if (!model) return unusableModel;
+      const rest = cur.retrieval.customRerankModels.filter((m) => m.id !== model.id);
+      retrieval = { ...cur.retrieval, customRerankModels: [...rest, model] };
+    }
+    const next = coerce({ ...cur, retrieval });
+    await writeSettings(next);
+    return { ok: true, retrieval: next.retrieval };
+  });
+}
+
+/** Said when a model description names nothing Stem could load or file on disk. */
+export const UNUSABLE_MODEL_ERROR =
+  'Stem could not make sense of that model description — it needs a repo id like org/name and a quantization.';
+
+const unusableModel: CustomModelResult = { ok: false, error: UNUSABLE_MODEL_ERROR };
+
+/**
+ * The stored shape of an incoming model description, or null when it is not
+ * one. Callers that need the repo id BEFORE saving (the import copy, which
+ * turns it into a path) go through this rather than trusting what they were
+ * handed.
+ */
+export function coerceCustomModel(
+  stage: 'embed' | 'rerank',
+  raw: unknown
+): CustomEmbedModel | CustomRerankModel | null {
+  return stage === 'embed' ? coerceCustomEmbedModel(raw) : coerceCustomRerankModel(raw);
+}
+
+/**
+ * Drop an imported model's entry. The cached weights stay on disk — deleting
+ * files somebody may have carried in on a USB stick is a different, much less
+ * recoverable action than forgetting a name.
+ */
+export function removeCustomModel(stage: 'embed' | 'rerank', id: string): Promise<CustomModelResult> {
+  return enqueue(async () => {
+    const cur = await readSettings();
+    const embed = stage === 'embed';
+    const selected = embed ? cur.retrieval.embeddings.localModel : cur.retrieval.reranker.localModel;
+    // Refused while selected, rather than quietly reverting: with the entry gone
+    // coercion would move the stage to a curated model on the next read, and the
+    // user would find a model switch they never made.
+    if (selected === id) {
+      return { ok: false, error: 'This is the selected model — choose another one first.' };
+    }
+    const list = embed ? cur.retrieval.customEmbedModels : cur.retrieval.customRerankModels;
+    if (!list.some((m) => m.id === id)) return { ok: false, error: 'That model is not in the list.' };
+    const retrieval: RetrievalSettings = embed
+      ? { ...cur.retrieval, customEmbedModels: cur.retrieval.customEmbedModels.filter((m) => m.id !== id) }
+      : { ...cur.retrieval, customRerankModels: cur.retrieval.customRerankModels.filter((m) => m.id !== id) };
+    const next = coerce({ ...cur, retrieval });
+    await writeSettings(next);
+    return { ok: true, retrieval: next.retrieval };
   });
 }

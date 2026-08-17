@@ -1,9 +1,9 @@
-import { RERANK_CATALOG } from './rerank-catalog';
+import { resolveRerankSpec } from './rerank-catalog';
 import type { LocalRerankModelSpec } from './rerank-catalog';
 import { RerankUnavailableError } from './rerank';
 import type { RerankClient } from './rerank';
 import type { EmbedWorkerManager } from './embed-manager';
-import type { RerankerSettings } from '../../shared/types';
+import type { RerankerSettings, RetrievalSettings } from '../../shared/types';
 
 // RerankClient over the bundled local cross-encoder. Same contract as the local
 // embeddings client: available() NEVER awaits readiness — it kicks the worker
@@ -12,13 +12,15 @@ import type { RerankerSettings } from '../../shared/types';
 // waits on a model download. Config is read fresh per call so a settings change
 // applies on the next turn without a restart.
 
+// Takes the whole retrieval config for the same reason the embeddings client
+// does: a model id means nothing without the list of imported models.
 export function createLocalRerankClient(
-  getSettings: () => Promise<RerankerSettings>,
+  getSettings: () => Promise<RetrievalSettings>,
   manager: EmbedWorkerManager
 ): RerankClient {
   async function spec(): Promise<LocalRerankModelSpec | null> {
-    const s = await getSettings();
-    return s.mode === 'local' ? RERANK_CATALOG[s.localModel] : null;
+    const r = await getSettings();
+    return r.reranker.mode === 'local' ? resolveRerankSpec(r) : null;
   }
 
   return {

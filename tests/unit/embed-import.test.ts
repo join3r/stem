@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { findImportableModels, importLocalModels } from '../../src/server/recall/embed-import';
+import {
+  findCustomImportables,
+  findImportableModels,
+  importCustomModel,
+  importLocalModels,
+  repoFromPath
+} from '../../src/server/recall/embed-import';
 
 // Importing weights the user brought themselves. The three layouts are the three
 // ways someone actually ends up holding a model, and the refusals matter as much
@@ -103,5 +109,90 @@ describe('importLocalModels', () => {
   it('says so when the folder is not there', () => {
     const result = importLocalModels(join(src, 'nope'), cache);
     expect(result.ok).toBe(false);
+  });
+
+  // The refusal that isn't a dead end: the folder holds a model, just not one of
+  // ours, and the caller can offer to describe it instead of sending the user
+  // away to find a catalogued model.
+  it('hands back an unrecognised model as a candidate, not just a refusal', () => {
+    completeModel(src, 'BAAI/bge-small-en-v1.5');
+    const result = importLocalModels(src, cache);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.unknown).toHaveLength(1);
+    expect(result.unknown![0]).toMatchObject({ repo: 'BAAI/bge-small-en-v1.5', dtype: 'q8' });
+  });
+});
+
+// A model Stem has no entry for. Everything the dialog does NOT ask about is
+// inferred here, so this is where a wrong inference has to be caught: the repo id
+// becomes the folder under the cache, and the dtype decides which weights file
+// the worker (and the offline gate) will look for.
+describe('findCustomImportables', () => {
+  it('reads the repo id from a Hub cache path, however deep the snapshot sits', () => {
+    expect(repoFromPath(join('/tmp', 'models--BAAI--bge-m3', 'snapshots', 'abc123'))).toBe('BAAI/bge-m3');
+  });
+
+  it('reads the repo id from a plain org/name folder', () => {
+    expect(repoFromPath(join('/tmp', 'hub', 'BAAI', 'bge-m3'))).toBe('BAAI/bge-m3');
+  });
+
+  it('reduces a folder name to something that can safely BE a folder', () => {
+    // The repo id names a directory under the model cache, so what it may
+    // contain is the same question as what a path segment may contain.
+    expect(repoFromPath(join('/tmp', 'my models', 'bge m3 (copy)'))).toBe('my-models/bge-m3-copy');
+    // Nothing above the folder to read as an org — say so rather than invent one.
+    expect(repoFromPath(join('/', 'bge-m3'))).toBe('imported/bge-m3');
+  });
+
+  it('derives the dtype from the weights file that is actually there', () => {
+    for (const [file, dtype] of [
+      ['model_quantized.onnx', 'q8'],
+      ['model_q4.onnx', 'q4'],
+      ['model.onnx', 'fp32']
+    ] as const) {
+      const root = join(src, dtype);
+      write(root, 'mine/model/config.json');
+      write(root, `mine/model/onnx/${file}`, 'X'.repeat(4 * 1024 * 1024));
+      expect(findCustomImportables(root)[0]).toMatchObject({ repo: 'mine/model', dtype });
+    }
+  });
+
+  it('ignores a folder the catalog already claims, so it keeps the named refusal', () => {
+    // Half a catalogued model: importLocalModels says which file is missing,
+    // which is far more use than being asked to describe it from scratch.
+    write(src, `${REPO}/config.json`);
+    write(src, `${REPO}/${WEIGHTS}`, 'X'.repeat(4 * 1024 * 1024));
+    expect(findCustomImportables(src)).toEqual([]);
+  });
+
+  it('ignores a folder with no config.json — nothing there names a model', () => {
+    write(src, 'mine/model/onnx/model.onnx', 'X'.repeat(4 * 1024 * 1024));
+    expect(findCustomImportables(src)).toEqual([]);
+  });
+
+  it('reports the size on disk and the folder name', () => {
+    completeModel(src, 'mine/bge-small');
+    const [found] = findCustomImportables(src);
+    expect(found).toMatchObject({ label: 'bge-small' });
+    expect(found!.approxSizeMB).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe('importCustomModel', () => {
+  it('copies into the cache under the repo id it was given', () => {
+    completeModel(src, 'mine/bge-small');
+    const result = importCustomModel(join(src, 'mine', 'bge-small'), 'mine/bge-small', 'q8', cache);
+    expect(result.ok).toBe(true);
+    expect(readFileSync(join(cache, 'mine', 'bge-small', 'config.json'), 'utf8')).toBe('x');
+  });
+
+  it('refuses by name when the folder is half a model', () => {
+    completeModel(src, 'mine/bge-small');
+    rmSync(join(src, 'mine', 'bge-small', 'tokenizer_config.json'));
+    const result = importCustomModel(join(src, 'mine', 'bge-small'), 'mine/bge-small', 'q8', cache);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('tokenizer_config.json');
   });
 });

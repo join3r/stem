@@ -24,15 +24,25 @@ import {
 import { previewFacts } from '../recall/inject';
 import { consolidateFacts } from '../recall/consolidate';
 import { processExplicitNote } from '../recall/note';
-import { EMBED_CATALOG } from '../recall/embed-catalog';
-import { importLocalModels } from '../recall/embed-import';
+import { DEFAULT_LOCAL_EMBED_MODEL, EMBED_CATALOG, resolveEmbedSpec } from '../recall/embed-catalog';
+import { importCustomModel, importLocalModels } from '../recall/embed-import';
 import { embedModelsDir } from '../workspace/paths';
-import { DEFAULT_LOCAL_RERANK_MODEL, RERANK_CATALOG } from '../recall/rerank-catalog';
-import { memoryRunOf, readSettings } from '../workspace/settings';
+import { DEFAULT_LOCAL_RERANK_MODEL, RERANK_CATALOG, resolveRerankSpec } from '../recall/rerank-catalog';
+import {
+  coerceCustomModel,
+  memoryRunOf,
+  readSettings,
+  removeCustomModel,
+  saveCustomModel,
+  UNUSABLE_MODEL_ERROR
+} from '../workspace/settings';
 import type { LlmClient } from '../recall/llm';
 import type {
   ActiveFacts,
   ConflictResolution,
+  CustomEmbedModel,
+  CustomModelResult,
+  CustomRerankModel,
   ImportModelResult,
   LocalEmbedStatus,
   LocalRerankStatus,
@@ -114,14 +124,18 @@ export function registerMemoryIpc(deps: IpcDeps): void {
     // Opening the panel doubles as a kick (idempotent while healthy), so someone
     // who goes straight to Memory → advanced right after launch sees the worker
     // start immediately instead of an idle state until the startup timer lands.
-    const e = (await readSettings()).retrieval.embeddings;
-    if (!deps.e2e && e.mode === 'local') deps.embedManager()?.ensure(EMBED_CATALOG[e.localModel]);
-    return deps.embedManager()?.status() ?? { model: 'multilingual-e5-small', state: 'idle' };
+    const retrieval = (await readSettings()).retrieval;
+    if (!deps.e2e && retrieval.embeddings.mode === 'local') {
+      deps.embedManager()?.ensure(resolveEmbedSpec(retrieval));
+    }
+    return deps.embedManager()?.status() ?? { model: DEFAULT_LOCAL_EMBED_MODEL, state: 'idle' };
   });
   registerServer('reranker:localStatus', async (): Promise<LocalRerankStatus> => {
     // Same panel-open kick as embeddings:localStatus, for the reranker model.
-    const r = (await readSettings()).retrieval.reranker;
-    if (!deps.e2e && r.mode === 'local') deps.embedManager()?.ensureRerank(RERANK_CATALOG[r.localModel]);
+    const retrieval = (await readSettings()).retrieval;
+    if (!deps.e2e && retrieval.reranker.mode === 'local') {
+      deps.embedManager()?.ensureRerank(resolveRerankSpec(retrieval));
+    }
     return deps.embedManager()?.rerankStatus() ?? { model: DEFAULT_LOCAL_RERANK_MODEL, state: 'idle' };
   });
   /**
@@ -145,6 +159,44 @@ export function registerMemoryIpc(deps: IpcDeps): void {
     }
     return result;
   });
+  /**
+   * The other half of import: a model no catalog entry matches, brought in with
+   * the description the dialog assembled — what the folder said (repo,
+   * quantization, size) plus the handful of answers a directory listing cannot
+   * give. Files first, entry second, so a folder that turns out to be
+   * incomplete never leaves behind a name for a model that cannot load.
+   *
+   * Deliberately does NOT select the model. Import is "this now exists"; making
+   * it the active one is a separate click, and re-embedding the whole fact store
+   * is not something to do to somebody who was only copying files in.
+   */
+  registerServer(
+    'models:importCustom',
+    async (
+      _e,
+      dir: string,
+      stage: 'embed' | 'rerank',
+      model: CustomEmbedModel | CustomRerankModel
+    ): Promise<CustomModelResult> => {
+      const described = coerceCustomModel(stage, model);
+      if (!described) return { ok: false, error: UNUSABLE_MODEL_ERROR };
+      const copied = importCustomModel(String(dir ?? ''), described.repo, described.dtype, embedModelsDir());
+      if (!copied.ok) return copied;
+      return saveCustomModel(stage, described);
+    }
+  );
+  /** Edits to an imported model's description; its files are already in place. */
+  registerServer(
+    'models:saveCustom',
+    (_e, stage: 'embed' | 'rerank', model: CustomEmbedModel | CustomRerankModel): Promise<CustomModelResult> =>
+      saveCustomModel(stage, model)
+  );
+  /** Forget an imported model. The weights stay on disk — see removeCustomModel. */
+  registerServer(
+    'models:removeCustom',
+    (_e, stage: 'embed' | 'rerank', id: string): Promise<CustomModelResult> =>
+      removeCustomModel(stage, String(id ?? ''))
+  );
   registerServer(
     'retrieval:remoteHealth',
     (): RemoteRetrievalHealth =>

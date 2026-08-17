@@ -1982,14 +1982,22 @@ export type EmbeddingsMode = 'off' | 'local' | 'remote';
 /** Curated local embedding models (specs live in server/recall/embed-catalog.ts). */
 export type LocalEmbedModelId = 'multilingual-e5-small' | 'multilingual-e5-base' | 'embeddinggemma-300m';
 
+/** Quantization a local model is loaded at, passed to transformers.js as `dtype`. */
+export type LocalModelDtype = 'q8' | 'q4' | 'fp32';
+
 /**
  * Embeddings-stage settings: an exclusive mode plus the config for both backends
  * (kept side-by-side so switching modes never loses the remote endpoint details).
  */
 export interface EmbeddingsSettings {
   mode: EmbeddingsMode;
-  /** Which curated local model to run when mode === 'local'. */
-  localModel: LocalEmbedModelId;
+  /**
+   * Which local model to run when mode === 'local': a {@link LocalEmbedModelId}
+   * or the id of a {@link CustomEmbedModel} the user imported. A plain string
+   * rather than the union because the set is only closed until someone brings
+   * their own weights; settings coercion validates it against catalog ∪ custom.
+   */
+  localModel: string;
   /** Remote endpoint (used when mode === 'remote'): any OpenAI-compatible /v1/embeddings server. */
   baseUrl: string;
   model: string;
@@ -1998,7 +2006,8 @@ export interface EmbeddingsSettings {
 
 /** Live state of the local embedding worker/model — drives the Manage-panel status line. */
 export interface LocalEmbedStatus {
-  model: LocalEmbedModelId;
+  /** Catalog id, or a custom model's — the same string `localModel` holds. */
+  model: string;
   state: 'idle' | 'downloading' | 'loading' | 'ready' | 'error';
   /** Download progress 0–100 while state === 'downloading'. */
   progressPct?: number;
@@ -2044,9 +2053,87 @@ export interface ImportedModelInfo {
  * redistribute models, so this is how a machine with no route to Hugging Face
  * gets one. A refusal names what is wrong — there is no second chance to guess
  * on a machine that cannot download the missing piece.
+ *
+ * `unknown` is the one refusal that is not a dead end: the folder holds a model,
+ * it is simply not one Stem has an entry for. The caller offers to describe it
+ * (see {@link CustomImportCandidate}) rather than making the user go and find a
+ * model from the list instead.
  */
 export type ImportModelResult =
   | { ok: true; models: ImportedModelInfo[] }
+  | { ok: false; error: string; unknown?: CustomImportCandidate[] };
+
+/**
+ * A model Stem has no catalog entry for, made selectable by what its folder
+ * holds plus the few answers a folder cannot give. Everything derivable IS
+ * derived at import time — repo id and quantization from the layout, size from
+ * disk, name from the folder — so the only question left is the prompt
+ * prefixes, which cannot be guessed and whose wrong value degrades retrieval
+ * silently instead of failing.
+ *
+ * Deliberately shaped to BE a LocalEmbedModelSpec (server/recall/embed-catalog.ts):
+ * the worker is handed the whole spec, so a synthesised entry runs through the
+ * same path as a curated one with nothing to special-case.
+ */
+export interface CustomEmbedModel {
+  /** `custom:<repo>` — namespaced so it can never collide with a catalog id. */
+  id: string;
+  /** Hugging Face repo id, which is also the folder it lives in under the cache. */
+  repo: string;
+  label: string;
+  dtype: LocalModelDtype;
+  approxSizeMB: number;
+  /**
+   * Vector dimension, null until the first successful load fills it in from the
+   * worker's probe. Never asked: nothing decides anything from it (vectors carry
+   * their own dim), so a wrong answer would be a lie with no error to catch it.
+   */
+  dim: number | null;
+  /** Training-time prompt prefixes, prepended verbatim per EmbedKind. */
+  prefixes: { query: string; passage: string };
+}
+
+/**
+ * The reranker counterpart of {@link CustomEmbedModel}. Same derive-what-you-can
+ * rule, but three answers instead of one: how the model turns a pair into a
+ * logit, the instruction a causal reranker judges against, and the two score
+ * floors. Read the doc comments on LocalRerankModelSpec before touching those
+ * floors — they are MEASUREMENTS that belong to one specific set of weights, so
+ * what is stored here starts as the curated model's numbers and is honestly
+ * unmeasured for these ones until someone runs the eval.
+ */
+export interface CustomRerankModel {
+  id: string;
+  repo: string;
+  label: string;
+  dtype: LocalModelDtype;
+  approxSizeMB: number;
+  scoring: 'classifier' | 'causal-yes-no';
+  /** Task instruction for 'causal-yes-no' scoring; ignored by classifiers. */
+  instruct?: string;
+  minRelevantScore: number;
+  factGateScore: number;
+}
+
+/** A model-shaped folder that matches no catalog entry, as the import dialog gets it. */
+export interface CustomImportCandidate {
+  /** Read from the path: `models--org--name` → `org/name`, else `<parent>/<name>`. */
+  repo: string;
+  /** The folder's own name, offered as the display name. */
+  label: string;
+  dtype: LocalModelDtype;
+  approxSizeMB: number;
+  /** The directory holding config.json and onnx/ — where the copy reads from. */
+  sourceDir: string;
+}
+
+/**
+ * Outcome of importing, editing or dropping a custom model entry. Answers with
+ * the whole retrieval config rather than just success, because every one of
+ * those actions changes what the model dropdown should be offering.
+ */
+export type CustomModelResult =
+  | { ok: true; retrieval: RetrievalSettings }
   | { ok: false; error: string };
 
 /** Curated local reranker models (specs live in server/recall/rerank-catalog.ts). */
@@ -2058,8 +2145,8 @@ export type LocalRerankModelId = 'bge-reranker-v2-m3' | 'qwen3-reranker-0.6b';
  */
 export interface RerankerSettings {
   mode: RerankerMode;
-  /** Which curated local model to run when mode === 'local'. */
-  localModel: LocalRerankModelId;
+  /** Catalog id or imported {@link CustomRerankModel} id; see EmbeddingsSettings.localModel. */
+  localModel: string;
   /** Remote-endpoint fields (used when mode === 'remote'). */
   baseUrl: string;
   model: string;
@@ -2068,7 +2155,8 @@ export interface RerankerSettings {
 
 /** Live state of the local reranker model — drives the Manage-panel status line. */
 export interface LocalRerankStatus {
-  model: LocalRerankModelId;
+  /** Catalog id, or a custom model's — the same string `localModel` holds. */
+  model: string;
   state: 'idle' | 'downloading' | 'loading' | 'ready' | 'error';
   /** Download progress 0–100 while state === 'downloading'. */
   progressPct?: number;
@@ -2106,12 +2194,23 @@ export interface RemoteRetrievalHealth {
 export interface RetrievalSettings {
   embeddings: EmbeddingsSettings;
   reranker: RerankerSettings;
+  /**
+   * Models the user imported that Stem has no catalog entry for. They live here
+   * rather than in a file of their own because they are exactly what the two
+   * stages above select from — one read answers "which models exist" and "which
+   * one is chosen", and one coercion validates that the answer is consistent.
+   */
+  customEmbedModels: CustomEmbedModel[];
+  customRerankModels: CustomRerankModel[];
 }
 
 /** A partial retrieval patch — update either stage, any subset of its fields. */
 export interface PartialRetrievalSettings {
   embeddings?: Partial<EmbeddingsSettings>;
   reranker?: Partial<RerankerSettings>;
+  /** Replaced wholesale when given (a list has no per-field merge). */
+  customEmbedModels?: CustomEmbedModel[];
+  customRerankModels?: CustomRerankModel[];
 }
 
 export type RetrievalStage = 'embeddings' | 'reranker';
@@ -2936,6 +3035,23 @@ export interface StemApi {
    * machine that runs the models). Returns what was imported, or why not.
    */
   importModels(dir: string): Promise<ImportModelResult>;
+  /**
+   * Copy in a model Stem has no catalog entry for, from `dir` on the server's
+   * disk, and record the description the import dialog assembled. Does not
+   * switch the active model — the new entry simply joins the list.
+   */
+  importCustomModel(
+    dir: string,
+    stage: 'embed' | 'rerank',
+    model: CustomEmbedModel | CustomRerankModel
+  ): Promise<CustomModelResult>;
+  /** Save edits to an imported model's description (its files are already in place). */
+  saveCustomModel(
+    stage: 'embed' | 'rerank',
+    model: CustomEmbedModel | CustomRerankModel
+  ): Promise<CustomModelResult>;
+  /** Drop an imported model's entry. Refuses while it is the selected model; its files stay on disk. */
+  removeCustomModel(stage: 'embed' | 'rerank', id: string): Promise<CustomModelResult>;
   /** What each chat's shell commands have left on disk, biggest first. */
   getScratchUsage(): Promise<ScratchUsageRow[]>;
   /** Empty one chat's scratch folder (or the unfiled pile); the chat itself stays. */

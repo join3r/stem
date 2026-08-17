@@ -9,7 +9,9 @@ import type {
   ChatsSettings,
   DefaultsSettings,
   ConnectedFolderPatch,
+  CustomEmbedModel,
   CustomInstructionsSettings,
+  CustomRerankModel,
   EscapeAction,
   ExecApprovalRequest,
   ExecDecision,
@@ -221,6 +223,12 @@ const api: StemApi = {
     ipcRenderer.invoke('exec:resolveApproval', id, decision),
   execHostShellInfo: () => ipcRenderer.invoke('exec:hostShellInfo'),
   importModels: (dir: string) => ipcRenderer.invoke('models:import', dir),
+  importCustomModel: (dir: string, stage: 'embed' | 'rerank', model: CustomEmbedModel | CustomRerankModel) =>
+    ipcRenderer.invoke('models:importCustom', dir, stage, model),
+  saveCustomModel: (stage: 'embed' | 'rerank', model: CustomEmbedModel | CustomRerankModel) =>
+    ipcRenderer.invoke('models:saveCustom', stage, model),
+  removeCustomModel: (stage: 'embed' | 'rerank', id: string) =>
+    ipcRenderer.invoke('models:removeCustom', stage, id),
   getScratchUsage: () => ipcRenderer.invoke('exec:scratchUsage'),
   clearScratch: (key: string) => ipcRenderer.invoke('exec:clearScratch', key),
   onMcpChanged: (listener: () => void) => {

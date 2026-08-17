@@ -172,6 +172,13 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   // itself before it reaches a path (see workspace/paths.ts isScratchId).
   'exec:clearScratch': [a.string],
   'models:import': [a.string],
+  // The folder, which stage's list the model joins, and the description the
+  // import dialog assembled. That description is reshaped where it lands
+  // (workspace/settings.ts coerceCustomModel), which is the only place that
+  // knows a repo id becomes a directory name under the model cache.
+  'models:importCustom': [a.string, a.oneOf(['embed', 'rerank']), a.object],
+  'models:saveCustom': [a.oneOf(['embed', 'rerank']), a.object],
+  'models:removeCustom': [a.oneOf(['embed', 'rerank']), a.string],
   'settings:updateCustomInstructions': [a.object],
   'settings:updateRetrieval': [a.object],
   'settings:testRetrieval': [a.oneOf(['embeddings', 'reranker'])]

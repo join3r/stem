@@ -40,9 +40,9 @@ import { isRecallEnabled } from './workspace/memory';
 import { captureFromEvent } from './recall/capture';
 import { createHttpEmbeddingsClient } from './recall/embeddings';
 import { createHttpRerankClient } from './recall/rerank';
-import { EMBED_CATALOG } from './recall/embed-catalog';
+import { resolveEmbedSpec } from './recall/embed-catalog';
 import type { EmbedWorkerManager } from './recall/embed-manager';
-import { RERANK_CATALOG } from './recall/rerank-catalog';
+import { resolveRerankSpec } from './recall/rerank-catalog';
 import type { ScanWorkerManager } from './recall/scan-manager';
 import type { RemoteHealthTracker } from './recall/remote-health';
 import { backfillChatIndex, reindexChatThread } from './chatsearch/index-sync';
@@ -477,14 +477,14 @@ function registerIpc(): void {
       (before.embeddings.mode !== after.embeddings.mode ||
         before.embeddings.localModel !== after.embeddings.localModel)
     ) {
-      if (after.embeddings.mode === 'local') embedManager.reconfigure(EMBED_CATALOG[after.embeddings.localModel]);
+      if (after.embeddings.mode === 'local') embedManager.reconfigure(resolveEmbedSpec(after));
       else if (before.embeddings.mode === 'local') embedManager.reconfigure(null);
     }
     if (
       embedManager &&
       (before.reranker.mode !== after.reranker.mode || before.reranker.localModel !== after.reranker.localModel)
     ) {
-      if (after.reranker.mode === 'local') embedManager.reconfigureRerank(RERANK_CATALOG[after.reranker.localModel]);
+      if (after.reranker.mode === 'local') embedManager.reconfigureRerank(resolveRerankSpec(after));
       else if (before.reranker.mode === 'local') embedManager.reconfigureRerank(null);
     }
     // A touched stage gets its remote-endpoint verdict wiped: it described the
@@ -506,7 +506,7 @@ function registerIpc(): void {
       // Local mode: Test doubles as the "start/retry the download" button — force
       // past the error-retry gate, then report where the worker is right now.
       if (!embedManager) return { ok: false, detail: 'Embedding worker not started yet.' };
-      const spec = EMBED_CATALOG[emb.localModel];
+      const spec = resolveEmbedSpec(retrieval);
       embedManager.ensure(spec, { force: true });
       const st = embedManager.status();
       if (st.state === 'error') return { ok: false, detail: st.error ?? 'model failed to load' };
@@ -529,7 +529,7 @@ function registerIpc(): void {
       // Local mode: Test doubles as the "start/retry the download" button, same
       // contract as the embeddings branch above.
       if (!embedManager) return { ok: false, detail: 'Embedding worker not started yet.' };
-      const spec = RERANK_CATALOG[rr.localModel];
+      const spec = resolveRerankSpec(retrieval);
       embedManager.ensureRerank(spec, { force: true });
       const st = embedManager.rerankStatus();
       if (st.state === 'error') return { ok: false, detail: st.error ?? 'model failed to load' };

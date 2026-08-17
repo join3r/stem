@@ -1,4 +1,4 @@
-import type { LocalRerankModelId } from '../../shared/types';
+import type { LocalModelDtype, LocalRerankModelId, RetrievalSettings } from '../../shared/types';
 
 // Curated specs for the bundled local reranker (cross-encoder) backend. Pure
 // data (no Electron imports) so it's unit-testable and shareable with the
@@ -6,11 +6,12 @@ import type { LocalRerankModelId } from '../../shared/types';
 // ONNX build on the Hugging Face hub with a transformers.js-standard layout.
 
 export interface LocalRerankModelSpec {
-  id: LocalRerankModelId;
+  /** A {@link LocalRerankModelId}, or `custom:<repo>` for a model the user imported. */
+  id: string;
   /** HF repo with transformers.js-compatible ONNX weights. */
   repo: string;
   /** Quantization passed to transformers.js `dtype`. */
-  dtype: 'q8' | 'q4' | 'fp32';
+  dtype: LocalModelDtype;
   approxSizeMB: number;
   /** UI display name. */
   label: string;
@@ -163,3 +164,23 @@ export const RERANK_CATALOG: Record<LocalRerankModelId, LocalRerankModelSpec> = 
 };
 
 export const DEFAULT_LOCAL_RERANK_MODEL: LocalRerankModelId = 'bge-reranker-v2-m3';
+
+/**
+ * The spec for whichever local reranker the settings select — curated, or
+ * synthesised when the user imported one Stem has no entry for. Same contract
+ * and same reasons as resolveEmbedSpec: never index RERANK_CATALOG with a
+ * settings id directly, because a custom id lands on `undefined`.
+ *
+ * A custom entry's floors are the ones the import dialog prefilled from the
+ * curated model with its scoring mode, NOT measurements of these weights — the
+ * dialog says so where it asks, and `npm run eval:skill-retrieval` is how they
+ * stop being a guess.
+ */
+export function resolveRerankSpec(r: RetrievalSettings): LocalRerankModelSpec {
+  const catalog = RERANK_CATALOG[r.reranker.localModel as LocalRerankModelId];
+  if (catalog) return catalog;
+  const custom: LocalRerankModelSpec | undefined = r.customRerankModels.find(
+    (m) => m.id === r.reranker.localModel
+  );
+  return custom ?? RERANK_CATALOG[DEFAULT_LOCAL_RERANK_MODEL];
+}
