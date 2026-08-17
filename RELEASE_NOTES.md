@@ -86,7 +86,9 @@ Maintainer notes:
   folder that already holds the model — Stem's own model folder copied from another computer, or
   a download you made somewhere with an open network — and it copies it into place and loads it.
   If the folder is missing a piece, Stem says which one instead of failing later. With Stem on a
-  server, you pick the folder on the server.
+  server, you pick the folder on the server. A model Stem has never heard of works too — point it
+  at any ONNX embedder or reranker, answer the two or three things the folder can't say, and it
+  joins the list alongside the built-in ones.
 - **Windows commands run in Git Bash.** On Windows the assistant's commands now run in Git Bash
   when Git for Windows is installed, so `ls`, `cat` and `grep` mean what you expect and quoting
   works the way it does everywhere else; without Git they run in Command Prompt as before.

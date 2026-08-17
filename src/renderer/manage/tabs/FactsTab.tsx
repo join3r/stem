@@ -22,13 +22,17 @@ import type {
   MemoryConflict,
   AutoResolvedConflict,
   MemoryRebuildStatus,
-  ImportedModelInfo
+  ImportedModelInfo,
+  CustomEmbedModel,
+  CustomImportCandidate,
+  CustomRerankModel
 } from '../../../shared/types';
 import { resolveMemoryModel } from '../../../shared/modelRoles';
 import { clampEffort, EffortSelect, effortsOf } from '../../ui/EffortSelect';
 import { MdxView } from '../../chat/MdxView';
 import { useOffline } from '../../hooks/useServerReachable';
 import { useRemoteServer } from '../../hooks/useRemoteServer';
+import { ImportModelDialog } from '../ImportModelDialog';
 import { ServerFolderPicker } from '../ServerFolderPicker';
 import { useRetrievalHealth } from '../../hooks/useRetrievalHealth';
 import { HoverTip, InfoTip } from '../../ui/InfoTip';
@@ -75,6 +79,16 @@ const LOCAL_RERANK_MODELS: { id: LocalRerankModelId; label: string; detail: stri
   { id: 'qwen3-reranker-0.6b', label: 'Qwen3 Reranker 0.6B', detail: '~1.2 GB · multilingual · best recall measured' },
   { id: 'bge-reranker-v2-m3', label: 'BGE Reranker v2 M3', detail: '~570 MB · multilingual · fastest' }
 ];
+
+/**
+ * An imported model as a picker entry. Its size came off the disk it was copied
+ * from and its dimension from the load probe, so the line says what is actually
+ * known — no dimension yet simply means it has not run once.
+ */
+function customOption(m: CustomEmbedModel | CustomRerankModel): { id: string; label: string; detail: string } {
+  const dim = 'dim' in m && m.dim ? ` · ${m.dim}-dim` : '';
+  return { id: m.id, label: m.label, detail: `~${m.approxSizeMB} MB${dim} · imported` };
+}
 
 const RERANK_MODES: { id: RerankerMode; label: string; hint: string }[] = [
   { id: 'off', label: 'Off', hint: 'Rank facts by embedding similarity only' },
@@ -133,20 +147,41 @@ function importedSummary(models: ImportedModelInfo[]): string {
 }
 
 /**
- * Bring model weights in from a folder the user already has. Stem does not ship
- * or download models on anyone's behalf, so on a machine that cannot reach
- * Hugging Face this is the only way a local model ever loads: point at a copy of
- * someone else's cache, a `huggingface-cli download`, or a USB stick.
+ * Bring model weights in from a folder the user already has, and keep whatever
+ * came in that way. Stem does not ship or download models on anyone's behalf, so
+ * on a machine that cannot reach Hugging Face this is the only way a local model
+ * ever loads: point at a copy of someone else's cache, a `huggingface-cli
+ * download`, or a USB stick.
+ *
+ * A model Stem has an entry for is copied and that is the whole interaction. One
+ * it doesn't — any other ONNX embedder or cross-encoder — comes back as a
+ * candidate instead of a refusal, and {@link ImportModelDialog} asks the few
+ * things the folder could not say. What that produces is listed here afterwards,
+ * to edit or to forget.
  *
  * The folder has to be on the machine that RUNS the models. When that is another
  * computer, the native dialog would browse the wrong disk — same branch the
  * connected-folders picker takes.
  */
-function ImportModelsButton() {
+function ImportedModels({
+  stage,
+  models,
+  onRetrieval
+}: {
+  stage: 'embed' | 'rerank';
+  /** This stage's imported models, as retrieval settings hold them. */
+  models: (CustomEmbedModel | CustomRerankModel)[];
+  /** Anything that changed the lists — the picker above is rebuilt from it. */
+  onRetrieval: (retrieval: RetrievalSettings) => void;
+}) {
   const remote = useRemoteServer();
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  // Unrecognised folders wait their turn: one dialog each, in order, so pointing
+  // Stem at a directory of several models is not a choice between them.
+  const [queue, setQueue] = useState<CustomImportCandidate[]>([]);
+  const [editing, setEditing] = useState<CustomEmbedModel | CustomRerankModel | null>(null);
 
   async function importFrom(dir: string): Promise<void> {
     setPicking(false);
@@ -154,7 +189,9 @@ function ImportModelsButton() {
     setResult(null);
     try {
       const r = await window.stem.importModels(dir);
-      setResult(r.ok ? { ok: true, text: importedSummary(r.models) } : { ok: false, text: r.error });
+      if (r.ok) setResult({ ok: true, text: importedSummary(r.models) });
+      else if (r.unknown?.length) setQueue(r.unknown);
+      else setResult({ ok: false, text: r.error });
     } catch (e) {
       setResult({ ok: false, text: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -171,28 +208,69 @@ function ImportModelsButton() {
     if (dirs[0]) await importFrom(dirs[0]);
   }
 
+  async function drop(model: CustomEmbedModel | CustomRerankModel): Promise<void> {
+    const r = await window.stem.removeCustomModel(stage, model.id);
+    if (r.ok) {
+      onRetrieval(r.retrieval);
+      setResult({ ok: true, text: `Removed ${model.label}. Its files are still on disk.` });
+    } else {
+      setResult({ ok: false, text: r.error });
+    }
+  }
+
   return (
-    <div className="retrieval-test">
-      {picking && (
-        <ServerFolderPicker onConnect={(path) => void importFrom(path)} onClose={() => setPicking(false)} />
+    <>
+      {models.length > 0 && (
+        <div className="custom-models">
+          {models.map((m) => (
+            <div key={m.id} className="custom-model-row">
+              <span className="muted">{m.label}</span>
+              <button className="link-btn" onClick={() => setEditing(m)}>
+                Edit
+              </button>
+              <button className="link-btn danger" onClick={() => void drop(m)}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
       )}
-      <button
-        className="retrieval-test-btn"
-        onClick={() => void choose()}
-        disabled={busy}
-        title="Copy model files in from a folder instead of downloading them"
-        aria-label="Import model files"
-      >
-        <FolderInput size={14} />
-        <span>{busy ? 'Importing…' : 'Import model files'}</span>
-      </button>
-      {!busy && result && (
-        <span className={`retrieval-test-status ${result.ok ? 'ok' : 'err'}`} title={result.text}>
-          {result.ok ? <Check size={12} /> : <X size={12} />}
-          {result.text}
-        </span>
-      )}
-    </div>
+      <div className="retrieval-test">
+        {picking && (
+          <ServerFolderPicker onConnect={(path) => void importFrom(path)} onClose={() => setPicking(false)} />
+        )}
+        {(queue[0] || editing) && (
+          <ImportModelDialog
+            stage={stage}
+            candidate={editing ? undefined : queue[0]}
+            model={editing ?? undefined}
+            onSaved={(retrieval) => {
+              onRetrieval(retrieval);
+              setResult({ ok: true, text: editing ? `Saved ${editing.label}.` : `Imported ${queue[0]!.label}.` });
+              if (editing) setEditing(null);
+              else setQueue((q) => q.slice(1));
+            }}
+            onClose={() => (editing ? setEditing(null) : setQueue((q) => q.slice(1)))}
+          />
+        )}
+        <button
+          className="retrieval-test-btn"
+          onClick={() => void choose()}
+          disabled={busy}
+          title="Copy model files in from a folder instead of downloading them"
+          aria-label="Import model files"
+        >
+          <FolderInput size={14} />
+          <span>{busy ? 'Importing…' : 'Import model files'}</span>
+        </button>
+        {!busy && result && (
+          <span className={`retrieval-test-status ${result.ok ? 'ok' : 'err'}`} title={result.text}>
+            {result.ok ? <Check size={12} /> : <X size={12} />}
+            {result.text}
+          </span>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -202,11 +280,16 @@ function ImportModelsButton() {
 // persist on blur; mode/model switches persist immediately.
 function EmbeddingsFields({
   value,
+  custom,
   onPatch,
+  onRetrieval,
   remoteError
 }: {
   value: EmbeddingsSettings;
+  /** Embedders the user imported — they join the picker below the curated ones. */
+  custom: CustomEmbedModel[];
   onPatch: (patch: Partial<EmbeddingsSettings>) => void;
+  onRetrieval: (retrieval: RetrievalSettings) => void;
   /** Last recorded failure of the user's remote endpoint, shown under its fields. */
   remoteError?: string | null;
 }) {
@@ -265,17 +348,17 @@ function EmbeddingsFields({
             value={value.localModel}
             onChange={(e) => {
               setTest(null);
-              onPatch({ localModel: e.target.value as LocalEmbedModelId });
+              onPatch({ localModel: e.target.value });
             }}
           >
-            {LOCAL_EMBED_MODELS.map((m) => (
+            {[...LOCAL_EMBED_MODELS, ...custom.map(customOption)].map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label} ({m.detail})
               </option>
             ))}
           </select>
           <LocalStatusLine status={status} />
-          <ImportModelsButton />
+          <ImportedModels stage="embed" models={custom} onRetrieval={onRetrieval} />
         </>
       )}
       {mode === 'remote' && (
@@ -347,11 +430,16 @@ function EmbeddingsFields({
 // cosine ranking misses.
 function RerankerFields({
   value,
+  custom,
   onPatch,
+  onRetrieval,
   remoteError
 }: {
   value: RerankerSettings;
+  /** Rerankers the user imported — they join the picker below the curated ones. */
+  custom: CustomRerankModel[];
   onPatch: (patch: Partial<RerankerSettings>) => void;
+  onRetrieval: (retrieval: RetrievalSettings) => void;
   /** Last recorded failure of the user's remote endpoint, shown under its fields. */
   remoteError?: string | null;
 }) {
@@ -418,17 +506,17 @@ function RerankerFields({
             value={value.localModel}
             onChange={(e) => {
               setTest(null);
-              onPatch({ localModel: e.target.value as LocalRerankModelId });
+              onPatch({ localModel: e.target.value });
             }}
           >
-            {LOCAL_RERANK_MODELS.map((m) => (
+            {[...LOCAL_RERANK_MODELS, ...custom.map(customOption)].map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label} ({m.detail})
               </option>
             ))}
           </select>
           <LocalStatusLine status={status} />
-          <ImportModelsButton />
+          <ImportedModels stage="rerank" models={custom} onRetrieval={onRetrieval} />
         </>
       )}
       {mode === 'remote' && (
@@ -1212,12 +1300,16 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
               </div>
               <EmbeddingsFields
                 value={retrieval.embeddings}
+                custom={retrieval.customEmbedModels}
                 onPatch={patchEmbeddings}
+                onRetrieval={setRetrieval}
                 remoteError={health.embed?.remote ? health.embed.error : null}
               />
               <RerankerFields
                 value={retrieval.reranker}
+                custom={retrieval.customRerankModels}
                 onPatch={patchReranker}
+                onRetrieval={setRetrieval}
                 remoteError={health.rerank?.remote ? health.rerank.error : null}
               />
             </div>

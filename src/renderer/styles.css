@@ -2764,6 +2764,23 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   letter-spacing: 0.08em;
 }
 
+/* ---- Imported models (a model Stem has no catalog entry for) ---- */
+/* The list under a local model picker: one row per model the user imported,
+   with the two things that can be done to an entry. Rows, not chips, because
+   Remove is destructive-ish and wants a readable label next to it. */
+.custom-models { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-2) 0; }
+.custom-model-row { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-12); }
+.custom-model-row .muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.custom-model-row .link-btn { flex: none; font-size: var(--fs-11); }
+/* The describe-this-model dialog. Wider than the default card: the prefix and
+   instruct fields hold training-time strings that are unreadable when wrapped
+   every few words. */
+.custom-model-card { width: min(520px, calc(100vw - 48px)); }
+.custom-model-card textarea.ifield { resize: vertical; font-size: var(--fs-12); }
+.custom-model-floor { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); font-size: var(--fs-12); color: var(--muted); }
+.custom-model-floor span { flex: 1; }
+.custom-model-floor .ifield { width: 96px; flex: none; }
+
 /* ---- Server-side folder picker (remote installs' "add connected folder") ---- */
 .folder-picker-card { width: min(480px, calc(100vw - 48px)); }
 .folder-picker-hint { margin: 0 0 10px; font-size: var(--fs-12); }
