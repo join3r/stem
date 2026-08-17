@@ -69,6 +69,12 @@ const api: StemApi = {
     ipcRenderer.invoke('providers:updateLocal', id, patch),
   testLocalProvider: (id: LocalProviderId, baseUrl: string, apiKey?: string, api?: LocalProviderApi) =>
     ipcRenderer.invoke('providers:testLocal', id, baseUrl, apiKey, api),
+  previewPiModels: (source: { json?: string; path?: string }) => ipcRenderer.invoke('providers:previewPiModels', source),
+  copyPiModels: (
+    source: { json?: string; path?: string },
+    providerId: string,
+    hints?: { baseUrl?: string; apiKey?: string; api?: LocalProviderApi }
+  ) => ipcRenderer.invoke('providers:copyPiModels', source, providerId, hints),
   disconnectProvider: (providerId: string) => ipcRenderer.invoke('providers:disconnect', providerId),
   checkAuth: (provider: string) => ipcRenderer.invoke('auth:check', provider),
   completeOnboarding: () => ipcRenderer.invoke('auth:completeOnboarding'),

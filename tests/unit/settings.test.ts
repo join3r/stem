@@ -387,6 +387,56 @@ describe('local provider settings', () => {
     });
   });
 
+  it('round-trips copied extras on custom and strips them from ollama', async () => {
+    await updateLocalProvider('custom', {
+      enabled: true,
+      baseUrl: 'http://vllm:8000',
+      api: 'openai-completions',
+      preserveModelsConfig: true,
+      models: ['qwen3'],
+      modelExtras: [
+        { id: 'qwen3', reasoning: true, maxTokens: 32768, compat: { thinkingFormat: 'qwen-chat-template' } }
+      ],
+      providerCompat: { supportsReasoningEffort: false, thinkingFormat: 'qwen-chat-template' },
+      providerHeaders: { 'x-test': '1' }
+    });
+    expect((await readSettings()).localProviders.custom).toEqual({
+      enabled: true,
+      baseUrl: 'http://vllm:8000',
+      api: 'openai-completions',
+      models: ['qwen3'],
+      preserveModelsConfig: true,
+      modelExtras: [
+        { id: 'qwen3', reasoning: true, maxTokens: 32768, compat: { thinkingFormat: 'qwen-chat-template' } }
+      ],
+      providerCompat: { supportsReasoningEffort: false, thinkingFormat: 'qwen-chat-template' },
+      providerHeaders: { 'x-test': '1' }
+    });
+    await updateLocalProvider('custom', {
+      preserveModelsConfig: false,
+      modelExtras: [],
+      providerCompat: {},
+      providerHeaders: {}
+    });
+    expect((await readSettings()).localProviders.custom).toEqual({
+      enabled: true,
+      baseUrl: 'http://vllm:8000',
+      api: 'openai-completions',
+      models: ['qwen3']
+    });
+    await updateLocalProvider('ollama', {
+      enabled: true,
+      baseUrl: 'http://localhost:11434',
+      preserveModelsConfig: true,
+      modelExtras: [{ id: 'nope' }],
+      providerCompat: { thinkingFormat: 'qwen' }
+    } as never);
+    expect((await readSettings()).localProviders.ollama).toEqual({
+      enabled: true,
+      baseUrl: 'http://localhost:11434'
+    });
+  });
+
   it('strips the api field for ollama/lmstudio (hand-edited settings.json cannot force it)', async () => {
     // Only `custom` may opt into anthropic-messages; a hand-edited settings.json
     // trying to set it on ollama must round-trip without the field.

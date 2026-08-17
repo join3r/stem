@@ -210,7 +210,8 @@ function localProviderBlock(
   baseUrl: string,
   models: PiModelConfig[],
   apiKey: string | undefined,
-  api: LocalProviderApi
+  api: LocalProviderApi,
+  extras?: { compat?: Record<string, unknown>; headers?: Record<string, string> }
 ): PiProviderConfig {
   const normalized = normalizeLocalBaseUrl(baseUrl);
   // openai-completions: append /v1 so pi hits /v1/chat/completions (matches the
@@ -221,17 +222,20 @@ function localProviderBlock(
   const finalBaseUrl = api === 'anthropic-messages' ? normalized : `${normalized}/v1`;
   // Per-flavor compat: OpenAI-compat servers get the local-server defaults;
   // anthropic-messages providers get an empty block so pi's Anthropic defaults
-  // (eager tool streaming, cache retention, …) apply. Users needing proxy-
-  // specific overrides can hand-edit models.json.
-  const compat: Record<string, unknown> =
+  // (eager tool streaming, cache retention, …) apply. A copied overlay may
+  // replace this wholesale (thinkingFormat, chatTemplateKwargs, …).
+  const defaultCompat: Record<string, unknown> =
     api === 'anthropic-messages' ? {} : { supportsDeveloperRole: false, supportsReasoningEffort: false };
+  const overlayCompat = extras?.compat && Object.keys(extras.compat).length ? extras.compat : undefined;
+  const headers = extras?.headers && Object.keys(extras.headers).length ? extras.headers : undefined;
   return {
     baseUrl: finalBaseUrl,
     api,
     // Keyless servers still need a non-empty key for pi to consider the models
     // available (pi's own docs recommend a dummy value).
     apiKey: apiKey?.trim() || 'local',
-    compat,
+    compat: overlayCompat ?? defaultCompat,
+    ...(headers ? { headers } : {}),
     models
   };
 }
@@ -348,7 +352,17 @@ export function syncModelsConfig(): Promise<boolean> {
     const before = JSON.stringify(config);
 
     for (const id of LOCAL_PROVIDER_IDS) {
-      const { enabled, baseUrl, apiKey, models: manual, api: rawApi } = settings[id];
+      const {
+        enabled,
+        baseUrl,
+        apiKey,
+        models: manual,
+        api: rawApi,
+        preserveModelsConfig,
+        modelExtras,
+        providerCompat,
+        providerHeaders
+      } = settings[id];
       if (!enabled) {
         delete config.providers[id];
         continue;
@@ -356,6 +370,23 @@ export function syncModelsConfig(): Promise<boolean> {
       // Only `custom` may speak anthropic-messages; the coercion enforces this too,
       // this is defense in depth against a hand-edited settings.json.
       const api: LocalProviderApi = id === 'custom' && rawApi === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions';
+      const overlay =
+        id === 'custom' && preserveModelsConfig && modelExtras?.length
+          ? {
+              models: modelExtras
+                .map((m) => {
+                  const rec = m as PiModelConfig;
+                  return typeof rec.id === 'string' && rec.id.trim() ? rec : null;
+                })
+                .filter((m): m is PiModelConfig => !!m),
+              extras: { compat: providerCompat, headers: providerHeaders }
+            }
+          : null;
+      if (overlay?.models.length) {
+        // Copied extras are the catalog: don't probe, don't strip to `{ id }`.
+        config.providers[id] = localProviderBlock(baseUrl, overlay.models, apiKey, api, overlay.extras);
+        continue;
+      }
       // Hand-entered ids are authoritative: an endpoint that names its models has
       // opted out of discovery, so don't probe it (and don't let a listing endpoint
       // it happens to serve override the user's choice).

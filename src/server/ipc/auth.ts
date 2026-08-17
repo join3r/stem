@@ -2,6 +2,7 @@ import { registerServer } from './guard';
 import type { IpcDeps } from './deps';
 import { markOnboardingCompleted, readSettings, updateDefaultModel, updateLocalProvider } from '../workspace/settings';
 import { probeLocalProvider, syncModelsConfig } from '../pi/models-config';
+import { CLEARED_CUSTOM_OVERLAY, overlayPatchFromSource, previewPiModelsSource } from '../pi/models-copy';
 import { relayCallback } from '../pi/oauth-courier';
 import { isLocalProviderId } from '../../shared/providers';
 import type {
@@ -88,6 +89,32 @@ export function registerAuthIpc(deps: IpcDeps): void {
     if (deps.e2e) return { ok: true, models: ['stem-e2e-model'] };
     return probeLocalProvider(baseUrl, apiKey, api);
   });
+  registerServer('providers:previewPiModels', async (_e, source: { json?: string; path?: string }) => {
+    if (deps.e2e) return { ok: true, providers: [{ id: 'vllm', modelIds: ['stem-e2e-model'] }] };
+    return previewPiModelsSource(source);
+  });
+  registerServer('providers:copyPiModels', async (_e, source: { json?: string; path?: string }, providerId: string, hints?: Partial<{ baseUrl: string; apiKey: string; api: LocalProviderApi }>) => {
+    if (deps.e2e) return { ok: true, status: await deps.runtime().login() };
+    try {
+      const stored = (await readSettings()).localProviders.custom;
+      const current = {
+        ...stored,
+        ...(hints?.baseUrl?.trim() ? { baseUrl: hints.baseUrl.trim() } : {}),
+        ...(hints?.apiKey !== undefined ? { apiKey: hints.apiKey } : {}),
+        ...(hints?.api ? { api: hints.api } : {})
+      };
+      const overlay = await overlayPatchFromSource(source, providerId, current);
+      if (!overlay.ok) return { ok: false, error: overlay.error };
+      const settings = await updateLocalProvider('custom', overlay.patch);
+      const cfg = settings.localProviders.custom;
+      await syncModelsConfig();
+      if (cfg.enabled) await deps.providerAuth()!.setApiKey('custom', cfg.apiKey?.trim() || 'local');
+      await deps.runtime().restart();
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    return { ok: true, status: await deps.onAuthenticated() };
+  });
   registerServer('providers:updateLocal', async (_e, id: LocalProviderId, patch: Partial<LocalProviderSettings>) => {
     if (deps.e2e) return { ok: true, status: await deps.runtime().login() };
     try {
@@ -116,7 +143,7 @@ export function registerAuthIpc(deps: IpcDeps): void {
       await deps.providerAuth()!.removeProvider(providerId);
       if (isLocalProviderId(providerId)) {
         // Drop the endpoint's secret with it — re-adding asks for the key again.
-        await updateLocalProvider(providerId, { enabled: false, apiKey: '', models: [] });
+        await updateLocalProvider(providerId, { enabled: false, apiKey: '', models: [], ...CLEARED_CUSTOM_OVERLAY });
         await syncModelsConfig();
       }
       // The default model must not outlive the provider that served it: pi refuses

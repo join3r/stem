@@ -29,6 +29,13 @@ The selected model receives the prompt, attachments, and context Stem adds to th
 turn. A cloud model receives that data on its provider’s service. A local model
 sends it to the server address you configured.
 
+**Custom endpoint** is any other OpenAI- or Anthropic-compatible server (a vLLM
+box, a gateway, a proxy). After you add it, you can paste a Pi `models.json` or
+give a path to one. Stem copies that provider’s extras — thinking flags, max
+tokens, Qwen/GLM `thinkingFormat` — onto its own Custom endpoint. That does not
+replace Stem’s Pi, and Stem will not overwrite those extras until you replace
+them or disconnect.
+
 **Web search** works with every model, not only cloud ones, and returns cited
 sources. Under **Web search** you choose the backend that runs the search:
 **Automatic** ends at one that needs no key, or pick a named one and paste its key.

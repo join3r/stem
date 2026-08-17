@@ -8,7 +8,8 @@ import type {
   LocalProviderApi,
   LocalProviderId,
   LocalProvidersSettings,
-  LocalProviderTestResult
+  LocalProviderTestResult,
+  PiModelsOverlayProvider
 } from '../../../../shared/types';
 import { API_KEY_PROVIDER_IDS, AUTH_PROVIDER_IDS, isLocalProviderId, providerName } from '../../../../shared/providers';
 import { resolveBackgroundModel, resolveMemoryModel, resolveRoleEffort, resolveSkillsModel } from '../../../../shared/modelRoles';
@@ -684,6 +685,9 @@ function ProvidersSection({ deadProvider }: { deadProvider?: string | null }) {
   // Add Server) so the steady state is a calm list of connected providers.
   const [adding, setAdding] = useState(false);
   const [mode, setMode] = useState<'account' | 'apikey' | 'local'>('account');
+  // Disconnect of a Custom endpoint that still has copied extras needs a second
+  // click: those extras live only in Stem, and a silent minus would drop them.
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   // In-flight OAuth attempt (null = none). Mirrors the onboarding wizard's
   // oauthWait/manualInput steps in miniature; completion resolves the
   // providerLogin promise, so `done` events only clear transient state.
@@ -763,6 +767,7 @@ function ProvidersSection({ deadProvider }: { deadProvider?: string | null }) {
   async function disconnect(id: string) {
     setBusy(true);
     setError(null);
+    setConfirmDisconnect(false);
     try {
       const res = await window.stem.disconnectProvider(id);
       if (!res.ok) setError(res.error ?? 'Could not disconnect.');
@@ -802,7 +807,10 @@ function ProvidersSection({ deadProvider }: { deadProvider?: string | null }) {
             <div
               key={row.id}
               className={`group-row${selected === row.id ? ' selected' : ''}`}
-              onClick={() => setSelected(row.id)}
+              onClick={() => {
+                setConfirmDisconnect(false);
+                setSelected(row.id);
+              }}
             >
               <span className={`row-icon ${row.local ? 'local' : 'remote'}`}>
                 {row.local ? <HardDrive size={14} /> : <Globe size={14} />}
@@ -844,12 +852,54 @@ function ProvidersSection({ deadProvider }: { deadProvider?: string | null }) {
         </button>
         <button
           title="Disconnect selected"
-          onClick={() => selected && void disconnect(selected)}
+          onClick={() => {
+            if (!selected) return;
+            if (selected === 'custom' && local?.custom.preserveModelsConfig && !confirmDisconnect) {
+              setConfirmDisconnect(true);
+              return;
+            }
+            void disconnect(selected);
+          }}
           disabled={!selected || busy}
         >
           <Minus size={15} />
         </button>
       </div>
+      {confirmDisconnect && selected === 'custom' && (
+        <p className="muted memory-reset-confirm">
+          This removes the copied extras from Stem. Your own files are not changed.{' '}
+          <button className="link-btn danger" onClick={() => void disconnect('custom')}>
+            Disconnect
+          </button>
+          <button className="link-btn" onClick={() => setConfirmDisconnect(false)}>
+            Cancel
+          </button>
+        </p>
+      )}
+
+      {selected === 'custom' && local?.custom.enabled && !adding && (
+        <>
+          <div className="grp-head">Custom endpoint extras</div>
+          <div className="formgroup">
+            {local.custom.preserveModelsConfig ? (
+              <p className="muted">
+                Stem keeps these extras on the Custom endpoint and will not overwrite them until you
+                replace them or disconnect.
+              </p>
+            ) : (
+              <p className="muted">
+                Paste a models.json or give a path to copy thinking and max-token extras onto this
+                endpoint. Stem&apos;s other providers stay as they are.
+              </p>
+            )}
+            <CustomOverlayFields
+              locked={!!local.custom.preserveModelsConfig}
+              onCopied={changed}
+              onError={setError}
+            />
+          </div>
+        </>
+      )}
 
       {adding && (
         <>
@@ -1118,6 +1168,7 @@ function LocalServerAddForm({
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<LocalProviderTestResult | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirmEnable, setConfirmEnable] = useState(false);
   // The probe runs for seconds against a URL the user is still typing into, so a
   // late answer must prove it still belongs to this form before it may speak for
   // it: a crossed result restores a cleared badge and fills one endpoint's model
@@ -1145,6 +1196,7 @@ function LocalServerAddForm({
     setApi(id === 'custom' ? null : 'openai-completions');
     setTest(null);
     setTesting(false);
+    setConfirmEnable(false);
   }
 
   async function runTest() {
@@ -1195,6 +1247,10 @@ function LocalServerAddForm({
   async function enable() {
     // Nothing in flight may label the form once it has been submitted — and the
     // discarded probe no longer owns the button it left in its testing state.
+    if (custom && settings.custom.preserveModelsConfig && !confirmEnable) {
+      setConfirmEnable(true);
+      return;
+    }
     testGateRef.current.invalidate();
     setTesting(false);
     setSaving(true);
@@ -1210,12 +1266,18 @@ function LocalServerAddForm({
         // Sent even when empty so re-adding a previously keyed endpoint without
         // one clears the stored key instead of silently inheriting it.
         apiKey: custom ? apiKey.trim() : '',
-        models: custom ? modelList : []
+        models: custom ? modelList : [],
+        // Typed IDs replace a copied overlay: drop extras so sync writes `{ id }`
+        // stubs again instead of keeping the previous thinking/max-token flags.
+        ...(custom
+          ? { preserveModelsConfig: false, modelExtras: [], providerCompat: {}, providerHeaders: {} }
+          : {})
       });
       if (!res.ok) onError(res.error ?? 'Could not enable the server.');
       else await onSaved();
     } finally {
       setSaving(false);
+      setConfirmEnable(false);
     }
   }
 
@@ -1246,7 +1308,9 @@ function LocalServerAddForm({
           from your URL and lets the client add the versioned path itself. The key goes on the wire the way the
           target API expects (<code>Authorization: Bearer</code> for OpenAI-flavored servers, <code>X-Api-Key</code>
           for Anthropic). Test connection fills the model IDs in when the endpoint lists them; endpoints that serve
-          no listing just need the IDs typed in.
+          no listing just need the IDs typed in. For a local vLLM (or similar) that does not advertise thinking
+          flags, paste a models.json overlay or a path to one — Stem copies those extras onto this endpoint and
+          does not replace Stem&apos;s Pi.
         </InfoTip>
       </span>
       <select
@@ -1305,6 +1369,17 @@ function LocalServerAddForm({
             value={models}
             onChange={(e) => setModels(e.target.value)}
           />
+          <span className="set-sub">Model extras</span>
+          <p className="muted">
+            Optional. Paste a models.json or a path to copy thinking and max-token extras onto this
+            endpoint.
+          </p>
+          <CustomOverlayFields
+            locked={!!settings.custom.preserveModelsConfig}
+            onCopied={onSaved}
+            onError={onError}
+            hints={{ baseUrl, apiKey, api }}
+          />
         </>
       )}
       <div className="retrieval-test">
@@ -1335,9 +1410,170 @@ function LocalServerAddForm({
           disabled={saving || !baseUrl.trim() || (custom && modelList.length === 0) || (custom && api === null)}
           onClick={() => void enable()}
         >
-          {saving ? 'Enabling…' : 'Enable'}
+          {saving ? 'Enabling…' : confirmEnable ? 'Replace extras and enable' : 'Enable'}
         </button>
       </div>
+      {confirmEnable && (
+        <p className="muted">
+          Enable with typed IDs replaces the copied extras on this endpoint. Your own files are not
+          changed.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Paste JSON or a path to a Pi models.json; copy one provider's extras onto
+ * Stem's Custom endpoint. Does not replace Stem's Pi.
+ */
+function CustomOverlayFields({
+  locked,
+  onCopied,
+  onError,
+  hints
+}: {
+  locked: boolean;
+  onCopied: () => Promise<void>;
+  onError: (message: string | null) => void;
+  hints?: { baseUrl?: string; apiKey?: string; api?: LocalProviderApi | null };
+}) {
+  const [json, setJson] = useState('');
+  const [path, setPath] = useState('');
+  const [providers, setProviders] = useState<PiModelsOverlayProvider[] | null>(null);
+  const [picked, setPicked] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+
+  function source(): { json?: string; path?: string } {
+    return json.trim() ? { json: json.trim() } : { path: path.trim() };
+  }
+
+  function resetPreview() {
+    setProviders(null);
+    setPicked('');
+    setConfirmReplace(false);
+  }
+
+  async function preview() {
+    setBusy(true);
+    onError(null);
+    resetPreview();
+    try {
+      const res = await window.stem.previewPiModels(source());
+      if (!res.ok) onError(res.error ?? 'Could not read that overlay.');
+      else {
+        setProviders(res.providers ?? []);
+        if (res.providers?.length === 1) setPicked(res.providers[0].id);
+      }
+    } catch {
+      onError('Could not read that overlay.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    if (!picked) return;
+    if (locked && !confirmReplace) {
+      setConfirmReplace(true);
+      return;
+    }
+    setBusy(true);
+    onError(null);
+    try {
+      const res = await window.stem.copyPiModels(source(), picked, {
+        ...(hints?.baseUrl?.trim() ? { baseUrl: hints.baseUrl.trim() } : {}),
+        ...(hints?.apiKey !== undefined ? { apiKey: hints.apiKey } : {}),
+        ...(hints?.api ? { api: hints.api } : {})
+      });
+      if (!res.ok) onError(res.error ?? 'Could not copy extras onto Custom.');
+      else await onCopied();
+    } catch {
+      onError('Could not copy extras onto Custom.');
+    } finally {
+      setBusy(false);
+      setConfirmReplace(false);
+    }
+  }
+
+  return (
+    <div className="set-block">
+      <textarea
+        className="ci-textarea"
+        rows={5}
+        aria-label="models.json overlay"
+        placeholder='Paste models.json here — {"providers": { "vllm": { … } }}'
+        value={json}
+        onChange={(e) => {
+          setJson(e.target.value);
+          resetPreview();
+        }}
+      />
+      <input
+        className="ifield"
+        aria-label="Path to models.json"
+        placeholder="Or a path to a models.json file"
+        value={path}
+        disabled={!!json.trim()}
+        onChange={(e) => {
+          setPath(e.target.value);
+          resetPreview();
+        }}
+      />
+      <div className="memory-view-actions">
+        <button
+          type="button"
+          className="link-btn"
+          disabled={busy || (!json.trim() && !path.trim())}
+          onClick={() => void preview()}
+        >
+          {busy && !providers ? 'Reading…' : 'Read overlay'}
+        </button>
+      </div>
+      {providers && providers.length > 1 && (
+        <select
+          className="ifield"
+          aria-label="Provider to copy"
+          value={picked}
+          onChange={(e) => {
+            setPicked(e.target.value);
+            setConfirmReplace(false);
+          }}
+        >
+          <option value="">Choose a provider</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.id}
+              {p.modelIds.length ? ` (${p.modelIds.join(', ')})` : ''}
+            </option>
+          ))}
+        </select>
+      )}
+      {providers && providers.length === 1 && (
+        <p className="muted">
+          {providers[0].id}
+          {providers[0].modelIds.length ? ` — ${providers[0].modelIds.join(', ')}` : ''}
+        </p>
+      )}
+      {providers && (
+        <div className="memory-view-actions">
+          <button
+            type="button"
+            className="link-btn"
+            disabled={busy || !picked}
+            onClick={() => void copy()}
+          >
+            {busy && providers ? 'Copying…' : confirmReplace ? 'Replace extras' : 'Copy into Stem'}
+          </button>
+        </div>
+      )}
+      {confirmReplace && (
+        <p className="muted">
+          This replaces the extras already on Custom. Stem&apos;s Pi and your own files stay as they
+          are.
+        </p>
+      )}
     </div>
   );
 }

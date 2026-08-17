@@ -408,7 +408,68 @@ describe('syncModelsConfig', () => {
     });
   });
 
-  it('probes a keyless custom endpoint that names no models', async () => {
+  it('writes full model extras and overlay compat when custom is locked', async () => {
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        providers: {
+          xai: { baseUrl: 'https://leftover.example/v1', models: [{ id: 'grok' }] }
+        }
+      })
+    );
+    const fetchMock = vi.fn(async () => new Response('nope', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+    use({
+      custom: {
+        enabled: true,
+        baseUrl: 'http://vllm:8000',
+        api: 'openai-completions',
+        preserveModelsConfig: true,
+        models: ['qwen3'],
+        modelExtras: [
+          {
+            id: 'qwen3',
+            reasoning: true,
+            maxTokens: 32768,
+            contextWindow: 131072,
+            compat: { thinkingFormat: 'qwen-chat-template' }
+          }
+        ],
+        providerCompat: {
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: false,
+          thinkingFormat: 'qwen-chat-template'
+        },
+        providerHeaders: { 'x-extra': 'yes' }
+      }
+    });
+    expect(await syncModelsConfig()).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const cfg = readConfig();
+    expect(cfg.providers.xai.models).toEqual([{ id: 'grok' }]);
+    expect(cfg.providers.custom).toEqual({
+      baseUrl: 'http://vllm:8000/v1',
+      api: 'openai-completions',
+      apiKey: 'local',
+      compat: {
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+        thinkingFormat: 'qwen-chat-template'
+      },
+      headers: { 'x-extra': 'yes' },
+      models: [
+        {
+          id: 'qwen3',
+          reasoning: true,
+          maxTokens: 32768,
+          contextWindow: 131072,
+          compat: { thinkingFormat: 'qwen-chat-template' }
+        }
+      ]
+    });
+  });
+
+  it('still writes id-only custom models when extras are not locked', async () => {
     stubModels(['discovered']);
     use({ custom: { enabled: true, baseUrl: 'http://box:8000' } });
     await syncModelsConfig();

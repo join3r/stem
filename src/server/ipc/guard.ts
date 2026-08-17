@@ -65,6 +65,8 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
     a.optional(a.nullish(a.string)),
     a.optional(a.nullish(a.oneOf(['openai-completions', 'anthropic-messages'])))
   ],
+  'providers:previewPiModels': [a.object],
+  'providers:copyPiModels': [a.object, a.string, a.optional(a.object)],
   'providers:updateLocal': [a.string, a.object],
   'providers:disconnect': [a.string],
   'backend:startTurn': [a.object],

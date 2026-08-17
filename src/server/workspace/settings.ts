@@ -165,6 +165,35 @@ function coerceEffort(raw: unknown): string | null {
   return typeof raw === 'string' && EFFORT_LEVELS.includes(raw) ? raw : null;
 }
 
+/** Pi model objects: keep entries that have a non-empty string `id`. */
+function coerceModelExtras(raw: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Record<string, unknown>[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const rec = entry as Record<string, unknown>;
+    const id = typeof rec.id === 'string' ? rec.id.trim() : '';
+    if (!id) continue;
+    out.push({ ...rec, id });
+  }
+  return out;
+}
+
+function coercePlainObject(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const rec = raw as Record<string, unknown>;
+  return Object.keys(rec).length ? rec : undefined;
+}
+
+function coerceStringRecord(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof k === 'string' && k.trim() && typeof v === 'string') out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 const RERANKER_MODES: readonly RerankerMode[] = ['off', 'local', 'remote'];
 // Derived from the catalog, not written out by hand: a hand-kept copy silently
 // rejected 'qwen3-reranker-0.6b' when it was added everywhere but here, and
@@ -406,12 +435,23 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
     // openai-completions pick from an absent field (= not yet configured).
     const api: LocalProviderApi | undefined =
       id === 'custom' && (r.api === 'anthropic-messages' || r.api === 'openai-completions') ? r.api : undefined;
+    // Overlay extras are custom-only: a hand-edited ollama block cannot lock
+    // Stem's catalog rewrite. Empty arrays/objects drop so disconnect round-trips
+    // to the old shape.
+    const preserve = id === 'custom' && r.preserveModelsConfig === true;
+    const modelExtras = id === 'custom' ? coerceModelExtras(r.modelExtras) : [];
+    const providerCompat = id === 'custom' ? coercePlainObject(r.providerCompat) : undefined;
+    const providerHeaders = id === 'custom' ? coerceStringRecord(r.providerHeaders) : undefined;
     return {
       enabled: typeof r.enabled === 'boolean' ? r.enabled : def.enabled,
       baseUrl: typeof r.baseUrl === 'string' && r.baseUrl.trim() ? r.baseUrl.trim() : def.baseUrl,
       ...(api ? { api } : {}),
       ...(apiKey ? { apiKey } : {}),
-      ...(models.length ? { models } : {})
+      ...(models.length ? { models } : {}),
+      ...(preserve ? { preserveModelsConfig: true } : {}),
+      ...(modelExtras.length ? { modelExtras } : {}),
+      ...(providerCompat ? { providerCompat } : {}),
+      ...(providerHeaders ? { providerHeaders } : {})
     };
   };
   const localProviders: LocalProvidersSettings = {

@@ -3063,8 +3063,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   /**
    * Keep the local-provider catalog fresh: re-probe enabled Ollama/LM Studio
    * servers at most every 30s so newly pulled models appear without an app
-   * restart. (A provider whose model ids were typed by hand isn't probed — see
-   * syncModelsConfig.) pi's RPC mode loads models.json once at spawn, so a change
+   * restart. (Hand-entered ids and a locked Custom extras overlay are not
+   * probed — see syncModelsConfig.) pi's RPC mode loads models.json once at spawn, so a change
    * needs a process restart — done only when no turn is streaming; otherwise the
    * next sync (or any restart) catches up.
    */

@@ -214,6 +214,50 @@ export interface LocalProviderSettings {
    * explicitly; empty/absent means "ask the server".
    */
   models?: string[];
+  /**
+   * Custom endpoint only. When true, Stem writes `modelExtras` / `providerCompat`
+   * into models.json instead of `{ id }` stubs, and will not drop those extras
+   * on a catalog sync. Cleared on disconnect or when the typed-ID Enable path
+   * replaces the overlay.
+   */
+  preserveModelsConfig?: boolean;
+  /**
+   * Custom endpoint only. Full Pi model objects (id plus reasoning, maxTokens,
+   * thinkingLevelMap, per-model compat, …) copied from a models.json overlay.
+   * Authoritative for the custom catalog when `preserveModelsConfig` is set.
+   */
+  modelExtras?: Record<string, unknown>[];
+  /**
+   * Custom endpoint only. Provider-level `compat` copied from the overlay
+   * (thinkingFormat, supportsReasoningEffort, chatTemplateKwargs, …).
+   */
+  providerCompat?: Record<string, unknown>;
+  /**
+   * Custom endpoint only. Optional extra HTTP headers from the overlay, written
+   * onto the custom provider block as Pi `headers`.
+   */
+  providerHeaders?: Record<string, string>;
+}
+
+/** One provider listed from a pasted or linked Pi models.json overlay. */
+export interface PiModelsOverlayProvider {
+  id: string;
+  modelIds: string[];
+  baseUrl?: string;
+}
+
+/** Preview of a Pi models.json (paste or path) before copying onto Custom. */
+export interface PiModelsOverlayPreview {
+  ok: boolean;
+  providers?: PiModelsOverlayProvider[];
+  error?: string;
+}
+
+/** Result of copying a Pi overlay onto Stem's Custom endpoint. */
+export interface PiModelsOverlayCopyResult {
+  ok: boolean;
+  error?: string;
+  status?: RuntimeStatus;
 }
 
 export type LocalProvidersSettings = Record<LocalProviderId, LocalProviderSettings>;
@@ -2437,6 +2481,20 @@ export interface StemApi {
     apiKey?: string,
     api?: LocalProviderApi
   ): Promise<LocalProviderTestResult>;
+  /**
+   * List providers in a pasted Pi models.json or a path to one, so Settings can
+   * copy extras onto Custom. Does not write Stem's Pi home.
+   */
+  previewPiModels(source: { json?: string; path?: string }): Promise<PiModelsOverlayPreview>;
+  /**
+   * Copy one provider from that overlay onto Stem's Custom endpoint (reasoning,
+   * thinkingFormat, maxTokens, …). Stem's Pi home stays Stem's.
+   */
+  copyPiModels(
+    source: { json?: string; path?: string },
+    providerId: string,
+    hints?: { baseUrl?: string; apiKey?: string; api?: LocalProviderApi }
+  ): Promise<PiModelsOverlayCopyResult>;
   /** Remove a provider's credentials (or disable a local provider) and refresh the backend. */
   disconnectProvider(providerId: string): Promise<ProviderLoginResult>;
   /**

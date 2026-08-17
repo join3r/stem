@@ -595,6 +595,10 @@ async function collectBlocks(res: Response, count: number): Promise<Block[]> {
           event: lines.find((line) => line.startsWith('event: '))?.slice(7) ?? null,
           data: JSON.parse(data) as Block['data']
         });
+        // One socket read can carry several frames (pushTo then push in the
+        // same tick). Stop at `count` so a coalesced broadcast is not treated
+        // as part of the addressed-frame collection.
+        if (blocks.length >= count) break;
       }
       split = buffer.indexOf('\n\n');
     }
