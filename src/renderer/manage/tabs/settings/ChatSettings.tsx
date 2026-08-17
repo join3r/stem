@@ -6,7 +6,8 @@ import type {
   DeviceInfo,
   ExecSettings,
   ScratchUsageRow,
-  WebSearchSettings
+  WebSearchSettings,
+  WindowsShell
 } from '../../../../shared/types';
 import { InfoTip } from '../../../ui/InfoTip';
 import { ModelPicker } from '../../../ui/ModelPicker';
@@ -60,6 +61,9 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
   const [chats, setChats] = useState<ChatsSettings | null>(null);
   const [exec, setExec] = useState<ExecSettings | null>(null);
   const [allowInput, setAllowInput] = useState('');
+  const [detectedBash, setDetectedBash] = useState<string | null>(null);
+  const [bashPathDraft, setBashPathDraft] = useState('');
+  const [bashPathError, setBashPathError] = useState('');
   // null while the walk is still running — sizing every chat's folder is a disk
   // walk on the server, so the block says "Measuring…" rather than "0 folders".
   const [scratch, setScratch] = useState<ScratchUsageRow[] | null>(null);
@@ -74,6 +78,7 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   // Per-field debounce so typing doesn't spam the atomic settings writer.
   const ciMainTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bashPathTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     void window.stem.getSettings().then((s) => {
@@ -81,10 +86,14 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
       setCi(s.customInstructions);
       setChats(s.chats);
       setExec(s.exec);
+      setBashPathDraft(s.exec.gitBashPath ?? '');
     });
     // Its own request: a disk walk should not hold up the settings the rest of
     // this tab is made of.
     void window.stem.getScratchUsage().then(setScratch).catch(() => setScratch([]));
+    if (window.stem.platform === 'win32') {
+      void window.stem.detectGitBash().then(setDetectedBash).catch(() => setDetectedBash(null));
+    }
     void window.stem.execHostState().then((s) => setExecHostEnabled(s.enabled)).catch(() => undefined);
     void window.stem
       .listDevices()
@@ -116,7 +125,54 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
 
   function updateExec(patch: Partial<ExecSettings>) {
     setExec((cur) => (cur ? { ...cur, ...patch } : cur)); // optimistic; reconcile below
-    window.stem.updateExecSettings(patch).then((s) => setExec(s.exec));
+    window.stem.updateExecSettings(patch).then((s) => {
+      setExec(s.exec);
+      if (patch.gitBashPath !== undefined || patch.windowsShell !== undefined) {
+        setBashPathDraft(s.exec.gitBashPath ?? '');
+      }
+    });
+  }
+
+  async function chooseWindowsShell(next: WindowsShell) {
+    if (!exec) return;
+    if (next === 'cmd') {
+      setBashPathError('');
+      updateExec({ windowsShell: 'cmd' });
+      return;
+    }
+    const path = (bashPathDraft.trim() || exec.gitBashPath || detectedBash || '').trim();
+    if (!path) {
+      setBashPathError('Git Bash was not found. Paste the path to bash.exe, then choose Git Bash again.');
+      return;
+    }
+    setBashPathError('');
+    updateExec({ windowsShell: 'git-bash', gitBashPath: path });
+  }
+
+  function saveGitBashPath(value: string) {
+    setBashPathDraft(value);
+    if (bashPathTimer.current) clearTimeout(bashPathTimer.current);
+    bashPathTimer.current = setTimeout(() => {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        // Empty path keeps Git Bash selected; spawn auto-detects or falls back to cmd.
+        updateExec({ gitBashPath: null });
+        return;
+      }
+      updateExec({
+        gitBashPath: trimmed,
+        windowsShell: exec?.windowsShell === 'git-bash' ? 'git-bash' : exec?.windowsShell
+      });
+    }, 400);
+  }
+
+  async function browseGitBash() {
+    const files = await window.stem.openFiles();
+    const picked = files[0];
+    if (!picked) return;
+    setBashPathError('');
+    setBashPathDraft(picked);
+    updateExec({ windowsShell: 'git-bash', gitBashPath: picked });
   }
 
   function clearScratch(key: string) {
@@ -274,6 +330,52 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
 
         {exec?.enabled && (
           <>
+            {window.stem.platform === 'win32' && (
+              <div className="set-block">
+                <span className="set-sub">
+                  Windows shell{' '}
+                  <InfoTip label="About the Windows shell">
+                    Commands run in Git Bash when bash.exe is on disk, and fall back to Command
+                    Prompt (cmd.exe) if it is not. Stem looks for Git for Windows in the usual
+                    places (no PowerShell). If it is installed somewhere unusual, paste the path.
+                    Switching shells changes which commands auto-run (dir vs ls) and how quotes
+                    work.
+                  </InfoTip>
+                </span>
+                <div className="seg-ctl">
+                  <button
+                    className={exec.windowsShell !== 'git-bash' ? 'active' : ''}
+                    onClick={() => void chooseWindowsShell('cmd')}
+                  >
+                    Command Prompt
+                  </button>
+                  <button
+                    className={exec.windowsShell === 'git-bash' ? 'active' : ''}
+                    onClick={() => void chooseWindowsShell('git-bash')}
+                  >
+                    Git Bash
+                  </button>
+                </div>
+                {(exec.windowsShell === 'git-bash' || bashPathError) && (
+                  <>
+                    <div className="exec-bash-path">
+                      <input
+                        className="ifield"
+                        type="text"
+                        placeholder={detectedBash || 'C:\\Program Files\\Git\\bin\\bash.exe'}
+                        aria-label="Path to Git Bash bash.exe"
+                        value={bashPathDraft}
+                        onChange={(e) => saveGitBashPath(e.target.value)}
+                      />
+                      <button type="button" className="link-btn" onClick={() => void browseGitBash()}>
+                        Browse
+                      </button>
+                    </div>
+                    {bashPathError && <em className="scratch-empty">{bashPathError}</em>}
+                  </>
+                )}
+              </div>
+            )}
             <div className="set-block">
               <span className="set-sub">
                 Approval mode{' '}

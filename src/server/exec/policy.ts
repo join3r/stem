@@ -1,5 +1,16 @@
-import type { ExecSettings } from '../../shared/types';
+import type { ExecSettings, HostShell } from '../../shared/types';
 import { unixShell } from './executor';
+import { hostShellFromPlatform, isCmdShell } from './host-shell';
+
+export { hostShellFromPlatform };
+
+/** Local HostShell, or a device's Node platform (win32 → cmd, anything else → POSIX). */
+type ShellArg = HostShell | NodeJS.Platform;
+
+function toHostShell(shell: ShellArg = hostShellFromPlatform()): HostShell {
+  if (shell === 'cmd' || shell === 'git-bash' || shell === 'zsh') return shell;
+  return hostShellFromPlatform(shell);
+}
 
 // The run_command auto-approve policy, kept pure so it is unit-testable:
 //
@@ -15,9 +26,9 @@ import { unixShell } from './executor';
 // entirely, and a command word containing a path separator never matches (an
 // allowlisted `git` must not admit `./git`).
 //
-// The parse is PLATFORM-SPECIFIC because the two host shells disagree about
+// The parse is SHELL-SPECIFIC because cmd.exe and POSIX shells disagree about
 // quoting, and a parser that models the wrong one hands out tier 1 for commands
-// the shell will happily split. See WINDOWS_HARD_META below.
+// the shell will happily split. See WINDOWS_HARD_META below. Git Bash is POSIX.
 
 /** Read-only probes that mean the same thing on both host shells. */
 const SHARED_ALLOWLIST = ['rg', 'git status', 'git log', 'git diff', 'git show', 'git branch', 'agent-browser'];
@@ -46,8 +57,10 @@ const POSIX_ALLOWLIST = [
  */
 const WINDOWS_ALLOWLIST = ['dir', 'type', 'where', 'echo', 'cd'];
 
-function staticAllowlist(platform: NodeJS.Platform): Set<string> {
-  return new Set([...SHARED_ALLOWLIST, ...(platform === 'win32' ? WINDOWS_ALLOWLIST : POSIX_ALLOWLIST)]);
+function staticAllowlist(shell: HostShell): Set<string> {
+  // Git Bash is a POSIX shell: ls/cat/grep exist. cmd.exe is the only one that
+  // gets dir/type — those names must not widen zsh or Git Bash tier 1.
+  return new Set([...SHARED_ALLOWLIST, ...(isCmdShell(shell) ? WINDOWS_ALLOWLIST : POSIX_ALLOWLIST)]);
 }
 
 /** One chained command within a compound (or the whole thing when not chained). */
@@ -110,14 +123,14 @@ function makeSegment(tokens: string[]): ParsedSegment {
  * Not a full shell parser — anything with shell semantics beyond "commands
  * chained with plain arguments" comes back `hasShellMeta` and is left to the judge.
  *
- * `platform` selects which shell's quoting rules to model; it must match the
- * shell `shellInvocation()` will actually spawn, or tier 1 is decided against a
+ * `shell` selects which quoting rules to model; it must match the shell
+ * `shellInvocation()` will actually spawn, or tier 1 is decided against a
  * grammar the host does not use.
  */
-export function parseCommand(command: string, platform: NodeJS.Platform = process.platform): ParsedCommand {
-  const win = platform === 'win32';
-  const hardMeta = win ? WINDOWS_HARD_META : POSIX_HARD_META;
-  const dquoteMeta = win ? WINDOWS_DQUOTE_META : POSIX_DQUOTE_META;
+export function parseCommand(command: string, shell: HostShell = hostShellFromPlatform()): ParsedCommand {
+  const cmd = isCmdShell(shell);
+  const hardMeta = cmd ? WINDOWS_HARD_META : POSIX_HARD_META;
+  const dquoteMeta = cmd ? WINDOWS_DQUOTE_META : POSIX_DQUOTE_META;
   const segments: ParsedSegment[] = [];
   let tokens: string[] = [];
   let current = '';
@@ -156,8 +169,9 @@ export function parseCommand(command: string, platform: NodeJS.Platform = proces
       continue;
     }
     // Under cmd.exe `'` opens nothing — it falls through to the hard-meta check
-    // below, so a single-quoted region can never hide a separator.
-    if (ch === '"' || (ch === "'" && !win)) {
+    // below, so a single-quoted region can never hide a separator. Git Bash and
+    // zsh honour single quotes.
+    if (ch === '"' || (ch === "'" && !cmd)) {
       quote = ch as "'" | '"';
       inToken = true;
       continue;
@@ -216,15 +230,18 @@ export interface Classification {
 export function classify(
   command: string,
   settings: Pick<ExecSettings, 'allowlist'>,
-  platform: NodeJS.Platform = process.platform,
+  shell: ShellArg = hostShellFromPlatform(),
   opts: { includeBuiltins?: boolean } = {}
 ): Classification {
-  const parsed = parseCommand(command, platform);
+  const host = toHostShell(shell);
+  const parsed = parseCommand(command, host);
   if (parsed.hasShellMeta || !parsed.segments.length) {
     return { tier: 'judge', prefixes: [], hasShellMeta: parsed.hasShellMeta };
   }
   const user = new Set(settings.allowlist);
-  const allowed = opts.includeBuiltins === false ? new Set<string>() : staticAllowlist(platform);
+  // includeBuiltins: false is the remote-target posture — that machine's tier 1
+  // is only its learned allowlist, never ls/dir/git status from this host.
+  const allowed = opts.includeBuiltins === false ? new Set<string>() : staticAllowlist(host);
   const uncovered = parsed.segments.filter(
     (seg) => !seg.candidates.some((c) => allowed.has(c) || user.has(c))
   );
@@ -239,10 +256,12 @@ export function classify(
  * on a VPS those are different computers, and the judge is being asked about the
  * first one.
  */
-export function hostShellLabel(platform: NodeJS.Platform = process.platform): string {
-  if (platform === 'win32') return 'a Windows machine, under cmd.exe';
-  const shell = unixShell().path.split('/').pop() || 'sh';
-  return `the machine Stem runs on, under ${shell}`;
+export function hostShellLabel(shell: ShellArg = hostShellFromPlatform()): string {
+  const host = toHostShell(shell);
+  if (host === 'cmd') return 'a Windows machine, under cmd.exe';
+  if (host === 'git-bash') return 'a Windows machine, under Git Bash';
+  const name = unixShell().path.split('/').pop() || 'sh';
+  return `the machine Stem runs on, under ${name}`;
 }
 
 /**
@@ -269,13 +288,13 @@ export function buildJudgePrompt(
   command: string,
   cwd: string,
   userIntent?: string,
-  platform: NodeJS.Platform = process.platform,
+  shell: ShellArg = hostShellFromPlatform(),
   shellLabel?: string
 ): string {
   const intent = (userIntent ?? '').trim().slice(0, 800);
   return [
     `An AI assistant working on a request from its user wants to run a shell command on`,
-    `${shellLabel ?? hostShellLabel(platform)}. Classify whether the`,
+    `${shellLabel ?? hostShellLabel(shell)}. Classify whether the`,
     'command is safe to run without asking the user first. Reply with exactly one word',
     '— safe, unsafe, or unsure — optionally followed on the same line by a very short reason.',
     '',

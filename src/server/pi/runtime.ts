@@ -43,6 +43,8 @@ import { log } from '../log';
 import { isContextOverflowError } from '../backend/overflow';
 import { PLAIN_MD_DIRECTIVE, stemAssistantInstructions } from '../workspace/bootstrap';
 import { readSettings } from '../workspace/settings';
+import { resolveHostShell } from '../exec/git-bash';
+import { hostShellAgentHint } from '../exec/host-shell';
 import { previewText } from '../chats/preview';
 import { autoTitle, nameThread, nameThreadIfDue as nameIfDue, type SubjectDeps } from '../chats/subject';
 import { setNaming } from '../workspace/chats';
@@ -2847,6 +2849,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // from here. Mirrors the gate written above for this turn.
     const web = buildWebSearchContext(input.webSearch ?? true);
     if (web) blocks.push(web);
+    try {
+      const exec = (await readSettings()).exec;
+      if (exec.enabled) {
+        const hint = hostShellAgentHint(resolveHostShell(exec));
+        if (hint) blocks.push(hint);
+      }
+    } catch {
+      // Shell hint is convenience for the model; a turn must still go out.
+    }
     if (input.format === 'md') blocks.push(PLAIN_MD_DIRECTIVE);
 
     // Images go to pi natively; text-like files and PDF text layers are inlined,

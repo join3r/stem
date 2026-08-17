@@ -2875,6 +2875,13 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   line-height: 1;
 }
 
+.exec-bash-path {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.exec-bash-path .ifield { flex: 1; min-width: 0; }
+
 /* Settings → Chat → Command execution: what each chat's commands left on disk. */
 .scratch-usage {
   margin-top: 8px;

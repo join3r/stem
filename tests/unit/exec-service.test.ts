@@ -31,7 +31,15 @@ function model(id: string, provider: string, isDefault = false): ModelSummary {
 
 function baseSettings(): AppSettings {
   return {
-    exec: { enabled: true, approvalMode: 'assisted', judgeModel: null, judgeEffort: null, allowlist: [] },
+    exec: {
+      enabled: true,
+      approvalMode: 'assisted',
+      judgeModel: null,
+      judgeEffort: null,
+      allowlist: [],
+      windowsShell: 'cmd',
+      gitBashPath: null
+    },
     // The judge reads these too: unpinned, it runs on the shared background model
     // if there is one, else the model of the chat that asked.
     defaults: { model: null, backgroundModel: null, backgroundEffort: 'low' }

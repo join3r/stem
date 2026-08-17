@@ -1885,6 +1885,16 @@ export interface SkillsSettings {
 export type ExecApprovalMode = 'manual' | 'assisted' | 'yolo';
 
 /**
+ * The shell `run_command` actually spawns. Independent of `process.platform` so
+ * Windows can be cmd.exe or Git Bash. The parser, allowlist, and judge prompt
+ * must use this same value — a mismatch is a safety bug.
+ */
+export type HostShell = 'zsh' | 'cmd' | 'git-bash';
+
+/** Windows-only setting: which host shell run_command uses. Ignored on macOS/Linux. */
+export type WindowsShell = 'cmd' | 'git-bash';
+
+/**
  * Command execution (the `run_command` tool): a tiered auto-approve policy.
  * A static safe allowlist and the user's learned prefixes run immediately; other
  * commands are classified by an LLM judge, and only judge-flagged ones fall back
@@ -1916,6 +1926,13 @@ export interface ExecSettings {
    * file and the chat's last message. See server/exec/scratch.ts.
    */
   scratchTtlDays: number | null;
+  /**
+   * Windows host shell. Default `git-bash` when bash.exe is on disk; otherwise
+   * Stem falls back to cmd.exe at spawn time. `cmd` is an explicit choice.
+   */
+  windowsShell: WindowsShell;
+  /** Absolute path to Git for Windows `bash.exe`. Ignored unless windowsShell is git-bash. */
+  gitBashPath: string | null;
 }
 
 /** One chat's scratch folder in Settings → Chat → Command execution → Scratch files. */
@@ -2874,6 +2891,11 @@ export interface StemApi {
   onExecApprovalResolved(listener: (payload: ApprovalResolvedPayload) => void): () => void;
   /** Answer a pending exec approval ("Allow once" / "Always allow prefix" / "Deny"). */
   respondExecApproval(id: string, decision: ExecDecision): Promise<void>;
+  /**
+   * Filesystem-first Git Bash lookup (Windows). Returns the path to bash.exe or
+   * null. Never spawns PowerShell.
+   */
+  detectGitBash(): Promise<string | null>;
   /** What each chat's shell commands have left on disk, biggest first. */
   getScratchUsage(): Promise<ScratchUsageRow[]>;
   /** Empty one chat's scratch folder (or the unfiled pile); the chat itself stays. */

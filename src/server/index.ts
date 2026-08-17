@@ -19,6 +19,7 @@ import { piHome } from './workspace/paths';
 import type { TaskScheduler } from './scheduler';
 import { initTaskScheduler } from './startup/scheduler';
 import type { ExecService } from './exec/service';
+import { detectGitBash } from './exec/git-bash';
 import { startScratchSweeper, stopScratchSweeper } from './exec/scratch';
 import { initExecService } from './startup/exec';
 import { initSkills } from './startup/skills';
@@ -450,6 +451,7 @@ function registerIpc(): void {
   registerServer('exec:resolveApproval', async (_e, id: string, decision: ExecDecision) => {
     execService?.resolveApproval(id, decision);
   });
+  registerServer('exec:detectGitBash', async () => detectGitBash());
   registerServer('settings:updateCustomInstructions', async (_e, patch: Partial<CustomInstructionsSettings>) => {
     // Just persist — backend:startTurn reads the instructions fresh per turn (for
     // both surfaces), so the change applies to the next turn with no restart.

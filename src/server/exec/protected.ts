@@ -1,6 +1,8 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { win32 as pathWin32, posix as pathPosix } from 'node:path';
+import type { HostShell } from '../../shared/types';
 import { protectedRootsPath } from '../workspace/paths';
+import { hostShellFromPlatform } from './host-shell';
 
 // Main-side twin of the bridge extension's protected-roots gate (which cannot be
 // imported — it lives in the pi child's .mjs). Enforces read-only connected
@@ -28,19 +30,26 @@ interface Host {
   resolve: (p: string) => string;
   sep: string;
   homeVar: string;
-  pathish: RegExp;
 }
 
-function host(platform: NodeJS.Platform): Host {
-  const win = platform === 'win32';
+function host(shell: HostShell): Host {
+  // Git Bash still runs on NTFS with Windows cwd/roots; only the *tokens* we
+  // pull out of the command line are POSIX-shaped.
+  const win = shell !== 'zsh';
   const p = win ? pathWin32 : pathPosix;
   return {
     win,
     resolve: (raw) => p.resolve(raw),
     sep: p.sep,
-    homeVar: win ? 'USERPROFILE' : 'HOME',
-    pathish: win ? WINDOWS_PATHISH_RE : POSIX_PATHISH_RE
+    homeVar: win ? 'USERPROFILE' : 'HOME'
   };
+}
+
+/** `/c/Users/foo` → `C:\Users\foo`. A bare `/b` is a flag, not drive B:. */
+export function msysToWindows(p: string): string | null {
+  const m = /^\/([a-zA-Z])\/(.+)$/.exec(p);
+  if (!m) return null;
+  return `${m[1]!.toUpperCase()}:\\${m[2]!.replace(/\//g, '\\')}`;
 }
 
 function canonicalish(p: string, h: Host): string {
@@ -75,9 +84,9 @@ export interface ProtectedScanResult {
  */
 export function readProtectedRoots(
   path: string = protectedRootsPath(),
-  platform: NodeJS.Platform = process.platform
+  shell: HostShell = hostShellFromPlatform()
 ): string[] {
-  const h = host(platform);
+  const h = host(shell);
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');
@@ -90,14 +99,30 @@ export function readProtectedRoots(
 }
 
 /** Every path-looking token in a command, with ~ and (on Windows) %VAR% expanded. */
-function pathTokens(command: string, h: Host): string[] {
+function pathTokens(command: string, shell: HostShell, h: Host): string[] {
   const home = process.env[h.homeVar] ?? '';
   const text = h.win
     ? command.replace(WINDOWS_ENV_RE, (whole, name: string) => process.env[name] ?? whole)
     : command;
   const out: string[] = [];
-  for (const match of text.match(h.pathish) ?? []) {
-    out.push(match.startsWith('~') ? home + match.slice(1) : match);
+  const push = (raw: string): void => {
+    out.push(raw.startsWith('~') ? home + raw.slice(1).replace(/\//g, h.sep) : raw);
+  };
+  if (shell === 'zsh') {
+    for (const match of text.match(POSIX_PATHISH_RE) ?? []) push(match);
+    return out;
+  }
+  // cmd.exe: Windows shapes only. Git Bash: those plus MSYS `/c/Users/...`.
+  for (const match of text.match(WINDOWS_PATHISH_RE) ?? []) push(match);
+  if (shell === 'git-bash') {
+    for (const match of text.match(POSIX_PATHISH_RE) ?? []) {
+      if (match.startsWith('~')) {
+        push(match);
+        continue;
+      }
+      const converted = msysToWindows(match);
+      if (converted) out.push(converted);
+    }
   }
   return out;
 }
@@ -110,12 +135,12 @@ export function scanProtected(
   command: string,
   cwd: string,
   rootsPath: string = protectedRootsPath(),
-  platform: NodeJS.Platform = process.platform
+  shell: HostShell = hostShellFromPlatform()
 ): ProtectedScanResult {
-  const h = host(platform);
+  const h = host(shell);
   let roots: string[];
   try {
-    roots = readProtectedRoots(rootsPath, platform);
+    roots = readProtectedRoots(rootsPath, shell);
   } catch {
     return {
       blocked: true,
@@ -124,7 +149,7 @@ export function scanProtected(
   }
   if (!roots.length) return { blocked: false };
 
-  const targets = [cwd, ...pathTokens(command, h)];
+  const targets = [cwd, ...pathTokens(command, shell, h)];
   for (const target of targets) {
     const canonical = canonicalish(target, h);
     const hit = roots.find((root) => isInside(canonical, root, h));

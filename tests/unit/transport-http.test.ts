@@ -595,6 +595,10 @@ async function collectBlocks(res: Response, count: number): Promise<Block[]> {
           event: lines.find((line) => line.startsWith('event: '))?.slice(7) ?? null,
           data: JSON.parse(data) as Block['data']
         });
+        // One TCP read can contain several SSE blocks (pushTo then a broadcast
+        // in the same tick). Stop at `count` so callers asking for the first
+        // event do not also get whatever arrived in the same chunk.
+        if (blocks.length >= count) break;
       }
       split = buffer.indexOf('\n\n');
     }

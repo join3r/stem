@@ -52,20 +52,40 @@ describe('shellInvocation', () => {
   it('uses the host shell with -c on Unix platforms', () => {
     // Never a hardcoded /bin/zsh: a Linux server (the Docker image included) has
     // no zsh, and every command there died with `spawn /bin/zsh ENOENT`.
-    const expected = { command: unixShell().path, args: ['-c', 'echo hi'], detached: true };
-    expect(shellInvocation('echo hi', 'darwin')).toEqual(expected);
-    expect(shellInvocation('echo hi', 'linux')).toEqual(expected);
+    const expected = {
+      command: unixShell().path,
+      args: ['-c', 'echo hi'],
+      detached: true,
+      verbatimArguments: false
+    };
+    expect(shellInvocation('echo hi', 'zsh')).toEqual(expected);
   });
 
-  it('uses cmd.exe /d /s /c on win32 (no AutoRun)', () => {
-    const inv = shellInvocation('echo hi', 'win32');
+  it('uses cmd.exe /d /s /c on cmd (no AutoRun)', () => {
+    const inv = shellInvocation('echo hi', 'cmd');
     // Quoted /c payload so cmd /s strips one outer pair; inner quotes stay intact.
     expect(inv.args).toEqual(['/d', '/s', '/c', '"echo hi"']);
     expect(inv.detached).toBe(false);
+    expect(inv.verbatimArguments).toBe(true);
     // ComSpec may be set; otherwise the default is cmd.exe.
     expect(inv.command.toLowerCase()).toMatch(/cmd\.exe$/);
   });
 
+  it('uses bash --noprofile --norc -c for Git Bash (no login profile)', () => {
+    const bash = 'C:\\Program Files\\Git\\bin\\bash.exe';
+    expect(shellInvocation('echo hi', 'git-bash', bash)).toEqual({
+      command: bash,
+      args: ['--noprofile', '--norc', '-c', 'echo hi'],
+      detached: false,
+      verbatimArguments: false
+    });
+  });
+
+  it('falls back to cmd when Git Bash is selected without a path', () => {
+    const inv = shellInvocation('echo hi', 'git-bash', null);
+    expect(inv.args).toEqual(['/d', '/s', '/c', '"echo hi"']);
+    expect(inv.verbatimArguments).toBe(true);
+  });
 });
 
 describe('resolveLoginPath', () => {

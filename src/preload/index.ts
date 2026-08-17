@@ -219,6 +219,7 @@ const api: StemApi = {
   },
   respondExecApproval: (id: string, decision: ExecDecision) =>
     ipcRenderer.invoke('exec:resolveApproval', id, decision),
+  detectGitBash: () => ipcRenderer.invoke('exec:detectGitBash'),
   getScratchUsage: () => ipcRenderer.invoke('exec:scratchUsage'),
   clearScratch: (key: string) => ipcRenderer.invoke('exec:clearScratch', key),
   onMcpChanged: (listener: () => void) => {

@@ -1,13 +1,17 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import type { HostShell } from '../../shared/types';
+import { hostShellFromPlatform } from './host-shell';
 
 // Spawns approved run_command commands. Runs in main (the privileged process).
 // On macOS/Linux: the host shell (see unixShell) `-c`, with the user's
 // LOGIN-shell PATH — a GUI app's environment lacks Homebrew/npm bin dirs, so
 // without this `agent-browser` & co. would be "command not found" even when
 // installed.
-// On Windows: `cmd.exe /d /s /c` (no AutoRun; avoids a broken PowerShell
-// profile.ps1). PATH comes from the process environment (Path/PATH).
+// On Windows: `cmd.exe /d /s /c` by default (no AutoRun; avoids a broken
+// PowerShell profile.ps1). Opt-in Git Bash is `bash.exe --noprofile --norc -c`
+// (same idea: skip .bashrc). PATH comes from the process environment, plus
+// Git's usr\bin when Git Bash is the host shell.
 
 export const DEFAULT_TIMEOUT_MS = 60_000;
 export const MAX_TIMEOUT_MS = 300_000;
@@ -29,6 +33,11 @@ export interface ShellInvocation {
   args: string[];
   /** POSIX process-group kill via negative PID; false on Windows (taskkill). */
   detached: boolean;
+  /**
+   * Node must not rewrite quotes. True only for cmd's `/c "..."` form;
+   * Git Bash and zsh use normal argv quoting.
+   */
+  verbatimArguments: boolean;
 }
 
 /**
@@ -73,21 +82,33 @@ export function resetShellCacheForTests(): void {
 
 /**
  * Build the argv used to run one user command. Pure so Mac CI can assert the
- * Windows shape without needing cmd.exe.
+ * Windows shape without needing cmd.exe or bash.exe.
  */
 export function shellInvocation(
   command: string,
-  platform: NodeJS.Platform = process.platform
+  shell: HostShell = hostShellFromPlatform(),
+  gitBashPath?: string | null
 ): ShellInvocation {
-  if (platform === 'win32') {
+  if (shell === 'git-bash' && gitBashPath) {
+    // --noprofile --norc skips .bashrc / /etc/profile (mirrors cmd /d). PATH for
+    // unix tools is prepended by gitBashPathEnv, not by a login shell.
+    return {
+      command: gitBashPath,
+      args: ['--noprofile', '--norc', '-c', command],
+      detached: false,
+      verbatimArguments: false
+    };
+  }
+  if (shell === 'cmd' || shell === 'git-bash') {
+    // git-bash without a path falls back to cmd — never spawn a missing bash.
     // /d = no AutoRun (registry hooks that mirror a broken profile). /s /c + a
     // quoted payload is the CreateProcess-safe form: cmd strips one outer quote
     // pair and runs the rest as-is (inner " and | stay intact for PowerShell).
     // Pair with windowsVerbatimArguments so Node does not turn " into \".
     const comspec = process.env.ComSpec || 'cmd.exe';
-    return { command: comspec, args: ['/d', '/s', '/c', `"${command}"`], detached: false };
+    return { command: comspec, args: ['/d', '/s', '/c', `"${command}"`], detached: false, verbatimArguments: true };
   }
-  return { command: unixShell().path, args: ['-c', command], detached: true };
+  return { command: unixShell().path, args: ['-c', command], detached: true, verbatimArguments: false };
 }
 
 const loginPathCache = new Map<NodeJS.Platform, Promise<string>>();
@@ -183,6 +204,8 @@ export interface RunCommandOptions {
   timeoutMs: number;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
+  shell?: HostShell;
+  gitBashPath?: string | null;
 }
 
 /**
@@ -230,7 +253,7 @@ function killChildTree(child: ReturnType<typeof spawn>, detached: boolean): void
  */
 export function runCommand(opts: RunCommandOptions): Promise<ExecOutcome> {
   return new Promise<ExecOutcome>((resolve, reject) => {
-    const shell = shellInvocation(opts.command);
+    const shell = shellInvocation(opts.command, opts.shell, opts.gitBashPath);
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(shell.command, shell.args, {
@@ -239,9 +262,10 @@ export function runCommand(opts: RunCommandOptions): Promise<ExecOutcome> {
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: shell.detached,
         windowsHide: true,
-        // Keep the /c "..." quotes we built; Node's default Windows quoting
-        // would escape inner " as \" and break PowerShell -Command "...".
-        windowsVerbatimArguments: process.platform === 'win32'
+        // Keep the /c "..." quotes we built for cmd; Node's default Windows
+        // quoting would escape inner " as \" and break PowerShell -Command "...".
+        // Git Bash uses normal argv quoting (verbatimArguments is false).
+        windowsVerbatimArguments: shell.verbatimArguments
       });
     } catch (e) {
       reject(e instanceof Error ? e : new Error(String(e)));

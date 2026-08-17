@@ -90,7 +90,7 @@ Commands run on the machine Stem itself runs on: your own computer normally, or 
 server if you [moved Stem to one](../running-on-a-server.md) — so they see the programs
 installed there, not the ones on the computer you happen to be typing on. On macOS and
 Linux they run under `zsh`, or `bash`/`sh` on a machine without it; on Windows under
-`cmd.exe`.
+Git Bash when it is installed, otherwise `cmd.exe`.
 
 - **Manual**: known-safe and always-allowed commands run; everything else asks first.
 - **Assisted**: an AI safety check passes routine commands and asks about uncertain
@@ -100,6 +100,13 @@ Linux they run under `zsh`, or `bash`/`sh` on a machine without it; on Windows u
 
 On an approval card, **Always allow** saves a command prefix for future turns.
 Keep prefixes narrow; `git status` grants less access than `git`.
+
+On Windows, **Windows shell** defaults to Git Bash when `bash.exe` is on disk, and
+falls back to Command Prompt if it is not. Stem looks for Git Bash without using
+PowerShell. If it is not in a usual place, paste the path to `bash.exe`. Commands
+then run in that one shell — quoting and the always-allowed list follow it (`dir`
+vs `ls`). Pick Command Prompt yourself if you want cmd.exe even though Git is
+installed.
 
 <!-- TODO(screenshot): Command approval card with Allow once, Always allow, and Deny. -->
 

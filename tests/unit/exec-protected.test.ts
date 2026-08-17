@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { scanProtected } from '../../src/server/exec/protected';
+import { scanProtected, msysToWindows } from '../../src/server/exec/protected';
 
 // The main-side fail-closed guard for read-only connected folders: any command
 // or cwd referencing a protected root is blocked; unreadable gate state blocks
@@ -64,7 +64,7 @@ describe('scanProtected on Windows paths', () => {
   });
 
   const scan = (command: string, cwd = 'C:\\work') =>
-    scanProtected(command, cwd, rootsPath, 'win32');
+    scanProtected(command, cwd, rootsPath, 'cmd');
 
   it('blocks drive-absolute paths inside a protected root', () => {
     // `type` and `dir` are tier 1 under cmd, so this is the gate's whole job.
@@ -109,8 +109,39 @@ describe('scanProtected on Windows paths', () => {
   it('is what the POSIX scan misses — the regression this covers', () => {
     // Same command, POSIX rules: no `~` and no leading `/`, so nothing matched
     // and the read-only folder was wide open to `type`.
-    expect(scanProtected('type C:\\Users\\me\\vault\\secrets.txt', 'C:\\work', rootsPath, 'darwin').blocked).toBe(
+    expect(scanProtected('type C:\\Users\\me\\vault\\secrets.txt', 'C:\\work', rootsPath, 'zsh').blocked).toBe(
       false
     );
+  });
+});
+
+describe('scanProtected on Git Bash paths', () => {
+  const winVault = 'C:\\Users\\me\\vault';
+
+  beforeEach(() => {
+    writeFileSync(rootsPath, JSON.stringify({ roots: [winVault] }));
+  });
+
+  const scan = (command: string, cwd = 'C:\\work') =>
+    scanProtected(command, cwd, rootsPath, 'git-bash');
+
+  it('blocks MSYS /c/Users/... paths mapped onto a Windows root', () => {
+    expect(scan('cat /c/Users/me/vault/secrets.txt').blocked).toBe(true);
+  });
+
+  it('still blocks Windows drive paths (the agent may emit either shape)', () => {
+    expect(scan('cat C:\\Users\\me\\vault\\secrets.txt').blocked).toBe(true);
+  });
+
+  it('does not treat a cmd /b flag as drive B:', () => {
+    expect(scan('ls /b').blocked).toBe(false);
+  });
+});
+
+describe('msysToWindows', () => {
+  it('maps /c/Users/foo to C:\\Users\\foo', () => {
+    expect(msysToWindows('/c/Users/me/vault')).toBe('C:\\Users\\me\\vault');
+    expect(msysToWindows('/b')).toBeNull();
+    expect(msysToWindows('/usr/bin')).toBeNull();
   });
 });

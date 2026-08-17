@@ -97,7 +97,10 @@ const DEFAULTS: ServerSettings = {
     judgeEffort: null,
     allowlist: [],
     deviceAllowlists: {},
-    scratchTtlDays: DEFAULT_SCRATCH_TTL_DAYS
+    scratchTtlDays: DEFAULT_SCRATCH_TTL_DAYS,
+    // Prefer Git Bash on Windows (auto-detect bash.exe; cmd.exe if Git is missing).
+    windowsShell: 'git-bash',
+    gitBashPath: null
   },
   // Embeddings + reranker for relevance-ranking facts at inject time. Embeddings
   // default to the bundled local model (multilingual, in-process, nothing leaves
@@ -360,7 +363,19 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
         ? null
         : typeof rawExec.scratchTtlDays === 'number' && Number.isFinite(rawExec.scratchTtlDays) && rawExec.scratchTtlDays > 0
           ? Math.floor(rawExec.scratchTtlDays)
-          : DEFAULTS.exec.scratchTtlDays
+          : DEFAULTS.exec.scratchTtlDays,
+    gitBashPath:
+      typeof rawExec.gitBashPath === 'string' && rawExec.gitBashPath.trim()
+        ? rawExec.gitBashPath.trim().slice(0, 500)
+        : null,
+    // git-bash without a saved path still means "prefer Git Bash": spawn-time
+    // resolveHostShell auto-detects bash.exe and falls back to cmd if missing.
+    windowsShell:
+      rawExec.windowsShell === 'cmd'
+        ? 'cmd'
+        : rawExec.windowsShell === 'git-bash'
+          ? 'git-bash'
+          : DEFAULTS.exec.windowsShell
   };
   const rawRet = (parsed?.retrieval ?? {}) as Partial<RetrievalSettings>;
   const retrieval: RetrievalSettings = {
