@@ -19,6 +19,7 @@ import { createScanWorkerManager, type ScanWorkerManager } from '../recall/scan-
 import { spawnScanWorker } from '../recall/scan-worker-host';
 import { setScanWorkerManager } from '../recall/scan';
 import * as activity from '../activity';
+import { log } from '../log';
 import { recallStore } from '../recall/store';
 const { getEpisodicGeneration, getFactsGeneration, getFactsMissingVector, pruneMessageVectorsExceptModel, pruneSummaryVectorsExceptModel, pruneVectorsExceptModel, getSummariesMissingVector, upsertFactVectorForSnapshot, upsertSummaryVector } = recallStore;
 
@@ -58,6 +59,65 @@ function trackModelStatus(
   if (status.state === 'ready') {
     activity.endByKind(kind, { worked: true, detail: status.dim ? `Ready · ${status.dim}-dim` : 'Ready' });
   }
+}
+
+/** Last thing written per log key, so a repeating status writes one line. */
+const lastLoggedStatus = new Map<string, string>();
+
+/**
+ * Whether `value` differs from what was last logged for `key`. Uninteresting
+ * transitions are recorded too (with no line) rather than skipped, so a stage
+ * that recovers and then fails the same way again still gets a second line.
+ */
+function changed(key: string, value: string): boolean {
+  if (lastLoggedStatus.get(key) === value) return false;
+  lastLoggedStatus.set(key, value);
+  return true;
+}
+
+/**
+ * A local model's lifecycle, written to stem.log — the same events
+ * {@link trackModelStatus} mirrors into the activity registry.
+ *
+ * That registry is an in-app surface and nothing else, so a model that fails to
+ * load on someone else's machine leaves behind nothing they can send us: the
+ * report arrives as "the embedding model failed" and stops there. Here the
+ * transitions worth reading after the fact get one line each — the load that
+ * started, the one that failed with its message, the model that came up.
+ *
+ * Keyed on model+state+error rather than the state alone, because these statuses
+ * repeat: download progress posts ~4/s, and available() re-kicks a failed model
+ * every ERROR_RETRY_MS for as long as the app runs. A second identical line says
+ * nothing the first didn't; a changed message is a different failure and earns
+ * its own. Exported because that dedupe is the part that regresses into spam.
+ */
+export function logModelStatus(
+  stage: 'embeddings' | 'reranker',
+  status: { model: string; state: string; dim?: number; error?: string }
+): void {
+  // Progress ticks share the 'downloading' state, so they collapse into the one
+  // line that says a download began.
+  if (!changed(`local:${stage}`, `${status.model}:${status.state}:${status.error ?? ''}`)) return;
+  if (status.state === 'idle') return; // "nothing is loaded" is not an event
+  log('retrieval', `local ${stage} model ${status.state}`, {
+    model: status.model,
+    ...(status.dim ? { dim: status.dim } : {}),
+    ...(status.error ? { error: status.error } : {})
+  });
+}
+
+/**
+ * A remote endpoint's verdict, when it turns bad. Only the failures are written:
+ * unlike a local model there is no lifecycle worth narrating, and 'ok' is the
+ * state every working install sits in.
+ */
+export function logRemoteHealth(
+  stage: 'embeddings' | 'reranker',
+  health: { state: string; error?: string }
+): void {
+  if (!changed(`remote:${stage}`, `${health.state}:${health.error ?? ''}`)) return;
+  if (health.state !== 'error') return;
+  log('retrieval', `remote ${stage} endpoint failing`, { error: health.error });
 }
 
 /**
@@ -118,7 +178,14 @@ export function initRetrieval(deps: {
   // so their health is the recorded outcome of the requests recall makes anyway
   // — the wrappers below write it, and the Memory tab's red markers read it.
   const remoteHealth = createRemoteHealthTracker();
-  remoteHealth.onChange((health) => deps.emit('retrieval:remoteHealth', health));
+  remoteHealth.onChange((health) => {
+    deps.emit('retrieval:remoteHealth', health);
+    // Same silence as a local model's, for the same reason. onChange carries
+    // BOTH stages whenever either one moves, which is what the dedupe is for
+    // here: a stuck embeddings endpoint must not re-log every time the reranker
+    // changes its mind.
+    for (const stage of ['embeddings', 'reranker'] as const) logRemoteHealth(stage, health[stage]);
+  });
   setRetrievalClients({
     embeddings: createEmbeddingsRouter({
       getMode: async () => (await getEmbedSettings()).mode,
@@ -162,10 +229,12 @@ export function initRetrieval(deps: {
   embedManager.onRerankStatus((status) => {
     deps.emit('reranker:localStatus', status);
     trackModelStatus('models.rerank', 'Preparing reranker model', status);
+    logModelStatus('reranker', status);
   });
   embedManager.onStatus((status) => {
     deps.emit('embeddings:localStatus', status);
     trackModelStatus('models.embed', 'Preparing embedding model', status);
+    logModelStatus('embeddings', status);
     // The model just came up: prune vectors from previously-used models (local
     // vectors are cheap to regenerate; keeps recall.sqlite tidy) and backfill any
     // facts missing a vector in the background. Without this, inject would embed

@@ -136,5 +136,22 @@ Or avoid pipes with `(...)` / property access when that is enough
 8. Connect a folder read-only, then ask Stem to `type` a file inside it. Expect
    the read-only refusal, not the file.
 9. Check that `%APPDATA%\Stem\` appears and survives a restart.
-10. Memory / search: if hybrid embeddings fail, check the main log for
-    `embed-endpoint` / named-pipe errors (FTS-only fallback is safe but weaker).
+10. Memory / search: if hybrid embeddings fail, the reason is in
+    `%APPDATA%\Stem\stem.log` (FTS-only fallback is safe but weaker). Three
+    scopes cover it — grep for whichever the symptom points at:
+
+    ```bat
+    findstr /C:"[retrieval]" /C:"[embed-worker]" /C:"[embed-endpoint]" "%APPDATA%\Stem\stem.log"
+    ```
+
+    - `[retrieval]` — the model's own lifecycle: `downloading`, `loading`,
+      `ready` with its dimension, or `error` with the message the Memory tab
+      shows. One line per transition, so a repeated failure appears once.
+    - `[embed-worker]` — the utility process: `spawned`, a `fork failed`, an
+      unexpected exit (with code and uptime), a purged corrupt weights cache. A
+      model that never appears as `spawned` was never asked for; one that spawns
+      and exits with no `error` status aborted natively (ONNX OOM and friends),
+      and the reason went with the child's stderr.
+    - `[embed-endpoint]` — the named pipe serving query embeddings to the
+      `stem-recall` MCP server. Failing here costs `search_past_chats` its
+      semantic half and nothing else.

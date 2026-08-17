@@ -2,6 +2,7 @@ import { createServer } from 'node:net';
 import type { Socket } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, unlinkSync } from 'node:fs';
+import { log } from '../log';
 import type { EmbeddingsClient, EmbedKind } from './embeddings';
 
 // Local embed endpoint: a unix-domain socket in main that lets the stem-recall
@@ -142,8 +143,14 @@ export function startEmbedEndpoint(opts: {
   });
 
   server.on('error', (err) => {
-    // Fires async after listen() — no throw path out of here by design.
-    console.warn(`[embed-endpoint] disabled: ${String(err)}`);
+    // Fires async after listen() — no throw path out of here by design. Goes to
+    // the app log rather than the console because the whole symptom is silent:
+    // search_past_chats quietly drops to FTS-only, and a console line is gone
+    // the moment the app was started from anything but a terminal.
+    log('embed-endpoint', 'disabled — search_past_chats stays FTS-only', {
+      path: opts.socketPath,
+      error: String(err)
+    });
   });
   server.listen(opts.socketPath, () => {
     if (isPipe) return;

@@ -5,6 +5,7 @@ import type { EmbedKind } from './embeddings';
 import type { RerankResult } from './rerank';
 import type { WorkerOutMessage } from './embed-worker';
 import type { WorkerTransport } from './embed-worker-host';
+import { log } from '../log';
 import type { LocalEmbedStatus, LocalRerankStatus } from '../../shared/types';
 
 // Main-process side of the local retrieval worker: owns the utility-process
@@ -14,6 +15,13 @@ import type { LocalEmbedStatus, LocalRerankStatus } from '../../shared/types';
 // each with its own spec, status channel, and request queue. Everything here is
 // non-blocking: ensure() just kicks the machinery, and callers learn readiness
 // via status()/onStatus rather than awaiting a download.
+//
+// The `embed-worker` log lines cover the lifecycle events that never reach a
+// status callback, and so would otherwise exist nowhere a user can send us: a
+// process that died (the status goes back to 'loading' while respawns are left)
+// and a corrupt-cache purge (deliberately hidden from the UI, since the restart
+// is about to fix it). Without them the two failures the UI *can* show —
+// "worker exited" and "worker keeps crashing" — name nothing at all.
 
 export interface EmbedWorkerManager {
   /**
@@ -166,10 +174,21 @@ export function createEmbedWorkerManager(deps: {
    * 'loading' rather than surfacing an error the restart is about to fix).
    * Within budget only; past it the error status flows through as usual.
    */
-  function restartAfterCorruptPurge(status: { state: string; purgedCorruptCache?: boolean }): boolean {
+  function restartAfterCorruptPurge(status: {
+    state: string;
+    error?: string;
+    purgedCorruptCache?: boolean;
+  }): boolean {
     if (status.state !== 'error' || !status.purgedCorruptCache) return false;
     if (corruptRespawns >= MAX_CORRUPT_RESPAWNS) return false;
     corruptRespawns += 1;
+    // The one failure the UI never shows: a re-download that keeps coming back
+    // corrupt reads as a slow first load until the budget runs out.
+    log('embed-worker', 'purged corrupt weights cache, restarting to re-download', {
+      attempt: corruptRespawns,
+      of: MAX_CORRUPT_RESPAWNS,
+      error: status.error
+    });
     stop();
     spawnProcess();
     return true;
@@ -244,12 +263,16 @@ export function createEmbedWorkerManager(deps: {
       // Never throws out of ensure(): callers (available() on the turn hot path)
       // must fall back, not break the turn.
       const message = err instanceof Error ? err.message : 'failed to start embedding worker';
+      log('embed-worker', 'fork failed', { error: message });
       if (spec) setStatus({ model: spec.id, state: 'error', error: message });
       if (rerankSpec) setRerankStatus({ model: rerankSpec.id, state: 'error', error: message });
       return;
     }
     transport = t;
     spawnedAt = Date.now();
+    // Anchors the story a failure log has to tell: "never even forked" and
+    // "forked and then died" are the same silence without this line.
+    log('embed-worker', 'spawned', { embed: spec?.id ?? null, rerank: rerankSpec?.id ?? null });
     if (spec) setStatus({ model: spec.id, state: 'loading' });
     if (rerankSpec) setRerankStatus({ model: rerankSpec.id, state: 'loading' });
     // Identity-guarded: a superseded worker lives up to 2 s after stop() and its
@@ -257,18 +280,32 @@ export function createEmbedWorkerManager(deps: {
     t.onMessage((msg) => {
       if (transport === t) handleMessage(msg);
     });
-    t.onExit(() => {
+    t.onExit((code) => {
       if (transport !== t) return; // superseded by reconfigure
       transport = null;
+      const uptimeMs = Date.now() - spawnedAt;
       failAll('local embeddings: worker exited', 'local reranker: worker exited');
       // A worker that ran past STABLE_UPTIME_MS before dying is a one-off crash,
       // not a loop — refund its respawn budget so a long-lived worker that finally
       // trips over one bad input gets a fresh start.
-      if (Date.now() - spawnedAt >= STABLE_UPTIME_MS) respawns = 0;
+      if (uptimeMs >= STABLE_UPTIME_MS) respawns = 0;
       // Unexpected exit (dispose/reconfigure clear `transport` first): respawn
       // with a cap so a crash-looping model settles into 'error' instead of
       // burning CPU forever; the next settings change or Test resets the count.
-      if (respawns < MAX_RESPAWNS && (spec || rerankSpec)) {
+      const respawning = respawns < MAX_RESPAWNS && !!(spec || rerankSpec);
+      // A process that ABORTS (ONNX OOM, an ORT mutex abort on load) never posts
+      // an error status, so this exit is the only record that it ran at all. The
+      // reason itself died with the child's stderr; the code and the uptime are
+      // what separate "aborted mid-load" from "aborted on the first embed".
+      log('embed-worker', 'worker exited unexpectedly', {
+        code: code ?? null,
+        uptimeMs,
+        embed: spec?.id ?? null,
+        rerank: rerankSpec?.id ?? null,
+        respawning,
+        respawns
+      });
+      if (respawning) {
         respawns += 1;
         spawnProcess();
       } else {

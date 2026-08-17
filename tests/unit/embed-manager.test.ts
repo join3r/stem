@@ -1,7 +1,10 @@
 // Manager suite — the utility-process lifecycle around the local embedding
 // worker, driven through an in-memory fake transport (the vitest electron stub
 // has no utilityProcess; the WorkerTransport seam exists exactly for this).
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
+import { logFlushed } from '../../src/server/log';
+import { logFilePath } from '../../src/server/workspace/paths';
 import { EMBED_CATALOG } from '../../src/server/recall/embed-catalog';
 import { RERANK_CATALOG } from '../../src/server/recall/rerank-catalog';
 import { createEmbedWorkerManager } from '../../src/server/recall/embed-manager';
@@ -55,6 +58,18 @@ function manager(opts: { embedTimeoutMs?: number; rerankTimeoutMs?: number } = {
     ...opts
   });
   return { mgr, workers };
+}
+
+/** Every stem.log line so far. Taken as a before/after pair — one process runs
+ * this whole file, so earlier cases' lines are still in the file. */
+async function logLines(): Promise<string[]> {
+  await logFlushed();
+  const text = await readFile(logFilePath(), 'utf8').catch(() => '');
+  return text.split('\n').filter(Boolean);
+}
+
+async function newLines(before: string[]): Promise<string[]> {
+  return (await logLines()).slice(before.length);
 }
 
 const ready = (dim = 384): WorkerOutMessage => ({
@@ -344,5 +359,52 @@ describe('co-hosted reranker', () => {
     corrupt(workers[2]); // budget (2) exhausted — no third restart
     expect(workers).toHaveLength(3);
     expect(mgr.status().state).toBe('error');
+  });
+
+  // The two events that never reach a status callback, and so exist nowhere a
+  // user could send them from: a process that died (status goes back to
+  // 'loading' while respawns are left) and a corrupt-cache purge (hidden from
+  // the UI on purpose). Both leave the UI showing a message that names nothing —
+  // "worker exited", "worker keeps crashing" — so stem.log is the only record.
+  it('logs the lifecycle events the status channel hides', async () => {
+    const { mgr, workers } = manager();
+    const before = await logLines();
+    mgr.ensure(SPEC);
+    expect(await newLines(before)).toContainEqual(
+      expect.stringContaining(`[embed-worker] spawned {"embed":"${SPEC.id}","rerank":null}`)
+    );
+
+    workers[0].exit(9);
+    const afterExit = await newLines(before);
+    const exited = afterExit.filter((l) => l.includes('worker exited unexpectedly'));
+    expect(exited).toHaveLength(1);
+    // The reason died with the child's stderr; the code and the respawn decision
+    // are what separate "aborted mid-load" from "settled into error".
+    expect(exited[0]).toContain('"code":9');
+    expect(exited[0]).toContain('"respawning":true');
+
+    workers[1].emit({
+      type: 'status',
+      status: { model: SPEC.id, state: 'error', error: 'Protobuf parsing failed', purgedCorruptCache: true }
+    });
+    const purged = (await newLines(before)).filter((l) => l.includes('purged corrupt weights cache'));
+    expect(purged).toHaveLength(1);
+    expect(purged[0]).toContain('"attempt":1');
+    expect(purged[0]).toContain('Protobuf parsing failed');
+  });
+
+  it('logs a fork that fails outright rather than only failing the status', async () => {
+    const before = await logLines();
+    const mgr = createEmbedWorkerManager({
+      spawn: () => {
+        throw new Error('utilityProcess unavailable');
+      },
+      cacheDir: () => '/tmp/models'
+    });
+    mgr.ensure(SPEC);
+    expect(mgr.status()).toMatchObject({ state: 'error', error: 'utilityProcess unavailable' });
+    expect(await newLines(before)).toContainEqual(
+      expect.stringContaining('[embed-worker] fork failed {"error":"utilityProcess unavailable"}')
+    );
   });
 });
