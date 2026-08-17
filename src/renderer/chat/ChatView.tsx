@@ -77,6 +77,8 @@ function ActionTip({ tip, children }: { tip: string; children: ReactNode }) {
 /** Imperative surface so App can push files into this chat's composer (drop overlay). */
 export interface ChatViewHandle {
   addAttachments(files: File[]): void;
+  /** Put the caret in the composer — used when a new chat opens. */
+  focus(): void;
 }
 
 interface ChatViewProps {

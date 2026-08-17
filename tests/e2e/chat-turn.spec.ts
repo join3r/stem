@@ -73,3 +73,29 @@ test('a failed turn surfaces a system error bubble with Retry', async ({ mainWin
     mainWindow.locator('.message-assistant:not(.activity-row) .message-body').last()
   ).toContainText('Echo: still alive?');
 });
+
+test('a new chat lands with the caret in the composer', async ({ mainWindow }) => {
+  const composer = mainWindow.getByPlaceholder('Ask Stem…');
+  await send(mainWindow, 'first');
+  await expect(
+    mainWindow.locator('.message-assistant:not(.activity-row) .message-body').last()
+  ).toContainText('Echo: first');
+
+  // Coming from an open thread, ChatView remounts — the focus must land on the
+  // composer of the *new* instance, and the user can type straight away.
+  await mainWindow.keyboard.press('ControlOrMeta+n');
+  await expect(mainWindow.locator('.message-user')).toHaveCount(0);
+  await expect(composer).toBeFocused();
+  await mainWindow.keyboard.type('typed without clicking');
+  await expect(composer).toHaveValue('typed without clicking');
+
+  // ⌘N on a draft that is already open doesn't remount anything, so this is the
+  // other half of the fix: focus comes back even from elsewhere in the window.
+  await composer.blur();
+  await expect(composer).not.toBeFocused();
+  await mainWindow.keyboard.press('ControlOrMeta+n');
+  await expect(composer).toBeFocused();
+  // Nothing is remounted here, so the unsent text stays — ⌘N on an empty draft
+  // shouldn't throw away what you were writing.
+  await expect(composer).toHaveValue('typed without clicking');
+});

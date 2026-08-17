@@ -147,6 +147,8 @@ export default function App() {
   // ("Add to this conversation") into its composer.
   const chatViewRef = useRef<ChatViewHandle>(null);
   const onDropToChat = useCallback((files: File[]) => chatViewRef.current?.addAttachments(files), []);
+  // Bumped by `newConversation`; the effect beside it focuses the composer.
+  const [focusComposerSeq, setFocusComposerSeq] = useState(0);
 
   // Navigation state the event pipeline and IPC continuations need synchronously.
   const activeThreadIdRef = useRef(activeThreadId);
@@ -775,7 +777,17 @@ export default function App() {
     setDraftFolderId(folderId);
     core.store.replace(DRAFT, EMPTY_STATE);
     setActiveThreadId(null);
+    setFocusComposerSeq((n) => n + 1);
   }, [core]);
+
+  // A brand-new chat is for typing into, so put the caret in the composer — from
+  // ⌘N, the titlebar button, or the chat list. Deferred to an effect because
+  // coming from an open thread remounts ChatView (it's keyed by thread), and the
+  // handle only points at the new composer once that commit lands.
+  useEffect(() => {
+    if (focusComposerSeq === 0) return; // never on first mount
+    chatViewRef.current?.focus();
+  }, [focusComposerSeq]);
 
   // ⌘N / ⌘\ — mirror the titlebar buttons. (Composer shortcuts live in ChatView.)
   useShortcut('new-conversation', () => newConversation());

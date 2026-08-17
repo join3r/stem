@@ -57,6 +57,8 @@ export function detectLearnCommand(text: string): { focus: string } | null {
 /** Imperative surface so App can push files into the composer (drop overlay). */
 export interface ComposerHandle {
   addAttachments(files: File[]): void;
+  /** Put the caret in the text field — used when a new chat opens. */
+  focus(): void;
 }
 
 interface ComposerProps {
@@ -259,9 +261,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, []);
 
   // App pushes overlay-dropped files ("Add to this conversation") in here.
-  useImperativeHandle(ref, () => ({ addAttachments: (files) => void addFilesToComposer(files) }), [
-    addFilesToComposer
-  ]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      addAttachments: (files) => void addFilesToComposer(files),
+      focus: () => textareaRef.current?.focus()
+    }),
+    [addFilesToComposer]
+  );
 
   async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(e.clipboardData.files);
