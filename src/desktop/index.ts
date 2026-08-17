@@ -11,6 +11,7 @@ import {
 } from 'electron';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { installAppMenu } from './app-menu';
 import { electronHost } from './host';
 import { setHost } from '../server/host';
 import { startServer, type ServerHandle } from '../server';
@@ -348,6 +349,11 @@ app.whenReady().then(async () => {
   if (process.platform === 'darwin' && !appIcon.isEmpty()) {
     app.dock?.setIcon(appIcon);
   }
+
+  // Stem's own menu, which is the stock one minus Close Window — no ⌘W closing
+  // the app's only window (or the Quick Chat overlay, which never comes back).
+  // See app-menu.ts.
+  installAppMenu();
 
   // Take this machine's own settings out of settings.json before anything can
   // rewrite that file without them. The migration runs exactly once and this is

@@ -92,6 +92,12 @@ Maintainer notes:
   snoozed, renamed, filed or deleted straight from the result row, like any other row in the list.
   Until now the menu simply didn't open there, so the one chat you had just gone looking for was
   the one chat you had to close the search and hunt down in the tree to act on.
+- **⌘W no longer closes Stem.** Stem is not a browser, and the window it has is the app: a ⌘W
+  (Ctrl+W) meant for the tab next door used to make Stem disappear mid-thought, taking the open
+  chat and whatever was half-typed in the composer with it. The shortcut is gone from the menu,
+  on every platform. Pressed while Quick Chat had focus it was worse — the overlay is built once
+  when Stem starts, so closing it left the shortcut summoning nothing until a restart. Quitting
+  (⌘Q) and the window's own close button are unchanged.
 - **MCP tools no longer pose as web searches.** Any tool with "search" in its name — Home
   Assistant lookups included — used to appear in the activity feed as "Searched the web" with a
   globe icon, even though no web search happened. Tool calls are now labeled by what they

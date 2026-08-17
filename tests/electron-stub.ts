@@ -6,8 +6,9 @@
 // overrides (a reversible key wrapper, a pinned version) the suite wants.
 //
 // Nothing under src/server imports electron any more, so what remains here is
-// exactly the two src/desktop modules the unit suite exercises: platform.ts's
-// `app` bookkeeping, and the ipcMain registration in ipc-bridge.ts.
+// exactly the src/desktop modules the unit suite exercises: platform.ts's `app`
+// bookkeeping, the ipcMain registration in ipc-bridge.ts, and the application
+// menu app-menu.ts installs.
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -47,4 +48,15 @@ export const ipcMain = {
   }
 };
 
-export default { app, ipcMain };
+// app-menu.ts builds and installs the application menu through this fake; tests
+// read _applicationMenu back to assert what Stem installed (notably: no close item).
+type MenuTemplate = unknown[];
+export const Menu = {
+  _applicationMenu: null as MenuTemplate | null,
+  buildFromTemplate: (template: MenuTemplate) => template,
+  setApplicationMenu: (menu: MenuTemplate | null) => {
+    Menu._applicationMenu = menu;
+  }
+};
+
+export default { app, ipcMain, Menu };
