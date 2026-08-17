@@ -1895,6 +1895,16 @@ export type HostShell = 'zsh' | 'cmd' | 'git-bash';
 export type WindowsShell = 'cmd' | 'git-bash';
 
 /**
+ * The shell facts of the machine run_command runs on — the server, which is not
+ * necessarily this computer. `gitBashPath` is a filesystem-first lookup that
+ * never spawns PowerShell; null off Windows or when Git for Windows is absent.
+ */
+export interface ExecHostShellInfo {
+  platform: 'darwin' | 'linux' | 'win32';
+  gitBashPath: string | null;
+}
+
+/**
  * Command execution (the `run_command` tool): a tiered auto-approve policy.
  * A static safe allowlist and the user's learned prefixes run immediately; other
  * commands are classified by an LLM judge, and only judge-flagged ones fall back
@@ -2892,10 +2902,11 @@ export interface StemApi {
   /** Answer a pending exec approval ("Allow once" / "Always allow prefix" / "Deny"). */
   respondExecApproval(id: string, decision: ExecDecision): Promise<void>;
   /**
-   * Filesystem-first Git Bash lookup (Windows). Returns the path to bash.exe or
-   * null. Never spawns PowerShell.
+   * What the machine that RUNS commands is: its OS, and (on Windows) the Git
+   * Bash it found. Answered by the server, which may be another computer —
+   * `window.stem.platform` is this client's OS and says nothing about it.
    */
-  detectGitBash(): Promise<string | null>;
+  execHostShellInfo(): Promise<ExecHostShellInfo>;
   /** What each chat's shell commands have left on disk, biggest first. */
   getScratchUsage(): Promise<ScratchUsageRow[]>;
   /** Empty one chat's scratch folder (or the unfiled pile); the chat itself stays. */

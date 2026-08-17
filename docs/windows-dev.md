@@ -96,6 +96,12 @@ Stem looks for `bash.exe` on disk (usual Git for Windows paths, then PATH)
 without running PowerShell. If Git is installed somewhere unusual, paste the
 path to `bash.exe` under Settings → Chat → Command execution.
 
+Only a Git for Windows layout is accepted — `…\Git\bin\bash.exe` with `git.exe`
+beside it. `C:\Windows\System32\bash.exe` is WSL's launcher, and it is on PATH
+before anything else on a machine with WSL enabled: commands there would run in
+the Linux VM against `/mnt/c/...` paths, which the read-only folder guard does
+not translate. A machine with WSL and no Git for Windows falls back to cmd.exe.
+
 Command Prompt fallback (no Git Bash, or you pick it in Settings):
 
 `cmd.exe /d /s /c "<command>"`

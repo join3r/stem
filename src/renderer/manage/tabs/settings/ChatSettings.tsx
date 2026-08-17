@@ -4,6 +4,7 @@ import type {
   ChatsSettings,
   CustomInstructionsSettings,
   DeviceInfo,
+  ExecHostShellInfo,
   ExecSettings,
   ScratchUsageRow,
   WebSearchSettings,
@@ -61,7 +62,10 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
   const [chats, setChats] = useState<ChatsSettings | null>(null);
   const [exec, setExec] = useState<ExecSettings | null>(null);
   const [allowInput, setAllowInput] = useState('');
-  const [detectedBash, setDetectedBash] = useState<string | null>(null);
+  // The OS of the machine that RUNS commands, plus the Git Bash it found there.
+  // Asked of the server, not of this window: with Stem on a box somewhere,
+  // window.stem.platform is this desk's OS and the shell setting is not about it.
+  const [hostShell, setHostShell] = useState<ExecHostShellInfo | null>(null);
   const [bashPathDraft, setBashPathDraft] = useState('');
   const [bashPathError, setBashPathError] = useState('');
   // null while the walk is still running — sizing every chat's folder is a disk
@@ -91,9 +95,10 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
     // Its own request: a disk walk should not hold up the settings the rest of
     // this tab is made of.
     void window.stem.getScratchUsage().then(setScratch).catch(() => setScratch([]));
-    if (window.stem.platform === 'win32') {
-      void window.stem.detectGitBash().then(setDetectedBash).catch(() => setDetectedBash(null));
-    }
+    void window.stem
+      .execHostShellInfo()
+      .then(setHostShell)
+      .catch(() => setHostShell(null));
     void window.stem.execHostState().then((s) => setExecHostEnabled(s.enabled)).catch(() => undefined);
     void window.stem
       .listDevices()
@@ -135,12 +140,14 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
 
   async function chooseWindowsShell(next: WindowsShell) {
     if (!exec) return;
+    // A half-typed path must not land after this click and argue with it.
+    if (bashPathTimer.current) clearTimeout(bashPathTimer.current);
     if (next === 'cmd') {
       setBashPathError('');
       updateExec({ windowsShell: 'cmd' });
       return;
     }
-    const path = (bashPathDraft.trim() || exec.gitBashPath || detectedBash || '').trim();
+    const path = (bashPathDraft.trim() || exec.gitBashPath || hostShell?.gitBashPath || '').trim();
     if (!path) {
       setBashPathError('Git Bash was not found. Paste the path to bash.exe, then choose Git Bash again.');
       return;
@@ -152,17 +159,13 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
   function saveGitBashPath(value: string) {
     setBashPathDraft(value);
     if (bashPathTimer.current) clearTimeout(bashPathTimer.current);
+    // Path only. Which shell is selected is the segmented control's business —
+    // sending it from here would write back whatever `exec` said when the
+    // keystroke happened, undoing a click made while the timer was pending.
     bashPathTimer.current = setTimeout(() => {
       const trimmed = value.trim();
-      if (!trimmed) {
-        // Empty path keeps Git Bash selected; spawn auto-detects or falls back to cmd.
-        updateExec({ gitBashPath: null });
-        return;
-      }
-      updateExec({
-        gitBashPath: trimmed,
-        windowsShell: exec?.windowsShell === 'git-bash' ? 'git-bash' : exec?.windowsShell
-      });
+      // Empty path keeps Git Bash selected; spawn auto-detects or falls back to cmd.
+      updateExec({ gitBashPath: trimmed || null });
     }, 400);
   }
 
@@ -170,6 +173,12 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
     const files = await window.stem.openFiles();
     const picked = files[0];
     if (!picked) return;
+    // resolveGitBashExecutable ignores anything that is not bash.exe, so saving
+    // a git.exe here would show a path in Settings that nothing ever uses.
+    if (!picked.toLowerCase().endsWith('bash.exe')) {
+      setBashPathError(`That is not bash.exe. Pick the shell itself, usually Git\\bin\\bash.exe.`);
+      return;
+    }
     setBashPathError('');
     setBashPathDraft(picked);
     updateExec({ windowsShell: 'git-bash', gitBashPath: picked });
@@ -330,16 +339,17 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
 
         {exec?.enabled && (
           <>
-            {window.stem.platform === 'win32' && (
+            {hostShell?.platform === 'win32' && (
               <div className="set-block">
                 <span className="set-sub">
                   Windows shell{' '}
                   <InfoTip label="About the Windows shell">
-                    Commands run in Git Bash when bash.exe is on disk, and fall back to Command
-                    Prompt (cmd.exe) if it is not. Stem looks for Git for Windows in the usual
-                    places (no PowerShell). If it is installed somewhere unusual, paste the path.
-                    Switching shells changes which commands auto-run (dir vs ls) and how quotes
-                    work.
+                    Commands run in Git Bash when Git for Windows is installed, and fall back to
+                    Command Prompt (cmd.exe) if it is not. Stem looks in the usual places (no
+                    PowerShell); if Git is somewhere unusual, paste the path to its bash.exe.
+                    Only Git for Windows counts — WSL's bash runs in a Linux VM, where the
+                    read-only folder guard cannot see the paths it uses. Switching shells
+                    changes which commands auto-run (dir vs ls) and how quotes work.
                   </InfoTip>
                 </span>
                 <div className="seg-ctl">
@@ -362,7 +372,7 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
                       <input
                         className="ifield"
                         type="text"
-                        placeholder={detectedBash || 'C:\\Program Files\\Git\\bin\\bash.exe'}
+                        placeholder={hostShell?.gitBashPath || 'C:\\Program Files\\Git\\bin\\bash.exe'}
                         aria-label="Path to Git Bash bash.exe"
                         value={bashPathDraft}
                         onChange={(e) => saveGitBashPath(e.target.value)}

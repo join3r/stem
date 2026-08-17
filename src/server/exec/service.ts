@@ -15,7 +15,7 @@ import { resolveRoleEffort } from '../../shared/modelRoles';
 import { log } from '../log';
 import { ensureThreadScratch } from './scratch';
 import { clampTimeout, execEnv, resolveLoginPath, runCommand } from './executor';
-import { gitBashPathEnv, resolveGitBashExecutable, resolveHostShell } from './git-bash';
+import { gitBashPathEnv, resolveHostShellTarget, type HostShellTarget } from './git-bash';
 import { hostShellFromPlatform } from './host-shell';
 import { buildJudgePrompt, classify, deviceShellLabel, parseJudgeVerdict, resolveJudgeModel } from './policy';
 import { scanProtected } from './protected';
@@ -99,7 +99,12 @@ export class ExecService implements ExecBridge {
     if (!settings.enabled) {
       return { ok: false, error: 'Command execution is disabled in Settings → Chat → Command execution.' };
     }
-    const shell = resolveHostShell(settings);
+    // Decide the host shell ONCE, here, and carry it all the way to spawn. The
+    // parser, the allowlist, the protected-roots scan and the judge are all
+    // decided against it, and an approval card can sit for minutes — long enough
+    // for a Git upgrade to move bash.exe. Re-resolving at spawn time could hand a
+    // command parsed under bash quoting to cmd.exe, where `'` is not a quote.
+    const host = resolveHostShellTarget(settings);
 
     // A command aimed at a paired computer takes its own path: same tiers, but
     // classified against that machine's platform and its own allowlist, and
@@ -123,14 +128,14 @@ export class ExecService implements ExecBridge {
     }
 
     // Fail-closed read-only guard: any reference to a protected root blocks.
-    const guard = scanProtected(command, cwd, undefined, shell);
+    const guard = scanProtected(command, cwd, undefined, host.shell);
     if (guard.blocked) return { ok: false, error: guard.reason ?? 'Blocked by the read-only folder guard.' };
 
     // Yolo mode: everything runs — the protected-roots guard above is the only gate.
-    if (settings.approvalMode === 'yolo') return this.run(command, cwd, req, settings);
+    if (settings.approvalMode === 'yolo') return this.run(command, cwd, req, host);
 
     // Tier 1: static + user allowlist (every chained segment must clear it).
-    const cls = classify(command, settings, shell);
+    const cls = classify(command, settings, host.shell);
     if (cls.tier !== 'run') {
       // Tier 2 (assisted mode only): one-word LLM judge classification (intent-aware
       // when the turn's user message is known); errors/timeouts escalate. Manual mode
@@ -138,8 +143,16 @@ export class ExecService implements ExecBridge {
       let judgeVerdict: 'unsafe' | 'unsure' | 'failed' | null = null;
       let judgeReason: string | undefined;
       if (settings.approvalMode === 'assisted') {
-        const verdict = await this.judge(command, cwd, settings, all.defaults, req.userText, req.currentModel, shell);
-        if (verdict.verdict === 'safe') return this.run(command, cwd, req, settings);
+        const verdict = await this.judge(
+          command,
+          cwd,
+          settings,
+          all.defaults,
+          req.userText,
+          req.currentModel,
+          host.shell
+        );
+        if (verdict.verdict === 'safe') return this.run(command, cwd, req, host);
         judgeVerdict = verdict.verdict;
         judgeReason = verdict.reason;
       }
@@ -170,7 +183,7 @@ export class ExecService implements ExecBridge {
       }
     }
 
-    return this.run(command, cwd, req, settings);
+    return this.run(command, cwd, req, host);
   }
 
   abortThread(threadId: string): void {
@@ -392,15 +405,14 @@ export class ExecService implements ExecBridge {
     command: string,
     cwd: string,
     req: ExecRequest,
-    settings: ExecSettings
+    host: HostShellTarget
   ): Promise<ExecBridgeResult> {
     await this.acquireSlot();
     const controller = new AbortController();
     const entry: RunningExec = { threadId: req.threadId ?? '', controller };
     this.running.add(entry);
     try {
-      const shell = resolveHostShell(settings);
-      const gitBashPath = shell === 'git-bash' ? resolveGitBashExecutable(settings) : settings.gitBashPath;
+      const { shell, gitBashPath } = host;
       const loginPath = await resolveLoginPath();
       const pathForChild =
         shell === 'git-bash' && gitBashPath ? gitBashPathEnv(gitBashPath, loginPath) : loginPath;

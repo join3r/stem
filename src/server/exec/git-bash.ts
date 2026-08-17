@@ -6,9 +6,17 @@ import type { ExecSettings, HostShell } from '../../shared/types';
 
 // Git Bash detection and PATH helpers. Filesystem-first: never spawn PowerShell.
 // where.exe / reg.exe are optional last resorts and fail closed if AppLocker
-// blocks them. Existence of bash.exe is enough to pre-fill Settings; we do not
+// blocks them. Existence of the file is enough to pre-fill Settings; we do not
 // run `bash --version` here (that spawn can fail under WDAC even when the file
 // is present).
+//
+// GIT FOR WINDOWS ONLY, and the layout is the test — not the filename. A machine
+// with WSL enabled has C:\Windows\System32\bash.exe, which is the Linux VM
+// launcher: commands there run against /mnt/c paths that our protected-roots
+// translation (msysToWindows, `/c/…` → `C:\…`) does not recognise, so the
+// read-only folder guard would silently stop matching. MSYS2 and Cygwin are out
+// for the same reason — gitBashPathEnv's usr\bin / mingw64\bin prepend and that
+// same path translation are Git's layout, not theirs.
 
 const BASH_EXE = 'bash.exe';
 const LOOKUP_TIMEOUT_MS = 2000;
@@ -19,7 +27,25 @@ export interface DetectGitBashDeps {
   platform?: NodeJS.Platform;
 }
 
-/** True when `path` looks like bash.exe and the file is on disk. */
+/**
+ * The Git install a candidate belongs to: `…\Git\bin\bash.exe` → `…\Git`, the
+ * root gitBashPathEnv derives PATH from. Null when the shape is not Git's — the
+ * parent directory must be `bin`, which already excludes System32 and Git's own
+ * `usr\bin\bash.exe` (whose root would be one level off).
+ */
+function gitRootFor(bashPath: string): string | null {
+  const binDir = pathWin32.dirname(bashPath);
+  if (pathWin32.basename(binDir).toLowerCase() !== 'bin') return null;
+  const root = pathWin32.dirname(binDir);
+  return root && root !== binDir ? root : null;
+}
+
+/** `git.exe` / `libexec\git-core` beside the shell — the proof it is Git's bash. */
+function hasGitBeside(root: string, exists: (p: string) => boolean): boolean {
+  return exists(pathWin32.join(root, 'cmd', 'git.exe')) || exists(pathWin32.join(root, 'libexec', 'git-core'));
+}
+
+/** True when `path` is a Git for Windows bash.exe that is on disk. */
 export function isUsableGitBashPath(
   path: string | null | undefined,
   exists: (p: string) => boolean = existsSync
@@ -27,8 +53,10 @@ export function isUsableGitBashPath(
   if (!path || typeof path !== 'string') return false;
   const trimmed = path.trim();
   if (!trimmed.toLowerCase().endsWith(BASH_EXE)) return false;
+  const root = gitRootFor(trimmed);
+  if (!root) return false;
   try {
-    return exists(trimmed);
+    return exists(trimmed) && hasGitBeside(root, exists);
   } catch {
     return false;
   }
@@ -202,19 +230,37 @@ export function resolveGitBashExecutable(
   return detectGitBashFromDisk({ exists, env });
 }
 
+/** The shell run_command will spawn, and the bash.exe that answer was based on. */
+export interface HostShellTarget {
+  shell: HostShell;
+  /** The executable for 'git-bash'; null for every other shell. */
+  gitBashPath: string | null;
+}
+
 /**
- * The shell run_command will actually spawn. Git Bash when the user wants it
- * (the Windows default) AND bash.exe is on disk — saved path or auto-detected.
- * Otherwise cmd.exe.
+ * The shell run_command will actually spawn, together with the executable the
+ * decision rests on. Git Bash when the user wants it (the Windows default) AND
+ * bash.exe is on disk — saved path or auto-detected. Otherwise cmd.exe.
+ *
+ * Resolve this ONCE per request and pass the whole thing around: this touches the
+ * filesystem, so asking twice can give two answers, and the parser and the spawn
+ * disagreeing about the shell is a safety bug (see shared/types.ts, HostShell).
  */
+export function resolveHostShellTarget(
+  settings: Pick<ExecSettings, 'windowsShell' | 'gitBashPath'>,
+  platform: NodeJS.Platform = process.platform,
+  exists: (p: string) => boolean = existsSync
+): HostShellTarget {
+  if (platform !== 'win32') return { shell: 'zsh', gitBashPath: null };
+  const bash = settings.windowsShell === 'git-bash' ? resolveGitBashExecutable(settings, exists) : null;
+  return bash ? { shell: 'git-bash', gitBashPath: bash } : { shell: 'cmd', gitBashPath: null };
+}
+
+/** Just the shell, for callers with nothing to spawn (the per-turn agent hint). */
 export function resolveHostShell(
   settings: Pick<ExecSettings, 'windowsShell' | 'gitBashPath'>,
   platform: NodeJS.Platform = process.platform,
   exists: (p: string) => boolean = existsSync
 ): HostShell {
-  if (platform !== 'win32') return 'zsh';
-  if (settings.windowsShell === 'git-bash' && resolveGitBashExecutable(settings, exists)) {
-    return 'git-bash';
-  }
-  return 'cmd';
+  return resolveHostShellTarget(settings, platform, exists).shell;
 }

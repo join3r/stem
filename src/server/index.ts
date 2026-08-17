@@ -69,6 +69,7 @@ import type {
   CustomInstructionsSettings,
   EscapeAction,
   ExecDecision,
+  ExecHostShellInfo,
   ExecSettings,
   MemoryModelSettings,
   ModelSummary,
@@ -451,7 +452,13 @@ function registerIpc(): void {
   registerServer('exec:resolveApproval', async (_e, id: string, decision: ExecDecision) => {
     execService?.resolveApproval(id, decision);
   });
-  registerServer('exec:detectGitBash', async () => detectGitBash());
+  registerServer(
+    'exec:hostShellInfo',
+    async (): Promise<ExecHostShellInfo> => ({
+      platform: process.platform as ExecHostShellInfo['platform'],
+      gitBashPath: await detectGitBash()
+    })
+  );
   registerServer('settings:updateCustomInstructions', async (_e, patch: Partial<CustomInstructionsSettings>) => {
     // Just persist — backend:startTurn reads the instructions fresh per turn (for
     // both surfaces), so the change applies to the next turn with no restart.

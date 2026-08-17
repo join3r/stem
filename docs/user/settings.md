@@ -101,9 +101,11 @@ Git Bash when it is installed, otherwise `cmd.exe`.
 On an approval card, **Always allow** saves a command prefix for future turns.
 Keep prefixes narrow; `git status` grants less access than `git`.
 
-On Windows, **Windows shell** defaults to Git Bash when `bash.exe` is on disk, and
-falls back to Command Prompt if it is not. Stem looks for Git Bash without using
-PowerShell. If it is not in a usual place, paste the path to `bash.exe`. Commands
+On Windows, **Windows shell** defaults to Git Bash when Git for Windows is installed,
+and falls back to Command Prompt if it is not. Stem looks for it without using
+PowerShell, and only Git for Windows counts: WSL ships a `bash.exe` of its own, but
+it runs in a Linux VM whose paths the read-only folder guard cannot check. If Git is
+not in a usual place, paste the path to its `bash.exe`. Commands
 then run in that one shell — quoting and the always-allowed list follow it (`dir`
 vs `ls`). Pick Command Prompt yourself if you want cmd.exe even though Git is
 installed.

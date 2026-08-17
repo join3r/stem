@@ -2034,9 +2034,9 @@ function registerExecTool(pi) {
       'for when and how. ' +
       'On macOS/Linux Stem uses the host shell (zsh where there is one, otherwise bash or sh) with the login-shell ' +
       'PATH (Homebrew/npm CLIs like `agent-browser` work). On Windows Stem uses the shell chosen in Settings → ' +
-      'Chat → Command execution (Command Prompt by default, or Git Bash). Each turn names the one local shell ' +
-      'that will run — follow that, not both. ' +
-      'When the shell is cmd.exe (the Windows default, and the shell on a paired Windows computer), ' +
+      'Chat → Command execution: Git Bash when Git for Windows is installed, Command Prompt otherwise. Each ' +
+      'turn names the one local shell that will run — follow that, not both. ' +
+      'When the shell is cmd.exe (which is also the shell on a paired Windows computer), ' +
       'if you need PowerShell, invoke it explicitly as `powershell.exe -NoProfile -ExecutionPolicy Bypass ' +
       '-Command "..."` so a broken profile.ps1 cannot block the run. A bare `|` is a cmd pipe (it splits ' +
       'before PowerShell) — put PowerShell pipelines inside `-Command "..."` (or use `(...)` / property ' +
