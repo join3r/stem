@@ -25,12 +25,15 @@ import { previewFacts } from '../recall/inject';
 import { consolidateFacts } from '../recall/consolidate';
 import { processExplicitNote } from '../recall/note';
 import { EMBED_CATALOG } from '../recall/embed-catalog';
+import { importLocalModels } from '../recall/embed-import';
+import { embedModelsDir } from '../workspace/paths';
 import { DEFAULT_LOCAL_RERANK_MODEL, RERANK_CATALOG } from '../recall/rerank-catalog';
 import { memoryRunOf, readSettings } from '../workspace/settings';
 import type { LlmClient } from '../recall/llm';
 import type {
   ActiveFacts,
   ConflictResolution,
+  ImportModelResult,
   LocalEmbedStatus,
   LocalRerankStatus,
   RemoteRetrievalHealth
@@ -120,6 +123,27 @@ export function registerMemoryIpc(deps: IpcDeps): void {
     const r = (await readSettings()).retrieval.reranker;
     if (!deps.e2e && r.mode === 'local') deps.embedManager()?.ensureRerank(RERANK_CATALOG[r.localModel]);
     return deps.embedManager()?.rerankStatus() ?? { model: DEFAULT_LOCAL_RERANK_MODEL, state: 'idle' };
+  });
+  /**
+   * Weights the user brought themselves, from a folder on the machine Stem runs
+   * on. Stem never ships or downloads them on that machine's behalf — this is
+   * the whole offline story, so a refusal has to say what is wrong by name.
+   */
+  registerServer('models:import', async (_e, dir: string): Promise<ImportModelResult> => {
+    const result = importLocalModels(String(dir ?? ''), embedModelsDir());
+    if (!result.ok) return result;
+    // Load what just arrived: force past the 5-minute error backoff, since the
+    // reason it is in error is exactly the thing this call fixed.
+    const settings = await readSettings();
+    for (const model of result.models) {
+      if (model.stage === 'embed' && settings.retrieval.embeddings.localModel === model.id) {
+        deps.embedManager()?.ensure(EMBED_CATALOG[model.id as keyof typeof EMBED_CATALOG], { force: true });
+      }
+      if (model.stage === 'rerank' && settings.retrieval.reranker.localModel === model.id) {
+        deps.embedManager()?.ensureRerank(RERANK_CATALOG[model.id as keyof typeof RERANK_CATALOG], { force: true });
+      }
+    }
+    return result;
   });
   registerServer(
     'retrieval:remoteHealth',

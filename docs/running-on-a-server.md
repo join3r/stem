@@ -331,6 +331,11 @@ Two things are deliberately not in the backup and do not need to be: the embeddi
 weights (identical for everybody, re-downloaded on demand) and the list of paired
 devices (a device pairs with the Stem it is talking to, not with an archive).
 
+If the server cannot reach Hugging Face, copy a model folder onto it — `scp -r` the
+`embed-models` folder from a machine where memory search already works, anywhere the
+container can read — and use **Import model files** under Memory → Facts → Relevance
+ranking. The picker browses the SERVER's disk, because that is where the models run.
+
 ## Upgrading
 
 ```

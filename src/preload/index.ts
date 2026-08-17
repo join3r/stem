@@ -220,6 +220,7 @@ const api: StemApi = {
   respondExecApproval: (id: string, decision: ExecDecision) =>
     ipcRenderer.invoke('exec:resolveApproval', id, decision),
   execHostShellInfo: () => ipcRenderer.invoke('exec:hostShellInfo'),
+  importModels: (dir: string) => ipcRenderer.invoke('models:import', dir),
   getScratchUsage: () => ipcRenderer.invoke('exec:scratchUsage'),
   clearScratch: (key: string) => ipcRenderer.invoke('exec:clearScratch', key),
   onMcpChanged: (listener: () => void) => {

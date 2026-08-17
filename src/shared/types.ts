@@ -2025,6 +2025,30 @@ export interface LocalEmbedStatus {
  */
 export type RerankerMode = 'off' | 'local' | 'remote';
 
+/** One model copied in from a folder the user supplied (Settings → Memory). */
+export interface ImportedModelInfo {
+  /** Catalog id, e.g. multilingual-e5-small. */
+  id: string;
+  /** Which stage's catalog it satisfies. */
+  stage: 'embed' | 'rerank';
+  /** Hugging Face repo id the files came from. */
+  repo: string;
+  label: string;
+  /** Files copied in; 0 when every byte was already in the cache. */
+  copied: number;
+  alreadyPresent: boolean;
+}
+
+/**
+ * Importing weights the user obtained themselves. Stem does not ship or
+ * redistribute models, so this is how a machine with no route to Hugging Face
+ * gets one. A refusal names what is wrong — there is no second chance to guess
+ * on a machine that cannot download the missing piece.
+ */
+export type ImportModelResult =
+  | { ok: true; models: ImportedModelInfo[] }
+  | { ok: false; error: string };
+
 /** Curated local reranker models (specs live in server/recall/rerank-catalog.ts). */
 export type LocalRerankModelId = 'bge-reranker-v2-m3' | 'qwen3-reranker-0.6b';
 
@@ -2907,6 +2931,11 @@ export interface StemApi {
    * `window.stem.platform` is this client's OS and says nothing about it.
    */
   execHostShellInfo(): Promise<ExecHostShellInfo>;
+  /**
+   * Copy model weights into the cache from a folder on the SERVER's disk (the
+   * machine that runs the models). Returns what was imported, or why not.
+   */
+  importModels(dir: string): Promise<ImportModelResult>;
   /** What each chat's shell commands have left on disk, biggest first. */
   getScratchUsage(): Promise<ScratchUsageRow[]>;
   /** Empty one chat's scratch folder (or the unfiled pile); the chat itself stays. */

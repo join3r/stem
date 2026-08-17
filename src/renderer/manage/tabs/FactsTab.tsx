@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plug, ChevronRight, X, Check, Trash2, Wand2, Eye, RefreshCw, Pin, RotateCcw, ShieldCheck, Lock, Send, TriangleAlert } from 'lucide-react';
+import { Plug, ChevronRight, X, Check, Trash2, Wand2, Eye, RefreshCw, Pin, RotateCcw, ShieldCheck, Lock, Send, TriangleAlert, FolderInput } from 'lucide-react';
 import type {
   DefaultsSettings,
   MemoryContents,
@@ -21,12 +21,15 @@ import type {
   FactStatus,
   MemoryConflict,
   AutoResolvedConflict,
-  MemoryRebuildStatus
+  MemoryRebuildStatus,
+  ImportedModelInfo
 } from '../../../shared/types';
 import { resolveMemoryModel } from '../../../shared/modelRoles';
 import { clampEffort, EffortSelect, effortsOf } from '../../ui/EffortSelect';
 import { MdxView } from '../../chat/MdxView';
 import { useOffline } from '../../hooks/useServerReachable';
+import { useRemoteServer } from '../../hooks/useRemoteServer';
+import { ServerFolderPicker } from '../ServerFolderPicker';
 import { useRetrievalHealth } from '../../hooks/useRetrievalHealth';
 import { HoverTip, InfoTip } from '../../ui/InfoTip';
 import { ModelPicker } from '../../ui/ModelPicker';
@@ -123,6 +126,76 @@ function LocalStatusLine({
   return <p className="muted">{localStatusLabel(status)}</p>;
 }
 
+/** What to say after an import that worked. */
+function importedSummary(models: ImportedModelInfo[]): string {
+  const names = models.map((m) => m.label).join(', ');
+  return models.every((m) => m.alreadyPresent) ? `${names} was already here.` : `Imported ${names}.`;
+}
+
+/**
+ * Bring model weights in from a folder the user already has. Stem does not ship
+ * or download models on anyone's behalf, so on a machine that cannot reach
+ * Hugging Face this is the only way a local model ever loads: point at a copy of
+ * someone else's cache, a `huggingface-cli download`, or a USB stick.
+ *
+ * The folder has to be on the machine that RUNS the models. When that is another
+ * computer, the native dialog would browse the wrong disk — same branch the
+ * connected-folders picker takes.
+ */
+function ImportModelsButton() {
+  const remote = useRemoteServer();
+  const [picking, setPicking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function importFrom(dir: string): Promise<void> {
+    setPicking(false);
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await window.stem.importModels(dir);
+      setResult(r.ok ? { ok: true, text: importedSummary(r.models) } : { ok: false, text: r.error });
+    } catch (e) {
+      setResult({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function choose(): Promise<void> {
+    if (remote) {
+      setPicking(true);
+      return;
+    }
+    const dirs = await window.stem.pickDirectory();
+    if (dirs[0]) await importFrom(dirs[0]);
+  }
+
+  return (
+    <div className="retrieval-test">
+      {picking && (
+        <ServerFolderPicker onConnect={(path) => void importFrom(path)} onClose={() => setPicking(false)} />
+      )}
+      <button
+        className="retrieval-test-btn"
+        onClick={() => void choose()}
+        disabled={busy}
+        title="Copy model files in from a folder instead of downloading them"
+        aria-label="Import model files"
+      >
+        <FolderInput size={14} />
+        <span>{busy ? 'Importing…' : 'Import model files'}</span>
+      </button>
+      {!busy && result && (
+        <span className={`retrieval-test-status ${result.ok ? 'ok' : 'err'}`} title={result.text}>
+          {result.ok ? <Check size={12} /> : <X size={12} />}
+          {result.text}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // Embeddings-stage controls: an exclusive Built-in / Server / Off mode, the local
 // model picker + live download/ready status, or the remote endpoint fields (free
 // text — Stem just makes the HTTP call). Text edits stay local while typing and
@@ -202,6 +275,7 @@ function EmbeddingsFields({
             ))}
           </select>
           <LocalStatusLine status={status} />
+          <ImportModelsButton />
         </>
       )}
       {mode === 'remote' && (
@@ -354,6 +428,7 @@ function RerankerFields({
             ))}
           </select>
           <LocalStatusLine status={status} />
+          <ImportModelsButton />
         </>
       )}
       {mode === 'remote' && (
