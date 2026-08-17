@@ -2,6 +2,7 @@ import { registerServer } from './guard';
 import type { IpcDeps } from './deps';
 import { markOnboardingCompleted, readSettings, updateDefaultModel, updateLocalProvider } from '../workspace/settings';
 import { probeLocalProvider, syncModelsConfig } from '../pi/models-config';
+import { parseModelOverrides } from '../pi/model-overrides';
 import { relayCallback } from '../pi/oauth-courier';
 import { isLocalProviderId } from '../../shared/providers';
 import type {
@@ -90,6 +91,14 @@ export function registerAuthIpc(deps: IpcDeps): void {
   });
   registerServer('providers:updateLocal', async (_e, id: LocalProviderId, patch: Partial<LocalProviderSettings>) => {
     if (deps.e2e) return { ok: true, status: await deps.runtime().login() };
+    // Gate the overrides BEFORE anything is persisted. pi fails models.json as a
+    // unit, so a single bad type here would empty the whole provider map and take
+    // Ollama and LM Studio down with the endpoint being edited — the form gets
+    // the reasons back instead, and nothing is written.
+    if (patch.modelOverrides !== undefined) {
+      const parsed = parseModelOverrides(patch.modelOverrides);
+      if (!parsed.ok) return { ok: false, error: parsed.errors.join('\n') };
+    }
     try {
       const settings = await updateLocalProvider(id, patch);
       const cfg = settings.localProviders[id];
@@ -116,6 +125,10 @@ export function registerAuthIpc(deps: IpcDeps): void {
       await deps.providerAuth()!.removeProvider(providerId);
       if (isLocalProviderId(providerId)) {
         // Drop the endpoint's secret with it — re-adding asks for the key again.
+        // modelOverrides deliberately stays: the strings take real debugging to
+        // find, and an override only applies to a model id that matches, so one
+        // left from another endpoint is inert. The add form pre-fills it back so
+        // it is never applied invisibly.
         await updateLocalProvider(providerId, { enabled: false, apiKey: '', models: [] });
         await syncModelsConfig();
       }

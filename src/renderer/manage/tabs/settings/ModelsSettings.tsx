@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Plug, Globe, HardDrive, Plus, Minus, X, Check, RefreshCw } from 'lucide-react';
+import { Plug, Globe, HardDrive, Plus, Minus, X, Check, RefreshCw, ChevronRight } from 'lucide-react';
 import type {
   AuthProviderId,
   ApiKeyProviderId,
@@ -8,7 +8,8 @@ import type {
   LocalProviderApi,
   LocalProviderId,
   LocalProvidersSettings,
-  LocalProviderTestResult
+  LocalProviderTestResult,
+  ModelOverride
 } from '../../../../shared/types';
 import { API_KEY_PROVIDER_IDS, AUTH_PROVIDER_IDS, isLocalProviderId, providerName } from '../../../../shared/providers';
 import { resolveBackgroundModel, resolveMemoryModel, resolveRoleEffort, resolveSkillsModel } from '../../../../shared/modelRoles';
@@ -938,6 +939,19 @@ function ProvidersSection({ deadProvider }: { deadProvider?: string | null }) {
         </>
       )}
 
+      {/* Revealed by selecting the row, the way Add Provider is revealed by +.
+          Only for a connected custom endpoint: Ollama reports its own
+          capabilities, and LM Studio's users are better served by adding their
+          server as a custom endpoint than by a second place to hand-configure. */}
+      {selected === 'custom' && local?.custom.enabled && !adding && (
+        <CustomOverridesForm
+          value={local.custom.modelOverrides}
+          busy={busy}
+          onSaved={changed}
+          onError={setError}
+        />
+      )}
+
       {error && <p className="error">{error}</p>}
     </>
   );
@@ -1081,10 +1095,157 @@ function ProviderApiKeyForm({
   );
 }
 
+// ---- Per-model overrides for a custom endpoint ----
+//
+// What a server's GET /v1/models listing cannot say, above all that a model
+// reasons. Without it pi reports no thinking levels and the composer's effort
+// control never appears — so a Qwen3 behind an OpenAI-compatible endpoint runs
+// with reasoning off and nothing to switch it on. The text is pi's own
+// `modelOverrides` object, unaltered: what is typed here is what a hand-written
+// models.json would hold, and Stem re-applies it on every sync so a re-probe
+// can't rebuild it away.
+
+const OVERRIDES_PLACEHOLDER = `{
+  "qwen3-32b": {
+    "reasoning": true,
+    "thinkingLevelMap": { "off": "off", "low": "low", "medium": "medium", "high": "high" },
+    "compat": { "thinkingFormat": "qwen-chat-template" }
+  }
+}`;
+
+/** The stored object as editable text; empty (not "{}") when there is nothing set. */
+function overridesToText(value: Record<string, ModelOverride> | undefined): string {
+  return value && Object.keys(value).length ? JSON.stringify(value, null, 2) : '';
+}
+
+/**
+ * Text → the object to send. Only JSON well-formedness is decided here, because
+ * main is the authority on whether the CONTENT is acceptable — it holds the
+ * guard that keeps a models.json pi can't load from ever being written. Blank
+ * means "none", which is how the box is cleared.
+ */
+function overridesFromText(text: string): { ok: true; value: Record<string, ModelOverride> } | { ok: false } {
+  if (!text.trim()) return { ok: true, value: {} };
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false };
+    return { ok: true, value: parsed as Record<string, ModelOverride> };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** The textarea plus its hint, shared by the add form and the edit-in-place block. */
+function OverridesField({
+  text,
+  onChange,
+  kept
+}: {
+  text: string;
+  onChange: (text: string) => void;
+  kept?: boolean;
+}) {
+  return (
+    <>
+      <textarea
+        className="ifield"
+        aria-label="Per-model overrides"
+        rows={8}
+        spellCheck={false}
+        placeholder={OVERRIDES_PLACEHOLDER}
+        value={text}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <p className="muted">
+        Keyed by model id, in the shape pi’s models.json uses. Stem’s effort control shows Off, Low,
+        Medium, High and X-High — a level this endpoint can’t do belongs in{' '}
+        <code>thinkingLevelMap</code> as <code>null</code>. Leave the box empty for none.
+      </p>
+      {kept && (
+        <p className="muted">
+          Kept from the endpoint you last used — clear it if this is a different server.
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * Edit the overrides of an endpoint that is already connected, without
+ * disconnecting it.
+ *
+ * The one field on a local provider that gets its own edit path, and
+ * deliberately: URL and key are typed once from something you already know,
+ * while these strings are found by trial — the reporting user's own agent had to
+ * debug them out of their server. Making every attempt cost a disconnect and a
+ * full re-type is what would send people back to hand-editing the file this
+ * feature exists to stop them hand-editing.
+ */
+function CustomOverridesForm({
+  value,
+  busy,
+  onSaved,
+  onError
+}: {
+  value: Record<string, ModelOverride> | undefined;
+  busy: boolean;
+  onSaved: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const saved = overridesToText(value);
+  const [text, setText] = useState(saved);
+  const [saving, setSaving] = useState(false);
+  // Re-seed when a save lands (or another window changes it): `saved` is the
+  // stored truth, and the box must not keep showing a stale edit after it.
+  const seeded = useRef(saved);
+  if (seeded.current !== saved) {
+    seeded.current = saved;
+    if (text !== saved) setText(saved);
+  }
+  const parsed = overridesFromText(text);
+  const dirty = text !== saved;
+
+  async function save() {
+    if (!parsed.ok) return;
+    setSaving(true);
+    onError(null);
+    try {
+      const res = await window.stem.updateLocalProvider('custom', { modelOverrides: parsed.value });
+      if (!res.ok) onError(res.error ?? 'Could not save the overrides.');
+      else await onSaved();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="grp-head">Custom endpoint — per-model overrides</div>
+      <div className="formgroup">
+        <div className="set-block">
+          <OverridesField text={text} onChange={setText} />
+          {!parsed.ok && <p className="error">That isn’t valid JSON yet.</p>}
+          <div className="push-row">
+            <button
+              type="button"
+              className="push default"
+              disabled={saving || busy || !dirty || !parsed.ok}
+              onClick={() => void save()}
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 /**
  * Add an OpenAI-compatible server (Ollama / LM Studio / a custom endpoint): pick
  * the server, adjust the URL if needed, optionally Test, then Enable. Editing
- * later = disconnect (−) and re-add, matching the MCP servers list.
+ * later = disconnect (−) and re-add, matching the MCP servers list — except for
+ * the per-model overrides, which are editable in place on the connected row.
  *
  * The custom endpoint adds a key field and swaps model discovery for a typed
  * list: an arbitrary endpoint may not serve GET /v1/models at all (or may serve
@@ -1118,6 +1279,15 @@ function LocalServerAddForm({
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<LocalProviderTestResult | null>(null);
   const [saving, setSaving] = useState(false);
+  // Overrides survive a disconnect on purpose, so the form starts holding
+  // whatever the last endpoint had. Seeded once, not per render: this is an
+  // editable draft, and re-seeding would fight the typing.
+  const [overrides, setOverrides] = useState(() => overridesToText(settings.custom.modelOverrides));
+  // Open when something was retained: Enable is about to apply it to whatever
+  // endpoint this turns out to be, and a fragment that rides along behind a
+  // collapsed heading is the invisible-config problem all over again.
+  const [showAdvanced, setShowAdvanced] = useState(!!settings.custom.modelOverrides);
+  const parsedOverrides = overridesFromText(overrides);
   // The probe runs for seconds against a URL the user is still typing into, so a
   // late answer must prove it still belongs to this form before it may speak for
   // it: a crossed result restores a cleared badge and fills one endpoint's model
@@ -1145,6 +1315,9 @@ function LocalServerAddForm({
     setApi(id === 'custom' ? null : 'openai-completions');
     setTest(null);
     setTesting(false);
+    // The overrides draft is NOT cleared: it belongs to `custom`, only reaches
+    // the patch when `custom` is the selection, and surviving a stray click on
+    // Ollama and back is the same reason it survives a disconnect.
   }
 
   async function runTest() {
@@ -1210,7 +1383,11 @@ function LocalServerAddForm({
         // Sent even when empty so re-adding a previously keyed endpoint without
         // one clears the stored key instead of silently inheriting it.
         apiKey: custom ? apiKey.trim() : '',
-        models: custom ? modelList : []
+        models: custom ? modelList : [],
+        // Whatever the box holds, including an emptied one — Enable is the point
+        // where the retained fragment is either confirmed for this endpoint or
+        // cleared. Malformed JSON can't get here: the button is disabled.
+        ...(custom && parsedOverrides.ok ? { modelOverrides: parsedOverrides.value } : {})
       });
       if (!res.ok) onError(res.error ?? 'Could not enable the server.');
       else await onSaved();
@@ -1305,6 +1482,26 @@ function LocalServerAddForm({
             value={models}
             onChange={(e) => setModels(e.target.value)}
           />
+          {/* Collapsed by default, like the MCP add form's headers box: nobody
+              needs it until their endpoint turns out not to describe itself. */}
+          <button
+            className="memory-view-toggle"
+            aria-expanded={showAdvanced}
+            onClick={() => setShowAdvanced((v) => !v)}
+          >
+            <ChevronRight size={14} className={showAdvanced ? 'open' : ''} />
+            <strong>Advanced — per-model overrides</strong>
+          </button>
+          {showAdvanced && (
+            <>
+              <OverridesField
+                text={overrides}
+                onChange={setOverrides}
+                kept={!!settings.custom.modelOverrides}
+              />
+              {!parsedOverrides.ok && <p className="error">That isn’t valid JSON yet.</p>}
+            </>
+          )}
         </>
       )}
       <div className="retrieval-test">
@@ -1332,7 +1529,13 @@ function LocalServerAddForm({
         <button
           type="button"
           className="push default"
-          disabled={saving || !baseUrl.trim() || (custom && modelList.length === 0) || (custom && api === null)}
+          disabled={
+            saving ||
+            !baseUrl.trim() ||
+            (custom && modelList.length === 0) ||
+            (custom && api === null) ||
+            (custom && !parsedOverrides.ok)
+          }
           onClick={() => void enable()}
         >
           {saving ? 'Enabling…' : 'Enable'}

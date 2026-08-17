@@ -417,6 +417,77 @@ describe('local provider settings', () => {
     expect(lp.ollama).toEqual({ enabled: false, baseUrl: 'http://localhost:11434' });
     expect(Object.keys(lp).sort()).toEqual(['custom', 'lmstudio', 'ollama']);
   });
+
+  // Per-model overrides are the one field whose whole purpose is to survive
+  // things — a rebuild of models.json, a disconnect, a coercion pass. Every one
+  // of those is somewhere it could quietly be dropped instead.
+  describe('per-model overrides', () => {
+    const OVERRIDES = {
+      'qwen3-32b': { reasoning: true, thinkingLevelMap: { off: 'off', high: 'high' } }
+    };
+
+    it('round-trips on the custom endpoint, and stays absent when unset', async () => {
+      await updateLocalProvider('custom', { enabled: true, baseUrl: 'http://box:8000' });
+      expect((await readSettings()).localProviders.custom).toEqual({
+        enabled: true,
+        baseUrl: 'http://box:8000'
+      });
+      await updateLocalProvider('custom', { modelOverrides: OVERRIDES });
+      expect((await readSettings()).localProviders.custom.modelOverrides).toEqual(OVERRIDES);
+    });
+
+    it('survives the patch a disconnect sends', async () => {
+      // ipc/auth.ts clears the key and the model list on disconnect and leaves
+      // these alone on purpose: the strings take real debugging to find.
+      await updateLocalProvider('custom', {
+        enabled: true,
+        baseUrl: 'http://box:8000',
+        apiKey: 'sk-secret',
+        models: ['qwen3-32b'],
+        modelOverrides: OVERRIDES
+      });
+      await updateLocalProvider('custom', { enabled: false, apiKey: '', models: [] });
+      expect((await readSettings()).localProviders.custom).toEqual({
+        enabled: false,
+        baseUrl: 'http://box:8000',
+        modelOverrides: OVERRIDES
+      });
+    });
+
+    it('is cleared by an empty object, so the box can be emptied', async () => {
+      await updateLocalProvider('custom', { enabled: true, baseUrl: 'http://box:8000', modelOverrides: OVERRIDES });
+      await updateLocalProvider('custom', { modelOverrides: {} });
+      expect((await readSettings()).localProviders.custom.modelOverrides).toBeUndefined();
+    });
+
+    it('keeps a fragment the deeper guard would reject, so it can be corrected', async () => {
+      // Dropping the text on read is the exact failure this feature exists to
+      // end. models-config validates before writing models.json; settings only
+      // check the shape.
+      writeFileSync(
+        path,
+        JSON.stringify({
+          localProviders: {
+            custom: {
+              enabled: true,
+              baseUrl: 'http://box:8000',
+              modelOverrides: { 'qwen3-32b': { reasoning: 'yes' }, '  ': {}, bad: 7 }
+            }
+          }
+        })
+      );
+      // The non-object entry and the blank id go (they are not overrides at all);
+      // the wrongly-typed value stays for the user to fix.
+      expect((await readSettings()).localProviders.custom.modelOverrides).toEqual({
+        'qwen3-32b': { reasoning: 'yes' }
+      });
+    });
+
+    it('is a custom-endpoint field only', async () => {
+      await updateLocalProvider('ollama', { enabled: true, modelOverrides: OVERRIDES });
+      expect((await readSettings()).localProviders.ollama.modelOverrides).toBeUndefined();
+    });
+  });
 });
 
 describe('embeddings settings migration + coercion', () => {

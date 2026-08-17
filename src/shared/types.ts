@@ -195,6 +195,31 @@ export type LocalProviderId = 'ollama' | 'lmstudio' | 'custom';
  */
 export type LocalProviderApi = 'openai-completions' | 'anthropic-messages';
 
+/**
+ * What one model of a custom endpoint needs said about it that its `/v1/models`
+ * listing cannot say — above all that it reasons, and how to ask it to.
+ *
+ * This is pi's `modelOverrides` entry, deliberately unchanged: the value is
+ * written into models.json verbatim, so what someone types into Settings is
+ * exactly what a hand-written models.json would hold. Fields Stem understands
+ * are validated (see server/pi/model-overrides.ts); the index signature is for
+ * the ones pi grows next, which pass through untouched because pi's schema
+ * tolerates unknown keys.
+ */
+export interface ModelOverride {
+  name?: string;
+  /** The whole point: without this, pi reports no efforts and the picker hides. */
+  reasoning?: boolean;
+  /** pi thinking level → the value this server wants; null marks one it can't do. */
+  thinkingLevelMap?: Record<string, string | null>;
+  input?: ('text' | 'image')[];
+  contextWindow?: number;
+  maxTokens?: number;
+  /** Wire-format switches — `thinkingFormat` is what carries the thinking flag. */
+  compat?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface LocalProviderSettings {
   enabled: boolean;
   /** Server root, e.g. http://localhost:11434 (no path; Stem appends /v1/…). */
@@ -219,6 +244,18 @@ export interface LocalProviderSettings {
    * explicitly; empty/absent means "ask the server".
    */
   models?: string[];
+  /**
+   * Per-model facts the endpoint doesn't report, keyed by model id — written to
+   * this provider's `modelOverrides` in models.json on every sync, which is what
+   * keeps them from being rebuilt away. `custom` only: Ollama reports its own
+   * capabilities and LM Studio's users are better served by a Custom entry than
+   * by a second place to hand-configure.
+   *
+   * Survives a disconnect on purpose (see ipc/auth.ts) — the strings take real
+   * debugging to find, and an override only ever applies to a matching model id,
+   * so one left over from another endpoint is inert.
+   */
+  modelOverrides?: Record<string, ModelOverride>;
 }
 
 export type LocalProvidersSettings = Record<LocalProviderId, LocalProviderSettings>;

@@ -406,12 +406,23 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
     // openai-completions pick from an absent field (= not yet configured).
     const api: LocalProviderApi | undefined =
       id === 'custom' && (r.api === 'anthropic-messages' || r.api === 'openai-completions') ? r.api : undefined;
+    // Per-model overrides: `custom` only, and coerced only as far as its shape —
+    // an entry that fails the deeper guard (pi/model-overrides.ts) is KEPT here
+    // and dropped at sync time instead. Losing the text on read is the exact
+    // failure the feature exists to end; the box has to still show what was
+    // typed so it can be corrected.
+    const rawOverrides = r.modelOverrides;
+    const overrides =
+      id === 'custom' && isRecord(rawOverrides)
+        ? Object.fromEntries(Object.entries(rawOverrides).filter(([k, v]) => k.trim() && isRecord(v)))
+        : {};
     return {
       enabled: typeof r.enabled === 'boolean' ? r.enabled : def.enabled,
       baseUrl: typeof r.baseUrl === 'string' && r.baseUrl.trim() ? r.baseUrl.trim() : def.baseUrl,
       ...(api ? { api } : {}),
       ...(apiKey ? { apiKey } : {}),
-      ...(models.length ? { models } : {})
+      ...(models.length ? { models } : {}),
+      ...(Object.keys(overrides).length ? { modelOverrides: overrides } : {})
     };
   };
   const localProviders: LocalProvidersSettings = {

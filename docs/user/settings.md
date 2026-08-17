@@ -29,6 +29,41 @@ The selected model receives the prompt, attachments, and context Stem adds to th
 turn. A cloud model receives that data on its provider’s service. A local model
 sends it to the server address you configured.
 
+### When your endpoint doesn’t describe itself
+
+Stem shows the thinking-effort control — Off, Low, Medium, High, X-High — only for
+a model that says it can think. Most servers say so; some don’t. A Qwen3 behind
+your own endpoint often arrives looking like a model that cannot reason at all, so
+it answers with thinking switched off and there is no control to switch it on.
+
+Select the connected **Custom** server to get **Per-model overrides**, and tell
+Stem what the endpoint didn’t:
+
+```json
+{
+  "qwen3-32b": {
+    "reasoning": true,
+    "thinkingLevelMap": { "off": "off", "low": "low", "medium": "medium", "high": "high" },
+    "compat": { "thinkingFormat": "qwen-chat-template" }
+  }
+}
+```
+
+Each key is a model id your endpoint serves. `reasoning` is what makes the control
+appear; `thinkingLevelMap` says what to send for each level, and a level your
+server can’t do goes in as `null` so Stem stops offering it. `thinkingFormat`
+names how the request carries the thinking flag — which format yours wants is
+something your server’s own documentation will tell you.
+
+Save re-checks what you typed and refuses anything that would leave Stem unable to
+talk to any of your servers, so a wrong guess costs you a message under the box and
+nothing else. Overrides stay put — Stem re-applies them every time it refreshes the
+model list, and keeps them if you disconnect the endpoint, filling them back in
+when you add one again.
+
+This box is for the **Custom** server. If you need it for LM Studio, add LM Studio
+as a Custom endpoint instead, with the URL `http://localhost:1234`.
+
 **Web search** works with every model, not only cloud ones, and returns cited
 sources. Under **Web search** you choose the backend that runs the search:
 **Automatic** ends at one that needs no key, or pick a named one and paste its key.

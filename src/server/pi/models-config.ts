@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { LocalProviderApi, LocalProviderTestResult } from '../../shared/types';
+import type { LocalProviderApi, LocalProviderTestResult, ModelOverride } from '../../shared/types';
 import { LOCAL_PROVIDER_IDS, isLocalProviderId } from '../../shared/providers';
+import { log } from '../log';
+import { parseModelOverrides } from './model-overrides';
 import { piModelsConfigPath } from '../workspace/paths';
 import { readSettings } from '../workspace/settings';
 
@@ -210,7 +212,8 @@ function localProviderBlock(
   baseUrl: string,
   models: PiModelConfig[],
   apiKey: string | undefined,
-  api: LocalProviderApi
+  api: LocalProviderApi,
+  modelOverrides: Record<string, ModelOverride>
 ): PiProviderConfig {
   const normalized = normalizeLocalBaseUrl(baseUrl);
   // openai-completions: append /v1 so pi hits /v1/chat/completions (matches the
@@ -232,7 +235,14 @@ function localProviderBlock(
     // available (pi's own docs recommend a dummy value).
     apiKey: apiKey?.trim() || 'local',
     compat,
-    models
+    models,
+    // pi's topmost user-config layer: applied by model id after everything else,
+    // merging into thinkingLevelMap and compat rather than replacing them. This
+    // is the field that carries "this model reasons" for a server whose /v1/models
+    // listing can't say so. Written from settings on EVERY sync — that is what
+    // keeps it from being rebuilt away, which is the whole point. Omitted when
+    // empty so an endpoint with none round-trips to the shape it always had.
+    ...(Object.keys(modelOverrides).length ? { modelOverrides } : {})
   };
 }
 
@@ -353,6 +363,13 @@ export function syncModelsConfig(): Promise<boolean> {
         delete config.providers[id];
         continue;
       }
+      // Backstop for a hand-edited settings.json — the UI refuses a bad fragment
+      // before it is ever persisted. Dropping it costs the overrides; writing it
+      // would cost the whole file, since pi fails models.json as a unit and would
+      // take every other local provider down with it.
+      const parsed = parseModelOverrides(settings[id].modelOverrides);
+      if (!parsed.ok) log('pi', `ignoring invalid model overrides for ${id}`, { errors: parsed.errors });
+      const overrides = parsed.ok ? parsed.value : {};
       // Only `custom` may speak anthropic-messages; the coercion enforces this too,
       // this is defense in depth against a hand-edited settings.json.
       const api: LocalProviderApi = id === 'custom' && rawApi === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions';
@@ -360,7 +377,7 @@ export function syncModelsConfig(): Promise<boolean> {
       // opted out of discovery, so don't probe it (and don't let a listing endpoint
       // it happens to serve override the user's choice).
       if (manual?.length) {
-        config.providers[id] = localProviderBlock(baseUrl, manual.map((m) => ({ id: m })), apiKey, api);
+        config.providers[id] = localProviderBlock(baseUrl, manual.map((m) => ({ id: m })), apiKey, api, overrides);
         continue;
       }
       const probe = await probeLocalProvider(baseUrl, apiKey, api);
@@ -371,7 +388,7 @@ export function syncModelsConfig(): Promise<boolean> {
       // *unknown* — and a spawn asking for it (`--provider ollama`) then dies
       // with "Unknown provider", taking every other provider down with it.
       // Nothing is lost by waiting: the next sync writes it once a probe answers.
-      if (models.length) config.providers[id] = localProviderBlock(baseUrl, models, apiKey, api);
+      if (models.length) config.providers[id] = localProviderBlock(baseUrl, models, apiKey, api, overrides);
       else delete config.providers[id];
     }
 

@@ -66,7 +66,12 @@ function stubModels(ids: string[]): void {
   );
 }
 
-function readConfig(): { providers: Record<string, { baseUrl: string; models?: { id: string }[] }> } {
+function readConfig(): {
+  providers: Record<
+    string,
+    { baseUrl: string; models?: { id: string }[]; modelOverrides?: Record<string, unknown> }
+  >;
+} {
   return JSON.parse(readFileSync(configPath, 'utf8'));
 }
 
@@ -540,6 +545,90 @@ describe('syncModelsConfig', () => {
       const raw = readFileSync(configPath, 'utf8');
       expect(JSON.parse(raw).providers.custom).toBeUndefined();
       expect(raw).not.toContain('sk-should-not-survive');
+    });
+  });
+  // ---- Per-model overrides ----------------------------------------------
+  //
+  // The reported bug in one sentence: hand-editing models.json to say a Qwen3
+  // reasons did not survive, because every sync rebuilds the provider block.
+  // These pin the fix — settings are the source, and the rebuild carries them.
+  describe('per-model overrides', () => {
+    const OVERRIDES = {
+      'qwen3-32b': {
+        reasoning: true,
+        thinkingLevelMap: { off: 'off', high: 'high' },
+        compat: { thinkingFormat: 'qwen-chat-template' }
+      }
+    };
+
+    it('writes them into the custom block as pi modelOverrides', async () => {
+      stubModels(['qwen3-32b']);
+      use({ custom: { enabled: true, baseUrl: 'http://box:8000', modelOverrides: OVERRIDES } });
+      await syncModelsConfig();
+      expect(readConfig().providers.custom.modelOverrides).toEqual(OVERRIDES);
+    });
+
+    it('survives a re-probe that returns a different model list', async () => {
+      // THE regression. The block is rebuilt from scratch here — new models, new
+      // everything — and the overrides have to come through it untouched.
+      stubModels(['qwen3-32b']);
+      use({ custom: { enabled: true, baseUrl: 'http://box:8000', modelOverrides: OVERRIDES } });
+      await syncModelsConfig();
+      stubModels(['qwen3-32b', 'qwen3-8b']);
+      expect(await syncModelsConfig()).toBe(true);
+      const custom = readConfig().providers.custom;
+      expect(custom.models).toEqual([{ id: 'qwen3-32b' }, { id: 'qwen3-8b' }]);
+      expect(custom.modelOverrides).toEqual(OVERRIDES);
+    });
+
+    it('carries them onto an endpoint whose model ids were typed by hand', async () => {
+      // Manual ids skip the probe entirely — a separate branch, and the one a
+      // gateway-backed endpoint actually takes.
+      use({
+        custom: {
+          enabled: true,
+          baseUrl: 'http://box:8000',
+          models: ['qwen3-32b'],
+          modelOverrides: OVERRIDES
+        }
+      });
+      await syncModelsConfig();
+      expect(readConfig().providers.custom.models).toEqual([{ id: 'qwen3-32b' }]);
+      expect(readConfig().providers.custom.modelOverrides).toEqual(OVERRIDES);
+    });
+
+    it('omits the key entirely when there are none, keeping the old block shape', async () => {
+      stubModels(['qwen3-32b']);
+      use({ custom: { enabled: true, baseUrl: 'http://box:8000' } });
+      await syncModelsConfig();
+      expect('modelOverrides' in readConfig().providers.custom).toBe(false);
+    });
+
+    it('drops an invalid fragment but still writes the provider', async () => {
+      // Backstop for a hand-edited settings.json. Writing it would cost the whole
+      // file — pi fails models.json as a unit — so the overrides go and the
+      // endpoint stays.
+      stubModels(['qwen3-32b']);
+      use({
+        custom: {
+          enabled: true,
+          baseUrl: 'http://box:8000',
+          modelOverrides: { 'qwen3-32b': { reasoning: 'yes' } } as never
+        }
+      });
+      await syncModelsConfig();
+      const custom = readConfig().providers.custom;
+      expect(custom.models).toEqual([{ id: 'qwen3-32b' }]);
+      expect('modelOverrides' in custom).toBe(false);
+    });
+
+    it('re-syncs to no change once written', async () => {
+      // Every content change restarts pi; overrides that looked different on
+      // each pass would restart it every 30s forever.
+      stubModels(['qwen3-32b']);
+      use({ custom: { enabled: true, baseUrl: 'http://box:8000', modelOverrides: OVERRIDES } });
+      expect(await syncModelsConfig()).toBe(true);
+      expect(await syncModelsConfig()).toBe(false);
     });
   });
 });
