@@ -22,6 +22,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:win": "vitest run tests/unit/exec-executor.test.ts tests/unit/exec-git-bash.test.ts tests/unit/exec-policy.test.ts tests/unit/exec-protected.test.ts tests/unit/exec-service.test.ts tests/unit/embed-files.test.ts tests/unit/embed-import.test.ts tests/unit/embed-catalog.test.ts tests/unit/custom-models.test.ts tests/unit/settings.test.ts",
     "test:server": "node scripts/server-boot.mjs",
     "test:e2e": "playwright test",
     "test:e2e:real": "STEM_E2E_REAL=1 playwright test",

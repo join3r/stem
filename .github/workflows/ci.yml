@@ -67,11 +67,16 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  # Windows is where run_command now has the most new behaviour, and the part
-  # that matters most — telling Git for Windows' bash.exe from WSL's launcher —
-  # is only real against a real filesystem: System32\bash.exe exists on these
-  # runners. Unit tests only; the E2E and headless-boot layers stay on the matrix
-  # above, where the app is actually shipped from.
+  # Windows is where run_command now has the most new behaviour, and the part that
+  # matters most — telling Git for Windows' bash.exe from WSL's launcher — is only
+  # real against a real filesystem: System32\bash.exe exists on these runners.
+  #
+  # A SUBSET of the unit suite (npm run test:win), not `npm test`. The rest of the
+  # suite asserts POSIX facts on purpose — 0600 file modes, Unix-socket binding,
+  # a login shell to probe — and those assertions are about the platforms Stem
+  # ships to, not bugs to be fixed for Windows' benefit. Running the lot here
+  # would report ~30 red tests that say nothing about this code. Widening the
+  # list is welcome; making the whole suite host-agnostic is its own project.
   unit-windows:
     runs-on: windows-latest
     steps:
@@ -87,5 +92,5 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests (Vitest)
-        run: npm test
+      - name: Unit tests (Vitest, Windows-relevant subset)
+        run: npm run test:win
