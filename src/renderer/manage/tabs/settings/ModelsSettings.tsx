@@ -13,6 +13,7 @@ import type {
 } from '../../../../shared/types';
 import { API_KEY_PROVIDER_IDS, AUTH_PROVIDER_IDS, isLocalProviderId, providerName } from '../../../../shared/providers';
 import { resolveBackgroundModel, resolveMemoryModel, resolveRoleEffort, resolveSkillsModel } from '../../../../shared/modelRoles';
+import { parsePiModelsJson, providerLabel } from '../../../../shared/piModelsImport';
 import { clampEffort, EffortSelect, effortsOf } from '../../../ui/EffortSelect';
 import { localProbeTarget, probeStillDescribes } from '../../../localProbe';
 import { RequestGate } from '../../../requestGate';
@@ -1135,6 +1136,98 @@ function overridesFromText(text: string): { ok: true; value: Record<string, Mode
   }
 }
 
+/**
+ * Fill the box from a models.json the user already has, rather than making them
+ * transcribe it. The people who need overrides at all are largely people running
+ * the same endpoint under pi, where the strings are already known-good.
+ *
+ * It writes nothing: `onFill` hands converted text to the textarea and the
+ * existing Save button remains the only thing that reaches settings.json. So a
+ * paste that turns out to be wrong costs an edit, not a broken endpoint.
+ */
+function OverridesImporter({ onFill }: { onFill: (text: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [paste, setPaste] = useState('');
+  const [pickedId, setPickedId] = useState('');
+  const parsed = paste.trim() ? parsePiModelsJson(paste) : null;
+  const providers = parsed?.ok ? parsed.providers : [];
+  // Derived rather than held in state: the paste is re-parsed on every keystroke,
+  // so a remembered id can name a provider the current text no longer has. The
+  // fallback prefers a provider that actually carries something over the first
+  // one listed — a file whose first block is a bare Ollama would otherwise open
+  // on "nothing to copy".
+  const picked =
+    providers.find((p) => p.id === pickedId) ??
+    providers.find((p) => Object.keys(p.overrides).length) ??
+    providers[0];
+  const empty = !!picked && Object.keys(picked.overrides).length === 0;
+
+  function fill() {
+    if (!picked || empty) return;
+    onFill(JSON.stringify(picked.overrides, null, 2));
+    setPaste('');
+    setPickedId('');
+    setOpen(false);
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="memory-view-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <ChevronRight size={14} className={open ? 'open' : ''} />
+        <strong>Import from a models.json</strong>
+      </button>
+      {open && (
+        <>
+          <p className="muted">
+            Paste a pi models.json — Stem reads the extras out of it and fills the box below.
+          </p>
+          <textarea
+            className="ifield"
+            aria-label="pi models.json to import"
+            rows={5}
+            spellCheck={false}
+            placeholder={'{ "providers": { "vllm": { "baseUrl": "http://…", "models": [ … ] } } }'}
+            value={paste}
+            onChange={(e) => setPaste(e.target.value)}
+          />
+          {parsed && !parsed.ok && <p className="error">{parsed.error}</p>}
+          {/* One provider needs no choosing, but it still gets named: the counts
+              are the only sign the paste was understood before anything moves. */}
+          {providers.length === 1 && <p className="muted">{providerLabel(providers[0])}</p>}
+          {providers.length > 1 && (
+            <>
+              <span className="set-sub">Provider</span>
+              <select
+                className="ifield"
+                aria-label="Provider to import"
+                value={picked?.id ?? ''}
+                onChange={(e) => setPickedId(e.target.value)}
+              >
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {providerLabel(p)}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          {empty && <p className="muted">That one’s models carry no extras to copy.</p>}
+          <div className="push-row">
+            <button type="button" className="push" disabled={!picked || empty} onClick={fill}>
+              Fill the box
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 /** The textarea plus its hint, shared by the add form and the edit-in-place block. */
 function OverridesField({
   text,
@@ -1147,6 +1240,9 @@ function OverridesField({
 }) {
   return (
     <>
+      {/* Inside the field, not beside it, so the add form and the edit-in-place
+          block both get the importer without either one wiring it up. */}
+      <OverridesImporter onFill={onChange} />
       <textarea
         className="ifield"
         aria-label="Per-model overrides"

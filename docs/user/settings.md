@@ -55,6 +55,12 @@ server can’t do goes in as `null` so Stem stops offering it. `thinkingFormat`
 names how the request carries the thinking flag — which format yours wants is
 something your server’s own documentation will tell you.
 
+If you already run this endpoint under pi, you don’t have to type any of that
+again. Open **Import from a models.json**, paste the file in, and pick the
+provider — Stem pulls out what each model needs, folds the provider-wide settings
+into every model, and fills the box in. Nothing is saved yet: read what it wrote,
+change what you like, then Save.
+
 Save re-checks what you typed and refuses anything that would leave Stem unable to
 talk to any of your servers, so a wrong guess costs you a message under the box and
 nothing else. Overrides stay put — Stem re-applies them every time it refreshes the
