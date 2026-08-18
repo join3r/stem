@@ -2,7 +2,7 @@ import { ExecService } from '../exec/service';
 import { detectGitBash, isUsableGitBashPath } from '../exec/git-bash';
 import { readSettings, updateExecSettings } from '../workspace/settings';
 import type { ChatBackend } from '../backend';
-import type { ExecApprovalRequest } from '../../shared/types';
+import type { ExecApprovalArmed, ExecApprovalRequest } from '../../shared/types';
 
 /**
  * Command execution: the assistant's run_command tool, routed from the backend
@@ -15,13 +15,15 @@ export function initExecService(deps: {
   runtime: ChatBackend;
   emitApprovalRequest: (request: ExecApprovalRequest) => void;
   emitApprovalResolved: (id: string) => void;
+  emitApprovalArmed: (armed: ExecApprovalArmed) => void;
 }): ExecService {
   const service = new ExecService({
     runtime: () => deps.runtime,
     readSettings,
     updateExecSettings,
     emitApprovalRequest: deps.emitApprovalRequest,
-    emitApprovalResolved: deps.emitApprovalResolved
+    emitApprovalResolved: deps.emitApprovalResolved,
+    emitApprovalArmed: deps.emitApprovalArmed
   });
   deps.runtime.setExecBridge(service);
   void seedWindowsGitBash();

@@ -26,6 +26,34 @@ export function ApprovalSheet(): ReactElement | null {
   const approvals = useApprovals();
   const theme = useTheme();
   const item = approvals.current;
+
+  // An answer that landed after its card had gone. The sheet stays up for it:
+  // the user tapped "Run once" and nothing ran, and a phone that closes without
+  // a word leaves them believing it did.
+  if (approvals.missed) {
+    return (
+      <Modal visible transparent animationType="slide" onRequestClose={approvals.dismissMissed}>
+        <View style={styles.scrim}>
+          <View style={[styles.sheet, { backgroundColor: theme.bg, borderColor: theme.line }]}>
+            <View style={styles.header}>
+              <Text style={[styles.title, { color: theme.text }]}>That answer came too late</Text>
+            </View>
+            <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+              <Mono theme={theme}>{approvals.missed}</Mono>
+              <Text style={[styles.text, { color: theme.dim }]}>
+                Nobody answered in time, so this was not run — and the assistant was told exactly
+                that, not that you refused. Ask it again if you still want it.
+              </Text>
+            </ScrollView>
+            <View style={styles.actions}>
+              <Action label="OK" tone={theme.accent} filled onPress={approvals.dismissMissed} theme={theme} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
   if (!item) return null;
 
   return (

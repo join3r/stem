@@ -1316,6 +1316,21 @@ export interface ExecApprovalRequest {
   deviceId?: string;
   /** The device's label at the moment the card was raised, for the card text. */
   deviceLabel?: string;
+  /**
+   * When this card stops being answerable (epoch ms), or absent while it is still
+   * queued behind an older one — a card nobody can see yet is not running a clock.
+   * The server arms the head of the queue and says so on {@link ExecApprovalArmed};
+   * the card counts down to it, because a deadline nobody was shown is one the
+   * user can only discover by being told, afterwards, that they said no.
+   */
+  expiresAt?: number;
+}
+
+/** `exec:approvalArmed` — a queued card reached the head and its clock started. */
+export interface ExecApprovalArmed {
+  id: string;
+  /** Epoch ms; the card is answerable until then. */
+  expiresAt: number;
 }
 
 /** The user's answer to an exec approval card. */
@@ -3022,8 +3037,15 @@ export interface StemApi {
   onExecApproval(listener: (request: ExecApprovalRequest) => void): () => void;
   /** Fired when an exec approval is answered or expires. */
   onExecApprovalResolved(listener: (payload: ApprovalResolvedPayload) => void): () => void;
-  /** Answer a pending exec approval ("Allow once" / "Always allow prefix" / "Deny"). */
-  respondExecApproval(id: string, decision: ExecDecision): Promise<void>;
+  /** Fired when a queued exec approval reaches the head and its deadline is set. */
+  onExecApprovalArmed(listener: (payload: ExecApprovalArmed) => void): () => void;
+  /**
+   * Answer a pending exec approval ("Allow once" / "Always allow prefix" / "Deny").
+   * False means the answer arrived too late — the card had already expired and the
+   * tool call was released without it, which the user has to be told rather than
+   * left to assume their click landed.
+   */
+  respondExecApproval(id: string, decision: ExecDecision): Promise<boolean>;
   /**
    * What the machine that RUNS commands is: its OS, and (on Windows) the Git
    * Bash it found. Answered by the server, which may be another computer —

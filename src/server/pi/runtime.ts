@@ -1690,8 +1690,18 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * the admin/instructions approvals.
    */
   private handleExecBridgeRequest(id: string, payload: string | undefined): void {
-    const respond = (value: unknown): void =>
-      this.proc?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    // Answer the process that ASKED, exactly as the skill bridge does. This used
+    // to answer whatever `this.proc` had become, which was survivable only while
+    // an approval card could not sit for long; now that one waits up to ten
+    // minutes for the person it asks, a restart in the middle is a real
+    // possibility — and the new process's elicitation table has never heard of
+    // this id, so a reply aimed at it would resolve nothing and could land on an
+    // unrelated request.
+    const requestProcess = this.proc;
+    const respond = (value: unknown): void => {
+      if (this.proc !== requestProcess) return;
+      requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    };
     const turn = this.currentTurn;
     void (async () => {
       try {
@@ -1774,10 +1784,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    */
   private handleSkillBridgeRequest(id: string, payload: string | undefined): void {
     // Answer the process that ASKED, not whatever `this.proc` happens to be by the
-    // time we reply. Unlike the exec bridge, this request can be parked behind an
-    // approval card for two minutes — long enough for a restart to have replaced
-    // the process, whose elicitation table knows nothing about this id. Matches
-    // how the instructions approval latches `requestProcess`.
+    // time we reply. This request can be parked behind an approval card for two
+    // minutes — long enough for a restart to have replaced the process, whose
+    // elicitation table knows nothing about this id. Matches how the instructions
+    // approval, and the exec bridge above, latch `requestProcess`.
     const requestProcess = this.proc;
     const respond = (value: unknown): void => {
       if (this.proc !== requestProcess) return;

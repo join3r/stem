@@ -202,7 +202,7 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
    * can ever be mistaken for the other, however odd the payload.
    */
   const control = (name: string, raw: string): void => {
-    let data: { head?: unknown; liveTurns?: unknown } = {};
+    let data: { head?: unknown; liveTurns?: unknown; execApprovals?: unknown } = {};
     try {
       data = JSON.parse(raw) as typeof data;
     } catch {
@@ -212,6 +212,19 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
       // Absent (a server with nothing to say) leaves the client's own view
       // alone; present — even empty — is the whole truth about what is running.
       if (Array.isArray(data.liveTurns)) deps.onSnapshot(data.liveTurns as LiveTurn[]);
+      // Approval cards still waiting, replayed down the SAME channel their
+      // pushes use: a card raised while this phone was asleep is not a different
+      // question, and the queue drops the duplicates when it was already awake.
+      // This is what makes a card answerable at all on a phone that was not
+      // attached when it was raised — the tool call behind it is blocked either
+      // way, and until now the only surface that could release it was the desk.
+      if (Array.isArray(data.execApprovals)) {
+        for (const request of data.execApprovals) {
+          if (request && typeof (request as { id?: unknown }).id === 'string') {
+            deps.onPush('exec:approvalRequest', request);
+          }
+        }
+      }
       return;
     }
     if (name === 'resync') {

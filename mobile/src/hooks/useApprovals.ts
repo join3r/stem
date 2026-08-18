@@ -9,13 +9,14 @@
 // request ones: an approval answered at the desk has to leave this phone's sheet
 // on its own, or the user taps Approve on something that already ran.
 //
-// Resync clears the queue rather than refetching it, because there is no channel
-// that lists pending approvals — they exist only as pushes. An entry that
-// survived a gap in the stream would be one whose resolve we may have missed,
-// and a stale approval card is worse than none: it invites an answer to a
-// question nobody is still asking. The real ones re-arrive on the next request,
-// and anything genuinely still blocked stays blocked until someone answers it at
-// the desk, which is the safe direction to fail in.
+// Resync clears the queue rather than refetching it: an entry that survived a gap
+// in the stream would be one whose resolve we may have missed, and a stale
+// approval card is worse than none — it invites an answer to a question nobody is
+// still asking. What replaces it is not a refetch either. The `snapshot` frame
+// the server sends the instant a stream opens carries the exec cards still
+// waiting, and the stream replays them as ordinary `exec:approvalRequest` pushes
+// (src/transport/stream.ts), so a card raised while this phone was asleep — or
+// during the very gap that forced the resync — arrives again by itself.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { resolvedInstructionsText } from '@shared/instructions';
@@ -45,6 +46,14 @@ export interface ApprovalsView {
   /** The last failed answer, cleared on the next attempt. */
   error: string | null;
   /**
+   * A command whose answer arrived too late — the card had already expired (or
+   * the desk answered it first) and it was NOT run. Held after the card itself
+   * is gone, because the tap it belongs to has to be accounted for.
+   */
+  missed: string | null;
+  /** Acknowledge {@link missed} and close the sheet. */
+  dismissMissed(): void;
+  /**
    * Answer the current approval. `execDecision` only means anything for a
    * command: "Allow once" and "Always allow this prefix" are both an approval,
    * and the difference is written to the user's allowlist server-side.
@@ -57,6 +66,7 @@ export function useApprovals(): ApprovalsView {
   const [queue, setQueue] = useState<PendingApproval[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [missed, setMissed] = useState<string | null>(null);
 
   const add = useCallback((item: PendingApproval) => setQueue((q) => enqueueApproval(q, item)), []);
   const drop = useCallback(
@@ -110,13 +120,19 @@ export function useApprovals(): ApprovalsView {
       setError(null);
       try {
         switch (item.kind) {
-          case 'exec':
-            await connection.rpc(
+          case 'exec': {
+            const answered = await connection.rpc(
               'exec:resolveApproval',
               item.request.id,
               accept ? (execDecision ?? 'allowOnce') : 'deny'
             );
+            // False = the card had already expired, or the desk answered it
+            // first, and the command went on without this tap. Saying nothing
+            // would leave the user certain they had allowed something that was
+            // never run — the one thing a phone must not do from a pocket.
+            if (answered === false) setMissed(item.request.command);
             break;
+          }
           case 'mcp':
             await connection.rpc('mcp:adminDecision', item.proposal.id, accept);
             break;
@@ -172,8 +188,10 @@ export function useApprovals(): ApprovalsView {
       current: queue[0] ?? null,
       busy,
       error,
+      missed,
+      dismissMissed: () => setMissed(null),
       respond: (item, accept, execDecision) => void respond(item, accept, execDecision)
     }),
-    [busy, error, queue, respond]
+    [busy, error, missed, queue, respond]
   );
 }

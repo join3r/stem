@@ -9,6 +9,7 @@ import {
   type BackendEventEnvelope,
   type DeviceExecRequest,
   type DeviceMcpRequest,
+  type ExecApprovalRequest,
   type QuickChatSettings,
   type StartTurnInput,
   type TurnAttachment
@@ -489,7 +490,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
    * neither can ever be mistaken for the other, however odd the payload.
    */
   function control(name: string, raw: string): void {
-    let data: { head?: unknown; liveTurns?: unknown } = {};
+    let data: { head?: unknown; liveTurns?: unknown; execApprovals?: unknown } = {};
     try {
       data = JSON.parse(raw) as typeof data;
     } catch {
@@ -531,6 +532,18 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       // present — even empty — is the whole truth about what is running.
       if (Array.isArray(turns)) {
         deps.liveTurns(turns as { threadId: string; turnId: string | null }[]);
+      }
+      // Approval cards raised while this client was away, or during a gap in the
+      // stream. Replayed as ordinary request frames — the card queues dedupe by
+      // id, so a card we already have is not shown twice — because a request
+      // frame is exactly what this is: the same question, still unanswered.
+      const approvals = data.execApprovals;
+      if (Array.isArray(approvals)) {
+        for (const request of approvals as ExecApprovalRequest[]) {
+          if (!request || typeof request.id !== 'string') continue;
+          deps.sendToMain('exec:approvalRequest', request);
+          deps.sendToOverlay('exec:approvalRequest', request);
+        }
       }
       return;
     }
@@ -638,6 +651,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         return;
       // Resolutions and catalog/status changes: rendered by both surfaces, and
       // harmlessly ignored by whichever one has no listener mounted.
+      case 'exec:approvalArmed':
       case 'exec:approvalResolved':
       case 'mcp:adminApprovalResolved':
       case 'instructions:approvalResolved':

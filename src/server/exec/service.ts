@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type {
   DefaultsSettings,
+  ExecApprovalArmed,
   ExecApprovalRequest,
   ExecDecision,
   ExecSettings,
@@ -27,7 +28,15 @@ import { execDeviceRouter, resolveExecTarget } from '../exec-device/router';
 // ExecBridge seam. NOTE the judge is a heuristic, not a security boundary — the
 // hard gates are the protected-roots scan and the manual approval tier.
 
-const APPROVAL_TIMEOUT_MS = 120_000;
+// How long a VISIBLE card waits for an answer. Two minutes was a chat-app
+// reflex and it was wrong for this: the person it asks may be reading the
+// command, be on the other side of the room, or be answering on a phone that
+// has to be unlocked first — and running out of time here used to be reported
+// to the assistant as "the user declined", a sentence nobody said. Ten minutes
+// is long enough that expiry means "nobody is there", which is what it should
+// have meant all along; the clock only starts once the card is actually the one
+// on screen (see armHead).
+const APPROVAL_TIMEOUT_MS = 600_000;
 // complete() spawns a throwaway pi process per call and may queue behind Recall
 // distillation completes, so cold-start alone can eat >10s — 15s timed out in
 // practice and dumped perfectly fine commands onto approval cards. Windows
@@ -49,6 +58,17 @@ function judgeFailureReason(detail: string): string | undefined {
   if (lower.includes('could not be located')) return 'the pi backend could not start';
   return undefined;
 }
+/**
+ * What the assistant is told when the card expired. It says who did not answer
+ * (nobody) rather than who refused (no one did), because the assistant repeats
+ * this to the user in its own words — and "you declined" about a command they
+ * never saw an answer to is how a bug becomes an argument.
+ */
+const APPROVAL_TIMEOUT_ERROR =
+  `Nobody answered the approval prompt for this command within ${Math.round(APPROVAL_TIMEOUT_MS / 60_000)} ` +
+  'minutes, so it did not run. This is not a refusal — the user may simply have been away. Ask whether ' +
+  'they still want it before running anything else.';
+
 /** listModels() is an RPC to the backend; cache it — the judge runs per command. */
 const MODELS_CACHE_TTL_MS = 5 * 60_000;
 /** Concurrent command cap; further tool calls queue rather than forking shells. */
@@ -62,15 +82,33 @@ export interface ExecServiceDeps {
   emitApprovalRequest: (request: ExecApprovalRequest) => void;
   /** Tell the renderer(s) a pending approval was answered or expired. */
   emitApprovalResolved: (id: string) => void;
+  /** Tell the renderer(s) a queued card is now the visible one, and until when. */
+  emitApprovalArmed?: (armed: ExecApprovalArmed) => void;
   /** Injection seams for tests; default to the wired exec-device router. */
   deviceRouter?: () => import('../exec-device/router').ExecDeviceRouter;
   resolveDevice?: typeof resolveExecTarget;
 }
 
+/**
+ * What a card can end as. 'timeout' is deliberately not an {@link ExecDecision}:
+ * a decision is something a person made, and the whole point of separating them
+ * is that the assistant is never again told "the user declined" about a card
+ * nobody answered.
+ */
+type ApprovalOutcome = ExecDecision | 'timeout';
+
 interface PendingApproval {
   threadId: string;
-  resolve: (decision: ExecDecision) => void;
-  timer: NodeJS.Timeout;
+  resolve: (outcome: ApprovalOutcome) => void;
+  /** The card as the clients have it, replayed to one that reconnects. */
+  request: ExecApprovalRequest;
+  /** Null while queued behind an older card: only the visible one is on a clock. */
+  timer: NodeJS.Timeout | null;
+  /**
+   * True once the request frame has gone out. Until it has, a deadline set on
+   * the card needs no announcement — it rides on the frame itself.
+   */
+  announced: boolean;
 }
 
 interface RunningExec {
@@ -176,6 +214,7 @@ export class ExecService implements ExecBridge {
       if (decision === 'deny') {
         return { ok: false, error: 'The user declined to run this command.' };
       }
+      if (decision === 'timeout') return { ok: false, error: APPROVAL_TIMEOUT_ERROR };
       if (decision === 'alwaysAllow' && cls.prefixes.length) {
         const cur = (await this.deps.readSettings()).exec.allowlist;
         const merged = [...cur, ...cls.prefixes.filter((p) => !cur.includes(p))];
@@ -204,6 +243,16 @@ export class ExecService implements ExecBridge {
   /** Answer a pending approval card (IPC entry point). Returns false for unknown/expired ids. */
   resolveApproval(id: string, decision: ExecDecision): boolean {
     return this.settleApproval(id, decision);
+  }
+
+  /**
+   * The cards still waiting, oldest first — replayed to a client the instant it
+   * connects. A card raised while a client was away (or during a stream gap)
+   * otherwise exists only as a push nobody caught, and the tool call behind it
+   * sits there until it expires against an empty room.
+   */
+  pendingApprovals(): ExecApprovalRequest[] {
+    return [...this.pending.values()].map((p) => p.request);
   }
 
   // ---- internals ----
@@ -303,6 +352,7 @@ export class ExecService implements ExecBridge {
       if (decision === 'deny') {
         return { ok: false, error: 'The user declined to run this command.' };
       }
+      if (decision === 'timeout') return { ok: false, error: APPROVAL_TIMEOUT_ERROR };
       if (decision === 'alwaysAllow' && cls.prefixes.length) {
         // Into THIS device's bucket. Read fresh, like the local path: another
         // card may have written the settings while this one was open.
@@ -382,22 +432,60 @@ export class ExecService implements ExecBridge {
     }
   }
 
-  private requestApproval(request: Omit<ExecApprovalRequest, 'id'>): Promise<ExecDecision> {
+  private requestApproval(request: Omit<ExecApprovalRequest, 'id'>): Promise<ApprovalOutcome> {
     const id = randomUUID();
-    return new Promise<ExecDecision>((resolveDecision) => {
-      const timer = setTimeout(() => this.settleApproval(id, 'deny'), APPROVAL_TIMEOUT_MS);
-      this.pending.set(id, { threadId: request.threadId, resolve: resolveDecision, timer });
-      this.deps.emitApprovalRequest({ id, ...request });
+    return new Promise<ApprovalOutcome>((resolveDecision) => {
+      const entry: PendingApproval = {
+        threadId: request.threadId,
+        resolve: resolveDecision,
+        request: { id, ...request },
+        timer: null,
+        announced: false
+      };
+      this.pending.set(id, entry);
+      // Arm BEFORE emitting, so the card goes out with its deadline already on
+      // it when it is the one that will be shown — one frame, not a frame and a
+      // correction. A card queued behind an older one goes out without one and
+      // is armed later, by the settle that promotes it.
+      this.armHead();
+      this.deps.emitApprovalRequest(entry.request);
+      entry.announced = true;
     });
   }
 
-  private settleApproval(id: string, decision: ExecDecision): boolean {
+  /**
+   * Put the oldest unanswered card on the clock, and nothing else.
+   *
+   * Every surface shows one card at a time, oldest first (the renderer's queue[0],
+   * the phone's sheet). A timer on a card behind it counts down time the user was
+   * never given the chance to use: two parallel run_command calls used to raise
+   * two cards at once, and the second could expire — reported as a refusal —
+   * while it was still invisible behind the first. So the clock and the screen
+   * agree here: a card is answerable from the moment it can be seen.
+   */
+  private armHead(): void {
+    const head = this.pending.values().next().value as PendingApproval | undefined;
+    if (!head || head.timer) return;
+    const id = head.request.id;
+    head.timer = setTimeout(() => {
+      log('exec', 'approval expired unanswered', { command: head.request.command });
+      this.settleApproval(id, 'timeout');
+    }, APPROVAL_TIMEOUT_MS);
+    head.request.expiresAt = Date.now() + APPROVAL_TIMEOUT_MS;
+    // Only for a card the clients already have: a fresh one carries its own
+    // deadline on the request frame that follows this call.
+    if (head.announced) this.deps.emitApprovalArmed?.({ id, expiresAt: head.request.expiresAt });
+  }
+
+  private settleApproval(id: string, outcome: ApprovalOutcome): boolean {
     const pending = this.pending.get(id);
     if (!pending) return false;
     this.pending.delete(id);
-    clearTimeout(pending.timer);
-    pending.resolve(decision);
+    if (pending.timer) clearTimeout(pending.timer);
+    pending.resolve(outcome);
     this.deps.emitApprovalResolved(id);
+    // Whatever was behind it is now the card on screen, so start its clock.
+    this.armHead();
     return true;
   }
 

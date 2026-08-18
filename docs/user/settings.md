@@ -101,6 +101,12 @@ Git Bash when it is installed, otherwise `cmd.exe`.
 On an approval card, **Always allow** saves a command prefix for future turns.
 Keep prefixes narrow; `git status` grants less access than `git`.
 
+A card waits ten minutes for an answer. Only the card on screen counts down; when
+several commands are waiting, each one's ten minutes starts when it becomes the card
+in front of you. If nobody answers in time the command is dropped, and the assistant
+is told that nobody answered — never that you refused. Any surface can answer: a card
+raised while your phone was asleep is waiting for it when it reconnects.
+
 On Windows, **Windows shell** defaults to Git Bash when Git for Windows is installed,
 and falls back to Command Prompt if it is not. Stem looks for it without using
 PowerShell, and only Git for Windows counts: WSL ships a `bash.exe` of its own, but

@@ -196,6 +196,24 @@ describe('createEventStream', () => {
     stream.stop();
   });
 
+  it('replays the approval cards still waiting, as the pushes they were', async () => {
+    const net = harness();
+    const { seen, stream } = start(net);
+    await settle();
+    net.sockets[0].send(
+      'event: snapshot\ndata: {"liveTurns":[],"execApprovals":[{"id":"a1","command":"ls -la"},{"id":"a2"},{"command":"no id"}]}\n\n'
+    );
+    await settle();
+    // A card raised while this phone was asleep is answerable now; the one with
+    // no id is not a card at all and is dropped rather than queued.
+    expect(seen.pushes.map((p) => p.channel)).toEqual([
+      'exec:approvalRequest',
+      'exec:approvalRequest'
+    ]);
+    expect((seen.pushes[0].payload as { id: string }).id).toBe('a1');
+    stream.stop();
+  });
+
   it('leaves live turns alone when a snapshot carries none', async () => {
     const net = harness();
     const { seen, stream } = start(net);

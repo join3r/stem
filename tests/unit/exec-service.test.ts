@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -439,5 +439,131 @@ describe('ExecService device targeting', () => {
     expect(judgeCalls).toHaveLength(0);
     expect(approvals).toHaveLength(0);
     expect(ran[0]).toMatchObject({ command: 'yt-dlp https://x.test', cwd: '/Users/vlado/Downloads' });
+  });
+});
+
+// The approval queue itself: what a card that nobody answers means, when its
+// clock starts, and what an answer that arrives too late does. All three used to
+// have the same wrong answer — "the user declined".
+//
+// Device-targeted on purpose: it is the path with no filesystem in it, so the
+// only thing these tests have to wait for is the queue.
+describe('ExecService approval queue', () => {
+  let approvals: ExecApprovalRequest[];
+  let armed: Array<{ id: string; expiresAt: number }>;
+  let resolved: string[];
+  let settings: AppSettings;
+  let service: ExecService;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    settings = baseSettings();
+    // Manual: straight to the card, so nothing here waits on a judge.
+    settings.exec.approvalMode = 'manual';
+    (settings.exec as unknown as { deviceAllowlists: Record<string, string[]> }).deviceAllowlists = {};
+    approvals = [];
+    armed = [];
+    resolved = [];
+    service = new ExecService({
+      runtime: () => ({ listModels: async () => [], complete: async () => 'unsure' }) as unknown as ChatBackend,
+      readSettings: async () => settings,
+      updateExecSettings: async () => settings,
+      emitApprovalRequest: (request) => approvals.push(request),
+      emitApprovalResolved: (id) => resolved.push(id),
+      emitApprovalArmed: (a) => armed.push(a),
+      resolveDevice: async () => ({ ok: true, deviceId: 'mac-1', label: "Vlado's MacBook" }),
+      deviceRouter: () => ({
+        announce: async () => undefined,
+        hosts: async () => ({}),
+        hostFor: async () => ({
+          deviceId: 'mac-1',
+          announcedAt: new Date().toISOString(),
+          enabled: true,
+          platform: 'darwin'
+        }),
+        isAvailable: () => true,
+        run: async () => ({ ok: true as const, text: 'Exit code: 0' }),
+        settle: () => false,
+        abortThread: () => undefined,
+        forget: async () => undefined,
+        close: () => undefined
+      }) as never
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const ask = (command: string) =>
+    service.handleExecRequest({
+      command,
+      device: 'mac-1',
+      threadId: 'chat-a',
+      isScheduled: false
+    } as never);
+
+  /** Let the request reach its card; nothing here takes more than a few ticks. */
+  const untilCards = async (n: number): Promise<void> => {
+    for (let i = 0; i < 20 && approvals.length < n; i++) await vi.advanceTimersByTimeAsync(1);
+  };
+
+  it('says nobody answered when a card expires — never that the user declined', async () => {
+    const pending = ask('ls -la');
+    await untilCards(1);
+    await vi.advanceTimersByTimeAsync(600_000);
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect((result as { error: string }).error).toContain('Nobody answered');
+    expect((result as { error: string }).error).not.toContain('declined');
+    // And the card is taken off every surface, not left on screen to be clicked.
+    expect(resolved).toEqual([approvals[0].id]);
+  });
+
+  it('does not run a queued card’s clock while it is behind another one', async () => {
+    const first = ask('ls -la');
+    const second = ask('df -h');
+    await untilCards(2);
+    // Only the visible one carries a deadline.
+    expect(approvals[0].expiresAt).toBeGreaterThan(Date.now());
+    expect(approvals[1].expiresAt).toBeUndefined();
+
+    // Nine minutes of the user reading the first card is not time taken from the
+    // second: it has not started counting at all.
+    await vi.advanceTimersByTimeAsync(540_000);
+    expect(resolved).toEqual([]);
+
+    expect(service.resolveApproval(approvals[0].id, 'deny')).toBe(true);
+    await first;
+    // Promoted, and the clients are told when it now expires.
+    expect(armed).toHaveLength(1);
+    expect(armed[0]).toMatchObject({ id: approvals[1].id });
+    expect(armed[0].expiresAt).toBe(Date.now() + 600_000);
+
+    // Its full window starts from there.
+    await vi.advanceTimersByTimeAsync(599_000);
+    expect(resolved).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(((await second) as { error?: string }).error).toContain('Nobody answered');
+  });
+
+  it('refuses a late answer instead of swallowing it', async () => {
+    const pending = ask('ls -la');
+    await untilCards(1);
+    const id = approvals[0].id;
+    expect(service.resolveApproval(id, 'allowOnce')).toBe(true);
+    await pending;
+    // The same click a second time — or any click after the card expired — is
+    // answered with false, which is what the card turns into "that came too late".
+    expect(service.resolveApproval(id, 'allowOnce')).toBe(false);
+  });
+
+  it('lists what is still waiting, for a client that has just connected', async () => {
+    void ask('ls -la');
+    void ask('df -h');
+    await untilCards(2);
+    expect(service.pendingApprovals().map((r) => r.command)).toEqual(['ls -la', 'df -h']);
+    service.settleAll();
+    expect(service.pendingApprovals()).toEqual([]);
   });
 });

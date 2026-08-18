@@ -23,7 +23,13 @@ import { detectGitBash } from './exec/git-bash';
 import { startScratchSweeper, stopScratchSweeper } from './exec/scratch';
 import { initExecService } from './startup/exec';
 import { initSkills } from './startup/skills';
-import { closeTransport, pushToClients, startTransport, type TransportEndpoint } from './startup/transport';
+import {
+  closeTransport,
+  pushToClients,
+  setPendingApprovalsSource,
+  startTransport,
+  type TransportEndpoint
+} from './startup/transport';
 import { setActivityEmitter } from './activity';
 import { foldTurnEvent, liveTurnCount, noteTurnStart } from './live-turns';
 import { pushApprovalRequest, pushTurnFinished, type ApprovalPushKind } from './push';
@@ -450,7 +456,11 @@ function registerIpc(): void {
     return updateExecSettings(patch);
   });
   registerServer('exec:resolveApproval', async (_e, id: string, decision: ExecDecision) => {
-    execService?.resolveApproval(id, decision);
+    // The boolean matters: false means the card had already expired (or was
+    // answered on another surface) and the tool call went on without this
+    // answer. Swallowing it here is what let a click land on nothing while the
+    // card vanished exactly as if it had worked — the client says so instead.
+    return execService?.resolveApproval(id, decision) ?? false;
   });
   registerServer(
     'exec:hostShellInfo',
@@ -631,8 +641,16 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     },
     emitApprovalResolved: (id) => {
       emit('exec:approvalResolved', { id });
+    },
+    // A card that was queued behind another one is now the visible one, and only
+    // now starts its clock — no push beside it, because nothing new is being
+    // asked: whoever is looking at the queue already has this card.
+    emitApprovalArmed: (armed) => {
+      emit('exec:approvalArmed', armed);
     }
   });
+  // Answer a client's first question on connecting: what is waiting on you?
+  setPendingApprovalsSource(() => execService?.pendingApprovals() ?? []);
 
   // Scratch housekeeping: each chat's run_command folder is removed when the chat
   // is deleted, and idle ones age out on the TTL (Settings → Chat → Command

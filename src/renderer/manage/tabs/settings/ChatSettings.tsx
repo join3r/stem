@@ -395,7 +395,9 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
                   clears commands that serve your request; only flagged ones pause.{' '}
                   <strong>Yolo</strong> — every command runs immediately, no questions asked (folders
                   you marked read-only stay protected). The safety check is a heuristic, not a
-                  security boundary; the model it runs on lives under Models.
+                  security boundary; the model it runs on lives under Models. A card that pauses
+                  waits ten minutes for you — after that the command is dropped and the assistant
+                  is told nobody answered, not that you refused.
                 </InfoTip>
               </span>
               <div className="seg-ctl">

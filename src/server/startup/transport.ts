@@ -13,6 +13,7 @@ import {
   type DownloadTarget,
   type TransportServer
 } from '../transport/server';
+import type { ExecApprovalRequest } from '../../shared/types';
 import { serverEndpointPath } from '../workspace/paths';
 
 /**
@@ -53,6 +54,21 @@ export interface TransportEndpoint {
 let primary: TransportServer | null = null;
 /** Monotonic SSE event id (see PushEvent.id). */
 let eventSeq = 0;
+
+/**
+ * The exec approval cards still waiting for an answer, for the connect snapshot.
+ *
+ * A seam rather than an import because the ExecService is constructed in
+ * server/index.ts, which imports this file — and because a client's first
+ * question on connecting ("what is waiting on me?") should be answered by the
+ * one component that knows, not by a second copy kept in sync with it.
+ */
+let pendingExecApprovals: () => ExecApprovalRequest[] = () => [];
+
+/** Wired once, at boot, right after the ExecService exists. */
+export function setPendingApprovalsSource(source: () => ExecApprovalRequest[]): void {
+  pendingExecApprovals = source;
+}
 
 /** Who is calling: the device registry's answer, and nothing else on top of it. */
 async function authenticate(presented: string | null): Promise<DeviceIdentity | null> {
@@ -180,7 +196,12 @@ export async function startTransport(cfg: TransportConfig): Promise<TransportEnd
     // while it was away is otherwise indistinguishable from one that finished
     // without it — both look like a thread that stopped producing deltas — and
     // the two need opposite things on screen.
-    connectSnapshot: () => ({ liveTurns: liveTurnSnapshot() }),
+    //
+    // Approval cards are here for the same reason and a sharper one: they exist
+    // only as pushes, so one raised while nobody was attached (or across a
+    // stream gap) was previously unrecoverable — the assistant sat blocked on a
+    // question no surface was showing, until it expired.
+    connectSnapshot: () => ({ liveTurns: liveTurnSnapshot(), execApprovals: pendingExecApprovals() }),
     extraHosts
   });
   // Uploads outlive the request that made them, so somebody has to notice the

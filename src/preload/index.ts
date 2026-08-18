@@ -13,6 +13,7 @@ import type {
   CustomInstructionsSettings,
   CustomRerankModel,
   EscapeAction,
+  ExecApprovalArmed,
   ExecApprovalRequest,
   ExecDecision,
   ExecSettings,
@@ -218,6 +219,11 @@ const api: StemApi = {
     const handler = (_e: unknown, payload: ApprovalResolvedPayload) => listener(payload);
     ipcRenderer.on('exec:approvalResolved', handler);
     return () => ipcRenderer.removeListener('exec:approvalResolved', handler);
+  },
+  onExecApprovalArmed: (listener: (payload: ExecApprovalArmed) => void) => {
+    const handler = (_e: unknown, payload: ExecApprovalArmed) => listener(payload);
+    ipcRenderer.on('exec:approvalArmed', handler);
+    return () => ipcRenderer.removeListener('exec:approvalArmed', handler);
   },
   respondExecApproval: (id: string, decision: ExecDecision) =>
     ipcRenderer.invoke('exec:resolveApproval', id, decision),
