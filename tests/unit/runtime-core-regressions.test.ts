@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -838,6 +838,31 @@ describe('scheduled-run model restore', () => {
     // Repaired, then resumed — and the conversation under the header untouched.
     expect(JSON.parse(lines[1]!)).toMatchObject({ message: { role: 'user' } });
     expect(requests.map((r) => r.type)).toContain('switch_session');
+  });
+
+  // The repair rewrites the whole file, and a session file's mtime is the only
+  // record of when a chat last had something happen in it — the Inbox places and
+  // bolds rows by it. Bumping it made the first open of a carried-over chat (from
+  // search, which is how you reach an old one) resurrect it from the archive and
+  // paint it unread, for a repair the user never did.
+  it('repairs a moved chat without making it look like new activity', async () => {
+    const { runtime, internal } = await scheduledRuntime();
+    const file = internal.sessionFiles.get('sched-1')!;
+    await writeFile(
+      file,
+      [
+        { type: 'session', id: 'sched-1', cwd: '/Users/someone/Library/Application Support/Stem/workspace' },
+        { type: 'message', id: 'u1', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } }
+      ]
+        .map((l) => JSON.stringify(l))
+        .join('\n')
+    );
+    const lastActivity = new Date('2026-07-01T10:00:00.000Z');
+    await utimes(file, lastActivity, lastActivity);
+
+    await runtime.resumeThread('sched-1');
+
+    expect(Math.floor((await stat(file)).mtimeMs)).toBe(lastActivity.getTime());
   });
 
   it('leaves a chat that already points here exactly as it is', async () => {

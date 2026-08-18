@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { open, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { log } from '../log';
 
@@ -63,6 +63,14 @@ async function readHeader(file: string): Promise<{ header: SessionHeader; end: n
  * that needs it is written, temp + rename so a chat cannot be lost to a torn
  * write. Never throws: an unreadable or read-only chat still gets its resume
  * attempt, and pi's own refusal is the better error to show.
+ *
+ * The file's mtime is put back afterwards. That timestamp is not bookkeeping:
+ * it is the ONLY signal Stem has for when a chat last had something happen in
+ * it, so the Inbox reads it as activity (see src/shared/inbox.ts) — bumping it
+ * would lift the chat out of the archive and paint it unread for a repair
+ * nobody did. Opening an old chat from search is where that showed: the first
+ * open of a carried-over chat rewrote its header and the chat announced itself
+ * as new.
  */
 async function rewriteSessionCwd(
   file: string,
@@ -74,11 +82,15 @@ async function rewriteSessionCwd(
     if (!found) return false;
     const { header, end } = found;
     if (header.cwd === workspace || !shouldRewrite(header.cwd!)) return false;
+    const times = await stat(file).catch(() => null);
     const rest = (await readFile(file, 'utf8')).slice(end + 1);
     const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await writeFile(tmp, `${JSON.stringify({ ...header, cwd: workspace })}\n${rest}`, 'utf8');
       await rename(tmp, file);
+      // Best-effort: a chat whose timestamps could not be restored is still a
+      // chat that opens, which is what the rewrite was for.
+      if (times) await utimes(file, times.atime, times.mtime).catch(() => undefined);
     } finally {
       await rm(tmp, { force: true }).catch(() => undefined);
     }
