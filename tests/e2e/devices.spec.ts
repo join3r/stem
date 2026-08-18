@@ -29,7 +29,12 @@ test('a pairing code is shown, once, with what it is for', async ({ mainWindow }
   await mainWindow.getByRole('button', { name: 'Get a code' }).click();
 
   // Grouped and drawn from an alphabet with no character that can be misheard.
-  await expect(mainWindow.getByText(/[2-9A-HJ-NP-TV-Z]{4}-[2-9A-HJ-NP-TV-Z]{4}/)).toBeVisible();
+  // Looked for where a code is said — the form that minted it — and matched
+  // whole rather than as a substring: a machine's own name is on this screen
+  // too, and a hostname like `iad20-fj917-a2b9dc00-9243-8874` holds something
+  // code-shaped without being a code.
+  const form = mainWindow.locator('form.set-block');
+  await expect(form.getByText(/^[2-9A-HJ-NP-TV-Z]{4}-[2-9A-HJ-NP-TV-Z]{4}$/)).toBeVisible();
   // …and the pairing it belongs to is listed as outstanding until it is spent.
   await expect(mainWindow.locator('.set-row', { hasText: 'Work laptop' })).toBeVisible();
 });
