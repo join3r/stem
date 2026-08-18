@@ -43,8 +43,19 @@ export class EmbeddingsUnavailableError extends Error {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-// Bound payloads on the 8b-on-CPU case; vectors come back the same either way.
-const MAX_BATCH = 64;
+// Passage batches get a separate, much longer budget. They are backfill work
+// nobody is waiting on, and on a CPU endpoint a full batch routinely runs
+// 12–20s — a 30s ceiling sits inside normal variance there and cuts off work
+// that was seconds from finishing. Queries stay on the short budget: a chat
+// turn is waiting, and lexical fallback beats a stalled turn.
+const DEFAULT_PASSAGE_TIMEOUT_MS = 120_000;
+// Bound payloads on the CPU-endpoint case; vectors come back the same either
+// way. 32 rather than 64 because a 64-passage batch alone can eat a whole
+// timeout budget on CPU, and a timed-out batch that retries redoes half as much.
+const MAX_BATCH = 32;
+
+/** A request cut off by our own timeout — the one failure worth retrying. */
+class EmbeddingsTimeoutError extends Error {}
 
 function trimUrl(base: string): string {
   return base.replace(/\/+$/, '');
@@ -52,14 +63,19 @@ function trimUrl(base: string): string {
 
 export function createHttpEmbeddingsClient(
   getConfig: () => Promise<EmbeddingsConfig | null>,
-  opts: { timeoutMs?: number } = {}
+  opts: { timeoutMs?: number; passageTimeoutMs?: number } = {}
 ): EmbeddingsClient {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const passageTimeoutMs = opts.passageTimeoutMs ?? DEFAULT_PASSAGE_TIMEOUT_MS;
 
-  async function embedBatch(cfg: EmbeddingsConfig, texts: string[]): Promise<Float32Array[]> {
+  async function embedBatch(cfg: EmbeddingsConfig, texts: string[], budgetMs: number): Promise<Float32Array[]> {
     const url = `${trimUrl(cfg.baseUrl)}/v1/embeddings`;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, budgetMs);
     let json: { data?: Array<{ index?: number; embedding?: number[] }> };
     try {
       const res = await fetch(url, {
@@ -73,6 +89,16 @@ export function createHttpEmbeddingsClient(
       });
       if (!res.ok) throw new Error(`embeddings: ${url} → HTTP ${res.status}`);
       json = (await res.json()) as typeof json;
+    } catch (err) {
+      // The abort's own message ("This operation was aborted") reaches the
+      // Memory-tab banner verbatim and reads like a crash. Name what happened:
+      // the endpoint was up but didn't answer inside our budget.
+      if (timedOut) {
+        throw new EmbeddingsTimeoutError(
+          `embeddings: ${url} → no response within ${Math.round(budgetMs / 1000)}s (endpoint reachable but slow)`
+        );
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }
@@ -98,13 +124,26 @@ export function createHttpEmbeddingsClient(
     async modelId() {
       return (await getConfig())?.model ?? null;
     },
-    async embed(texts) {
+    async embed(texts, kind) {
       const cfg = await getConfig();
       if (!cfg) throw new EmbeddingsUnavailableError();
       if (texts.length === 0) return [];
+      const budgetMs = kind === 'passage' ? passageTimeoutMs : timeoutMs;
       const out: Float32Array[] = [];
       for (let i = 0; i < texts.length; i += MAX_BATCH) {
-        out.push(...(await embedBatch(cfg, texts.slice(i, i + MAX_BATCH))));
+        const batch = texts.slice(i, i + MAX_BATCH);
+        try {
+          out.push(...(await embedBatch(cfg, batch, budgetMs)));
+        } catch (err) {
+          // A timeout is the one failure a second attempt tends to fix — the
+          // endpoint is up, just momentarily over budget behind another request
+          // — and only passage work retries: it's background, so the extra wait
+          // costs nobody, whereas a query retry would double a turn's stall
+          // when lexical fallback is standing right there. Anything else (HTTP
+          // status, response shape) fails the same way twice; rethrow.
+          if (kind !== 'passage' || !(err instanceof EmbeddingsTimeoutError)) throw err;
+          out.push(...(await embedBatch(cfg, batch, budgetMs)));
+        }
       }
       return out;
     }

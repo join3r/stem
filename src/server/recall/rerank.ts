@@ -68,7 +68,11 @@ export function createHttpRerankClient(
 
   async function post(url: string, body: unknown, apiKey: string | null | undefined): Promise<Response> {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, timeoutMs);
     try {
       return await fetch(url, {
         method: 'POST',
@@ -79,6 +83,14 @@ export function createHttpRerankClient(
         body: JSON.stringify(body),
         signal: ctrl.signal
       });
+    } catch (err) {
+      // Same mapping as the embeddings client: the abort's stock message
+      // ("This operation was aborted") reaches the Memory-tab banner verbatim
+      // and reads like a crash rather than the slowness it is.
+      if (timedOut) {
+        throw new Error(`rerank: ${url} → no response within ${Math.round(timeoutMs / 1000)}s (endpoint reachable but slow)`);
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }
