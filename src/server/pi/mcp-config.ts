@@ -722,8 +722,12 @@ function decryptServerSecrets(server: PiMcpServer): PiMcpServer {
   }
   if (out.oauthClientSecret) {
     const plain = decryptSecretValue(out.oauthClientSecret);
-    if (plain === null) delete out.oauthClientSecret;
-    else out.oauthClientSecret = plain;
+    // Dropping it and saying nothing is the exact failure the doc comment above
+    // describes, so it goes on `lost` with the headers and env values.
+    if (plain === null) {
+      delete out.oauthClientSecret;
+      lost.push('oauthClientSecret');
+    } else out.oauthClientSecret = plain;
   }
   // Absent rather than empty when nothing was lost, so the ordinary case adds no
   // field to a config that gets compared, hashed and written back.
@@ -732,13 +736,26 @@ function decryptServerSecrets(server: PiMcpServer): PiMcpServer {
   return out;
 }
 
+/** mcp.json parsed as far as `.corrupt`: unusable, but its bytes are preserved. */
+export class McpConfigCorrupt extends Error {}
+
+/**
+ * mcp.json is on disk, intact, and would not open — EACCES after a permission
+ * change, EIO on a failing disk, EBUSY behind a scanner. Distinct from
+ * {@link McpConfigCorrupt} because there is nothing preserved and nothing to
+ * rebuild from: the servers are still in that file, so the only safe move is to
+ * leave it alone.
+ */
+export class McpConfigUnreadable extends Error {}
+
 /**
  * Read mcp.json, distinguishing a genuinely missing file (legitimate first run →
- * fresh config) from one that exists but is corrupt/unparseable. The corrupt case
- * MUST NOT be silently treated as empty: callers that read-modify-write (notably
+ * fresh config) from one that exists but did not yield a config. Neither failing
+ * case may be silently treated as empty: callers that read-modify-write (notably
  * {@link ensureMcpConfig}) would then persist that emptiness and wipe every
- * user-added server. Instead we preserve the bytes to a `.corrupt` sibling for
- * recovery and throw, so the loss is visible and recoverable rather than silent.
+ * user-added server. A corrupt file has its bytes preserved to a `.corrupt`
+ * sibling; an unreadable one is left exactly where it is. Both throw, so the loss
+ * is visible and recoverable rather than silent.
  */
 export async function readMcpConfig(): Promise<PiMcpConfig> {
   let raw: string;
@@ -746,9 +763,12 @@ export async function readMcpConfig(): Promise<PiMcpConfig> {
     raw = await readFile(piMcpConfigPath(), 'utf8');
   } catch (error) {
     // ENOENT is the first run this promises to distinguish. Anything else is a
-    // file that IS there and did not open, and it lands on the same empty config
-    // — which ensureMcpConfig then writes back over every server the user added.
-    if (!isMissing(error)) degrade('pi.mcpConfig', 'read mcp.json as a first run and started from no servers', error);
+    // file that IS there and did not open; returning the same empty config for it
+    // is what would write emptiness back over every server the user added — with
+    // not even a `.corrupt` copy to recover from, since we never got the bytes.
+    if (!isMissing(error)) {
+      throw new McpConfigUnreadable(`mcp.json could not be read: ${String(error)}`);
+    }
     return { servers: {} };
   }
   try {
@@ -771,7 +791,7 @@ export async function readMcpConfig(): Promise<PiMcpConfig> {
         // at a path that does not exist.
         degrade('pi.mcpConfig', 'kept no .corrupt copy of the unreadable mcp.json', writeError)
     );
-    throw new Error(`mcp.json is corrupt (preserved at ${piMcpConfigPath()}.corrupt): ${String(e)}`);
+    throw new McpConfigCorrupt(`mcp.json is corrupt (preserved at ${piMcpConfigPath()}.corrupt): ${String(e)}`);
   }
 }
 
@@ -802,6 +822,15 @@ export async function ensureMcpConfig(): Promise<void> {
     try {
       config = await readMcpConfig();
     } catch (error) {
+      if (!(error instanceof McpConfigCorrupt)) {
+        // The file is there and intact and merely would not open. Rebuilding
+        // from an empty config here would overwrite servers that are still on
+        // disk and still recoverable — a permission slip turned into permanent
+        // loss. Leave it; recall runs on whatever entry the file already has,
+        // and the next bootstrap after the cause clears fixes it for free.
+        degrade('pi.mcpConfig', 'left mcp.json untouched and did not refresh the recall entry', error);
+        return;
+      }
       // Corrupt mcp.json (already preserved as `.corrupt` by readMcpConfig). Start
       // fresh so recall and the app keep working; the backup keeps any recoverable
       // user servers around instead of erasing them without a trace. The user's

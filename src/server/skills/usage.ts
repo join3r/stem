@@ -50,10 +50,26 @@ function freshUsage(): SkillsUsage {
 /** Tolerant read: a missing or corrupt file yields a fresh in-memory value
  *  (without writing — the next real write persists it). */
 export function readUsage(): SkillsUsage {
+  return readUsageOrNull() ?? freshUsage();
+}
+
+/**
+ * The read the mutators use, answering `null` for a sidecar that exists and did
+ * not read. They all read-modify-write, so a fresh value there is not a lost
+ * history but a destroyed one: the very next tick writes empty counters over
+ * every skill's injected/used record and flattens the ranking blend across the
+ * whole library. A corrupt file is different — its bytes are already unusable, so
+ * it is quarantined and starting over is the only move left.
+ */
+function readUsageOrNull(): SkillsUsage | null {
   let raw: string;
   try {
     raw = readFileSync(usageFile(), 'utf8');
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('skills.usage', 'could not read the usage sidecar', error);
+      return null;
+    }
     // quiet: no sidecar yet is every install before the first tick, and
     // `ensureUsageTracking` writes one at startup.
     return freshUsage();
@@ -81,9 +97,15 @@ export function readUsage(): SkillsUsage {
     }
     return { trackingSince: data.trackingSince, skills };
   } catch (error) {
-    // Not recoverable: the next tick writes the fresh value over the file, so
-    // every skill's injected/used history is gone and the ranking blend goes
-    // neutral across the whole library with nothing to show for it.
+    // The next tick writes the fresh value over the file, so keep the bytes
+    // first — the same quarantine mcp.json and models.json get. Without it every
+    // skill's injected/used history is gone and the ranking blend goes neutral
+    // across the whole library with nothing left to reconstruct it from.
+    try {
+      writeFileSync(`${usageFile()}.corrupt`, raw, 'utf8');
+    } catch (writeError) {
+      degrade('skills.usage', 'kept no copy of the corrupt usage sidecar', writeError);
+    }
     degrade('skills.usage', 'started skill usage history over', error);
     return freshUsage();
   }
@@ -129,7 +151,8 @@ export function ensureUsageTracking(): void {
 export function recordUses(slugs: string[], at: Date = new Date()): number {
   const real = slugs.filter(isSkillSlug);
   if (real.length === 0) return 0;
-  const usage = readUsage();
+  const usage = readUsageOrNull();
+  if (!usage) return 0;
   const iso = at.toISOString();
   for (const slug of real) {
     const entry = usage.skills[slug];
@@ -147,7 +170,8 @@ export function recordUses(slugs: string[], at: Date = new Date()): number {
 export function recordInjections(slugs: string[]): number {
   const real = slugs.filter(isSkillSlug);
   if (real.length === 0) return 0;
-  const usage = readUsage();
+  const usage = readUsageOrNull();
+  if (!usage) return 0;
   for (const slug of real) {
     const entry = usage.skills[slug] ?? { count: 0, lastUsedAt: '' };
     usage.skills[slug] = { ...entry, injected: (entry.injected ?? 0) + 1 };
@@ -166,7 +190,8 @@ export function recordInjections(slugs: string[]): number {
 export function recordGrades(injected: string[], used: string[], at: Date = new Date()): void {
   const real = injected.filter(isSkillSlug);
   if (real.length === 0) return;
-  const usage = readUsage();
+  const usage = readUsageOrNull();
+  if (!usage) return;
   const hit = new Set(used);
   const seconds = Math.floor(at.getTime() / 1000);
   for (const slug of real) {
@@ -185,7 +210,8 @@ export function recordGrades(injected: string[], used: string[], at: Date = new 
  * proven utility survives curator merges. No-op when nothing was tracked.
  */
 export function mergeUsage(winner: string, losers: string[]): void {
-  const usage = readUsage();
+  const usage = readUsageOrNull();
+  if (!usage) return;
   const tracked = losers.filter((slug) => slug !== winner && usage.skills[slug]);
   if (tracked.length === 0) return;
   const win = usage.skills[winner];
@@ -215,7 +241,8 @@ export function mergeUsage(winner: string, losers: string[]): void {
 
 /** Drop entries whose skill directory is gone (manage_skill remove, merges). */
 export function pruneUsage(): void {
-  const usage = readUsage();
+  const usage = readUsageOrNull();
+  if (!usage) return;
   const stale = Object.keys(usage.skills).filter((slug) => !isSkillSlug(slug));
   if (stale.length === 0) return;
   for (const slug of stale) delete usage.skills[slug];

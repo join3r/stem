@@ -883,6 +883,9 @@ export async function distillNewMessages(llm: LlmClient): Promise<number> {
           { text: claim.text, evidenceDate: incomingDate },
           llm
         );
+        // Unclassified: not memoized, so the pair is judged by a later pass
+        // instead of being recorded as compatible on a failed model call.
+        if (verdict === null) return true;
         if (getFactsGeneration() !== factsGeneration) return false;
         const current = getFactDetails(targetId);
         if (!current || current.status !== 'active' || current.text !== target.text) return true;

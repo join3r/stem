@@ -261,7 +261,15 @@ export function importCustomModel(
       error: `That folder is missing ${missing.join(', ')}. Copy the whole model folder, not just the weights.`
     };
   }
-  return { ok: true, copied: copyModelFiles(sourceDir, repo, cacheDir) };
+  const copied = copyModelFiles(sourceDir, repo, cacheDir);
+  const short = missingModelFiles(cacheDir, repo, dtype);
+  if (short.length) {
+    return {
+      ok: false,
+      error: `That model did not copy completely — ${short.join(', ')} did not arrive in the model cache. Check the folder is readable and try again.`
+    };
+  }
+  return { ok: true, copied };
 }
 
 function describeCatalog(): string {
@@ -311,5 +319,21 @@ export function importLocalModels(dir: string, cacheDir: string): ImportModelRes
     };
   }
 
-  return { ok: true, models: candidates.map((c) => copyModel(c, cacheDir)) };
+  const models = candidates.map((c) => copyModel(c, cacheDir));
+  // The SOURCE was checked above; this checks what actually landed. filesUnder()
+  // drops a directory it cannot enumerate, so a copy can come out short with
+  // every step reporting success — and that gap surfaces as an ONNX error at
+  // load time, on the machine that had no way to fetch the missing piece, which
+  // is the exact failure importing exists to prevent.
+  const short = candidates
+    .map((c) => ({ c, missing: missingModelFiles(cacheDir, c.repo, c.dtype) }))
+    .filter((x) => x.missing.length);
+  if (short.length) {
+    const { c, missing } = short[0]!;
+    return {
+      ok: false,
+      error: `${c.label} did not copy completely — ${missing.join(', ')} did not arrive in the model cache. Check the folder is readable and try again.`
+    };
+  }
+  return { ok: true, models };
 }

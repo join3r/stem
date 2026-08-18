@@ -141,6 +141,24 @@ describe('adjudicateOpenConflicts', () => {
     expect(store.getMemoryConflicts()).toHaveLength(1);
   });
 
+  it('does not spend an attempt on a model that is merely down', async () => {
+    seedConflict('Fact da.', 'Fact db.');
+    let calls = 0;
+    const down: LlmClient = { complete: async () => { calls += 1; throw new Error('model unreachable'); } };
+
+    // The attempt is counted BEFORE the call so a crash mid-call still costs one.
+    // An error we caught is the other case: three unlucky passes used to drop the
+    // conflict to manual-only for good, with nothing to say the model was the
+    // problem rather than the pair.
+    for (let i = 0; i < MAX_ADJUDICATE_ATTEMPTS + 1; i += 1) {
+      expect((await adjudicateOpenConflicts(down)).skipped).toBe(1);
+    }
+    expect(calls).toBe(MAX_ADJUDICATE_ATTEMPTS + 1);
+
+    // And the conflict is still adjudicable once the model is back.
+    expect((await adjudicateOpenConflicts(reply({ outcome: 'a_wins' }))).resolved).toBe(1);
+  });
+
   it('applies nothing when facts are reset while the model call is in flight', async () => {
     seedConflict('Fact ea.', 'Fact eb.');
     const llm: LlmClient = {

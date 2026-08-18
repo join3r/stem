@@ -1010,16 +1010,18 @@ export class RecallStore {
     if (built?.value !== '1') {
       try {
         handle.exec(`INSERT INTO facts_fts(facts_fts) VALUES('rebuild')`);
+        // Inside the try, like the trigram backfill below: written outside it, a
+        // rebuild that threw still marked the index built, and every fact that
+        // predates the index stayed unsearchable for the life of the store with
+        // nothing left to retry it.
+        handle
+          .prepare(`INSERT INTO meta(key, value) VALUES('facts_index_built', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`)
+          .run();
       } catch (e) {
         // A rebuild failure must never block startup; triggers still keep new
-        // facts synced. The facts that were already there, though, stay out of
-        // the index for good — the built flag below is written either way, so
-        // nothing retries this.
+        // facts synced, and the unset flag means the next open tries again.
         degrade('recall.store', 'left the facts already in the store out of the FTS index', e);
       }
-      handle
-        .prepare(`INSERT INTO meta(key, value) VALUES('facts_index_built', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`)
-        .run();
     }
     // The trigram index gets its OWN build flag: trigram availability is decided
     // per-session (the guarded CREATE above), so a store first opened on a SQLite
@@ -2087,6 +2089,18 @@ export class RecallStore {
   bumpAdjudicationAttempts = (conflictId: number): void => {
     this.open().prepare(
       `UPDATE fact_conflicts SET adjudicate_attempts = adjudicate_attempts + 1 WHERE id = ?`
+    ).run(conflictId);
+  };
+
+  /**
+   * Give back an attempt counted for a call that never reached a verdict. The
+   * bump happens before the model call so a crash mid-call still costs one — a
+   * caught error is the other case, and burning the budget on a model that is
+   * merely down is what drops a conflict to manual-only for good.
+   */
+  refundAdjudicationAttempt = (conflictId: number): void => {
+    this.open().prepare(
+      `UPDATE fact_conflicts SET adjudicate_attempts = MAX(0, adjudicate_attempts - 1) WHERE id = ?`
     ).run(conflictId);
   };
 

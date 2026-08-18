@@ -184,13 +184,18 @@ async function deliver(wake: WakeUp, label?: LabelSource): Promise<void> {
       // push spends a request learning the same thing — from every record that
       // still carries it, since one dead address can be written on several.
       for (const device of devices) {
-        await setDevicePushToken(device.id, null).catch((err) =>
-          // Without this write the token stays in the registry and every later
-          // wake-up spends an APNs request rediscovering that it is gone — and the
-          // line below says it was dropped when it was not.
-          degrade('push', 'kept a dead push token in the device registry', err)
+        const dropped = await setDevicePushToken(device.id, null).then(
+          () => true,
+          (err) => {
+            // Without this write the token stays in the registry and every later
+            // wake-up spends an APNs request rediscovering that it is gone. Say
+            // that, rather than the line below asserting a drop that did not
+            // happen — a log that reports work it did not do is worse than none.
+            degrade('push', 'kept a dead push token in the device registry', err);
+            return false;
+          }
         );
-        log('push', 'dropped a dead push token', { deviceId: device.id });
+        if (dropped) log('push', 'dropped a dead push token', { deviceId: device.id });
       }
       continue;
     }

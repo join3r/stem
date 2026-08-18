@@ -50,20 +50,41 @@ export function effectiveLearnMode(f: ConnectedFolder): 'off' | 'use' | 'new' | 
   return f.learnMode ?? 'use';
 }
 
+async function loadStore(): Promise<ConnectedFoldersStore> {
+  const parsed = JSON.parse(await readFile(connectedFoldersStorePath(), 'utf8')) as Partial<ConnectedFoldersStore>;
+  const folders = Array.isArray(parsed.folders) ? parsed.folders.map(coerce).filter((f): f is ConnectedFolder => !!f) : [];
+  return { version: 1, folders };
+}
+
 export async function readStore(): Promise<ConnectedFoldersStore> {
   try {
-    const parsed = JSON.parse(await readFile(connectedFoldersStorePath(), 'utf8')) as Partial<ConnectedFoldersStore>;
-    const folders = Array.isArray(parsed.folders) ? parsed.folders.map(coerce).filter((f): f is ConnectedFolder => !!f) : [];
-    return { version: 1, folders };
+    return await loadStore();
   } catch (error) {
     // Present but unreadable: every connected folder disappears from the Folders
-    // tab, the assistant stops reading paths nobody told it to stop reading, and
-    // the next update() persists that emptiness over the registry. (Absent is the
-    // ordinary case — nothing has been connected yet.)
+    // tab and the assistant stops reading paths nobody told it to stop reading.
+    // Survivable for a reader — the registry is still on disk and the next launch
+    // shows it again. (Absent is the ordinary case, nothing connected yet.)
     if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
       degrade('folders', 'started from an empty connected-folders store', error);
     }
     return emptyStore();
+  }
+}
+
+/**
+ * The read half of {@link update}, where the forgiving version is what makes the
+ * loss permanent: the empty registry is written straight back, and the
+ * protected-roots gate is then republished from it — so the folders vanish AND
+ * the read-only protection on them goes with it. Absent is still "nothing
+ * connected yet"; anything else refuses.
+ */
+async function readForUpdate(): Promise<ConnectedFoldersStore> {
+  try {
+    return await loadStore();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return emptyStore();
+    degrade('folders', 'refused to write the folder registry over a file it could not read', error);
+    throw error;
   }
 }
 
@@ -90,7 +111,7 @@ async function writeStore(store: ConnectedFoldersStore): Promise<void> {
 /** Read, mutate, persist atomically, then re-publish the protected-roots gate. */
 function update<T>(mutate: (store: ConnectedFoldersStore) => T): Promise<T> {
   return enqueue(async () => {
-    const store = await readStore();
+    const store = await readForUpdate();
     const result = mutate(store);
     await writeStore(store);
     await publishProtectedRoots(store).catch((error) => {

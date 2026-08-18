@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { open, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { open, readFile, readdir, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { degrade } from '../degrade';
 import { log } from '../log';
 
 // Chats that came from another machine, made resumable here.
@@ -37,14 +38,29 @@ interface SessionHeader {
 /** How far in we look for the header line; it is one short object per file. */
 const HEADER_PROBE_BYTES = 4096;
 
-/** The session header, or null when this is not a file with one. */
-async function readHeader(file: string): Promise<{ header: SessionHeader; end: number } | null> {
+/**
+ * The session header and the file's timestamps, or null when this is not a file
+ * with a header.
+ *
+ * The times come off the handle we already opened, not a second `stat()` call.
+ * That is deliberate: mtime is the only signal Stem has for when a chat last had
+ * something happen in it, so a repair that cannot put it back paints the chat
+ * unread and lifts it out of the archive. A separate stat has its own way to
+ * fail; an fstat on a descriptor we are holding does not, and if it somehow does,
+ * it throws before anything has been rewritten.
+ */
+async function readHeader(
+  file: string
+): Promise<{ header: SessionHeader; end: number; times: { atime: Date; mtime: Date } } | null> {
   const handle = await open(file, 'r');
   let head: string;
+  let times: { atime: Date; mtime: Date };
   try {
     const buffer = Buffer.alloc(HEADER_PROBE_BYTES);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     head = buffer.subarray(0, bytesRead).toString('utf8');
+    const stats = await handle.stat();
+    times = { atime: stats.atime, mtime: stats.mtime };
   } finally {
     await handle.close();
   }
@@ -52,7 +68,7 @@ async function readHeader(file: string): Promise<{ header: SessionHeader; end: n
   if (end === -1) return null; // no complete header in the probe: not ours to touch
   const header = JSON.parse(head.slice(0, end)) as SessionHeader;
   if (header?.type !== 'session' || typeof header.cwd !== 'string') return null;
-  return { header, end };
+  return { header, end, times };
 }
 
 /**
@@ -80,23 +96,22 @@ async function rewriteSessionCwd(
   try {
     const found = await readHeader(file);
     if (!found) return false;
-    const { header, end } = found;
+    const { header, end, times } = found;
     if (header.cwd === workspace || !shouldRewrite(header.cwd!)) return false;
-    // quiet: a chat whose original timestamps could not be read is one this
-    // rewrite then bumps, and the Inbox reads that bump as activity — the same
-    // cost as the utimes below, and unreportable for the same reason as the
-    // catch at the end of this function.
-    const times = await stat(file).catch(() => null);
     const rest = (await readFile(file, 'utf8')).slice(end + 1);
     const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await writeFile(tmp, `${JSON.stringify({ ...header, cwd: workspace })}\n${rest}`, 'utf8');
       await rename(tmp, file);
-      // quiet: a chat whose timestamps could not be restored is still a chat
-      // that opens, which is what the rewrite was for. It costs the chat its
-      // place in the archive — the Inbox reads the repair as activity — and
-      // nothing here can say so; see the catch at the end of this function.
-      if (times) await utimes(file, times.atime, times.mtime).catch(() => undefined);
+      await utimes(file, times.atime, times.mtime).catch((error) =>
+        // A chat whose timestamps could not be restored is still a chat that
+        // opens, which is what the rewrite was for — so this does not fail the
+        // repair. It does cost the chat its place in the archive, because the
+        // Inbox reads the fresh mtime as activity and paints it unread. That is
+        // the shape of the bug this whole function was written to avoid, so it
+        // says so rather than leaving the user to wonder why an old chat is back.
+        degrade('pi.sessionCwd', 'left a repaired chat looking like it had just been used', error)
+      );
     } finally {
       // quiet: either the rename consumed the temp file or the write never
       // reached it. What can survive is a `.tmp` beside the chat, which nothing

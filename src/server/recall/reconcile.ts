@@ -52,11 +52,17 @@ export function evidenceDateOf(details: FactDetails | null): string | null {
  * price change): same attribute of the same thing, one side clearly the newer
  * state. Callers decide whether they have the authority to act on them.
  *
- * Defaults to `'compatible'` whenever the model is unreachable or unparseable: a
+ * Answers `'compatible'` for anything the model does not clearly call otherwise: a
  * missed contradiction is quietly adjudicated by a later pass, while a false
  * conflict demands the user resolve something that isn't broken.
+ *
+ * Answers `null` — a distinct thing — when the pair could not be classified at
+ * all. Callers that memoize the verdict MUST NOT memoize a null: writing
+ * 'compatible' into fact_relation_checks on the strength of a model outage tells
+ * `isRelationChecked` this pair is settled, and the two facts are then never
+ * compared again once the model is back. A null pair is simply not yet judged.
  */
-export async function classifyRelation(a: RelationSide, b: RelationSide, llm: LlmClient): Promise<FactRelation> {
+export async function classifyRelation(a: RelationSide, b: RelationSide, llm: LlmClient): Promise<FactRelation | null> {
   const prompt = `${RELATION_PROMPT_HEADER}
 
 A (evidence dated ${a.evidenceDate ?? 'unknown'}): ${a.text}
@@ -78,11 +84,11 @@ Return ONLY JSON {"verdict":"compatible"|"contradicts"|"a_supersedes_b"|"b_super
       ? parsed.verdict
       : 'compatible';
   } catch (error) {
-    // 'compatible' is the safe default (module header), but it is also what the
-    // callers write into fact_relation_checks — so a pair judged by an outage is
-    // memoized as agreeing and never classified again once the model is back.
-    degrade('recall.reconcile', 'called the pair compatible', error);
-    return 'compatible';
+    // Not 'compatible': that verdict is what callers write into
+    // fact_relation_checks, so a pair judged by an outage would be memoized as
+    // agreeing and never classified again once the model is back.
+    degrade('recall.reconcile', 'left the pair unclassified', error);
+    return null;
   }
 }
 
@@ -263,6 +269,9 @@ export async function sweepFactAgainstNeighbours(
       { text: fresh.text, evidenceDate: evidenceDateOf(fresh) },
       llm
     );
+    // Unclassified (the model was unreachable): leave the pair unmemoized so a
+    // later sweep judges it, rather than recording an agreement nobody found.
+    if (verdict === null) continue;
     if (getFactsGeneration() !== factsGeneration) return false;
     // The classify call was async: only act if both sides are still the rows
     // the model judged.
@@ -340,6 +349,8 @@ export async function processPendingRelationChecks(
     // way, and a row invalidated mid-call must not make the activity row read
     // "Checked 0 pairs" after a cycle of model calls.
     checked += 1;
+    // Leave the row pending rather than settling it on a verdict nobody reached.
+    if (verdict === null) continue;
     if (getFactsGeneration() !== factsGeneration) break;
     const after = gate(pending);
     if (after === 'stale') recordRelationVerdict(pending.id, 'stale');

@@ -10,6 +10,7 @@ import { degrade } from '../degrade';
 import { log } from '../log';
 import { RECALL_MCP_NAME } from '../recall/register-mcp';
 import { SECRET_ENVELOPE_KEY, SECRET_VALUE_PREFIX } from '../pi/protocol';
+import { restampInboxBaseline } from './inbox';
 import { adoptSessionCwds } from '../pi/session-cwd';
 import { archivePath, extractTar, readTarMember, writeTar, type TarInput } from './tar';
 import type { SecretsState, StateExportReport, TransferGroup } from '../../shared/types';
@@ -492,23 +493,32 @@ function groupsOf(files: Array<{ path: string; size: number }>): TransferGroup[]
  * and cannot half-succeed.
  */
 export async function stateRootObstruction(root: string = userDataRoot()): Promise<string | null> {
-  const anyEntry = async (dir: string): Promise<boolean> => {
-    const names = await readdir(dir).catch((error) => {
+  /** Null when the directory is genuinely empty; otherwise the phrase to refuse with. */
+  const entriesIn = async (dir: string, used: string): Promise<string | null> => {
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch (error) {
       // Not there is the ordinary answer — a fresh state root has no sessions
-      // folder. There and unreadable answered as "empty" clears the import to
-      // unpack a second Stem on top of the chats it could not list, and there is
-      // deliberately no way back from that (see the note above).
-      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-        degrade('import', 'treated an unreadable state root folder as empty', error);
-      }
-      return [] as string[];
-    });
-    return names.some((name) => !SKIP_NAMES.has(name));
+      // folder. There and unreadable is NOT empty: answering that clears the
+      // import to unpack a second Stem on top of what it could not list, and
+      // there is deliberately no way back from that (see the note above). "I
+      // cannot tell" has to refuse, because being wrong here is unrecoverable.
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+      degrade('import', 'refused an import into a state root folder it could not read', error);
+      return `${dir} is there and would not open, so it cannot be told apart from a Stem that has been used`;
+    }
+    return names.some((name) => !SKIP_NAMES.has(name)) ? used : null;
   };
 
-  if (await anyEntry(join(root, 'pi-home', 'sessions'))) return 'it already has chats in it';
-  if (await anyEntry(join(root, 'pi-home', 'skills'))) return 'it already has skills in it';
-  if (await anyEntry(join(root, 'workspace', 'files'))) return 'it already has files in it';
+  for (const [dir, used] of [
+    [join(root, 'pi-home', 'sessions'), 'it already has chats in it'],
+    [join(root, 'pi-home', 'skills'), 'it already has skills in it'],
+    [join(root, 'workspace', 'files'), 'it already has files in it']
+  ] as const) {
+    const obstruction = await entriesIn(dir, used);
+    if (obstruction) return obstruction;
+  }
 
   for (const [file, what] of [
     ['folders.json', 'chat folders'],
@@ -516,15 +526,17 @@ export async function stateRootObstruction(root: string = userDataRoot()): Promi
     ['tasks.json', 'scheduled tasks'],
     ['connected-folders.json', 'connected folders']
   ] as const) {
-    const raw = await readFile(join(root, file), 'utf8').catch((error) => {
-      // As above: absent is what a fresh root looks like, unreadable is a store
-      // this cannot vouch for and clears the import over anyway.
-      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-        degrade('import', `treated an unreadable ${file} as empty`, error);
-      }
-      return null;
-    });
-    if (raw === null) continue;
+    let raw: string | null;
+    try {
+      raw = await readFile(join(root, file), 'utf8');
+    } catch (error) {
+      // As above: absent is what a fresh root looks like; unreadable is a store
+      // this cannot vouch for, and vouching for it anyway is what clears the
+      // import to unpack over it.
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
+      degrade('import', `refused an import into a root whose ${file} would not open`, error);
+      return `${file} is there and would not open, so it cannot be told apart from a Stem that has been used`;
+    }
     try {
       const parsed = JSON.parse(raw) as unknown;
       if (parsed && typeof parsed === 'object' && Object.values(parsed).some((v) => Array.isArray(v) ? v.length > 0 : v && typeof v === 'object' && Object.keys(v).length > 0)) {
@@ -549,10 +561,11 @@ export async function stateRootObstruction(root: string = userDataRoot()): Promi
     } catch (error) {
       // A database with no tables in it yet is a boot nobody used, and the signals
       // above are the ones that matter. A database that is there and will not open
-      // is the other case: "not evidence of use" is then a guess, and the import it
-      // clears unpacks a second Stem on top of the memory it could not read.
+      // is the other case: "not evidence of use" is then a guess, and an import
+      // cleared on a guess unpacks a second Stem on top of memory it never read.
       if (!/no such table/i.test(String(error))) {
-        degrade('import', 'treated an unreadable memory database as empty', error);
+        degrade('import', 'refused an import into a root whose memory database would not open', error);
+        return 'recall.sqlite is there and would not open, so it cannot be told apart from a Stem that has been used';
       }
     } finally {
       db?.close();
@@ -852,7 +865,7 @@ export async function importState(options: { archive: string; passphrase: string
   const obstruction = await stateRootObstruction(root);
   if (obstruction) {
     throw new Error(
-      `${root} is already a Stem that has been used — ${obstruction}.\n` +
+      `${root} cannot be imported into — ${obstruction}.\n` +
         'Importing on top of it would mix the two together. Move it aside first:\n' +
         `  mv "${root}" "${root}.before-import"\n` +
         'and run this again. Keeping the old directory is the rollback.'
@@ -866,7 +879,18 @@ export async function importState(options: { archive: string; passphrase: string
   // decline to import into a second time. Validating the whole archive first
   // would mean reading every byte of it twice for a case that only arises when
   // somebody hands you a hostile file.
-  const landedMembers = await extractTar(options.archive, root);
+  // Timestamps are not decoration in a state root: the Inbox reads a chat's mtime
+  // as when something last happened in it. If they could not be restored, every
+  // restored chat would arrive at unpack time — after the baseline that travelled
+  // inside the archive — and the Inbox would open on thousands of unread threads
+  // for turns nobody took. Re-stamping the baseline is the same clean slate a
+  // first launch gets.
+  let timesLost = false;
+  const landedMembers = await extractTar(options.archive, root, {
+    onTimesUnrestored: () => {
+      timesLost = true;
+    }
+  });
   const files = landedMembers.filter((m) => m.type === 'file');
 
   // Whether the data key opened is the single fact the credential half of the
@@ -892,6 +916,15 @@ export async function importState(options: { archive: string; passphrase: string
   // with nobody watching. (PiRuntime repairs a stray one on resume as well, for
   // state that came over before this pass existed.)
   await adoptSessionCwds(join(root, 'pi-home', 'sessions'), join(root, 'workspace'));
+
+  if (timesLost) {
+    await restampInboxBaseline().catch((error) =>
+      // The import still succeeded; what is left is an Inbox that opens on every
+      // restored chat marked unread. Worth a line, because from the user's side
+      // that looks like the import having done something to their chats.
+      degrade('import', 'left the restored chats looking unread in the Inbox', error)
+    );
+  }
 
   const assessment = await assess(root, secrets);
 

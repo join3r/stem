@@ -597,17 +597,43 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
   };
 }
 
+async function loadSettings(): Promise<ServerSettings> {
+  return coerce(JSON.parse(await readFile(settingsStorePath(), 'utf8')) as Partial<ServerSettings>);
+}
+
+/**
+ * Read for display and for decisions. Anything unreadable reads as defaults,
+ * because a settings screen that will not open is worse than one showing the
+ * factory values — and every caller here only reads.
+ */
 export async function readSettings(): Promise<ServerSettings> {
   try {
-    return coerce(JSON.parse(await readFile(settingsStorePath(), 'utf8')) as Partial<ServerSettings>);
+    return await loadSettings();
   } catch (error) {
-    // Defaults are exactly what a first launch looks like, and the next write
-    // persists them: a settings.json that is there and will not read costs the
-    // user their custom instructions, their model choices and their API keys.
+    // Defaults are exactly what a first launch looks like, so ENOENT says nothing.
     if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
       degrade('settings', 'fell back to default settings', error);
     }
     return coerce(null);
+  }
+}
+
+/**
+ * Read as the first half of a read-modify-write, where the forgiving version is
+ * the bug: the mutators below persist whatever this returns, so defaults from a
+ * settings.json that is merely unreadable — EACCES after a permission change,
+ * EIO on a failing disk — go straight back to disk over the user's custom
+ * instructions, model choices, retrieval config and local-provider API keys.
+ * Absent is still a first launch and still defaults; anything else refuses, and
+ * the mutation fails visibly instead of quietly costing the user their setup.
+ */
+async function readForUpdate(): Promise<ServerSettings> {
+  try {
+    return await loadSettings();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return coerce(null);
+    degrade('settings', 'refused to write settings over a file it could not read', error);
+    throw error;
   }
 }
 
@@ -640,7 +666,7 @@ async function writeSettings(settings: ServerSettings): Promise<void> {
  */
 export function updateQuickChat(patch: Partial<QuickChatSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     // The cast is what lets the machine-owned keys through to `coerce`, which is
     // the single place that decides what settings.json is allowed to hold.
     const next = coerce({ ...cur, quickChat: { ...cur.quickChat, ...patch } } as Partial<ServerSettings>);
@@ -652,7 +678,7 @@ export function updateQuickChat(patch: Partial<QuickChatSettings>): Promise<Serv
 /** Patch the web-search toggles/backend and persist; returns full settings. */
 export function updateWebSearch(patch: Partial<WebSearchSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({ ...cur, webSearch: { ...cur.webSearch, ...patch } });
     await writeSettings(next);
     return next;
@@ -662,7 +688,7 @@ export function updateWebSearch(patch: Partial<WebSearchSettings>): Promise<Serv
 /** Set the main-composer Escape-to-retract behavior and persist; returns full settings. */
 export function updateEscapeAction(action: EscapeAction): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({ ...cur, escapeAction: action });
     await writeSettings(next);
     return next;
@@ -672,7 +698,7 @@ export function updateEscapeAction(action: EscapeAction): Promise<ServerSettings
 /** Patch the memory-model setting and persist; returns the full settings. */
 export function updateMemorySettings(patch: Partial<MemoryModelSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({ ...cur, memory: { ...cur.memory, ...patch } });
     await writeSettings(next);
     return next;
@@ -682,7 +708,7 @@ export function updateMemorySettings(patch: Partial<MemoryModelSettings>): Promi
 /** Patch the standing custom instructions (per surface) and persist; returns full settings. */
 export function updateCustomInstructions(patch: Partial<CustomInstructionsSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({ ...cur, customInstructions: { ...cur.customInstructions, ...patch } });
     await writeSettings(next);
     return next;
@@ -692,7 +718,7 @@ export function updateCustomInstructions(patch: Partial<CustomInstructionsSettin
 /** Patch the skills model/effort/mode settings and persist; returns the full settings. */
 export function updateSkillsSettings(patch: Partial<SkillsSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({ ...cur, skills: { ...cur.skills, ...patch } });
     await writeSettings(next);
     return next;
@@ -702,7 +728,7 @@ export function updateSkillsSettings(patch: Partial<SkillsSettings>): Promise<Se
 /** Patch the Chats panel settings (subject mode/model, preview lines) and persist. */
 export function updateChatsSettings(patch: Partial<ChatsSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({ ...cur, chats: { ...cur.chats, ...patch } });
     await writeSettings(next);
     return next;
@@ -712,7 +738,7 @@ export function updateChatsSettings(patch: Partial<ChatsSettings>): Promise<Serv
 /** Patch the scheduled-task settings (notify prominence) and persist; returns full settings. */
 export function updateTasksSettings(patch: Partial<TasksSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({ ...cur, tasks: { ...cur.tasks, ...patch } });
     await writeSettings(next);
     return next;
@@ -722,7 +748,7 @@ export function updateTasksSettings(patch: Partial<TasksSettings>): Promise<Serv
 /** Patch the command-execution policy and persist; returns the full settings. */
 export function updateExecSettings(patch: Partial<ExecSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({ ...cur, exec: { ...cur.exec, ...patch } });
     await writeSettings(next);
     return next;
@@ -740,7 +766,7 @@ export function updateExecSettings(patch: Partial<ExecSettings>): Promise<Server
  */
 export function markOnboardingCompleted(): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({ ...cur, onboarding: { completed: true } });
     await writeSettings(next);
     return next;
@@ -750,7 +776,7 @@ export function markOnboardingCompleted(): Promise<ServerSettings> {
 /** Patch the app-level model defaults ('provider/modelId' or null) and persist. */
 export function updateDefaults(patch: Partial<DefaultsSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({ ...cur, defaults: { ...cur.defaults, ...patch } });
     await writeSettings(next);
     return next;
@@ -853,7 +879,7 @@ export async function skillsRunOf(): Promise<RoleRun> {
 /** Patch one local provider (Ollama / LM Studio / custom) and persist; returns the full settings. */
 export function updateLocalProvider(id: LocalProviderId, patch: Partial<LocalProviderSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({
       ...cur,
       localProviders: { ...cur.localProviders, [id]: { ...cur.localProviders[id], ...patch } }
@@ -866,7 +892,7 @@ export function updateLocalProvider(id: LocalProviderId, patch: Partial<LocalPro
 /** Patch the retrieval endpoints (deep-merged per stage) and persist; returns full settings. */
 export function updateRetrievalSettings(patch: PartialRetrievalSettings): Promise<ServerSettings> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const next = coerce({
       ...cur,
       retrieval: {
@@ -892,7 +918,7 @@ export function updateRetrievalSettings(patch: PartialRetrievalSettings): Promis
  */
 export function saveCustomModel(stage: 'embed' | 'rerank', raw: unknown): Promise<CustomModelResult> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     let retrieval: RetrievalSettings;
     if (stage === 'embed') {
       const model = coerceCustomEmbedModel(raw);
@@ -937,7 +963,7 @@ export function coerceCustomModel(
  */
 export function removeCustomModel(stage: 'embed' | 'rerank', id: string): Promise<CustomModelResult> {
   return enqueue(async () => {
-    const cur = await readSettings();
+    const cur = await readForUpdate();
     const embed = stage === 'embed';
     const selected = embed ? cur.retrieval.embeddings.localModel : cur.retrieval.reranker.localModel;
     // Refused while selected, rather than quietly reverting: with the entry gone

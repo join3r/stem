@@ -123,16 +123,37 @@ function update(mutate: (store: InboxFile) => void): Promise<InboxState> {
     } catch (err) {
       // Unlike readInbox this is about to write what it read back out, so an
       // unreadable file here is where the read, archived and snoozed state of
-      // every thread actually goes. (ENOENT is a first write on a fresh install,
-      // before anything has read the store.)
+      // every thread actually goes — plus a fresh `baseline: Date.now()`, which
+      // marks every existing thread read on the way past. Refuse: one archive
+      // click that reports a failure is cheaper than a silently emptied inbox.
+      // (ENOENT is a first write on a fresh install, before anything has read
+      // the store, and is the one case where an empty store is the truth.)
       if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-        degrade('inbox', 'replaced the inbox with an empty one', err);
+        degrade('inbox', 'refused to write the inbox over a file it could not read', err);
+        throw err;
       }
       store = coerce({}, Date.now());
     }
     mutate(store);
     await writeFileAtomic(store);
     return store;
+  });
+}
+
+/**
+ * Mark everything that already exists as seen, by moving the baseline to now.
+ *
+ * The one caller is the import, and only when the restored files' timestamps
+ * could not be put back: the archive carries `inbox.json` inside it, so its
+ * baseline is the one the old machine stamped, and thousands of chats left at
+ * unpack time all sort after it — every chat arriving unread and top of the list
+ * for turns nobody took. This is the same clean slate a first launch gets, and
+ * for the same reason: a badge count nobody can burn down is a badge nobody
+ * reads again.
+ */
+export function restampInboxBaseline(at: number = Date.now()): Promise<InboxState> {
+  return update((store) => {
+    store.baseline = at;
   });
 }
 

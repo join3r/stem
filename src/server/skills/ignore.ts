@@ -29,19 +29,27 @@ const HEADER = [
   '# only way to keep one out of the prompt.'
 ];
 
-/** Slugs of every skill directory carrying a `.disabled` marker. */
-export function disabledSlugs(root = skillsRoot()): string[] {
+/**
+ * Slugs of every skill directory carrying a `.disabled` marker, or `null` when
+ * the directory could not be enumerated at all.
+ *
+ * The null matters: an empty list means "nothing is disabled", which
+ * {@link syncSkillsIgnore} acts on by deleting the ignore file. One transient
+ * EACCES answering `[]` would put every disabled and curator-archived skill back
+ * in the backend's prompt, with nothing to rebuild the file until the next
+ * toggle. A missing root is not that case — there are no skills at all, so
+ * nothing is hidden, and `[]` is the truth.
+ */
+export function disabledSlugs(root = skillsRoot()): string[] | null {
   let entries: string[];
   try {
     entries = readdirSync(root, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name);
   } catch (error) {
-    // No root yet means nothing is disabled either. Any other failure is worse
-    // than it looks: `syncSkillsIgnore` reads an empty list as "nothing to hide"
-    // and deletes the ignore file, putting every archived skill back in the prompt.
     if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-      degrade('skills.ignore', 'found no disabled skills to hide', error);
+      degrade('skills.ignore', 'could not tell which skills are disabled', error);
+      return null;
     }
     return [];
   }
@@ -58,6 +66,13 @@ export function disabledSlugs(root = skillsRoot()): string[] {
 export function syncSkillsIgnore(root = skillsRoot()): string[] {
   const slugs = disabledSlugs(root);
   const file = join(root, SKILLS_IGNORE_FILE);
+  if (slugs === null) {
+    // We do not know what should be hidden, and the branch below for "nothing is
+    // disabled" deletes the file. Leaving the existing one in place keeps hiding
+    // whatever it already hid, which is the last thing we did know.
+    degrade('skills.ignore', 'left the skills ignore file as it was', new Error('the skills directory could not be read'));
+    return [];
+  }
   try {
     if (slugs.length === 0) {
       rmSync(file, { force: true });

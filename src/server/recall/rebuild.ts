@@ -160,7 +160,9 @@ export async function runMemoryRebuildStep(llm: LlmClient): Promise<MemoryRebuil
           llm
         );
         if (getFactsGeneration() !== factsGeneration) return false;
-        if (verdict === 'compatible') return true;
+        // Nothing is memoized here, so an unclassified pair costs only this pass:
+        // raise no conflict on a verdict the model never gave.
+        if (verdict === null || verdict === 'compatible') return true;
         const current = getFactDetails(targetId);
         if (current && current.status === 'active' && current.text === target.text) {
           createFactConflict(targetId, factId, reason);

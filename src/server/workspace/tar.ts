@@ -403,8 +403,17 @@ function safeJoin(root: string, member: string): string {
  * Modes are restored from the archive, so the 0600 files land 0600 — on POSIX.
  * Windows has no such bits and chmod there is close to a no-op, which is the
  * documented limit of this and of every other 0600 in Stem.
+ *
+ * `onTimesUnrestored` fires once if any member's timestamps could not be put
+ * back. The caller needs to know because mtime is not decoration here: it is what
+ * the Inbox reads as "when something last happened in this chat", so files left
+ * at unpack time arrive as a wall of activity nobody caused.
  */
-export async function extractTar(archive: string, root: string): Promise<TarMemberInfo[]> {
+export async function extractTar(
+  archive: string,
+  root: string,
+  opts: { onTimesUnrestored?: () => void } = {}
+): Promise<TarMemberInfo[]> {
   const landed: TarMemberInfo[] = [];
   // Said once rather than once per member: a destination that cannot set times
   // cannot set them for any of the thousands of files in a state root.
@@ -440,6 +449,7 @@ export async function extractTar(archive: string, root: string): Promise<TarMemb
         if (timesReported) return;
         timesReported = true;
         degrade('import', 'left every restored chat looking like it just happened', error);
+        opts.onTimesUnrestored?.();
       });
     }
     landed.push(member);

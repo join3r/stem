@@ -335,13 +335,19 @@ export async function sweepScratchOnce(deps: ScratchSweeperDeps): Promise<string
   });
   if (!chats) return [];
   if (chats.length === 0 && (await listScratchUsage()).some((r) => r.key !== UNFILED_KEY)) return [];
-  const ttlDays = await deps.ttlDays().catch((e) => {
-    // The fallback is a DELETING default: someone who chose "Never", or 90 days,
-    // gets their scratch aged out at 30 on a settings read nobody saw fail.
-    degrade('exec.scratch', `swept on the default ${DEFAULT_SCRATCH_TTL_DAYS}-day TTL instead of the configured one`, e);
-    return DEFAULT_SCRATCH_TTL_DAYS;
-  });
-  return sweepScratch({ ttlDays, chats });
+  // Fail-closed on the TTL too, for the same reason as the chat list: the default
+  // is a DELETING one, so falling back to it would age out at 30 days the scratch
+  // of someone who chose "Never" or 90 — on a settings read nobody saw fail. A
+  // skipped pass costs some disk until the next one.
+  const ttl = await deps.ttlDays().then(
+    (days) => ({ days }),
+    (e) => {
+      degrade('exec.scratch', 'skipped the sweep rather than age folders on a TTL it could not read', e);
+      return null;
+    }
+  );
+  if (!ttl) return [];
+  return sweepScratch({ ttlDays: ttl.days, chats });
 }
 
 /**

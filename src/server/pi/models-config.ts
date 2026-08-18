@@ -252,9 +252,17 @@ function localProviderBlock(
 }
 
 /**
+ * models.json is on disk, intact, and would not open. Unlike the corrupt case
+ * there is nothing quarantined and nothing to rebuild from — the providers are
+ * still in that file — so the caller must not write over it.
+ */
+export class ModelsConfigUnreadable extends Error {}
+
+/**
  * Read models.json, tolerating a missing file (fresh install) and quarantining a
  * corrupt one (preserved as `.corrupt`, like mcp-config) so hand-edits are never
- * silently destroyed.
+ * silently destroyed. Throws {@link ModelsConfigUnreadable} for a file that is
+ * there and will not open, which has no quarantine copy to fall back on.
  */
 export async function readModelsConfig(): Promise<PiModelsConfig> {
   const path = piModelsConfigPath();
@@ -263,10 +271,11 @@ export async function readModelsConfig(): Promise<PiModelsConfig> {
     raw = await readFile(path, 'utf8');
   } catch (error) {
     // ENOENT is the fresh install this tolerates. A file that IS there and did
-    // not open reads the same way — no providers — and the next sync writes that
-    // emptiness back over every local server the user set up.
+    // not open must not read the same way: no providers is what the next sync
+    // writes back over every local server the user set up, and unlike the corrupt
+    // branch below there are no bytes to quarantine first.
     if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-      degrade('pi.modelsConfig', 'read models.json as absent and started from no providers', error);
+      throw new ModelsConfigUnreadable(`models.json could not be read: ${String(error)}`);
     }
     return { providers: {} };
   }
@@ -381,7 +390,17 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 export function syncModelsConfig(): Promise<boolean> {
   return enqueue(async () => {
     const settings = (await readSettings()).localProviders;
-    const config = await readModelsConfig();
+    let config: PiModelsConfig;
+    try {
+      config = await readModelsConfig();
+    } catch (error) {
+      // Only the unreadable case reaches here (a corrupt file quarantines and
+      // returns empty). Syncing from an empty config would delete provider blocks
+      // that are still on disk, so do nothing at all and let the next sync — after
+      // the permission or the disk clears — do the work.
+      degrade('pi.modelsConfig', 'skipped the sync and left models.json as it is', error);
+      return false;
+    }
     const before = JSON.stringify(config);
 
     for (const id of LOCAL_PROVIDER_IDS) {

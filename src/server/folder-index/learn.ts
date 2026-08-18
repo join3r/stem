@@ -239,7 +239,9 @@ export async function learnFolderBatch(
         stampBatch();
         return { processed: batch.docs.length, written };
       }
-      if (verdict === 'compatible') continue;
+      // Unclassified means the model was unreachable, not that they agree — but
+      // nothing is memoized here either way, so the next sweep gets the pair.
+      if (verdict === null || verdict === 'compatible') continue;
       // Re-verify the pair is unchanged before applying a model-proposed relation
       // (ids can be superseded or rewritten while the call was in flight).
       const currentTarget = getFactDetails(targetId);

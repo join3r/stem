@@ -63,25 +63,45 @@ function coerceNaming(raw: unknown): Record<string, NamingState> {
   return out;
 }
 
+async function loadStore(): Promise<ChatStore> {
+  const parsed = JSON.parse(await readFile(chatStorePath(), 'utf8')) as Partial<ChatStore>;
+  return {
+    version: 1,
+    folders: Array.isArray(parsed.folders) ? parsed.folders : [],
+    assignments: parsed.assignments && typeof parsed.assignments === 'object' ? parsed.assignments : {},
+    subjects: coerceMap(parsed.subjects),
+    naming: coerceNaming(parsed.naming)
+  };
+}
+
 export async function readStore(): Promise<ChatStore> {
   try {
-    const parsed = JSON.parse(await readFile(chatStorePath(), 'utf8')) as Partial<ChatStore>;
-    return {
-      version: 1,
-      folders: Array.isArray(parsed.folders) ? parsed.folders : [],
-      assignments: parsed.assignments && typeof parsed.assignments === 'object' ? parsed.assignments : {},
-      subjects: coerceMap(parsed.subjects),
-      naming: coerceNaming(parsed.naming)
-    };
+    return await loadStore();
   } catch (error) {
     // Absent is the real fresh install. A file that is there and will not read is
-    // indistinguishable from one, and the next update() writes this empty store
-    // back over it — taking the folder tree, the subjects and every thread's
-    // naming schedule with it.
+    // indistinguishable from one to a reader, which is survivable — the tree looks
+    // empty until the next launch. It is only fatal on the write path, which uses
+    // readForUpdate below.
     if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
       degrade('chats', 'started from an empty folder store', error);
     }
     return emptyStore();
+  }
+}
+
+/**
+ * The read half of {@link update}. An empty store here is not a degraded view but
+ * a deletion: mutate() edits it and writeStore persists it, taking the folder
+ * tree, the assignments, the model-written subjects and every thread's naming
+ * schedule with it. Absent is still a fresh install; anything else refuses.
+ */
+async function readForUpdate(): Promise<ChatStore> {
+  try {
+    return await loadStore();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return emptyStore();
+    degrade('chats', 'refused to write the chat store over a file it could not read', error);
+    throw error;
   }
 }
 
@@ -110,7 +130,7 @@ async function writeStore(store: ChatStore): Promise<void> {
 /** Read, mutate, persist atomically. All public mutators funnel through here. */
 function update<T>(mutate: (store: ChatStore) => T): Promise<T> {
   return enqueue(async () => {
-    const store = await readStore();
+    const store = await readForUpdate();
     const result = mutate(store);
     await writeStore(store);
     return result;

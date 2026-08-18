@@ -71,6 +71,25 @@ describe('sweepFactAgainstNeighbours', () => {
     expect(relationRows()).toEqual([{ a: stale, b: fresh, verdict: 'b_supersedes_a', origin: 'sweep' }]);
   });
 
+  it('does not memoize a verdict the model never gave', async () => {
+    const other = seedFact('The user has switched to Firefox as their web browser.', [1, 0, 0]);
+    const fresh = seedFact('The user uses Arc Browser on macOS.', [0.95, 0.3, 0]);
+    const down: LlmClient = { complete: async () => { throw new Error('model unreachable'); } };
+
+    expect(await sweepFactAgainstNeighbours(fresh, MODEL, down, { directUser: true })).toBe(true);
+    // 'compatible' used to be the failure answer AND the memoized one, so an
+    // outage wrote "these two agree" into fact_relation_checks and
+    // isRelationChecked then blocked the pair from ever being looked at again.
+    expect(relationRows()).toEqual([]);
+    expect(store.getFactDetails(other)?.status).toBe('active');
+
+    // The pair is simply unjudged, so a working model still gets to judge it.
+    const llm = verdictLlm('b_supersedes_a');
+    expect(await sweepFactAgainstNeighbours(fresh, MODEL, llm, { directUser: true })).toBe(true);
+    expect(llm.calls).toBe(1);
+    expect(store.getFactDetails(other)?.status).toBe('superseded');
+  });
+
   it('raises a conflict instead when the new fact is not directly user-stated', async () => {
     const stale = seedFact('The user has switched to Firefox as their web browser.', [1, 0, 0]);
     const fresh = seedFact('The user uses Arc Browser on macOS.', [0.95, 0.3, 0]);

@@ -764,19 +764,20 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       try {
         // Gate native web search for THIS turn (main vs Quick Chat share one process,
         // so the bridge can't tell them apart — we set the gate just before the prompt).
-        await writeNativeSearchGate(input.webSearch ?? true).catch((e) =>
-          // The bridge reads the file, not this argument. A write that does not
-          // land leaves whatever the previous turn wrote — so search stays on
-          // for a turn the user turned it off in, or off for one they turned it
-          // on in, and the two contexts sharing the process make either likely.
-          degrade('pi.gates', 'ran the turn on the previous turn\'s web-search setting', e)
-        );
-        await writeServiceTierGate(input.serviceTier ?? null).catch((e) =>
-          // Same file-not-argument contract, and this one is billed: Fast and
-          // Standard are the two settings, and the turn runs on whichever the
-          // last write left behind.
-          degrade('pi.gates', 'ran the turn on the previous turn\'s service tier', e)
-        );
+        // Both gates fail the turn rather than degrading it. The bridge reads the
+        // FILE, not these arguments, so a write that does not land leaves whatever
+        // the previous turn wrote — and main and Quick Chat share one process, so
+        // "the previous turn" is routinely the other context's. Running anyway
+        // means search on for a turn the user turned it off in, or the wrong
+        // service tier, which is billed. Refusing is visible and costs one retry.
+        await writeNativeSearchGate(input.webSearch ?? true).catch((e) => {
+          degrade('pi.gates', 'refused the turn rather than run it on the previous web-search setting', e);
+          throw new Error(`Could not set this turn's web-search mode: ${e instanceof Error ? e.message : String(e)}`);
+        });
+        await writeServiceTierGate(input.serviceTier ?? null).catch((e) => {
+          degrade('pi.gates', 'refused the turn rather than run it on the previous service tier', e);
+          throw new Error(`Could not set this turn's service tier: ${e instanceof Error ? e.message : String(e)}`);
+        });
 
         const buildStart = Date.now();
         const { message, images } = await this.buildMessage(input, threadId, turn.recall, turnId);
@@ -2736,14 +2737,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   ): Promise<{ model?: string; effort?: string; contextTokens?: number }> {
     const file = await this.resolveSessionFile(threadId);
     if (!file) return {};
-    const text = await readFile(file, 'utf8').catch((e) => {
-      // '' parses to {}, which is indistinguishable here from a chat that has
-      // never chosen a model — so the scheduled run pins nothing and, with no
-      // contextTokens, skips the pre-run condense that exists precisely for a
-      // thread this long. The Tasks tab shows the same emptiness as a default.
-      degrade('pi.thread', 'read the chat as having no saved model, effort or context size', e);
-      return '';
-    });
+    // No `.catch` here on purpose. '' parses to {}, which is indistinguishable
+    // from a chat that has never chosen a model — so the scheduled run would pin
+    // nothing and, with no contextTokens, skip the pre-run condense that exists
+    // precisely for a thread this long. Both callers already handle a rejection:
+    // startTurn degrades and runs on the defaults knowingly, and the Tasks tab
+    // falls back to showing no override.
+    const text = await readFile(file, 'utf8');
     let model: string | undefined;
     let effort: string | undefined;
     let usageTokens: number | undefined;
@@ -3456,9 +3456,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     let raw: string | null = null;
     try {
       raw = await readFile(file, 'utf8');
-    } catch {
-      // quiet: absent on first run is the expected case — the file is written
-      // with the defaults below.
+    } catch (e) {
+      // Absent on first run is the expected case — the file is written with the
+      // defaults below. A settings.json that IS there and would not open must not
+      // take that branch: `raw = null` starts from `{}` and writes a fresh file,
+      // destroying exactly the hand-authored content the malformed-JSON branch
+      // below exists to protect.
+      if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        degrade('pi.settings', 'left pi settings.json untouched', e);
+        return;
+      }
       raw = null;
     }
     let settings: Record<string, unknown>;

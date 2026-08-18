@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { addMcpServer, removeMcpServer } from '../../src/server/pi/mcp';
 import { persistBridgeOAuthToken } from '../../src/server/pi/stem-mcp-extension.mjs';
 import {
@@ -7,6 +7,7 @@ import {
   deleteOAuthTokenIfMatches,
   ensureMcpConfig,
   mcpServerAuthIdentity,
+  McpConfigUnreadable,
   migrateLegacyOAuthTokens,
   readMcpConfig,
   readOAuthTokens,
@@ -66,6 +67,24 @@ describe('a credential that no longer decrypts', () => {
     expect(readFileSync(piMcpConfigPath(), 'utf8')).not.toContain('lostSecrets');
   });
 
+  it('names a lost OAuth client secret too, not just headers and env', async () => {
+    writeFileSync(
+      piMcpConfigPath(),
+      JSON.stringify({
+        servers: {
+          remote: { url: 'https://server.example/mcp', oauthClientSecret: UNREADABLE }
+        }
+      })
+    );
+
+    const server = (await readMcpConfig()).servers.remote;
+    // Dropping it is right; dropping it silently is what made a lost credential
+    // read as a deleted one — the MCP tab's "lost a saved credential" line comes
+    // straight off `lostSecrets`, and it never appeared for this field.
+    expect(server.oauthClientSecret).toBeUndefined();
+    expect(server.lostSecrets).toEqual(['oauthClientSecret']);
+  });
+
   it('says nothing at all when everything decrypts', async () => {
     await addMcpServer({
       name: 'files',
@@ -76,6 +95,45 @@ describe('a credential that no longer decrypts', () => {
     const server = (await readMcpConfig()).servers.files;
     expect(server.env).toEqual({ API_KEY: 'readable' });
     expect(server.lostSecrets).toBeUndefined();
+  });
+});
+
+describe('an mcp.json that is there and will not open', () => {
+  // A directory where the file belongs fails every read with a non-ENOENT error,
+  // on every platform, without permission games — and it stands in for the real
+  // causes: EACCES after a permission change, EIO on a failing disk, EBUSY
+  // behind a scanner.
+  const asDirectory = () => {
+    rmSync(piMcpConfigPath(), { force: true });
+    mkdirSync(piMcpConfigPath(), { recursive: true });
+  };
+
+  it('is not a first run, and is not treated as one', async () => {
+    asDirectory();
+    try {
+      await expect(readMcpConfig()).rejects.toThrow(McpConfigUnreadable);
+    } finally {
+      rmSync(piMcpConfigPath(), { recursive: true, force: true });
+    }
+  });
+
+  it('leaves the file alone instead of rebuilding it without the user’s servers', async () => {
+    await addMcpServer({ name: 'files', transport: 'stdio', command: '/usr/bin/mcp-files' });
+    const before = readFileSync(piMcpConfigPath(), 'utf8');
+
+    // Simulate the same failure on the read while leaving the bytes intact: the
+    // whole point is that the servers are still on disk and still recoverable,
+    // so refreshing the recall entry from an empty config would be a permission
+    // slip turned into permanent loss.
+    const original = readFileSync(piMcpConfigPath());
+    rmSync(piMcpConfigPath(), { force: true });
+    mkdirSync(piMcpConfigPath(), { recursive: true });
+    await ensureMcpConfig(); // must not throw, and must not write
+    rmSync(piMcpConfigPath(), { recursive: true, force: true });
+    writeFileSync(piMcpConfigPath(), original);
+
+    expect(readFileSync(piMcpConfigPath(), 'utf8')).toBe(before);
+    expect((await readMcpConfig()).servers.files).toBeTruthy();
   });
 });
 

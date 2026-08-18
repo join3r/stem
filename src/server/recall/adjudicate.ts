@@ -5,7 +5,7 @@ import { PENDING_KEY } from './distill';
 import type { LlmClient } from './llm';
 import { enqueueNeighbourChecksFor, evidenceDateOf } from './reconcile';
 import { recallStore, type AdjudicationDecision, type ConflictForAdjudication } from './store';
-const { applyAdjudication, bumpAdjudicationAttempts, getConflictsForAdjudication, getFactsGeneration, getMeta, setMeta } = recallStore;
+const { applyAdjudication, bumpAdjudicationAttempts, getConflictsForAdjudication, getFactsGeneration, getMeta, refundAdjudicationAttempt, setMeta } = recallStore;
 
 // The autonomous conflict adjudicator: a second look at open conflicts with more
 // context than the creation-time reconciler had (evidence excerpts, dates, the
@@ -109,11 +109,12 @@ export async function adjudicateOpenConflicts(llm: LlmClient): Promise<{ resolve
       try {
         decision = parseAdjudication(await llm.complete(buildPrompt(conflict)), conflict);
       } catch (error) {
-        // The attempt was counted before the call, so a model that is merely
-        // down still spends this conflict's budget: three such passes and it is
-        // manual-only forever. In `skipped` that is indistinguishable from the
-        // model reading the pair and saying "unclear".
-        degrade('recall.adjudicate', 'left the conflict open and spent one of its attempts', error);
+        // Give the attempt back. It is counted before the call so a crash
+        // mid-call still costs one; an error we caught is the other case, and
+        // spending budget on a model that is merely down is what drops a
+        // conflict to manual-only after three unlucky passes.
+        refundAdjudicationAttempt(conflict.id);
+        degrade('recall.adjudicate', 'left the conflict open without spending an attempt', error);
         decision = null;
       }
       // Reset is a hard cancellation barrier; conflict/fact ids can be reused after.

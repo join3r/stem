@@ -63,20 +63,37 @@ function coerce(raw: unknown): ScheduledTask | null {
   };
 }
 
+async function loadTasks(): Promise<ScheduledTask[]> {
+  const parsed = JSON.parse(await readFile(tasksStorePath(), 'utf8')) as Partial<TasksStore>;
+  return Array.isArray(parsed.tasks) ? parsed.tasks.map(coerce).filter((t): t is ScheduledTask => !!t) : [];
+}
+
 export async function readTasks(): Promise<ScheduledTask[]> {
   try {
-    const parsed = JSON.parse(await readFile(tasksStorePath(), 'utf8')) as Partial<TasksStore>;
-    return Array.isArray(parsed.tasks)
-      ? parsed.tasks.map(coerce).filter((t): t is ScheduledTask => !!t)
-      : [];
+    return await loadTasks();
   } catch (error) {
     // "No tasks" is what a fresh install looks like, so a store that is there and
-    // will not read stops every schedule without a word — and the next
-    // updateTasks writes the empty list back over it.
+    // will not read stops every schedule without a word.
     if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
       degrade('tasks', 'reported no scheduled tasks', error);
     }
     return [];
+  }
+}
+
+/**
+ * The read half of {@link updateTasks}, where an empty fallback is not a degraded
+ * answer but a deletion: mutate() folds the new task into "no tasks" and the write
+ * below persists exactly that, so one unreadable store costs the user every
+ * schedule they have. Absent is still a first run; anything else refuses.
+ */
+async function readForUpdate(): Promise<ScheduledTask[]> {
+  try {
+    return await loadTasks();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
+    degrade('tasks', 'refused to write the task list over a store it could not read', error);
+    throw error;
   }
 }
 
@@ -103,14 +120,33 @@ async function writeTasks(tasks: ScheduledTask[]): Promise<void> {
 /** Read, mutate the task array, persist atomically; returns the mutate() result. */
 export function updateTasks<T>(mutate: (tasks: ScheduledTask[]) => { tasks: ScheduledTask[]; result: T }): Promise<T> {
   return enqueue(async () => {
-    const current = await readTasks();
+    const current = await readForUpdate();
     const { tasks, result } = mutate(current);
     await writeTasks(tasks);
     return result;
   });
 }
 
-/** Overwrite the whole list (used by the scheduler after recomputing run bookkeeping). */
+/**
+ * Overwrite the whole list (used by the scheduler after recomputing run bookkeeping).
+ *
+ * The list handed in came from a `readTasks()` at scheduler boot, which answers
+ * `[]` for a store that is merely unreadable — so a blind overwrite here is the
+ * same deletion `updateTasks` refuses, arriving by a different door. Check that
+ * the store reads before replacing it, and skip the write rather than reject:
+ * one caller fires this without awaiting, and the cost of skipping is bookkeeping
+ * that reruns a task after a restart, against every schedule gone.
+ */
 export function saveTasks(tasks: ScheduledTask[]): Promise<void> {
-  return enqueue(() => writeTasks(tasks));
+  return enqueue(async () => {
+    try {
+      await loadTasks();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        degrade('tasks', 'did not persist the task list over a store it could not read', error);
+        return;
+      }
+    }
+    await writeTasks(tasks);
+  });
 }

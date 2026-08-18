@@ -62,6 +62,7 @@ claim `npm run probe:quiet` can go and check.
 - [x] **Round 2** — the 119 arrow-form `.catch(… => …)` handlers the first scanner
       could not see: 52 became `degrade()`, 67 got a `// quiet:` note
 - [x] Re-run the probe over the swept tree — 159 sites, result below
+- [x] Fix every defect the sweep found, with a test that fails without the fix
 - [ ] Re-read the 70 `// quiet:` notes no test would contradict (list below)
 - [ ] Decide whether the ledger earns a diagnostics surface, or whether the log
       plus the activity marker is enough
@@ -218,8 +219,18 @@ a note to the wrong site, which is worse than an occasional small refactor.
 
 ## What the sweep found
 
-Nine defects, none fixed: the sweep's rule was to add reporting and report bugs, not
-to change behaviour. In rough order of what they cost.
+Nineteen defects across sixteen files. The sweep itself fixed none of them — its rule
+was to add reporting and report bugs, not to change behaviour — and they were all
+fixed in the pass immediately after, listed here with what changed. In rough order of
+what they cost.
+
+One shape accounts for most of them, and it is worth naming on its own: **a read that
+answers "empty" for a file that is merely unreadable, feeding a write.** Absent and
+unreadable are not the same fact. Absent is a first run and empty is the truth;
+unreadable means the data is still there, on disk, intact, and the one thing you must
+not do is write over it. Every store below now splits the two — a forgiving
+`readX()` for display, a strict `readForUpdate()` for the read half of a
+read-modify-write — and the mutators refuse rather than persist a fallback.
 
 **Read-fallback-then-write, which loses user data.** Five stores fall back to an empty
 value when a read fails, and the same function then writes that value back. Corruption
@@ -230,14 +241,21 @@ in the same catch.
 - `workspace/settings.ts:602` — `readSettings` returns all defaults, and every mutator
   writes it back: custom instructions, model overrides, retrieval and memory config,
   and local-provider API keys, replaced by defaults on the next settings change.
+  **Fixed:** all 15 mutators read through `readForUpdate()`, which refuses.
 - `workspace/tasks.ts:71` — every scheduled task deleted on the next edit. Independently,
   a scheduler booting off an empty read schedules nothing and says nothing.
+  **Fixed:** `updateTasks` refuses, and `saveTasks` — the scheduler's whole-list
+  overwrite, which arrives by a different door and is fired without `await` — checks
+  the store reads before replacing it and skips the write rather than rejecting.
 - `workspace/chats.ts:75` — folder tree, assignments, model-written subjects, naming
-  schedules.
+  schedules. **Fixed:** `update()` refuses.
 - `workspace/inbox.ts:112` — the read inside `update()` writes a store with
   `baseline: Date.now()`, wiping archived/snoozed/read for every thread.
+  **Fixed:** `update()` refuses; one archive click reporting a failure is cheaper
+  than a silently emptied inbox.
 - `workspace/connected-folders.ts:57` — an empty registry, then protected-roots
-  republished from it.
+  republished from it. **Fixed:** `update()` refuses, so the read-only protection
+  cannot be republished away either.
 
 **Two branches disagreeing about the same file.**
 
@@ -247,10 +265,15 @@ in the same catch.
   every user-added server. An EACCES/EIO/EBUSY on a file that *is* there lands on
   exactly that path, with no `.corrupt` sibling written. `pi/models-config.ts:265` has
   the identical shape for local providers.
+  **Fixed:** `readMcpConfig` throws `McpConfigUnreadable` — distinct from
+  `McpConfigCorrupt`, whose bytes ARE preserved — and `ensureMcpConfig` returns
+  without writing for it, leaving servers that are still on disk recoverable.
+  `readModelsConfig` throws `ModelsConfigUnreadable` and `syncModelsConfig` skips
+  the sync.
 - `pi/runtime.ts:3338` — `ensurePiSettingsDefaults` sets `raw = null` for any read
   failure, so on EACCES it starts from `{}` and writes a fresh `settings.json`,
   destroying the hand-authored content the malformed-JSON branch six lines below
-  exists to protect.
+  exists to protect. **Fixed:** only ENOENT takes that branch.
 
 **A flag set outside the try it guards.**
 
@@ -258,7 +281,8 @@ in the same catch.
   `facts_index_built = '1'` outside the try, so a rebuild that throws still marks the
   index built. Every fact predating the index stays unsearchable for the life of the
   store, and nothing retries. The trigram backfill directly below writes its flag
-  inside the try; the two were plainly meant to match.
+  inside the try; the two were plainly meant to match. **Fixed:** the flag moved
+  inside, so a failed rebuild is retried on the next open.
 
 **A failure-derived verdict, memoized.**
 
@@ -266,10 +290,13 @@ in the same catch.
   and callers memoize it (`reconcile.ts:263`, `distill.ts:871`, `reconcile.ts:337`). A
   model outage writes "these two facts agree" into `fact_relation_checks`, and
   `isRelationChecked` then blocks the pair from ever being classified again once the
-  model recovers.
+  model recovers. **Fixed:** `classifyRelation` answers `null` — a third thing,
+  distinct from the verdict — and none of its five call sites memoizes a null.
 - `recall/adjudicate.ts:103` — attempts are counted before the model call, so a model
   that is merely down burns all three on every conflict and drops them permanently to
-  manual-only.
+  manual-only. **Fixed:** a new `refundAdjudicationAttempt` gives the attempt back on
+  a caught error. The pre-count still stands for a crash mid-call, which is what it
+  was for — a caught error is by definition the other case.
 
 **A read failure that deletes the thing it failed to read.**
 
@@ -277,9 +304,13 @@ in the same catch.
   `syncSkillsIgnore` reads an empty list as "nothing to hide" and `rmSync`s the ignore
   file. One transient EACCES puts every disabled and curator-archived skill back in
   the backend's prompt, and nothing rebuilds the file until the next toggle.
+  **Fixed:** `disabledSlugs` answers `null` for "could not tell", distinct from `[]`
+  for "nothing is disabled", and `syncSkillsIgnore` leaves the file alone on a null.
 - `skills/usage.ts:80` — a corrupt sidecar is not just lost history: `readUsage`
   returns a fresh value and the next tick writes it over the file, destroying every
   skill's counters and flattening the ranking blend across the library.
+  **Fixed:** an unreadable sidecar stops the mutators writing at all; a corrupt one is
+  quarantined to `.corrupt` first, the same treatment mcp.json and models.json get.
 
 **Success reported for work that did not happen.**
 
@@ -287,15 +318,72 @@ in the same catch.
   makes `copyModelFiles` copy a subset, and `importLocalModels` still returns
   `{ ok: true }` with a copied count. `missingModelFiles` validates the source before
   the copy; nothing re-checks the destination after. The model then dies at ONNX load
-  time on the machine that had no way to fetch it.
+  time on the machine that had no way to fetch it. **Fixed:** both import paths re-run
+  `missingModelFiles` against the CACHE after copying, and fail by name.
 - `workspace/state-transfer.ts:489` — `stateRootObstruction` treats a `recall.sqlite`
   it cannot open as "no evidence of use", so `importState` unpacks a second Stem over
   memory it merely failed to read — the merge the doc comment above it says there is
-  deliberately no `--force` for.
+  deliberately no `--force` for. **Fixed:** every "cannot tell" in
+  `stateRootObstruction` — an unlistable folder, an unreadable store file, a
+  `recall.sqlite` that will not open — now returns an obstruction and refuses the
+  import. Being wrong in that direction costs a moved directory; being wrong the other
+  way is unrecoverable by construction.
 - `pi/mcp-config.ts:684` — in `decryptServerSecrets` an `oauthClientSecret` that will
   not decrypt is deleted but never pushed onto `lost`, so the MCP tab's "lost a saved
   credential" line never appears for it. `headers` and `env` do it correctly two lines
-  above.
+  above. **Fixed:** it goes on `lost` with the rest.
+
+**Six more the round-2 arrow sweep turned up, fixed in the same pass.**
+
+- `pi/session-cwd.ts:85` — the second, undocumented route into the 0.4.x Inbox bug: a
+  failed `stat()` skipped the mtime restore the repair depends on, so a chat repaired
+  on open announced itself as new. **Fixed:** the timestamps now come off the handle
+  `readHeader` already has open, so there is no separate stat left to fail; a `utimes`
+  that still fails says so.
+- `workspace/tar.ts:442` — the same wire at import scale. `inbox.json` travels INSIDE
+  the archive, so its baseline is the old machine's, and every restored chat left at
+  unpack time sorts after it: an Inbox opening on thousands of unread threads for
+  turns nobody took. **Fixed:** `extractTar` tells its caller when timestamps were
+  lost, and `importState` re-stamps the inbox baseline — the same clean slate a first
+  launch gets, and for the same reason.
+- `pi/runtime.ts` (the per-turn gates) — the bridge reads the FILE, not the argument,
+  and main and Quick Chat share one pi process, so a failed gate write runs the turn
+  on the other context's setting. One of the two is billed. **Fixed:** both fail the
+  turn; refusing is visible and costs one retry.
+- `pi/runtime.ts:2645` — `readFile(...).catch(() => '')` made `threadTurnSettings`
+  answer `{}`, indistinguishable from a chat that never chose a model, so a scheduled
+  run pinned nothing and skipped the pre-run condense — at 3am, with nobody watching.
+  **Fixed:** it throws; both callers already handled a rejection.
+- `exec/scratch.ts:338` — the TTL fallback DELETES: "Never" or 90 days silently became
+  30 on a settings read nobody saw fail. **Fixed:** fail-closed, like the chat list
+  directly above it. A skipped pass costs some disk until the next one.
+- `push/index.ts` — the "dropped a dead push token" log was unconditional, asserting a
+  drop that did not happen when the write failed. **Fixed:** it logs the outcome.
+
+### The tests that hold them shut
+
+Every fix above is pinned by a test that fails without it. They are worth listing
+separately because the whole complaint that started this was "testing didn't catch
+it", and the reason it didn't is visible in what these assert: not a return value —
+the broken path and the working path return the same one — but **the file on disk
+still saying what it said before**.
+
+| File | Covers |
+| --- | --- |
+| `tests/unit/unreadable-stores.test.ts` | all five read-modify-write stores, plus the skills ignore file |
+| `tests/unit/session-cwd.test.ts` | the repair keeps a chat's mtime, one chat and a whole import |
+| `tests/unit/mcp-config-regressions.test.ts` | an unreadable mcp.json is not a first run; a lost OAuth client secret is named |
+| `tests/unit/relation-sweep.test.ts` | a verdict the model never gave is not memoized |
+| `tests/unit/adjudicate.test.ts` | a model that is merely down does not spend attempts |
+| `tests/unit/exec-scratch.test.ts` | an unreadable TTL skips the sweep instead of deleting on the default |
+
+Corrupt JSON is the probe in `unreadable-stores`, deliberately. It is realistic (the
+same class as the EACCES/EIO/EMFILE cases these paths are about), deterministic on
+every platform, and — unlike making a file unreadable — it leaves the directory
+perfectly writable, so "the bytes are unchanged afterwards" really does prove the
+write was refused rather than merely impossible. Six of its seven cases fail against
+the pre-fix tree; the seventh is the control that proves the ignore file is still
+deleted when nothing is actually hidden.
 
 ## Two places the rule had to bend
 
@@ -321,8 +409,10 @@ Silence is one of the three failure shapes behind the 0.4.x bugs, and the one th
 mechanises best. The other two are still open:
 
 - **Cross-module contracts on shared mutable state.** Nobody owned "a session file's
-  mtime means the user did something". Wants an "this operation touched only what it
-  claimed" snapshot helper, not a rule about catches.
+  mtime means the user did something". Both of its routes are now closed and pinned by
+  `tests/unit/session-cwd.test.ts` — but that is two cases fixed, not the class. It
+  still wants a "this operation touched only what it claimed" snapshot helper, not a
+  rule about catches.
 - **Unexercised edge states in state machines.** The approval bug was four bugs —
   timeout × queued-behind × late answer × client-away — each one cell of a matrix
   nobody enumerated. Fake timers are already used in 13 test files; the seam exists,

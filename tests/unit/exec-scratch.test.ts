@@ -252,6 +252,21 @@ describe('sweepScratch', () => {
     expect((await listScratchUsage()).map((r) => r.key).sort()).toEqual(['fresh', 'stale']);
   });
 
+  it('skips the pass rather than age folders on a TTL it could not read', async () => {
+    await seed();
+
+    // The old fallback was the DEFAULT ttl, which deletes: someone who chose
+    // "Never", or 90 days, had their scratch aged out at 30 on a settings read
+    // nobody saw fail.
+    expect(
+      await sweepScratchOnce({
+        listChats: async () => [{ threadId: 'stale' }, { threadId: 'fresh' }] as never,
+        ttlDays: () => Promise.reject(new Error('settings unreadable'))
+      })
+    ).toEqual([]);
+    expect((await listScratchUsage()).map((r) => r.key).sort()).toEqual(['fresh', 'stale']);
+  });
+
   it('still sweeps a lone unfiled pile when there are genuinely no chats', async () => {
     mkdirSync(execWorkspaceDir(), { recursive: true });
     writeFileSync(join(execWorkspaceDir(), 'old.bin'), 'junk');
