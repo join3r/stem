@@ -23,6 +23,10 @@ export function readEpisodicLimitBytes(db: DatabaseSync): number {
     const raw = Number.parseInt(row?.value ?? '', 10);
     return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_EPISODIC_MAX_BYTES;
   } catch {
+    // quiet: an unreadable meta table is the same answer as an unset one — the
+    // documented default, which is a safety ceiling nobody configures anyway.
+    // This file runs inside the scan worker, which has no log path of its own;
+    // reporting belongs to the caller that owns the connection.
     return DEFAULT_EPISODIC_MAX_BYTES;
   }
 }
@@ -34,7 +38,8 @@ export function dbSizeBytesFor(dbPath: string): number {
     try {
       total += statSync(p).size;
     } catch {
-      // sidecar (or db) not on disk yet — counts as 0.
+      // quiet: sidecar (or db) not on disk yet — counts as 0. The absence IS the
+      // measurement; a WAL that isn't there occupies nothing.
     }
   }
   return total;

@@ -170,7 +170,9 @@ export function initRecallTasks(deps: {
         // see. Acquisition now happens in settleTurn (skills/settle.ts) off the
         // just-finished turn's real tool trace, which leaves no backlog behind.
       } catch {
-        // non-fatal
+        // quiet: activity.track() already put the failing pass on the popover as
+        // a failed row and rethrew. All this catch does is abandon the rest of
+        // the cycle, which the next debounce runs again from the same watermark.
       } finally {
         distilling = false;
       }
@@ -195,7 +197,7 @@ export function initRecallTasks(deps: {
           detail: `Embedded ${n.toLocaleString()} message${n === 1 ? '' : 's'}`
         }))
         .catch(() => {
-          // Reported by track(); embedding failures stay non-fatal as before.
+          // quiet: reported by track(); embedding failures stay non-fatal as before.
         });
     }, delayMs);
   };
@@ -227,7 +229,7 @@ export function initRecallTasks(deps: {
       }));
       if (res.merged || res.archived || expired) await deps.runtime().requestSkillReload();
     } catch {
-      // non-fatal
+      // quiet: track() already failed the skills.curate row.
     } finally {
       curating = false;
     }
@@ -278,7 +280,7 @@ export function initRecallTasks(deps: {
         (n) => ({ worked: n > 0, detail: `Summarised ${n} chat${n === 1 ? '' : 's'}` })
       );
     } catch {
-      // non-fatal
+      // quiet: track() already failed the row; the interval tick tries again.
     }
   };
   setTimeout(() => void runSummaryBackfill(), 3 * 60_000);
@@ -300,7 +302,8 @@ export function initRecallTasks(deps: {
         (r) => ({ worked: r.enqueued > 0, detail: r.done ? 'Coverage complete' : `Queued ${r.enqueued} pair${r.enqueued === 1 ? '' : 's'}` })
       );
     } catch {
-      // non-fatal
+      // quiet: track() already failed the row, and the cursor did not move — the
+      // next tick picks the same batch up again.
     }
   };
   setTimeout(() => void runRelationSweepBackfill(), 4 * 60_000);

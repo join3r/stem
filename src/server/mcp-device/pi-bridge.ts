@@ -1,3 +1,4 @@
+import { degrade } from '../degrade';
 import { log } from '../log';
 import { readMcpConfig, type PiMcpServer } from '../pi/mcp-config';
 import { deviceMcpRouter, type DeviceMcpRouter } from './router';
@@ -42,6 +43,8 @@ export async function runDeviceMcpBridgeOp(
   try {
     request = JSON.parse(payload ?? '{}') as typeof request;
   } catch {
+    // quiet: the extension is holding a tool call open on the other side of
+    // this, and every path here ends in an error it shows.
     return { ok: false, error: 'Stem could not read that request.' };
   }
   const server = typeof request.server === 'string' ? request.server : '';
@@ -49,7 +52,14 @@ export async function runDeviceMcpBridgeOp(
 
   // A config nobody can read pins nothing: every server is refused by name
   // rather than routed on a guess.
-  const servers = await deps.readServers().catch(() => ({}) as Record<string, PiMcpServer>);
+  const servers = await deps.readServers().catch((err) => {
+    // Refusing is right, but the sentence below then blames the pin — it tells the
+    // model the server "is not configured to run on one of your devices" when the
+    // truth is that mcp.json would not read, which is the same answer it would
+    // give for a server the user really did delete.
+    degrade('mcp-device', 'refused every device-pinned MCP server because the config would not read', err);
+    return {} as Record<string, PiMcpServer>;
+  });
   const deviceId = servers[server]?.location?.deviceId;
   if (!deviceId) {
     // Either the entry is gone or it is a server-located one, which the bridge

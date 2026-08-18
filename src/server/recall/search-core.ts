@@ -14,6 +14,35 @@ import type { DatabaseSync } from 'node:sqlite';
 // It replaces the hand-copied duplicate search logic that previously lived in
 // mcp-server.mjs — behavior changes here reach both processes by construction.
 
+/**
+ * Where a leg says it failed and returned nothing anyway.
+ *
+ * Every FTS and cosine leg below answers a malformed MATCH, a schema drift or a
+ * corrupt vector blob with `[]` — which is also what a healthy store answers for
+ * a question nothing matches. Those two events are only ever told apart if the
+ * leg says something, and this file cannot reach the app's logger: it is bundled
+ * into the standalone MCP server and shared with the scan worker, which is why
+ * the header forbids imports past node:sqlite. So each host installs its own
+ * channel, and the default is the silence this file used to have everywhere.
+ */
+export type CoreDegradeSink = (scope: string, what: string, error: unknown) => void;
+
+let sink: CoreDegradeSink | null = null;
+
+/** Install the host's channel: degrade() in main, stderr in the MCP server. */
+export function setCoreDegradeSink(next: CoreDegradeSink | null): void {
+  sink = next;
+}
+
+function report(scope: string, what: string, error: unknown): void {
+  try {
+    sink?.(scope, what, error);
+  } catch {
+    // quiet: the caller is already inside its own failure path. A sink that
+    // throws must not turn a leg that returned [] into a leg that throws.
+  }
+}
+
 export type CoreRole = 'user' | 'assistant';
 
 /** One ranked hit; `score` is bm25 on FTS output, cosine on semantic, RRF on hybrid. */
@@ -160,6 +189,9 @@ function readMinCosine(db: DatabaseSync, key: string, fallback: number): number 
     const v = Number.parseFloat(row?.value ?? '');
     return Number.isFinite(v) && v >= 0 && v <= 1 ? v : fallback;
   } catch {
+    // quiet: the tunable is optional. A DB whose meta table predates the key —
+    // or the whole table — has nothing to say about it, and the shipped default
+    // is the answer, not a consolation prize.
     return fallback;
   }
 }
@@ -305,7 +337,8 @@ export function ftsSearchMessages(
         ftsScore: r.score as number
       }))
       .filter((h) => h.score <= FTS_SCORE_CEILING);
-  } catch {
+  } catch (e) {
+    report('recall.search', 'returned no episodic hits from the FTS leg', e);
     return [];
   }
 }
@@ -397,7 +430,8 @@ export function semanticSearchMessagesCore(
       insertTopN(top, hit, cos, opts.limit);
     }
     return top;
-  } catch {
+  } catch (e) {
+    report('recall.search', 'returned no episodic hits from the cosine leg', e);
     return [];
   }
 }
@@ -431,6 +465,8 @@ export function hasMessageVectorsCore(db: DatabaseSync): boolean {
     ).get() as { n: number };
     return row.n === 1;
   } catch {
+    // quiet: the question is whether any vector is cached, and a DB with no
+    // vector tables answers it — the missing table IS the no.
     return false;
   }
 }
@@ -493,8 +529,11 @@ export async function hybridSearchMessages(
           ? await opts.semanticScan(qe, scanOpts)
           : semanticSearchMessagesCore(db, qe.vec, qe.model, scanOpts);
       }
-    } catch {
+    } catch (e) {
       // The semantic leg is optional; a dead embedder must never break a turn.
+      // It is not free, though: the answer that comes back is FTS-only, and
+      // nothing about its shape says so.
+      report('recall.search', 'ranked episodic hits on FTS alone', e);
     }
     if (opts.timingSink) opts.timingSink.semantic = Date.now() - semStart;
   }
@@ -539,7 +578,8 @@ export function ftsSearchFacts(db: DatabaseSync, rawQuery: string, limit = FTS_C
       )
       .all(match, limit) as Array<{ id: number; text: string; score: number }>;
     return rows.filter((r) => r.score <= FTS_SCORE_CEILING);
-  } catch {
+  } catch (e) {
+    report('recall.facts', 'returned no fact hits from the FTS leg', e);
     return [];
   }
 }
@@ -592,7 +632,8 @@ export function semanticSearchFactsCore(
     }
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, limit);
-  } catch {
+  } catch (e) {
+    report('recall.facts', 'returned no fact hits from the cosine leg', e);
     return [];
   }
 }
@@ -610,8 +651,9 @@ export async function hybridSearchFacts(
     try {
       const qe = await opts.embedQuery();
       if (qe) sem = semanticSearchFactsCore(db, qe.vec, qe.model, SEMANTIC_CANDIDATES);
-    } catch {
-      // Semantic leg optional.
+    } catch (e) {
+      // Semantic leg optional — but search_facts without it is a different tool.
+      report('recall.facts', 'ranked facts on FTS alone', e);
     }
   }
   if (sem.length === 0) return fts.slice(0, limit);
@@ -663,7 +705,8 @@ export function ftsSearchSummaries(
         ftsScore: r.score as number
       }))
       .filter((h) => h.score <= FTS_SCORE_CEILING);
-  } catch {
+  } catch (e) {
+    report('recall.summaries', 'returned no summary hits from the FTS leg', e);
     return [];
   }
 }
@@ -718,7 +761,8 @@ export function semanticSearchSummariesCore(
       }, cos, opts.limit);
     }
     return scored;
-  } catch {
+  } catch (e) {
+    report('recall.summaries', 'returned no summary hits from the cosine leg', e);
     return [];
   }
 }
@@ -751,8 +795,10 @@ export async function hybridSearchSummaries(
           ? await opts.semanticScan(qe, scanOpts)
           : semanticSearchSummariesCore(db, qe.vec, qe.model, scanOpts);
       }
-    } catch {
-      // Semantic leg optional.
+    } catch (e) {
+      // Semantic leg optional. It is also the leg that carries sk→en, so an
+      // FTS-only summary answer is a much narrower one.
+      report('recall.summaries', 'ranked summaries on FTS alone', e);
     }
   }
   // Same one-scale rule as hybridSearchMessages: FTS-only still returns RRF scores.
@@ -839,7 +885,8 @@ export function ftsSearchDocs(
         ftsScore: r.score as number
       }))
       .filter((h) => total < DOC_FTS_GATE_MIN_DOCS || h.score <= FTS_SCORE_CEILING);
-  } catch {
+  } catch (e) {
+    report('folder-index.search', 'returned no document hits from the FTS leg', e);
     return [];
   }
 }
@@ -853,7 +900,8 @@ export function semanticSearchDocsCore(
 ): CoreDocHit[] {
   try {
     return semanticSearchDocsCoreOrThrow(db, qVec, model, opts);
-  } catch {
+  } catch (e) {
+    report('folder-index.search', 'returned no document hits from the cosine leg', e);
     return [];
   }
 }
@@ -937,8 +985,9 @@ export async function hybridSearchDocs(
           ? await opts.semanticScan(qe, scanOpts)
           : semanticSearchDocsCore(db, qe.vec, qe.model, scanOpts);
       }
-    } catch {
+    } catch (e) {
       // Semantic leg optional.
+      report('folder-index.search', 'ranked documents on FTS alone', e);
     }
   }
   // One-scale rule (see hybridSearchMessages). For docs it is load-bearing

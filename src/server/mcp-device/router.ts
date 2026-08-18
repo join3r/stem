@@ -408,6 +408,9 @@ export function deviceMcpRouter(): DeviceMcpRouter {
     pushTo: pushToDevice,
     connectedDevices: connectedDeviceIds,
     deviceLabel: async (deviceId) => {
+      // quiet: the null is read, not dropped — the branch below turns it into the
+      // id rather than into a claim about the pairing, which is the whole reason
+      // this is a null and not an empty list.
       const devices = await readDevices().catch(() => null);
       // A registry that could not be read is not evidence that the device is
       // gone, so it falls back to the id rather than to the "no longer paired"

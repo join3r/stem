@@ -35,7 +35,8 @@ export function parseTerms(output: string): string[] {
       const arr = JSON.parse(trimmed.slice(start, end + 1));
       if (Array.isArray(arr)) for (const v of arr) if (typeof v === 'string') raw.push(v);
     } catch {
-      // fall through to line/comma parsing
+      // quiet: the model is asked for JSON and mostly obliges; when it doesn't,
+      // the line/comma parse below reads the same reply just as well.
     }
   }
   if (raw.length === 0) {

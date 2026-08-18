@@ -1,3 +1,4 @@
+import { degrade } from '../degrade';
 import { log } from '../log';
 import { devicesWithPushTokens, setDevicePushToken, type DeviceRecord } from '../transport/auth';
 import { apnsConfigured, sendApns } from './apns';
@@ -142,7 +143,8 @@ async function resolveLabel(label?: LabelSource): Promise<string | null> {
   try {
     return (await label()) ?? null;
   } catch {
-    // A label is decoration; a notification without one is still a notification.
+    // quiet: a label is decoration; a notification without one is still a
+    // notification, and it still routes on the ids beside it.
     return null;
   }
 }
@@ -182,7 +184,12 @@ async function deliver(wake: WakeUp, label?: LabelSource): Promise<void> {
       // push spends a request learning the same thing — from every record that
       // still carries it, since one dead address can be written on several.
       for (const device of devices) {
-        await setDevicePushToken(device.id, null).catch(() => undefined);
+        await setDevicePushToken(device.id, null).catch((err) =>
+          // Without this write the token stays in the registry and every later
+          // wake-up spends an APNs request rediscovering that it is gone — and the
+          // line below says it was dropped when it was not.
+          degrade('push', 'kept a dead push token in the device registry', err)
+        );
         log('push', 'dropped a dead push token', { deviceId: device.id });
       }
       continue;

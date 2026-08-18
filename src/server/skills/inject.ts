@@ -1,3 +1,4 @@
+import { degrade } from '../degrade';
 import { getEmbeddingsClient, getRerankClient } from '../recall/retrieval';
 import type { EmbeddingsClient } from '../recall/embeddings';
 import type { RerankClient } from '../recall/rerank';
@@ -264,7 +265,11 @@ export async function selectSkills(
     if (!qVec) return indexAll(candidates);
     const embedder: SkillEmbedder = { model, embed: (texts) => client.embed(texts, 'passage') };
     vectors = await ensureSkillVectors(candidates, embedder);
-  } catch {
+  } catch (error) {
+    // Indistinguishable from the honest no-embedder case at the caller: both
+    // arrive as reason 'no-embeddings', and a turn that silently stops inlining
+    // is a turn the model works without procedures it was written to follow.
+    degrade('skills.inject', 'inlined no skills and listed the library instead', error);
     return indexAll(candidates);
   }
 
@@ -324,9 +329,12 @@ export async function selectSkills(
           shortlistSize: shortlist.length
         });
       }
-    } catch {
+    } catch (error) {
       // Reranker down mid-turn: fall through to the cosine-only cut rather than
-      // discarding a good embedding result.
+      // discarding a good embedding result. Worth saying, because the fallback
+      // fires on more than half the negatives in the golden fixture and its
+      // `relative` reason is the same one a machine with no reranker reports.
+      degrade('skills.inject', 'cut the shortlist on cosine alone', error);
     }
   }
 

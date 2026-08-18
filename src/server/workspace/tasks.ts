@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import type { ScheduledTask, TaskSchedule } from '../../shared/types';
+import { degrade } from '../degrade';
 import { tasksStorePath } from './paths';
 
 // The Stem-owned registry of scheduled tasks (tasks.json). Tiny and resilient like
@@ -68,7 +69,13 @@ export async function readTasks(): Promise<ScheduledTask[]> {
     return Array.isArray(parsed.tasks)
       ? parsed.tasks.map(coerce).filter((t): t is ScheduledTask => !!t)
       : [];
-  } catch {
+  } catch (error) {
+    // "No tasks" is what a fresh install looks like, so a store that is there and
+    // will not read stops every schedule without a word — and the next
+    // updateTasks writes the empty list back over it.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('tasks', 'reported no scheduled tasks', error);
+    }
     return [];
   }
 }

@@ -114,6 +114,7 @@ export function isValidCron(expr: string): boolean {
     parseCron(expr);
     return true;
   } catch {
+    // quiet: the throw IS the answer this function exists to convert.
     return false;
   }
 }

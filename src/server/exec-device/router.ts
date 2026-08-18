@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { degrade } from '../degrade';
 import { log } from '../log';
 import { readDevices } from '../transport/auth';
 import { connectedDeviceIds, pushToDevice } from '../startup/transport';
@@ -248,9 +249,14 @@ async function readHostsFile(): Promise<Record<string, DeviceExecHostEntry>> {
       }
       return hosts;
     }
-  } catch {
-    // Absent or unreadable both mean the same safe thing: no device is known to
-    // run commands, so none can be targeted until it announces again.
+  } catch (e) {
+    // A Stem that has never paired a command host has no file to read, and that
+    // is not a failure. A file that exists and will not parse is one: a computer
+    // that announced itself is silently no longer targetable, and the next write
+    // replaces the catalog with whatever announces after it.
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('exec-device.hosts', 'forgot which devices run commands', e);
+    }
   }
   return {};
 }
@@ -264,6 +270,9 @@ async function writeHostsFile(hosts: Record<string, DeviceExecHostEntry>): Promi
     await writeFile(tmp, `${JSON.stringify({ version: 1, hosts }, null, 2)}\n`, 'utf8');
     await rename(tmp, path);
   } finally {
+    // quiet: on the happy path the rename already moved it, and a temp file left
+    // behind by a torn write is inert — nothing reads this directory by pattern,
+    // only the one catalog path.
     await rm(tmp, { force: true }).catch(() => undefined);
   }
 }
@@ -273,6 +282,9 @@ export function fileExecHostStore(): ExecHostStore {
   let tail: Promise<unknown> = Promise.resolve();
   const queue = <T>(work: () => Promise<T>): Promise<T> => {
     const next = tail.then(work, work);
+    // quiet: the rejection is delivered to the caller through `next`, which is
+    // what this function returns. This copy exists only so one failed read does
+    // not poison every announcement queued behind it.
     tail = next.catch(() => undefined);
     return next;
   };
@@ -328,7 +340,13 @@ export async function resolveExecTarget(
 ): Promise<{ ok: true; deviceId: string; label: string } | { ok: false; error: string }> {
   const wanted = nameOrId.trim();
   if (!wanted) return { ok: false, error: 'Name the computer the command should run on.' };
-  const devices = await readDevices().catch(() => []);
+  // The empty list is indistinguishable from "nothing is paired", and that is
+  // what the assistant is told — and repeats to the user — about a machine that
+  // is sitting there paired.
+  const devices = await readDevices().catch((e) => {
+    degrade('exec-device.hosts', 'told the assistant no computers are paired', e);
+    return [];
+  });
   const matches = devices.filter(
     (d) => d.id === wanted || d.label.toLowerCase() === wanted.toLowerCase()
   );

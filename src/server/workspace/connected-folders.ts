@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { ConnectedFolder, ConnectedFolderPatch } from '../../shared/types';
+import { degrade } from '../degrade';
 import { connectedFoldersStorePath, piHome, protectedRootsPath } from './paths';
 
 // The Stem-owned registry of external "connected folders" the assistant may read
@@ -54,7 +55,14 @@ export async function readStore(): Promise<ConnectedFoldersStore> {
     const parsed = JSON.parse(await readFile(connectedFoldersStorePath(), 'utf8')) as Partial<ConnectedFoldersStore>;
     const folders = Array.isArray(parsed.folders) ? parsed.folders.map(coerce).filter((f): f is ConnectedFolder => !!f) : [];
     return { version: 1, folders };
-  } catch {
+  } catch (error) {
+    // Present but unreadable: every connected folder disappears from the Folders
+    // tab, the assistant stops reading paths nobody told it to stop reading, and
+    // the next update() persists that emptiness over the registry. (Absent is the
+    // ordinary case — nothing has been connected yet.)
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('folders', 'started from an empty connected-folders store', error);
+    }
     return emptyStore();
   }
 }
@@ -85,7 +93,13 @@ function update<T>(mutate: (store: ConnectedFoldersStore) => T): Promise<T> {
     const store = await readStore();
     const result = mutate(store);
     await writeStore(store);
-    await publishProtectedRoots(store).catch(() => undefined);
+    await publishProtectedRoots(store).catch((error) => {
+      // The registry is written, so the Folders tab shows the new mode — but the
+      // gate the bridge actually reads still holds the previous roots, and a
+      // folder just switched to read-only stays writable to the assistant until
+      // something publishes it again (the next mutation, or the next startup).
+      degrade('folders', 'left the write-protection gate on the previous folders', error);
+    });
     return result;
   });
 }
@@ -95,6 +109,8 @@ async function canonical(p: string): Promise<string> {
   try {
     return await realpath(p);
   } catch {
+    // quiet: a path that will not resolve is stored as it was given, and the next
+    // listing flags it missing — which is what the user needs to see anyway.
     return p;
   }
 }

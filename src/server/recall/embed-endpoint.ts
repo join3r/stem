@@ -2,6 +2,7 @@ import { createServer } from 'node:net';
 import type { Socket } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, unlinkSync } from 'node:fs';
+import { degrade } from '../degrade';
 import { log } from '../log';
 import type { EmbeddingsClient, EmbedKind } from './embeddings';
 
@@ -54,6 +55,9 @@ async function handleRequest(
   try {
     req = JSON.parse(line) as typeof req;
   } catch {
+    // quiet: a line that is not JSON carries no id to answer, so there is no
+    // reply to send. The peer reads any failure — a closed socket included — as
+    // its FTS-only fallback, which is the same thing it would have been told.
     socket.destroy();
     return;
   }
@@ -62,7 +66,7 @@ async function handleRequest(
     try {
       socket.end(`${JSON.stringify({ id, ...body })}\n`);
     } catch {
-      // Peer vanished mid-reply — nothing to do.
+      // quiet: the peer vanished mid-reply — there is no one left to tell.
     }
   };
 
@@ -119,7 +123,8 @@ export function startEmbedEndpoint(opts: {
     try {
       unlinkSync(opts.socketPath); // stale socket from a crashed previous run
     } catch {
-      // Didn't exist — fine.
+      // quiet: nothing stale to remove is the normal case, and a socket that
+      // really could not be removed takes down listen() below, which is logged.
     }
   }
 
@@ -156,8 +161,11 @@ export function startEmbedEndpoint(opts: {
     if (isPipe) return;
     try {
       chmodSync(opts.socketPath, 0o600);
-    } catch {
-      // chmod is best-effort; the token still gates access.
+    } catch (err) {
+      // The token still gates access, so this is not an open door — but the
+      // filesystem is the layer that holds even if the token leaks, and losing
+      // it leaves no other mark.
+      degrade('embed-endpoint', 'left the embed socket at its default permissions', err);
     }
   });
 
@@ -171,7 +179,8 @@ export function startEmbedEndpoint(opts: {
             try {
               unlinkSync(opts.socketPath);
             } catch {
-              // Already gone.
+              // quiet: already gone. One that survives is unlinked at the next
+              // startup, and one that survives that fails listen() — logged there.
             }
           }
           resolve();

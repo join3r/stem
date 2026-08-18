@@ -1,4 +1,5 @@
 import type { FactDetails } from '../../shared/types';
+import { degrade } from '../degrade';
 import { log } from '../log';
 import { PENDING_KEY } from './distill';
 import type { LlmClient } from './llm';
@@ -64,6 +65,9 @@ export function parseAdjudication(raw: string, c: ConflictForAdjudication): Adju
   try {
     parsed = JSON.parse(raw.slice(start, end + 1)) as { outcome?: unknown; facts?: unknown };
   } catch {
+    // quiet: null is this parser's documented verdict for a reply it cannot
+    // read, and the caller treats it exactly like the model's own "unclear" —
+    // the conflict stays open for the user. Nothing is skipped or lost.
     return null;
   }
   switch (parsed.outcome) {
@@ -104,7 +108,12 @@ export async function adjudicateOpenConflicts(llm: LlmClient): Promise<{ resolve
       let decision: AdjudicationDecision | null = null;
       try {
         decision = parseAdjudication(await llm.complete(buildPrompt(conflict)), conflict);
-      } catch {
+      } catch (error) {
+        // The attempt was counted before the call, so a model that is merely
+        // down still spends this conflict's budget: three such passes and it is
+        // manual-only forever. In `skipped` that is indistinguishable from the
+        // model reading the pair and saying "unclear".
+        degrade('recall.adjudicate', 'left the conflict open and spent one of its attempts', error);
         decision = null;
       }
       // Reset is a hard cancellation barrier; conflict/fact ids can be reused after.
@@ -133,14 +142,22 @@ export async function adjudicateOpenConflicts(llm: LlmClient): Promise<{ resolve
         // embed them and queue their neighbour pairs for the background pass.
         try {
           await enqueueNeighbourChecksFor(sink.newFactIds ?? []);
-        } catch {
+        } catch (error) {
           // Best-effort; a dead embedder must not fail the adjudication pass.
+          // But this is the only pass that ever enumerates these replacements'
+          // neighbours — they skip distillation's write-time sweep and the
+          // one-shot backfill is long since stamped done — so what is skipped
+          // here is skipped for the lifetime of those facts.
+          degrade('recall.adjudicate', 'left the replacement facts uncross-checked', error);
         }
       }
     }
     if (resolved > 0 || skipped > 0) log('adjudicate', 'conflict adjudication pass', { resolved, skipped });
-  } catch {
-    // Best-effort: store or model failures leave remaining conflicts open.
+  } catch (error) {
+    // Best-effort: store or model failures leave remaining conflicts open. The
+    // pass line above is inside the try, so without this the whole pass reports
+    // nothing at all — and its activity row still reads "Resolved 0 conflicts".
+    degrade('recall.adjudicate', 'ended the adjudication pass early', error);
   } finally {
     running = false;
   }

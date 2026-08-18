@@ -33,6 +33,7 @@ import type {
   TasksSettings
 } from '../../shared/types';
 import { type BackgroundRole, resolveRoleEffort } from '../../shared/modelRoles';
+import { degrade } from '../degrade';
 import { DEFAULT_SCRATCH_TTL_DAYS } from '../exec/scratch';
 import { customModelId, EMBED_CATALOG } from '../recall/embed-catalog';
 import { DEFAULT_LOCAL_RERANK_MODEL, RERANK_CATALOG } from '../recall/rerank-catalog';
@@ -599,7 +600,13 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
 export async function readSettings(): Promise<ServerSettings> {
   try {
     return coerce(JSON.parse(await readFile(settingsStorePath(), 'utf8')) as Partial<ServerSettings>);
-  } catch {
+  } catch (error) {
+    // Defaults are exactly what a first launch looks like, and the next write
+    // persists them: a settings.json that is there and will not read costs the
+    // user their custom instructions, their model choices and their API keys.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('settings', 'fell back to default settings', error);
+    }
     return coerce(null);
   }
 }

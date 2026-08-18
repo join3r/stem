@@ -1,10 +1,12 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { recallDbPath } from '../workspace/paths';
+import { degrade } from '../degrade';
 import {
   bytesToFloat32 as coreBytesToFloat32,
   hasMessageVectorsCore,
-  semanticSearchMessagesCore
+  semanticSearchMessagesCore,
+  setCoreDegradeSink
 } from './search-core';
 import {
   DEFAULT_EPISODIC_MAX_BYTES,
@@ -40,6 +42,14 @@ import type {
 //
 // node:sqlite is synchronous, so no async write-queue is needed (calls can't
 // interleave the way the JSON stores in chats.ts can). Ops here are tiny.
+
+// search-core.ts owns every FTS and cosine leg but can import nothing (it is
+// bundled into the standalone MCP server), so it reports through a sink the host
+// installs. This is that install for the main process, done at import because
+// every main-process retrieval path — search.ts, inject.ts, folder-index — comes
+// through here or alongside it, and a leg that fails before some later boot step
+// would otherwise fail silently.
+setCoreDegradeSink(degrade);
 
 export type MessageRole = 'user' | 'assistant';
 
@@ -911,7 +921,8 @@ export class RecallStore {
       try {
         handle.exec(`INSERT INTO facts_fts(facts_fts) VALUES('rebuild')`);
       } catch {
-        // The later guarded rebuild retries; schema migration itself remains usable.
+        // quiet: the guarded rebuild a few lines down retries this, and schema
+        // migration itself stays usable either way.
       }
       handle.prepare(`UPDATE facts SET source = 'legacy' WHERE source IS NULL OR source = 'distilled'`).run();
       // Mark that this store once held provenance-less v1 memories — the ONLY
@@ -981,8 +992,12 @@ export class RecallStore {
         END;
       `);
       this.factsTrigram = true;
-    } catch {
+    } catch (e) {
       this.factsTrigram = false;
+      // Once per open, and the loss is invisible from the outside: fact search
+      // keeps working, it just stops finding the inflected SK/DE forms the
+      // trigram leg exists for.
+      degrade('recall.store', 'built no fact trigram index — lexical fact search stays term-only', e);
     }
 
     // One-time backfill: rows that predate the fact indexes aren't in them yet
@@ -995,8 +1010,12 @@ export class RecallStore {
     if (built?.value !== '1') {
       try {
         handle.exec(`INSERT INTO facts_fts(facts_fts) VALUES('rebuild')`);
-      } catch {
-        // A rebuild failure must never block startup; triggers still keep new facts synced.
+      } catch (e) {
+        // A rebuild failure must never block startup; triggers still keep new
+        // facts synced. The facts that were already there, though, stay out of
+        // the index for good — the built flag below is written either way, so
+        // nothing retries this.
+        degrade('recall.store', 'left the facts already in the store out of the FTS index', e);
       }
       handle
         .prepare(`INSERT INTO meta(key, value) VALUES('facts_index_built', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`)
@@ -1017,7 +1036,8 @@ export class RecallStore {
             .prepare(`INSERT INTO meta(key, value) VALUES('facts_trigram_built', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`)
             .run();
         } catch {
-          // Retry on a later open; the flag stays unset.
+          // quiet: the flag stays unset, so the next open runs the backfill
+          // again — this heals itself without anyone reading a log.
         }
       }
     }
@@ -1194,8 +1214,10 @@ export class RecallStore {
           activity: Array.isArray(parsed.activity) ? parsed.activity : [],
           sources: Array.isArray(parsed.sources) ? parsed.sources : []
         });
-      } catch {
-        // Malformed row — skip; the message just renders without rows.
+      } catch (e) {
+        // The message renders as if the turn had done nothing — no sources, no
+        // activity — which is exactly what a turn that did nothing looks like.
+        degrade('recall.store', 'dropped one turn\'s stored activity and sources', e);
       }
     }
     return out;
@@ -1270,8 +1292,10 @@ export class RecallStore {
           }
         }
       }
-    } catch {
-      // Corrupt JSON — treat as no recorded set rather than throwing.
+    } catch (e) {
+      // Reads back as "this thread had no facts injected", which is a real
+      // state a thread can be in — so the row's existence is the only clue left.
+      degrade('recall.store', 'read a thread\'s injected fact set as empty', e);
     }
     return { factIds, reasons, disputed, tier: row.tier as FactTier };
   };
@@ -1317,7 +1341,10 @@ export class RecallStore {
         return Array.isArray(ids)
           ? [{ threadId: r.threadId, turnId: r.turnId, factIds: ids.filter((v): v is number => typeof v === 'number') }]
           : [];
-      } catch {
+      } catch (e) {
+        // The turn drops out of the batch and its row stays ungraded forever —
+        // every later distill re-reads it and drops it again.
+        degrade('recall.store', 'left one turn out of the fact-grading batch', e);
         return [];
       }
     });
@@ -1374,7 +1401,10 @@ export class RecallStore {
               )
             }]
           : [];
-      } catch {
+      } catch (e) {
+        // Same shape as the ungraded facts above: the row stays unconsumed and
+        // no later pass can get past it either.
+        degrade('recall.store', 'left one turn out of the injected-doc batch', e);
         return [];
       }
     });
@@ -1929,7 +1959,9 @@ export class RecallStore {
                 valid_until = NULL, updated_at = ? WHERE id = ?`
       ).run(this.normalizeFact(row.text), this.nowSeconds(), id).changes as number) > 0;
     } catch {
-      return false; // an active fact already owns the same normalized claim
+      // quiet: an active fact already owns the same normalized claim. The false
+      // this returns is the answer the caller asked for, not a swallowed one.
+      return false;
     }
   };
 
@@ -2347,7 +2379,8 @@ export class RecallStore {
         )
         .all(match, limit) as Array<Record<string, unknown>>;
       return rows.map(this.mapScoredFact);
-    } catch {
+    } catch (e) {
+      degrade('recall.facts', 'returned no fact hits from the term index', e);
       return [];
     }
   };
@@ -2373,7 +2406,8 @@ export class RecallStore {
         )
         .all(match, limit) as Array<Record<string, unknown>>;
       return rows.map(this.mapScoredFact);
-    } catch {
+    } catch (e) {
+      degrade('recall.facts', 'returned no fact hits from the trigram index', e);
       return [];
     }
   };
@@ -2555,6 +2589,8 @@ export class RecallStore {
       const parsed = JSON.parse(raw) as { model?: string; id?: number };
       return parsed.model === model && typeof parsed.id === 'number' ? parsed.id : 0;
     } catch {
+      // quiet: a watermark that won't parse is one we must not trust, and 0
+      // restarts the backfill — the same recovery a model switch already takes.
       return 0;
     }
   };
@@ -3046,7 +3082,9 @@ export class RecallStore {
             if (w.kind === 'correct') corrected += 1;
           }
         } catch {
-          // norm UNIQUE collision with another surviving row — leave this fact as-is.
+          // quiet: norm UNIQUE collision with another surviving row — the claim
+          // survives on that row, and the unincremented count says one fewer
+          // was corrected.
         }
       }
       handle.exec('COMMIT');

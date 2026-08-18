@@ -10,6 +10,7 @@ import { hybridSearchDocs, type CoreDocHit, type EmbedQueryFn } from '../recall/
 import { evictDocScanHandle, scanDocsOffThread } from '../recall/scan';
 import type { LlmClient } from '../recall/llm';
 import { recallStore } from '../recall/store';
+import { degrade } from '../degrade';
 import { log } from '../log';
 import * as activity from '../activity';
 import { summarizeFactTexts } from '../recall/audit';
@@ -76,7 +77,12 @@ export async function dropFolderIndex(folderId: string): Promise<void> {
   const base = folderIndexDbPath(folderId);
   await evictDocScanHandle(base);
   for (const suffix of ['', '-wal', '-shm']) {
-    await rm(`${base}${suffix}`, { force: true }).catch(() => undefined);
+    await rm(`${base}${suffix}`, { force: true }).catch((e) => {
+      // force:true already swallows "not there", so this is a file still held —
+      // and since folder ids are stable, turning the index back on later adopts
+      // this stale DB instead of building a fresh one.
+      degrade('folder-index.drop', 'left a disconnected folder\'s index on disk', e);
+    });
   }
 }
 
@@ -102,7 +108,9 @@ export async function syncFolderIndexes(): Promise<void> {
     try {
       names = await readdir(folderIndexDir());
     } catch {
-      // Dir doesn't exist yet — nothing to reconcile.
+      // quiet: no dir until the first index is built. If one exists and will not
+      // list, the manifest written below still decides what is searchable, and
+      // the next pass retries the deletions.
     }
     for (const name of names) {
       const m = name.match(/^(.+)\.sqlite$/);
@@ -179,12 +187,16 @@ export async function getFolderIndexStatuses(): Promise<Record<string, FolderInd
       const status = storeFor(f.id).readStatus();
       try {
         status.learn.facts = recallStore.countFactsBySource(`folder:${f.id}`);
-      } catch {
-        // Recall DB unavailable → the count stays 0.
+      } catch (e) {
+        // "0 facts" is exactly how the Folders tab draws a folder that has learned
+        // nothing, so an unreadable recall DB reads as learning that stopped.
+        degrade('folder-learn.facts', 'showed a folder as having learned nothing', e);
       }
       out[f.id] = status;
-    } catch {
-      // A folder whose index DB can't open just has no status yet.
+    } catch (e) {
+      // Missing from the map is how the tab draws a folder that was never indexed,
+      // so an index that will not open looks like one nobody asked for.
+      degrade('folder-index.status', 'left one folder without index status', e);
     }
   }
   return out;
@@ -258,7 +270,10 @@ export async function learnAllIndexedFolders(opts: {
       const target = folders.find((f) => {
         try {
           return storeFor(f.id).pendingLearnCount() > 0;
-        } catch {
+        } catch (e) {
+          // False takes the folder out of the drain entirely: its backlog is never
+          // distilled, and the tab goes on showing the pending count it cannot read.
+          degrade('folder-learn.pending', 'skipped a folder whose backlog would not read', e);
           return false;
         }
       });
@@ -281,7 +296,8 @@ export async function learnAllIndexedFolders(opts: {
           total: docsLearned + storeFor(target.id).pendingLearnCount()
         });
       } catch {
-        // A closed/locked index just means no progress bar this iteration.
+        // quiet: a closed or locked index costs this iteration's progress bar. The
+        // drain carries on and the next batch redraws it.
       }
       await new Promise((resolve) => setTimeout(resolve, LEARN_BATCH_PAUSE_MS));
     }
@@ -322,7 +338,10 @@ export async function searchFolderDocs(
           private: !f.memorize,
           learnEligible: effectiveLearnMode(f) !== 'off'
         }));
-      } catch {
+      } catch (e) {
+        // No hits is also what a folder with nothing relevant returns, so a broken
+        // index reaches the turn as "your notes say nothing about this".
+        degrade('folder-index.search', 'returned no hits from one folder', e);
         return [] as FolderDocHit[];
       }
     })

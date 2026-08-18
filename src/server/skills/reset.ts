@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { degrade } from '../degrade';
 import { filesRoot, skillsRoot } from '../workspace/paths';
 import { SKILLS_REV_FILE } from '../pi/protocol';
 import { listSkillRecords } from './store';
@@ -49,6 +50,8 @@ function storedSchema(): number {
     const n = Number.parseInt(readFileSync(schemaFile(), 'utf8').trim(), 10);
     return Number.isFinite(n) ? n : 0;
   } catch {
+    // quiet: no marker is exactly the state it records — a library nobody has
+    // answered for yet — and the answer is to ask.
     return 0;
   }
 }
@@ -59,7 +62,7 @@ export function markSkillsSchemaCurrent(): void {
     mkdirSync(skillsRoot(), { recursive: true });
     writeFileSync(schemaFile(), `${SKILLS_SCHEMA_VERSION}\n`, 'utf8');
   } catch {
-    // Best-effort. The cost of a failed write is being asked once more, which is
+    // quiet: the cost of a failed write is being asked once more, which is
     // strictly better than blocking startup over a marker file.
   }
 }
@@ -102,8 +105,11 @@ export function exportSkills(at: Date = new Date()): { count: number; folder: st
       const source = join(skillsRoot(), record.slug, 'SKILL.md');
       writeFileSync(join(dir, `${record.slug}.md`), readFileSync(source, 'utf8'), 'utf8');
       count += 1;
-    } catch {
-      // One unreadable file must not abandon the rest of the export.
+    } catch (error) {
+      // One unreadable file must not abandon the rest of the export — but this
+      // is the copy the user asked for of a skill `resetSkills` deletes moments
+      // later, and the count it reports back is the only other trace.
+      degrade('skills.reset', 'deleted one skill without exporting it', error);
     }
   }
   return { count, folder };
@@ -129,14 +135,16 @@ export function resetSkills(opts: { export: boolean } = { export: true }): Skill
       rmSync(join(root, record.slug), { recursive: true, force: true });
       removed += 1;
     } catch {
-      // best-effort; a leftover directory is visible in the Manage panel
+      // quiet: a leftover directory is visible in the Manage panel, where the
+      // user can remove it by hand.
     }
   }
   for (const sidecar of SIDECARS) {
     try {
       if (existsSync(join(root, sidecar))) rmSync(join(root, sidecar), { force: true });
     } catch {
-      // best-effort
+      // quiet: a sidecar that outlives the library it describes is pruned on the
+      // next pass — usage entries by slug, vectors by hash.
     }
   }
   // Whatever else is in there stays: the user may have dropped their own files
@@ -144,6 +152,7 @@ export function resetSkills(opts: { export: boolean } = { export: true }): Skill
   try {
     readdirSync(root);
   } catch {
+    // quiet: the read is the probe and the catch is the answer — no root, make one.
     mkdirSync(root, { recursive: true });
   }
 

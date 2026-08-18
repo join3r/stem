@@ -1,6 +1,7 @@
 
 import { reconcileExplicitFact } from './reconcile';
 import { parseClaims } from './distill';
+import { degrade } from '../degrade';
 import type { LlmClient } from './llm';
 import { recallStore } from './store';
 const { getFactDetails, getFactsGeneration, getInjectableFacts, supersedeFact, updateFactText, upsertFact } = recallStore;
@@ -57,7 +58,10 @@ export async function normalizeExplicitNote(factId: number, llm: LlmClient): Pro
     const parsed = JSON.parse(raw.slice(start, end + 1)) as { text?: unknown };
     if (typeof parsed.text !== 'string') return factId;
     rewritten = parsed.text.trim();
-  } catch {
+  } catch (error) {
+    // The note is durable either way, but nothing retries this: a note typed in
+    // Slovak stays in Slovak, and recall ranks it as the shape it is in.
+    degrade('recall.note', "kept the note's raw wording", error);
     return factId;
   }
   if (!rewritten || rewritten.length > MAX_REWRITE_LENGTH || rewritten === originalText) return factId;
@@ -117,7 +121,11 @@ export async function extractNoteFacts(factId: number, llm: LlmClient): Promise<
   let reply: string;
   try {
     reply = await llm.complete(extractPrompt(originalText, known));
-  } catch {
+  } catch (error) {
+    // [] is also what a genuinely nothing-durable note returns, and the caller
+    // cannot tell them apart — it just reconciles the raw blob and moves on,
+    // leaving a wall of pasted text competing with the facts inside it.
+    degrade('recall.note', 'kept the pasted note as one fact', error);
     return [];
   }
   // Wider text cap than distill's: a coherent list kept as one fact runs longer
@@ -178,7 +186,10 @@ export async function processExplicitNote(factId: number, llm: LlmClient): Promi
       const survivingId = await normalizeExplicitNote(factId, llm);
       await reconcileExplicitFact(survivingId, llm);
     }
-  } catch {
-    // Best-effort: the raw note is already durable.
+  } catch (error) {
+    // Best-effort: the raw note is already durable — but unreconciled, so a note
+    // that contradicts stored facts now coexists with them until some later pass
+    // happens to compare them.
+    degrade('recall.note', 'left the note unreconciled', error);
   }
 }

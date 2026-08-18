@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { degrade } from '../degrade';
 import { host } from '../host';
 import { secretKeyPath } from '../workspace/paths';
 import { SECRET_VALUE_PREFIX } from './protocol';
@@ -29,10 +30,16 @@ function loadOrCreateKey(): Buffer | null {
   try {
     const hex = wrapper.unwrap(readFileSync(path));
     if (/^[0-9a-f]{64}$/.test(hex)) return (cachedKey = Buffer.from(hex, 'hex'));
-  } catch {
+  } catch (error) {
     // missing or unwrappable (keychain reset / copied profile) → mint a fresh
     // key; data under the old key is unreadable either way and degrades to
-    // "signed out", never to a crash.
+    // "signed out", never to a crash. No file is simply the first run; a file
+    // that is there and will not unwrap is every stored credential on this
+    // machine becoming unreadable in one step, which nothing downstream can
+    // distinguish from the user never having entered them.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('pi.secrets', 'minted a new key, leaving the credentials under the old one unreadable', error);
+    }
   }
   const key = randomBytes(32);
   const tmp = `${path}.${process.pid}.tmp`;
@@ -40,13 +47,18 @@ function loadOrCreateKey(): Buffer | null {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     writeFileSync(tmp, wrapper.wrap(key.toString('hex')), { mode: 0o600 });
     renameSync(tmp, path);
-  } catch {
+  } catch (error) {
     try {
       rmSync(tmp, { force: true });
     } catch {
-      // best-effort
+      // quiet: the temp file is ours and already unreachable; leaving one behind
+      // costs a stray byte count, and the next attempt overwrites it.
     }
-    return (cachedKey = null); // unwritable disk → stay in plaintext mode
+    // Plaintext mode is the documented floor, but it is not what a machine WITH a
+    // keyring was promised: from here on every credential goes to disk readable
+    // by anything that can open the file.
+    degrade('pi.secrets', 'kept writing credentials as plaintext', error);
+    return (cachedKey = null);
   }
   return (cachedKey = key);
 }
@@ -90,7 +102,12 @@ export function decryptSecretValue(value: string): string | null {
     const decipher = createDecipheriv('aes-256-gcm', key, raw.subarray(0, 12));
     decipher.setAuthTag(raw.subarray(12, 28));
     return Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString('utf8');
-  } catch {
+  } catch (error) {
+    // Some callers hand this on to the user (mcp.json headers and env become
+    // `lostSecrets`, and the MCP tab says so); the whole-file OAuth envelope does
+    // not — the token map just reads as empty and every signed-in server starts
+    // asking for a password again with nothing said about why.
+    degrade('pi.secrets', 'dropped a stored credential it could not decrypt', error);
     return null;
   }
 }

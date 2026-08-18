@@ -8,6 +8,7 @@ import {
   type QueryEmbedding
 } from './search-core';
 import { scanMessagesOffThread } from './scan';
+import { degrade } from '../degrade';
 import { recallStore, type SearchHit, type SearchOptions, type Fact } from './store';
 const { search: storeSearch, countFacts, dbHandle, factTermSearch, factTrigramSearch } = recallStore;
 
@@ -158,8 +159,11 @@ export function searchMemory(rawQuery: string, options: SearchOptions = {}): Sea
   if (!match) return [];
   try {
     return storeSearch(match, options);
-  } catch {
-    // A malformed index / unexpected SQL error must never break a turn.
+  } catch (e) {
+    // A malformed index / unexpected SQL error must never break a turn. The []
+    // it becomes is the same [] a query with no matches gets, so the turn goes
+    // on believing the store had nothing to say.
+    degrade('recall.search', 'returned no episodic hits', e);
     return [];
   }
 }

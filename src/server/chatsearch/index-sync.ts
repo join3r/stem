@@ -1,5 +1,6 @@
 import { getIndexedWatermark, reindexThread, dropThread, type IndexDoc } from './store';
 import * as activity from '../activity';
+import { degrade } from '../degrade';
 
 // Keeps the chat-search index in step with the JSONL sessions:
 //   - backfillChatIndex: a background sweep on launch that indexes every chat whose
@@ -45,8 +46,11 @@ export async function reindexChatThread(rt: IndexRuntime, threadId: string): Pro
     // listThreads.updatedAt is milliseconds. Store the live watermark in the
     // same unit so launch backfill does not re-read every just-indexed thread.
     await reindexOne(rt, threadId, Date.now());
-  } catch {
-    // A single failed reindex must never break the turn/rename that triggered it.
+  } catch (error) {
+    // A single failed reindex must never break the turn/rename that triggered it —
+    // but until the next launch's backfill picks the thread up, searching for what
+    // was just said in it finds nothing.
+    degrade('chatsearch.index', 'left one chat out of the search index', error);
   }
 }
 
@@ -54,8 +58,10 @@ export async function reindexChatThread(rt: IndexRuntime, threadId: string): Pro
 export function dropChatThread(threadId: string): void {
   try {
     dropThread(threadId);
-  } catch {
-    // non-fatal
+  } catch (error) {
+    // Nothing retries this: the backfill only visits chats that still exist, so a
+    // failed drop leaves the deleted chat's text in the index for good.
+    degrade('chatsearch.index', 'kept a deleted chat in the search index', error);
   }
 }
 
@@ -79,9 +85,12 @@ export async function backfillChatIndex(rt: IndexRuntime): Promise<void> {
       try {
         await reindexOne(rt, c.threadId, c.updatedAt);
         indexed += 1;
-      } catch {
+      } catch (error) {
         // Skip a chat that fails to read/index; the next launch retries it (watermark
-        // wasn't advanced), and the rest of the backfill still proceeds.
+        // wasn't advanced), and the rest of the backfill still proceeds. A chat that
+        // fails every launch is missing from search for good, and the "Indexed n
+        // chats" row it is absent from cannot say so.
+        degrade('chatsearch.index', 'skipped one chat', error);
       }
     }
     activity.end(handle, {

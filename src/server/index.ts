@@ -12,6 +12,7 @@ import {
   registerWorkspaceIpc,
   type IpcDeps
 } from './ipc';
+import { degrade } from './degrade';
 import { log } from './log';
 import { ensureWorkspace } from './workspace/bootstrap';
 import { publishProtectedRootsNow } from './workspace/connected-folders';
@@ -236,11 +237,20 @@ async function onAuthenticated(): Promise<RuntimeStatus> {
       // empty list (last provider disconnected) clears it back to the constant.
       await updateDefaultModel(chooseDefaultModel(models));
     }
-  } catch {
-    // model list unavailable — keep the built-in default
+  } catch (err) {
+    // The re-pick is the only thing that clears a default whose provider is
+    // gone, and pi refuses to start on a spawn that names one — so a model list
+    // that failed here leaves the backend bricked with nothing said about why.
+    degrade('auth', 'kept the stored default model unchecked', err);
   }
   // Apply fresh credentials + the new default to the running process.
-  await runtime!.restart().catch(() => undefined);
+  await runtime!.restart().catch((err) => {
+    // pi reads auth.json and models.json once, at spawn. A restart that did not
+    // happen means the credential the user just finished adding never reaches
+    // the backend, and the status returned below comes from a process that has
+    // never seen it — the wizard then shows a sign-in that looks complete.
+    degrade('auth', 'finished sign-in without a backend that has the new credential', err);
+  });
   void scheduler?.start();
   return runtime!.status();
 }
@@ -260,6 +270,9 @@ function scheduleWebSearchRestart(): void {
   if (webSearchRestartTimer) clearTimeout(webSearchRestartTimer);
   webSearchRestartTimer = setTimeout(() => {
     webSearchRestartTimer = null;
+    // quiet: a restart that fails leaves exactly the state a restart skipped for
+    // an in-flight turn leaves — the key is on disk and the next spawn reads it.
+    // ensureStarted brings the process back on the next send either way.
     if (runtime && !runtime.isTurnRunning()) void runtime.restart().catch(() => undefined);
   }, WEB_SEARCH_RESTART_DEBOUNCE_MS);
 }
@@ -375,6 +388,10 @@ function registerIpc(): void {
     // correctness since startTurn calls ensureActive itself, but it makes the
     // first send faster. Crucially it no longer blocks the open behind the
     // foreground gate / any in-flight turn.
+    //
+    // quiet: startTurn calls ensureActive itself, so a pre-warm that failed costs
+    // the first send its latency and nothing else — the read below is a local
+    // file read and does not go near the backend.
     void runtime!.resumeThread(threadId).catch(() => {});
     const { title, messages } = await runtime!.readThread(threadId);
     return { threadId, title, messages };
@@ -530,6 +547,8 @@ function registerIpc(): void {
         const [vec] = await embedManager.embed(['Stem retrieval test'], 'query');
         return { ok: true, detail: `${vec.length}-dim · ${Date.now() - startedAt} ms · local` };
       } catch (err) {
+        // quiet: this handler IS the Test button — the failure is its answer,
+        // rendered next to the field the user is editing.
         return { ok: false, detail: err instanceof Error ? err.message : 'embed failed' };
       }
     }
@@ -553,6 +572,7 @@ function registerIpc(): void {
         const ranked = await embedManager.rerank('pets', ['I have a dog', 'the sky is blue'], 2);
         return { ok: true, detail: `ranked ${ranked.length} · ${Date.now() - startedAt} ms · local` };
       } catch (err) {
+        // quiet: the Test button's answer, same as the embeddings branch.
         return { ok: false, detail: err instanceof Error ? err.message : 'rerank failed' };
       }
     }
@@ -573,6 +593,8 @@ function registerIpc(): void {
       remoteHealth?.recordOk(stage);
       return { ok: true, detail: `ranked ${ranked.length} · ${Date.now() - startedAt} ms` };
     } catch (err) {
+      // quiet: the Test button's answer, and the verdict cache below takes the
+      // same failure to the red markers on the retrieval settings.
       const e = err as { message?: string; cause?: { code?: string } };
       const detail = e.cause?.code ?? e.message ?? 'request failed';
       // Test outcomes feed the verdict cache both ways: a passing test clears
@@ -595,7 +617,13 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   await ensureWorkspace();
   // Publish the read-only connected-folder roots so the backend extension enforces
   // them from the first turn (also rewritten on every Folders-tab mutation).
-  await publishProtectedRootsNow().catch(() => undefined);
+  await publishProtectedRootsNow().catch((err) => {
+    // This file is the only thing the extension reads to know a folder is
+    // read-only. Unpublished, the gate is whatever the last successful write
+    // said — so a folder switched to read-only in a previous session comes up
+    // writable to the assistant, and nothing on the Folders tab looks wrong.
+    degrade('folders', 'started without publishing the read-only folder roots', err);
+  });
   // pi is the only backend; it satisfies ChatBackend so everything below is
   // backend-agnostic. Alternate profiles (--fresh / --profile) skip seeding auth
   // from the user's global ~/.pi so they start unauthenticated in the onboarding wizard.
@@ -871,7 +899,13 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
           void scheduler?.start();
           return runtime!.prewarm();
         })
-        .catch(() => {});
+        .catch((err) => {
+          // The scheduler is started here and, apart from sign-in, only here — so a
+          // status() or settings read that threw takes every scheduled task with it,
+          // including the catch-up for the ones missed while Stem was closed, and the
+          // Tasks tab goes on listing them with their next run times.
+          degrade('startup', 'came up without prewarming the backend or starting the scheduler', err);
+        });
     },
 
     shutdown() {

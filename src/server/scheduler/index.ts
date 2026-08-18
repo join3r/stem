@@ -8,6 +8,7 @@ import type {
   TaskSchedule
 } from '../../shared/types';
 import { isContextOverflowError } from '../backend/overflow';
+import { degrade } from '../degrade';
 import { log } from '../log';
 import { noteTurnStart } from '../live-turns';
 import { toMs } from '../../shared/inbox';
@@ -101,7 +102,15 @@ export class TaskScheduler {
     run.preempted = true;
     // turnId may still be null while startTurn is building the prompt; runTask
     // checks the flag right after it resolves and interrupts then.
-    if (run.turnId && this.opts.interrupt) void this.opts.interrupt(run.turnId).catch(() => undefined);
+    if (run.turnId && this.opts.interrupt) {
+      void this.opts.interrupt(run.turnId).catch((err) =>
+        // The abort is the whole point of preempting: it is what frees the
+        // foreground gate. An abort that failed leaves the scheduler's turn
+        // running against the backend while the user waits behind it, and the
+        // requeue below still records the run as yielded.
+        degrade('tasks', 'left a preempted run holding the foreground gate', err)
+      );
+    }
   }
 
   /**
@@ -426,7 +435,13 @@ export class TaskScheduler {
         // reason as the interactive path in server/index.ts (see noteTurnStart).
         noteTurnStart(task.threadId, turnId);
         // A preempt that landed while startTurn was still building: interrupt now.
-        if (run.preempted && this.opts.interrupt) void this.opts.interrupt(turnId).catch(() => undefined);
+        if (run.preempted && this.opts.interrupt) {
+          // Same as preemptForUser: an abort that fails is a scheduled turn the
+          // user's turn now queues behind, with nothing anywhere saying so.
+          void this.opts.interrupt(turnId).catch((err) =>
+            degrade('tasks', 'left a preempted run holding the foreground gate', err)
+          );
+        }
         this.opts.onRun({ threadId: task.threadId, turnId, taskId: task.id, prompt: task.prompt, at: atIso });
         let settle = await this.waitForSettle(turnId, task.threadId);
         // Overflow self-heal: a run that died because the thread outgrew the
@@ -437,7 +452,14 @@ export class TaskScheduler {
           const compacted = await this.opts.runtime
             .compactThread(task.threadId)
             .then(() => true)
-            .catch(() => false);
+            .catch((err) => {
+              // The task row says the same "context window" failure whether the
+              // condense was tried and did not help or never ran at all, and this
+              // backstop exists precisely because pi's own compact-and-retry was
+              // observed failing silently. Say which one happened.
+              degrade('tasks', 'skipped the overflow retry with the thread still over the window', err);
+              return false;
+            });
           if (compacted) {
             const retry = await this.opts.runtime.startTurn({
               input: task.prompt,
@@ -449,7 +471,10 @@ export class TaskScheduler {
               run.turnId = retry.turnId;
               noteTurnStart(task.threadId, retry.turnId);
               if (run.preempted && this.opts.interrupt) {
-                void this.opts.interrupt(retry.turnId).catch(() => undefined);
+                // As above: a failed abort holds the gate against the user.
+                void this.opts.interrupt(retry.turnId).catch((err) =>
+                  degrade('tasks', 'left a preempted run holding the foreground gate', err)
+                );
               }
               this.opts.onRun({
                 threadId: task.threadId,
@@ -469,6 +494,8 @@ export class TaskScheduler {
         this.recordOutcome(task, null);
       }
     } catch (error) {
+      // quiet: recordOutcome puts the message on the task's row in the Tasks tab
+      // and the finally below raises tasks.run on the activity popover.
       task.lastStatus = 'failed';
       this.recordOutcome(task, error instanceof Error ? error.message : String(error));
     } finally {
@@ -565,7 +592,13 @@ export class TaskScheduler {
         // Mark the run failed promptly, but also abort its backend turn so a hung
         // agent does not keep the foreground gate occupied behind the scheduler's
         // now-advanced queue.
-        if (this.opts.interrupt) void this.opts.interrupt(turnId).catch(() => undefined);
+        if (this.opts.interrupt) {
+          // If the abort itself fails, that is exactly what happens: the queue has
+          // moved on, the row reads failed, and the turn is still running.
+          void this.opts.interrupt(turnId).catch((err) =>
+            degrade('tasks', 'left a timed-out run occupying the foreground gate', err)
+          );
+        }
         finish('failed');
       }, RUN_TIMEOUT_MS);
       this.opts.runtime.on('event', onEvent);
@@ -585,8 +618,13 @@ export class TaskScheduler {
       return thread
         ? { found: true, updatedAt: toMs(thread.updatedAt) }
         : { found: false, updatedAt: null };
-    } catch {
-      // If we can't tell, assume it exists rather than silently disabling the task.
+    } catch (err) {
+      // If we can't tell, assume it exists rather than silently disabling the
+      // task. The mtime is the loss that matters: onSilentRun uses the before/
+      // after pair to keep a scheduled run out of the Inbox, and without it the
+      // run either shows up as something the user did or hides something they
+      // should have seen.
+      degrade('tasks', 'ran the task without its chat\'s last-activity time', err);
       return { found: true, updatedAt: null };
     }
   }

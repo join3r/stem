@@ -23,6 +23,7 @@
 import { cp, lstat, mkdir, readdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ChatSummary } from '../../shared/types';
+import { degrade } from '../degrade';
 import { log } from '../log';
 import { execWorkspaceDir, filesRoot, isScratchId, threadWorkspaceDir } from '../workspace/paths';
 
@@ -59,6 +60,10 @@ interface Measured {
  */
 async function measure(dir: string): Promise<Measured> {
   const out: Measured = { bytes: 0, files: 0, newestMs: 0 };
+  // quiet: the caller listed this folder a moment ago, so a stat that fails now
+  // means it was swept or deleted underneath the walk — there is nothing left to
+  // weigh. A folder that is there and unreadable fails at the readdir below,
+  // which does say so.
   const self = await lstat(dir).catch(() => null);
   if (!self) return out;
   out.newestMs = self.mtimeMs;
@@ -66,11 +71,17 @@ async function measure(dir: string): Promise<Measured> {
   let entries: string[];
   try {
     entries = await readdir(dir);
-  } catch {
+  } catch (e) {
+    // The row keeps the folder's own mtime, so a folder nobody can read comes
+    // back looking empty — and an empty row is what Settings shows to someone
+    // trying to work out where their disk went.
+    degrade('exec.scratch', 'counted an unreadable folder as empty', e);
     return out;
   }
   for (const name of entries) {
     const full = join(dir, name);
+    // quiet: readdir named it, so a stat that fails is an entry that has gone
+    // since — a file nobody can find takes up no room in the row either.
     const info = await lstat(full).catch(() => null);
     if (!info) continue;
     // Symlinks (the `files` link, and anything the assistant made) count as the
@@ -103,8 +114,8 @@ async function linkFilesPlace(dir: string): Promise<void> {
     // ignored on POSIX. The target is absolute, which junctions require.
     await symlink(filesRoot(), link, 'junction');
   } catch {
-    // Already there, or not permitted. Either way the shell falls back to the
-    // absolute path, which the tool description still names.
+    // quiet: already there, or not permitted. Either way the shell falls back to
+    // the absolute path, which the tool description still names.
   }
 }
 
@@ -116,11 +127,18 @@ async function linkFilesPlace(dir: string): Promise<void> {
 export async function ensureThreadScratch(threadId: string | null | undefined): Promise<string> {
   if (!threadId || !isScratchId(threadId)) {
     const root = execWorkspaceDir();
-    await mkdir(root, { recursive: true }).catch(() => undefined);
+    await mkdir(root, { recursive: true }).catch((e) => {
+      degrade('exec.scratch', 'handed back a scratch folder it could not create', e);
+    });
     return root;
   }
   const dir = threadWorkspaceDir(threadId);
-  await mkdir(dir, { recursive: true }).catch(() => undefined);
+  await mkdir(dir, { recursive: true }).catch((e) => {
+    // Every command in this chat then spawns into a cwd that is not there, and
+    // the shell reports that as its own failure to start — a sentence about the
+    // command, for a problem with the folder.
+    degrade('exec.scratch', 'handed back a scratch folder it could not create', e);
+  });
   await linkFilesPlace(dir);
   return dir;
 }
@@ -135,8 +153,13 @@ export async function listScratchUsage(): Promise<ScratchUsage[]> {
   let entries;
   try {
     entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return []; // no command has ever run
+  } catch (e) {
+    // A root no command has ever created is an honest empty list. Anything else
+    // hands Settings that same "nothing here" over a pile it cannot see.
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('exec.scratch', 'listed no scratch folders at all', e);
+    }
+    return [];
   }
 
   const rows: ScratchUsage[] = [];
@@ -160,6 +183,8 @@ export async function listScratchUsage(): Promise<ScratchUsage[]> {
       unfiled.files += m.files;
       if (m.newestMs > unfiled.newestMs) unfiled.newestMs = m.newestMs;
     } else {
+      // quiet: same race as the walk — readdir named it and it is gone now, so
+      // it weighs nothing.
       const info = await lstat(full).catch(() => null);
       if (!info?.isFile()) continue;
       unfiled.bytes += info.size;
@@ -183,23 +208,38 @@ export async function clearScratch(key: string): Promise<void> {
     let entries;
     try {
       entries = await readdir(root, { withFileTypes: true });
-    } catch {
+    } catch (e) {
+      // The row was listed a moment ago to be clickable at all, so this is not
+      // an empty bucket: someone asked for the space back and did not get it.
+      degrade('exec.scratch', 'left the unfiled scratch where it was', e);
       return;
     }
     for (const entry of entries) {
       if (entry.isDirectory() && isScratchId(entry.name)) continue; // belongs to a chat
-      await rm(join(root, entry.name), { recursive: true, force: true }).catch(() => undefined);
+      await rm(join(root, entry.name), { recursive: true, force: true }).catch((e) => {
+        // force:true already swallows "gone", so this is a file that is still
+        // there — and Clear reports success either way, so the row shrinks in
+        // Settings while the disk does not.
+        degrade('exec.scratch', 'kept a file the user asked Settings to clear', e);
+      });
     }
     return;
   }
   if (!isScratchId(key)) return;
-  await rm(join(root, key), { recursive: true, force: true }).catch(() => undefined);
+  await rm(join(root, key), { recursive: true, force: true }).catch((e) => {
+    degrade('exec.scratch', "kept a chat's scratch the user asked Settings to clear", e);
+  });
 }
 
 /** Remove a chat's scratch folder outright. Called when the chat is deleted. */
 export async function deleteThreadScratch(threadId: string): Promise<void> {
   if (!isScratchId(threadId)) return;
-  await rm(threadWorkspaceDir(threadId), { recursive: true, force: true }).catch(() => undefined);
+  await rm(threadWorkspaceDir(threadId), { recursive: true, force: true }).catch((e) => {
+    // The conversation is gone from the app and its files are not, with no chat
+    // left to name them by — only the orphan row in Settings, and the sweep's
+    // clock, ever come back for them.
+    degrade('exec.scratch', "left a deleted chat's files on disk", e);
+  });
 }
 
 /**
@@ -211,6 +251,9 @@ export async function deleteThreadScratch(threadId: string): Promise<void> {
 export async function copyThreadScratch(fromThreadId: string, toThreadId: string): Promise<void> {
   if (!isScratchId(fromThreadId) || !isScratchId(toThreadId)) return;
   const from = threadWorkspaceDir(fromThreadId);
+  // quiet: most chats never run a command, so "no folder there" is the ordinary
+  // answer and there is nothing to copy. A copy that fails once there IS one is
+  // reported by the handler below.
   if (!(await lstat(from).catch(() => null))?.isDirectory()) return;
   await cp(from, threadWorkspaceDir(toThreadId), {
     recursive: true,
@@ -256,7 +299,8 @@ export async function sweepScratch(opts: {
       await clearScratch(row.key);
       removed.push(row.key);
     } catch {
-      // Gone already, or locked. Either way the next sweep can have it.
+      // quiet: gone already, or locked. The key stays out of `removed`, and the
+      // next sweep can have it.
     }
   }
   if (removed.length) log('exec', 'swept idle scratch folders', { removed: removed.length, ttlDays });
@@ -285,10 +329,18 @@ export interface ScratchSweeperDeps {
  * chat exists, which the Settings list makes easy to clear by hand.
  */
 export async function sweepScratchOnce(deps: ScratchSweeperDeps): Promise<string[]> {
-  const chats = await deps.listChats().catch(() => null);
+  const chats = await deps.listChats().catch((e) => {
+    degrade('exec.scratch', 'skipped the sweep rather than age folders it could not match to a chat', e);
+    return null;
+  });
   if (!chats) return [];
   if (chats.length === 0 && (await listScratchUsage()).some((r) => r.key !== UNFILED_KEY)) return [];
-  const ttlDays = await deps.ttlDays().catch(() => DEFAULT_SCRATCH_TTL_DAYS);
+  const ttlDays = await deps.ttlDays().catch((e) => {
+    // The fallback is a DELETING default: someone who chose "Never", or 90 days,
+    // gets their scratch aged out at 30 on a settings read nobody saw fail.
+    degrade('exec.scratch', `swept on the default ${DEFAULT_SCRATCH_TTL_DAYS}-day TTL instead of the configured one`, e);
+    return DEFAULT_SCRATCH_TTL_DAYS;
+  });
   return sweepScratch({ ttlDays, chats });
 }
 
@@ -299,8 +351,15 @@ export async function sweepScratchOnce(deps: ScratchSweeperDeps): Promise<string
  */
 export function startScratchSweeper(deps: ScratchSweeperDeps): void {
   if (sweeper) return;
-  void sweepScratchOnce(deps).catch(() => undefined);
-  sweeper = setInterval(() => void sweepScratchOnce(deps).catch(() => undefined), SWEEP_INTERVAL_MS);
+  // Nothing inside sweepScratchOnce is expected to reject — every failure it can
+  // survive it reports itself — so a rejection here is the whole housekeeping
+  // pass gone, and on a desktop quit each night the boot pass is the only one
+  // that ever runs.
+  void sweepScratchOnce(deps).catch((e) => degrade('exec.scratch', 'skipped the sweep pass at startup', e));
+  sweeper = setInterval(
+    () => void sweepScratchOnce(deps).catch((e) => degrade('exec.scratch', 'skipped a daily sweep pass', e)),
+    SWEEP_INTERVAL_MS
+  );
   // Never hold the process open for housekeeping.
   sweeper.unref?.();
 }

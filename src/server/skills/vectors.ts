@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { degrade } from '../degrade';
 import { skillsRoot } from '../workspace/paths';
 
 // Embedding cache for skill retrieval, kept in a sidecar JSON at the root of the
@@ -87,6 +88,8 @@ function readVectors(model: string): StoredVectors {
   try {
     raw = readFileSync(vectorsFile(), 'utf8');
   } catch {
+    // quiet: no file yet is the first turn after a model change or a fresh
+    // install, and the whole library is re-embedded either way.
     return empty;
   }
   try {
@@ -102,6 +105,8 @@ function readVectors(model: string): StoredVectors {
     }
     return { version: SKILL_VECTORS_VERSION, model, skills };
   } catch {
+    // quiet: same as a missing file — the cache is derived data and a corrupt
+    // one costs exactly one round of re-embedding.
     return empty;
   }
 }
@@ -111,8 +116,8 @@ function writeVectors(data: StoredVectors): void {
     mkdirSync(skillsRoot(), { recursive: true });
     writeFileSync(vectorsFile(), `${JSON.stringify(data)}\n`, 'utf8');
   } catch {
-    // best-effort: the cache is an optimization, so a failed write costs a
-    // re-embed next turn rather than a broken turn.
+    // quiet: the cache is an optimization, so a failed write costs a re-embed
+    // next turn rather than a broken turn — ranking is unchanged either way.
   }
 }
 
@@ -148,10 +153,13 @@ export async function ensureSkillVectors(
         const vec = vecs[i];
         if (vec) next[s.slug] = { hash: s.hash, vector: Array.from(vec) };
       });
-    } catch {
+    } catch (error) {
       // Embeddings went away mid-refresh. Keep whatever the cache already had —
-      // a partially warm map still ranks the skills it covers, and inject.ts
-      // treats a missing vector as "not a candidate" rather than an error.
+      // a partially warm map still ranks the skills it covers. But inject.ts
+      // treats a missing vector as "not a candidate", so every skill in `stale`
+      // — which on the turn after an edit is the edited one — cannot be inlined
+      // at all, and nothing downstream can tell that from a poor match.
+      degrade('skills.vectors', `left ${stale.length} skills unranked this turn`, error);
     }
   }
 

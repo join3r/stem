@@ -24,7 +24,9 @@ async function isDir(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory(); // stat follows symlinks
   } catch {
-    return false; // dangling link, or a mount that refuses stat
+    // quiet: a dangling link or a mount that refuses stat is not a directory,
+    // which is the whole question this asks.
+    return false;
   }
 }
 
@@ -48,6 +50,8 @@ export async function browseServerFolders(path?: string | null): Promise<ServerF
   try {
     names = await readdir(target, { withFileTypes: true });
   } catch (e) {
+    // quiet: the reason goes back in listing.error, which is on screen in the
+    // picker the moment a folder refuses to open.
     const code = (e as NodeJS.ErrnoException)?.code;
     listing.error =
       code === 'ENOENT'

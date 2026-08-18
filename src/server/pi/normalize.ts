@@ -237,6 +237,9 @@ function traceArgs(args: Record<string, unknown> | undefined): string | undefine
   try {
     json = JSON.stringify(redactSecrets(args));
   } catch {
+    // quiet: args that will not serialize (a cycle) are left out of the trace,
+    // which is the same thing this function does for empty ones and for secret
+    // envelopes. The call itself is traced either way.
     return undefined;
   }
   if (!json || json === '{}') return undefined;

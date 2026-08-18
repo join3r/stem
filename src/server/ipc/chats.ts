@@ -1,3 +1,4 @@
+import { degrade } from '../degrade';
 import { registerServer } from './guard';
 import type { IpcDeps } from './deps';
 import { searchChats, searchChatsLexical } from '../chatsearch/search';
@@ -90,7 +91,12 @@ export function registerChatsIpc(deps: IpcDeps): void {
     // a copy of them — otherwise its first act is to look for something it can
     // see itself creating. Best-effort: a fork whose files didn't copy is still
     // a fork worth having.
-    await copyThreadScratch(threadId, forked.threadId).catch(() => undefined);
+    await copyThreadScratch(threadId, forked.threadId).catch((err) =>
+      // The fork opens looking exactly like a good one, and the first thing the
+      // assistant does in it is fail to find a file its own transcript says it
+      // wrote a moment ago.
+      degrade('chats', 'forked a chat without a copy of its scratch files', err)
+    );
     return forked;
   });
   registerServer('chats:rename', async (_e, threadId: string, name: string) => {

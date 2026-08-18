@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import type { HostShell } from '../../shared/types';
+import { degrade } from '../degrade';
 import { hostShellFromPlatform } from './host-shell';
 
 // Spawns approved run_command commands. Runs in main (the privileged process).
@@ -143,7 +144,22 @@ function windowsPath(): string {
 
 function probeShellLoginPath(): Promise<string> {
   return new Promise<string>((resolve) => {
-    const fallback = (): void => resolve(process.env.PATH ?? '');
+    // Every way this probe can miss ends here, and every one of them costs the
+    // same thing: without the login shell's PATH, Homebrew/nvm binaries are
+    // invisible and every command that needs one dies as "command not found" —
+    // the exact failure this probe exists to prevent, and one nothing else
+    // explains. The result is cached for the life of the process, so a single
+    // slow boot spends the whole run that way.
+    //
+    // The four paths are reported together because the rarest of them (a
+    // synchronous spawn throw) used to be the only one that said anything, while
+    // the two that actually happen — an interactive rc file (nvm, oh-my-zsh)
+    // outrunning the 5s kill, and ENOENT on the shell binary — were silent.
+    const fallback = (why: string, error?: unknown): void => {
+      degrade('exec.loginPath', `ran commands with the GUI process PATH — ${why}`, error);
+      resolve(process.env.PATH ?? '');
+    };
+
     try {
       const shell = unixShell();
       const probe = spawn(shell.path, [shell.login ? '-lc' : '-c', 'printf %s "$PATH"'], {
@@ -152,21 +168,26 @@ function probeShellLoginPath(): Promise<string> {
       let out = '';
       const timer = setTimeout(() => {
         probe.kill('SIGKILL');
-        fallback();
+        fallback(`${shell.path} did not answer within 5s`);
       }, 5000);
       probe.stdout.on('data', (chunk: Buffer) => {
         if (out.length < 32_768) out += chunk.toString('utf8');
       });
-      probe.on('error', () => {
+      probe.on('error', (e) => {
         clearTimeout(timer);
-        fallback();
+        fallback(`${shell.path} could not be started`, e);
       });
-      probe.on('exit', () => {
+      probe.on('exit', (code) => {
         clearTimeout(timer);
-        resolve(out.trim() || (process.env.PATH ?? ''));
+        if (out.trim()) resolve(out.trim());
+        else fallback(`${shell.path} printed no PATH (exit ${code ?? 'unknown'})`);
       });
-    } catch {
-      fallback();
+    } catch (e) {
+      // Reported here rather than through fallback() so the report is visible at
+      // the catch, which is what tests/unit/quiet-failures.test.ts checks and what
+      // anyone reading this block would want to see without following a hop.
+      degrade('exec.loginPath', 'ran commands with the GUI process PATH — the shell could not be spawned', e);
+      resolve(process.env.PATH ?? '');
     }
   });
 }
@@ -223,12 +244,13 @@ function killChildTree(child: ReturnType<typeof spawn>, detached: boolean): void
         windowsHide: true
       }).unref();
     } catch {
-      // fall through
+      // quiet: taskkill is the tree kill; child.kill() below still reaches the
+      // child itself, which is the part that has to die.
     }
     try {
       child.kill();
     } catch {
-      // already gone
+      // quiet: the child is already gone, which is what the kill wanted.
     }
     return;
   }
@@ -236,10 +258,12 @@ function killChildTree(child: ReturnType<typeof spawn>, detached: boolean): void
     if (detached) process.kill(-pid, 'SIGKILL');
     else child.kill('SIGKILL');
   } catch {
+    // quiet: signalling a process group throws once the group is gone; the child
+    // alone is still worth the signal, and a dead child throws too.
     try {
       child.kill('SIGKILL');
     } catch {
-      // already gone
+      // quiet: nothing left to kill.
     }
   }
 }

@@ -540,6 +540,10 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
       client.res.write(text);
       return true;
     } catch {
+      // quiet: the write threw because the socket went between the check above
+      // and here. Reaping the client and answering false IS the report — the
+      // addressed path counts it as unreached, and the client that comes back
+      // replays the frames it missed out of the ring.
       clients.delete(client);
       return false;
     }
@@ -614,6 +618,7 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
     try {
       raw = await readBody(req, MAX_BODY_BYTES);
     } catch (e) {
+      // quiet: the caller is answered with the reason, 413 or 400.
       if (e instanceof BodyTooLarge) {
         sendJson(res, 413, { ok: false, error: 'request body too large' });
         return;
@@ -626,6 +631,7 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
     try {
       body = JSON.parse(raw) as typeof body;
     } catch {
+      // quiet: the caller sent it and the caller is told what was wrong with it.
       sendJson(res, 400, { ok: false, error: 'body is not JSON' });
       return;
     }
@@ -648,6 +654,9 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
       sendJson(res, 200, { ok: true, result: result ?? null });
     } catch (e) {
       const error = String((e as Error)?.message ?? e);
+      // quiet: the handler's own error goes back over the wire verbatim, which
+      // is the whole contract of /rpc — a client that asked gets told.
+      //
       // A rejected-call message is the caller's fault (400); anything else is
       // the handler failing, which the client should surface as an error, not a
       // permission problem.
@@ -801,6 +810,7 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
     try {
       rel = decodeURIComponent(raw);
     } catch {
+      // quiet: a path that will not decode cannot name a file; the client is told so.
       sendJson(res, 400, { ok: false, error: 'that is not a valid file path' });
       return;
     }
@@ -852,6 +862,8 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
     try {
       raw = await readBody(req, MAX_PAIR_BODY_BYTES);
     } catch {
+      // quiet: over the cap or cut off mid-body — either way the device pairing
+      // is refused to its face, which is the only audience this has.
       sendJson(res, 400, { ok: false, error: 'expected {code: string}' });
       return;
     }
@@ -859,6 +871,7 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
     try {
       body = JSON.parse(raw) as { code?: unknown; kind?: unknown } | null;
     } catch {
+      // quiet: the device that sent it is the one told about it.
       sendJson(res, 400, { ok: false, error: 'body is not JSON' });
       return;
     }
@@ -1040,7 +1053,7 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
         try {
           client.res.destroy();
         } catch {
-          // Already gone.
+          // quiet: already gone, which is what destroy() was for.
         }
       }
       return dropped;
@@ -1051,7 +1064,8 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
         try {
           client.res.end();
         } catch {
-          // Already gone.
+          // quiet: already gone, and we are closing anyway — the sockets are
+          // destroyed a few lines below regardless.
         }
       }
       clients.clear();

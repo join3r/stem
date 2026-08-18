@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { degrade } from '../degrade';
 import { SKILLS_REV_FILE } from '../pi/protocol';
 import { skillsRoot } from '../workspace/paths';
 import { SKILL_SLUG_RE, validateSkill, type SkillDraft, type SkillViolation } from './contract';
@@ -105,7 +106,11 @@ export function parseSkillMd(text: string): SkillFront {
   try {
     data = parseYaml(match[1]) as Record<string, unknown> | null;
     stem = ((data?.metadata as Record<string, unknown> | undefined)?.stem ?? {}) as Record<string, unknown>;
-  } catch {
+  } catch (error) {
+    // The description is the entire retrieval surface, so a skill that loses its
+    // front-matter still sits in the library and still shows in Manage, but can
+    // never be matched by anything again.
+    degrade('skills.store', 'read a skill with no name or description', error);
     return {};
   }
   return {
@@ -140,7 +145,13 @@ function readRecordIn(root: string, slug: string): SkillRecord | null {
   let raw: string;
   try {
     raw = readFileSync(join(root, slug, SKILL_FILE), 'utf8');
-  } catch {
+  } catch (error) {
+    // A missing file is the ordinary case — most of what sits in the skills root
+    // is not a skill. An unreadable one is a skill the library will behave, from
+    // here on, as if it never had.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('skills.store', 'dropped one skill from the library', error);
+    }
     return null;
   }
   const fm = parseSkillMd(raw);
@@ -168,7 +179,12 @@ export function listSkillRecords(): SkillRecord[] {
     dirs = readdirSync(root, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name);
-  } catch {
+  } catch (error) {
+    // No root yet is a fresh install. Any other failure reads out as a library
+    // with nothing in it — which is what Manage draws and what the turn injects.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('skills.store', 'reported an empty skill library', error);
+    }
     return [];
   }
   const records: SkillRecord[] = [];
@@ -193,8 +209,8 @@ export function readSkillRecord(slug: string): SkillRecord | null {
 function bumpSkillsRev(root: string): void {
   try {
     writeFileSync(join(root, SKILLS_REV_FILE), String(Date.now()), 'utf8');
-  } catch {
-    // see above
+  } catch (error) {
+    degrade('skills.store', 'left the backend loading the previous skill library', error);
   }
 }
 
@@ -248,6 +264,8 @@ export function saveSkill(draft: SkillDraft, opts: { origin: SkillOrigin; expect
     mkdirSync(join(root, slug), { recursive: true });
     writeFileSync(join(root, slug, SKILL_FILE), composeSkillMd(record), 'utf8');
   } catch (error) {
+    // quiet: the message goes back to whoever asked for the write and is shown —
+    // a save that vanished would be a skill the user believes exists.
     return { ok: false, error: `Could not write skill "${slug}": ${message(error)}` };
   }
   bumpSkillsRev(root);
@@ -275,6 +293,7 @@ export function removeSkill(slug: string, opts: { requireAgentAuthored?: boolean
   try {
     rmSync(join(root, clean), { recursive: true, force: true });
   } catch (error) {
+    // quiet: same as saveSkill — the caller gets the reason and shows it.
     return { ok: false, error: `Could not remove skill "${clean}": ${message(error)}` };
   }
   bumpSkillsRev(root);

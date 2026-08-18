@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { degrade } from '../degrade';
 import { skillsRoot } from '../workspace/paths';
 import { isRecallEnabled } from '../workspace/memory';
 import type { LlmClient } from '../recall/llm';
@@ -119,6 +120,8 @@ function parseFront(text: string): { name?: string; description?: string; source
       created: typeof stem.created === 'string' ? stem.created : undefined
     };
   } catch {
+    // quiet: an unreadable `source` reads as not-'agent' below, and leaving a
+    // skill alone is the posture this pass takes for everything it cannot place.
     return {};
   }
 }
@@ -136,7 +139,11 @@ function loadAgentSkills(usage: SkillsUsage): AgentSkill[] {
     entries = readdirSync(skillsRoot(), { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name);
-  } catch {
+  } catch (error) {
+    // An empty list means the pass reports 0 merged, 0 archived — the same
+    // answer as a library that needed nothing, which is the confusion the merge
+    // warning below exists to prevent.
+    degrade('skills.curate', 'curated nothing and reported no changes', error);
     return [];
   }
   const out: AgentSkill[] = [];
@@ -145,7 +152,7 @@ function loadAgentSkills(usage: SkillsUsage): AgentSkill[] {
     try {
       raw = readFileSync(join(skillsRoot(), slug, 'SKILL.md'), 'utf8');
     } catch {
-      continue; // not a skill directory
+      continue; // quiet: not a skill directory
     }
     const fm = parseFront(raw);
     if (fm.source !== 'agent') continue; // never touch user/bundled skills
@@ -192,7 +199,10 @@ export function parseCurate(output: string): CurateOps {
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed.slice(start, end + 1));
-  } catch {
+  } catch (error) {
+    // A model that answered in prose produces the same 0/0 the caller shows for
+    // a library with nothing to merge, and it will keep producing it every cycle.
+    degrade('skills.curate', 'discarded the curator reply and made no changes', error);
     return { ...EMPTY_OPS };
   }
   if (!parsed || typeof parsed !== 'object') return { ...EMPTY_OPS };
@@ -287,7 +297,8 @@ function applyCurate(skills: AgentSkill[], ops: CurateOps): CurateResult {
         rmSync(join(skillsRoot(), loser), { recursive: true, force: true });
       }
     } catch {
-      // best-effort; a loser left behind is a duplicate, not a broken library
+      // quiet: a loser left behind is a duplicate, not a broken library, and the
+      // next pass sees it beside the winner that now contains it.
     }
     // Proven utility survives the merge: winner inherits the losers' counts.
     mergeUsage(winnerSlug, losers);
@@ -333,8 +344,11 @@ export async function curateSkills(llm: LlmClient, opts: { force?: boolean } = {
   let ops: CurateOps;
   try {
     ops = parseCurate(await llm.complete(prompt));
-  } catch {
-    return ZERO; // model error — retry next cycle
+  } catch (error) {
+    // Retried next cycle, but until then the caller reports 0 merged and 0
+    // archived, which is what it also says when the library is already clean.
+    degrade('skills.curate', 'made no changes', error);
+    return ZERO;
   }
 
   const known = new Set(skills.map((s) => s.slug));

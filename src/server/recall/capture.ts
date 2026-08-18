@@ -1,5 +1,6 @@
 
 import { requestEpisodicMaintenance } from './scan';
+import { degrade } from '../degrade';
 import type { BackendEventEnvelope, ItemEventParams } from '../../shared/types';
 import { agentMessageText } from '../../shared/types';
 import { recallStore } from './store';
@@ -41,8 +42,11 @@ function maybeEnforceEpisodicLimit(): void {
   sinceEnforce = 0;
   try {
     requestEpisodicMaintenance();
-  } catch {
-    // Pruning must never break capture.
+  } catch (error) {
+    // Pruning must never break capture — but the request is the only thing that
+    // ever asks for the size cap, so a swallow here is the store growing without
+    // bound, and every later capture skips the check for another ENFORCE_EVERY.
+    degrade('recall.capture', 'skipped the episodic size check', error);
   }
 }
 
@@ -59,8 +63,11 @@ export function captureFromEvent(envelope: BackendEventEnvelope, opts: { web?: b
   try {
     recordMessage({ threadId: params.threadId, turnId: params.turnId, role: 'assistant', text, web: opts.web ?? false });
     maybeEnforceEpisodicLimit();
-  } catch {
-    // Capture must never break the chat.
+  } catch (error) {
+    // Capture must never break the chat. The reply is still on screen and still
+    // in pi's own session file; it is recall that no longer has it, and nothing
+    // re-reads a turn, so the loss is permanent and otherwise invisible.
+    degrade('recall.capture', 'dropped an assistant reply from recall', error);
   }
 }
 
@@ -81,7 +88,9 @@ export function captureUserMessage(input: {
       cwd: input.cwd ?? null
     });
     maybeEnforceEpisodicLimit();
-  } catch {
-    // ignore
+  } catch (error) {
+    // Same as the assistant tap: the turn carries on, but this message will
+    // never be distilled, summarized or searchable.
+    degrade('recall.capture', 'dropped a user message from recall', error);
   }
 }

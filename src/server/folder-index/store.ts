@@ -125,7 +125,7 @@ export class FolderIndexStore {
     try {
       handle.exec(`ALTER TABLE docs ADD COLUMN learned_hash TEXT`);
     } catch {
-      // Column already exists.
+      // quiet: the column is already there — the error IS the check.
     }
     handle
       .prepare(`INSERT INTO meta (key, value) VALUES ('folder_index_schema_version', ?)
@@ -251,7 +251,7 @@ export class FolderIndexStore {
         }
       }
     } catch {
-      // Corrupt stats degrade to zeros; the next scan rewrites them.
+      // quiet: corrupt stats read as zeros, and the next scan rewrites them.
     }
     const skippedCount = Object.values(skippedByExt).reduce((s, n) => s + n, 0);
     return {
@@ -376,7 +376,7 @@ export class FolderIndexStore {
     try {
       this.db?.close();
     } catch {
-      // Already closed / never opened.
+      // quiet: already closed, or never opened.
     }
     this.db = null;
   }

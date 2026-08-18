@@ -1,5 +1,6 @@
 
 import type { FactDetails } from '../../shared/types';
+import { degrade } from '../degrade';
 import type { LlmClient } from './llm';
 import { getEmbeddingsClient } from './retrieval';
 import { cosineSim } from './vector';
@@ -76,7 +77,11 @@ Return ONLY JSON {"verdict":"compatible"|"contradicts"|"a_supersedes_b"|"b_super
     return parsed.verdict === 'contradicts' || parsed.verdict === 'a_supersedes_b' || parsed.verdict === 'b_supersedes_a'
       ? parsed.verdict
       : 'compatible';
-  } catch {
+  } catch (error) {
+    // 'compatible' is the safe default (module header), but it is also what the
+    // callers write into fact_relation_checks — so a pair judged by an outage is
+    // memoized as agreeing and never classified again once the model is back.
+    degrade('recall.reconcile', 'called the pair compatible', error);
     return 'compatible';
   }
 }
@@ -96,10 +101,12 @@ function ids(value: unknown): number[] {
 export async function reconcileExplicitFact(factId: number, llm: LlmClient): Promise<void> {
   try {
     await reconcile(factId, llm);
-  } catch {
+  } catch (error) {
     // Best-effort: the fact itself is already durable. Callers fire this off the
     // acknowledgement path, so a store or model failure must not surface as an
-    // unhandled rejection in the main process.
+    // unhandled rejection in the main process — but nothing reconciles this fact
+    // again, so whatever it contradicts stays contradicted and unflagged.
+    degrade('recall.reconcile', 'left the new memory unreconciled', error);
   }
 }
 
@@ -133,7 +140,10 @@ Return ONLY JSON {"supersedeIds":[],"conflictIds":[]}.
     const end = raw.lastIndexOf('}');
     if (start === -1 || end <= start) return;
     parsed = JSON.parse(raw.slice(start, end + 1)) as ReconcileReply;
-  } catch {
+  } catch (error) {
+    // Same silence as the wrapper above, one layer in: no supersede, no
+    // conflict, and this fact is never revisited.
+    degrade('recall.reconcile', 'applied no supersede or conflict links', error);
     return;
   }
   // Reset is a hard cancellation barrier and fact ids can be reused afterward.

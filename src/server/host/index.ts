@@ -166,9 +166,16 @@ function headlessKeyWrapper(): KeyWrapper | null {
     // way here would leave an imported state root whose MCP sign-ins silently
     // refuse to open.
     passphrase = readPassphraseFile(path);
-  } catch {
-    // Present but unreadable (a directory, a permission we don't have). Say
-    // nothing more than the fallback does: plaintext, as if it were absent.
+  } catch (err) {
+    // Present but unreadable (a directory, a permission we don't have). The
+    // fallback is the same plaintext as an absent file, but the two are not the
+    // same situation: somebody deliberately put a key here, and them not
+    // noticing that it stopped being used is the whole failure. Said on stderr
+    // rather than through degrade(), which reaches log → paths → this file.
+    console.warn(
+      `[stem] the key file at ${path} could not be read (${err instanceof Error ? err.message : String(err)}). ` +
+        'Falling back to 0600 plaintext, as if there were no key file at all.'
+    );
     return (headlessWrapper = null);
   }
   if (!passphrase) return (headlessWrapper = null);
@@ -189,7 +196,9 @@ function readPackageVersion(root: string): string {
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { version?: unknown };
     if (typeof pkg.version === 'string' && pkg.version) return pkg.version;
   } catch {
-    // Not running from a tree with a package.json (bundled, or an odd cwd).
+    // quiet: not running from a tree with a package.json (bundled, or an odd
+    // cwd), which is why STEM_VERSION is read first and 0.0.0 is a documented
+    // answer rather than a failure.
   }
   return '0.0.0';
 }
@@ -221,7 +230,10 @@ export function headlessHost(): StemHost {
           try {
             hook();
           } catch {
-            // A cleanup that throws must not block the ones after it.
+            // quiet: a cleanup that throws must not block the ones after it, and
+            // by here the process is on its way out — the log chain is async and
+            // would never flush. What a hook leaves behind (a stale socket) is
+            // found and cleared by the next boot, which does say so.
           }
         }
       };

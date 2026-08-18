@@ -207,6 +207,8 @@ async function load(nextSpec: LocalEmbedModelSpec, cacheDir: string): Promise<vo
     extractor = pipe;
     postStatus({ state: 'ready', dim });
   } catch (err) {
+    // quiet: this process has no app log — parentPort is its only channel, and
+    // the error status below is the one the Memory tab reads as a red stage.
     const message = err instanceof Error ? err.message : String(err);
     extractor = null;
     postStatus({
@@ -225,7 +227,8 @@ async function loadRerank(nextSpec: LocalRerankModelSpec, cacheDir: string): Pro
   try {
     await old?.model.dispose?.();
   } catch {
-    // replaced anyway
+    // quiet: replaced anyway — the reference is already dropped, and a session
+    // that will not close is one this process no longer reaches.
   }
   rerankSpec = nextSpec;
   postRerankStatus({ state: 'loading' });
@@ -263,6 +266,8 @@ async function loadRerank(nextSpec: LocalRerankModelSpec, cacheDir: string): Pro
     reranker = next;
     postRerankStatus({ state: 'ready' });
   } catch (err) {
+    // quiet: same as load() — the rerank-status post is what carries this out
+    // of the process, to the reranker's own stage marker.
     const message = err instanceof Error ? err.message : String(err);
     reranker = null;
     postRerankStatus({
@@ -361,7 +366,8 @@ async function dispose(): Promise<void> {
     await pipe?.dispose?.();
     await rr?.model.dispose?.();
   } catch {
-    // being killed anyway
+    // quiet: being killed anyway — the manager's SIGTERM frees the sessions
+    // whether or not ORT let go of them first.
   }
   post({ type: 'disposed' });
 }

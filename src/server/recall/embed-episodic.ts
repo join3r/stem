@@ -1,3 +1,4 @@
+import { degrade } from '../degrade';
 import type { EmbeddingsClient } from './embeddings';
 import { recallStore } from './store';
 const { getEpisodicGeneration, getMessageEmbedWatermark, getMessagesForEmbedding, replaceMessageChunks, setMessageEmbedWatermark, upsertMessageChunkVector, upsertMessageVector } = recallStore;
@@ -122,9 +123,14 @@ export async function embedNewMessages(
       if (!intact()) return written;
       setMessageEmbedWatermark(model, batch[batch.length - 1].id);
     }
-  } catch {
+  } catch (err) {
     // Embed failure mid-pass: stop here. The watermark only moved past batches
-    // that were fully written, so nothing is lost — just deferred.
+    // that were fully written, so nothing is lost — just deferred. But the
+    // caller wraps this in activity.track and we return a count, not a throw,
+    // so a pass that died halfway would otherwise be filed as a finished one.
+    degrade('recall.embed', 'stopped the episodic embed pass early', err, {
+      activity: 'memory.episodicEmbed'
+    });
   } finally {
     running = false;
   }

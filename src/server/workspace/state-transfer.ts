@@ -6,6 +6,7 @@ import { delimiter, isAbsolute, join } from 'node:path';
 import { host } from '../host';
 import { resolveLoginPath } from '../exec/executor';
 import { passphraseKeyWrapper, passphraseProblem } from '../host/passphrase-key';
+import { degrade } from '../degrade';
 import { log } from '../log';
 import { RECALL_MCP_NAME } from '../recall/register-mcp';
 import { SECRET_ENVELOPE_KEY, SECRET_VALUE_PREFIX } from '../pi/protocol';
@@ -192,9 +193,19 @@ async function walk(dir: string, prefix: string, into: TarInput[]): Promise<void
   let entries: string[];
   try {
     entries = await readdir(dir);
-  } catch {
-    return; // absent is normal: a fresh install has no folder-index at all
+  } catch (error) {
+    // Absent is normal: a fresh install has no folder-index at all. A directory
+    // that is there and will not read is a hole in an archive that then reports
+    // the files it did write and calls itself a backup.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('export', 'left a folder out of the archive', error);
+    }
+    return;
   }
+  // quiet: readdir has just succeeded on this directory, so a stat that fails is
+  // one racing a delete — and the loop below then finds nothing in it either. The
+  // member only carries the folder's own mode and mtime; extract recreates a
+  // parent it was not given.
   const dirStat = await stat(dir).catch(() => null);
   if (dirStat) {
     into.push({ path: prefix, type: 'directory', mode: dirStat.mode & 0o7777, mtime: Math.floor(dirStat.mtimeMs / 1000), size: 0 });
@@ -204,7 +215,16 @@ async function walk(dir: string, prefix: string, into: TarInput[]): Promise<void
     if (prefix === 'pi-home' && SKIP_IN_PI_HOME.has(name)) continue;
     const child = archivePath(prefix, name);
     const full = join(dir, name);
-    const info = await lstat(full).catch(() => null);
+    const info = await lstat(full).catch((error) => {
+      // Gone between the readdir and here is a lock or a temporary, and the skip
+      // is right. A file that is there and will not stat is a hole in an archive
+      // that then reports the files it did write and calls itself a backup — the
+      // same loss as the unreadable directory above.
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        degrade('export', 'left a file out of the archive', error);
+      }
+      return null;
+    });
     if (!info) continue;
     if (info.isDirectory()) {
       await walk(full, child, into);
@@ -274,9 +294,10 @@ function rewrapSecretKey(passphrase: string): { data: Buffer; state: SecretsStat
     if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error('not a data key');
     return { data: passphraseKeyWrapper(passphrase).wrap(hex), state: 'rewrapped' };
   } catch {
-    // The keychain no longer opens it (a reset, a restored machine). The
+    // quiet: the keychain no longer opens it (a reset, a restored machine). The
     // ciphertexts in this archive are unreadable by anybody, including this Mac —
-    // so they travel, and the import says which connections will ask again.
+    // so they travel as 'unreadable', which the manifest carries and the import
+    // turns into the paragraph naming what will ask to be connected again.
     return { data: Buffer.alloc(0), state: 'unreadable' };
   }
 }
@@ -296,7 +317,9 @@ function mcpConfigWithoutLocalPaths(source: string): Buffer | null {
     delete parsed.servers[RECALL_MCP_NAME];
     return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
   } catch {
-    return null; // unparseable: carry the bytes as they are, corrupt and all
+    // quiet: unparseable, so the bytes travel as they are, corrupt and all — and
+    // the entry this would have stripped is rewritten at the first boot anyway.
+    return null;
   }
 }
 
@@ -325,7 +348,16 @@ export async function exportState(options: { out: string; passphrase: string }):
         continue;
       }
       if (member.kind === 'file') {
-        const info = await stat(member.source).catch(() => null);
+        const info = await stat(member.source).catch((error) => {
+          // Absent is ordinary: nothing has been scheduled, no chat folder made.
+          // Present and unreadable loses a whole top-level member — the chat
+          // folders, the inbox, the scheduled tasks — out of an archive that goes
+          // on to report how many files it wrote.
+          if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+            degrade('export', `left ${member.archive} out of the archive`, error);
+          }
+          return null;
+        });
         if (!info?.isFile()) continue;
         entries.push({
           path: member.archive,
@@ -339,7 +371,15 @@ export async function exportState(options: { out: string; passphrase: string }):
       }
       const snapshot = await snapshotDatabase(member.source, member.archive, scratch);
       const from = snapshot ?? member.source;
-      const info = await stat(from).catch(() => null);
+      const info = await stat(from).catch((error) => {
+        // No recall.sqlite is a Stem nobody has talked to yet. One that is there
+        // and will not stat takes the entire memory database out of the archive,
+        // silently, on the one copy the user is about to migrate from.
+        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+          degrade('export', `left ${member.archive} out of the archive`, error);
+        }
+        return null;
+      });
       if (!info?.isFile()) continue;
       entries.push({
         path: member.archive,
@@ -412,6 +452,9 @@ export async function exportState(options: { out: string; passphrase: string }):
       secrets: secrets.state
     };
   } finally {
+    // quiet: everything in here is a copy of something still on disk, and a temp
+    // directory that will not delete must not fail an export that already wrote
+    // its archive — the OS reaps it.
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
   }
 }
@@ -450,7 +493,16 @@ function groupsOf(files: Array<{ path: string; size: number }>): TransferGroup[]
  */
 export async function stateRootObstruction(root: string = userDataRoot()): Promise<string | null> {
   const anyEntry = async (dir: string): Promise<boolean> => {
-    const names = await readdir(dir).catch(() => [] as string[]);
+    const names = await readdir(dir).catch((error) => {
+      // Not there is the ordinary answer — a fresh state root has no sessions
+      // folder. There and unreadable answered as "empty" clears the import to
+      // unpack a second Stem on top of the chats it could not list, and there is
+      // deliberately no way back from that (see the note above).
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        degrade('import', 'treated an unreadable state root folder as empty', error);
+      }
+      return [] as string[];
+    });
     return names.some((name) => !SKIP_NAMES.has(name));
   };
 
@@ -464,7 +516,14 @@ export async function stateRootObstruction(root: string = userDataRoot()): Promi
     ['tasks.json', 'scheduled tasks'],
     ['connected-folders.json', 'connected folders']
   ] as const) {
-    const raw = await readFile(join(root, file), 'utf8').catch(() => null);
+    const raw = await readFile(join(root, file), 'utf8').catch((error) => {
+      // As above: absent is what a fresh root looks like, unreadable is a store
+      // this cannot vouch for and clears the import over anyway.
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        degrade('import', `treated an unreadable ${file} as empty`, error);
+      }
+      return null;
+    });
     if (raw === null) continue;
     try {
       const parsed = JSON.parse(raw) as unknown;
@@ -472,7 +531,8 @@ export async function stateRootObstruction(root: string = userDataRoot()): Promi
         return `it already has ${what} in it`;
       }
     } catch {
-      // Unparseable is still somebody's data; err towards refusing.
+      // quiet: unparseable is still somebody's data, and the refusal returned
+      // here is the loudest thing this function can say.
       return `it already has ${what} in it`;
     }
   }
@@ -486,9 +546,14 @@ export async function stateRootObstruction(root: string = userDataRoot()): Promi
         const row = db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n?: number } | undefined;
         if ((row?.n ?? 0) > 0) return 'it already has memory in it';
       }
-    } catch {
-      // No schema yet, or a database this build cannot read. Either way it is not
-      // evidence of use, and the signals above are the ones that matter.
+    } catch (error) {
+      // A database with no tables in it yet is a boot nobody used, and the signals
+      // above are the ones that matter. A database that is there and will not open
+      // is the other case: "not evidence of use" is then a guess, and the import it
+      // clears unpacks a second Stem on top of the memory it could not read.
+      if (!/no such table/i.test(String(error))) {
+        degrade('import', 'treated an unreadable memory database as empty', error);
+      }
     } finally {
       db?.close();
     }
@@ -561,12 +626,21 @@ async function assess(root: string, secrets: StateImportReport['secrets']): Prom
   let config: { servers?: Record<string, Record<string, unknown>> } = {};
   try {
     config = JSON.parse(await readFile(join(root, 'pi-home', 'mcp.json'), 'utf8')) as typeof config;
-  } catch {
-    // No MCP config, or an unreadable one. Nothing to say about servers.
+  } catch (error) {
+    // No MCP config is the common case and there is nothing to say about it. One
+    // that will not parse takes the whole tools half of the report with it — no
+    // command that is missing here, no URL only the old LAN could reach — off the
+    // one screen the user reads to find out what the move broke.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('import', 'said nothing about MCP servers in the report', error);
+    }
   }
   const servers = Object.entries(config.servers ?? {});
   const remote = servers.filter(([, s]) => typeof s.url === 'string');
 
+  // quiet: no token map is the common case, and one that will not read costs the
+  // report a reassuring sentence rather than an instruction — whether connected
+  // tools come up signed in is decided by `secrets`, settled before this runs.
   const oauthRaw = await readFile(join(root, 'pi-home', 'mcp-oauth.json'), 'utf8').catch(() => null);
   const signedIn: string[] = [];
   if (oauthRaw) {
@@ -578,7 +652,8 @@ async function assess(root: string, secrets: StateImportReport['secrets']): Prom
         signedIn.push(...remote.map(([name]) => name));
       }
     } catch {
-      // Corrupt token map: treat every remote server as signed out.
+      // quiet: a corrupt token map is reported the loud way — every remote server
+      // is listed as signed out, which is the safe direction to be wrong in.
       signedIn.push(...remote.map(([name]) => name));
     }
   }
@@ -606,13 +681,17 @@ async function assess(root: string, secrets: StateImportReport['secrets']): Prom
     );
   }
 
+  // quiet: the only line this feeds says the model sign-ins should keep working,
+  // so losing it asks nothing of anybody — and a sign-in that did not survive the
+  // move asks for itself on the first turn.
   const authRaw = await readFile(join(root, 'pi-home', 'auth.json'), 'utf8').catch(() => null);
   if (authRaw) {
     let providers: string[] = [];
     try {
       providers = Object.keys(JSON.parse(authRaw) as Record<string, unknown>);
     } catch {
-      // Unparseable; say nothing rather than something wrong.
+      // quiet: an auth.json this cannot read is one there is nothing true to say
+      // about, and a sign-in that did not survive asks for itself on the first turn.
     }
     if (providers.length > 0) {
       reauthorize.push(
@@ -644,7 +723,15 @@ async function assess(root: string, secrets: StateImportReport['secrets']): Prom
     }
   }
 
-  const foldersRaw = await readFile(join(root, 'connected-folders.json'), 'utf8').catch(() => null);
+  const foldersRaw = await readFile(join(root, 'connected-folders.json'), 'utf8').catch((error) => {
+    // No registry means nothing was ever connected. One that is there and will
+    // not read leaves the report silent about every folder that came over as a
+    // path this machine does not have — the same loss the parse below degrades on.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('import', 'said nothing about connected folders in the report', error);
+    }
+    return null;
+  });
   if (foldersRaw) {
     try {
       const parsed = JSON.parse(foldersRaw) as { folders?: Array<{ path?: string; name?: string }> };
@@ -655,8 +742,11 @@ async function assess(root: string, secrets: StateImportReport['secrets']): Prom
             'Its search index came over; the folder itself has to be somewhere this Stem can read.'
         );
       }
-    } catch {
-      // Nothing useful to say about an unreadable registry.
+    } catch (error) {
+      // The registry came over and will not read, so every connected folder lands
+      // as nothing — and the report whose job is naming what did not survive the
+      // move says nothing about any of them.
+      degrade('import', 'said nothing about connected folders in the report', error);
     }
   }
 
@@ -683,6 +773,8 @@ async function assess(root: string, secrets: StateImportReport['secrets']): Prom
  * people to ignore the report.
  */
 async function commandProbe(): Promise<(command: string) => boolean> {
+  // quiet: resolveLoginPath answers with the process PATH on every failure of its
+  // own and degrades there (exec.loginPath); it has no rejection to report.
   const loginPath = await resolveLoginPath().catch(() => '');
   const dirs = [...new Set([loginPath, process.env.PATH ?? ''].flatMap((p) => p.split(delimiter)))].filter(Boolean);
   // Windows resolves a bare name through PATHEXT; elsewhere the name is the file.
@@ -719,6 +811,8 @@ function isPrivateAddress(raw: string): boolean {
   try {
     hostname = new URL(raw).hostname.toLowerCase().replace(/^\[|\]$/g, '');
   } catch {
+    // quiet: a URL this cannot read is one it has nothing true to say about, per
+    // the note above.
     return false;
   }
   if (hostname === 'localhost' || hostname === '::1') return true;
@@ -784,6 +878,8 @@ export async function importState(options: { archive: string; passphrase: string
       const hex = passphraseKeyWrapper(options.passphrase).unwrap(readFileSync(keyPath));
       secrets = /^[0-9a-f]{64}$/.test(hex) ? 'opened' : 'wrong-passphrase';
     } catch {
+      // quiet: 'wrong-passphrase' goes into the report, where assess() turns it
+      // into the paragraph saying every connected tool comes up signed out.
       secrets = 'wrong-passphrase';
     }
   }
@@ -800,10 +896,10 @@ export async function importState(options: { archive: string; passphrase: string
   const assessment = await assess(root, secrets);
 
   // Provenance, left where the next person to wonder will look.
-  await writeFile(join(root, MANIFEST_NAME), `${JSON.stringify({ ...manifest, importedAt: new Date().toISOString() }, null, 2)}\n`, {
-    encoding: 'utf8',
-    mode: 0o600
-  }).catch(() => undefined);
+  const provenance = `${JSON.stringify({ ...manifest, importedAt: new Date().toISOString() }, null, 2)}\n`;
+  // quiet: written for a person reading the state root afterwards; nothing in
+  // Stem reads it back, and the same three facts are in the report this returns.
+  await writeFile(join(root, MANIFEST_NAME), provenance, { encoding: 'utf8', mode: 0o600 }).catch(() => undefined);
 
   return {
     stateRoot: root,

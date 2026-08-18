@@ -97,6 +97,8 @@ async function bytesOf(att: TurnAttachment): Promise<Buffer | null> {
     try {
       return await readFile(path);
     } catch {
+      // quiet: null is the caller's cue to name this attachment in `rejected`,
+      // which is how the user finds out the file did not go with the message.
       return null;
     }
   }
@@ -121,6 +123,9 @@ export async function imagePreviewDataUrl(path: string): Promise<string | null> 
     const bytes = await readFile(path);
     return `data:${mime};base64,${bytes.toString('base64')}`;
   } catch {
+    // quiet: this is the thumbnail in the live bubble, not the attachment — the
+    // same file is read again for the turn itself, and that read is the one that
+    // reports.
     return null;
   }
 }

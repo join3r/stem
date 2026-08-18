@@ -40,13 +40,37 @@ import {
   type CoreFactHit,
   type CoreSearchHit,
   type CoreSummaryHit,
-  type QueryEmbedding
+  type QueryEmbedding,
+  setCoreDegradeSink
 } from './search-core';
 
 const DB_PATH = process.env.STEM_RECALL_DB;
 const EMBED_SOCK = process.env.STEM_EMBED_SOCK;
 const EMBED_TOKEN = process.env.STEM_EMBED_TOKEN;
 const FOLDER_INDEX_DIR = process.env.STEM_FOLDER_INDEX_DIR;
+
+/**
+ * This process's version of degrade(): a failure it survived, said out loud.
+ *
+ * There is no log file here — main's logger resolves its path through the
+ * workspace and host modules this bundle deliberately doesn't carry — and stdout
+ * is the JSON-RPC frame stream, so stderr is the one channel left that can't
+ * corrupt the protocol. It also takes search-core's leg failures
+ * (setCoreDegradeSink below), which is the whole point: `[]` from a broken FTS
+ * index and `[]` from a question nothing matches leave this server saying the
+ * same "no results found" sentence.
+ */
+function report(scope: string, what: string, error: unknown): void {
+  const detail = error instanceof Error ? error.message || error.name : String(error);
+  try {
+    process.stderr.write(`[${scope}] degraded: ${what} (${detail})\n`);
+  } catch {
+    // quiet: same rule as degrade() in main — reporting a degradation must never
+    // become one. A closed stderr can't be allowed to fail a tool call.
+  }
+}
+
+setCoreDegradeSink(report);
 
 let db: DatabaseSync | null = null;
 function open(): DatabaseSync {
@@ -73,6 +97,8 @@ function isRecallEnabledFlag(): boolean {
       .get() as { value?: string } | undefined;
     return row?.value !== 'false';
   } catch {
+    // quiet: the doc comment above is the contract — unreadable meta counts as
+    // enabled, deliberately, and matches what the main process does.
     return true;
   }
 }
@@ -114,6 +140,9 @@ function embedQueryViaSocket(query: string): Promise<QueryEmbedding | null> {
           done(null);
         }
       } catch {
+        // quiet: null here is FTS-only, and it is the same null the timeout, the
+        // refused connect and the error handler above all produce. Singling out
+        // the malformed-reply case would light up one of five identical outcomes.
         done(null);
       }
     });
@@ -177,7 +206,10 @@ function readFolderManifest(): FolderManifestEntry[] {
       folders?: FolderManifestEntry[];
     };
     return Array.isArray(raw.folders) ? raw.folders.filter((f) => f && typeof f.dbFile === 'string') : [];
-  } catch {
+  } catch (e) {
+    // Every indexed folder disappears at once, and search_folder_docs answers
+    // with the same sentence it uses when a folder simply had no match.
+    report('recall.mcp', 'searched no indexed folders — the manifest was unreadable', e);
     return [];
   }
 }
@@ -195,6 +227,8 @@ function folderReachable(path: unknown): boolean {
   try {
     return statSync(path).isDirectory();
   } catch {
+    // quiet: the question is whether the folder is there right now, and a stat
+    // that fails has answered it.
     return false;
   }
 }
@@ -221,7 +255,8 @@ function evictFolderDb(dbFile: string): void {
   try {
     db?.close();
   } catch {
-    // Already closed/broken.
+    // quiet: already closed or broken. The handle is out of the map either way,
+    // which is the only thing eviction owes anyone.
   }
 }
 
@@ -254,8 +289,11 @@ export async function searchFolderDocs(query: string, limit: unknown, folder: un
         embedQuery
       });
       all.push(...hits.map((h) => ({ ...h, folderLabel: entry.label })));
-    } catch {
+    } catch (e) {
       // A missing/locked index just contributes no hits; reopen fresh next call.
+      // The answer still lists every other folder, so nothing about it says one
+      // folder was left out.
+      report('recall.mcp', `skipped the "${entry.label}" folder index`, e);
       evictFolderDb(entry.dbFile);
     }
   }
@@ -523,6 +561,8 @@ rl.on('line', (line) => {
   try {
     msg = JSON.parse(trimmed) as RpcMessage;
   } catch {
+    // quiet: a line that isn't a JSON frame carries no id to answer on, so
+    // there is nobody to tell — and pi is the only writer to this stdin.
     return;
   }
   try {

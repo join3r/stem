@@ -18,6 +18,8 @@ function formatLine(scope: string, message: string, extra?: unknown): string {
     try {
       suffix = ` ${JSON.stringify(extra)}`;
     } catch {
+      // quiet: the line still goes out, saying in place of the payload exactly
+      // what went wrong with it.
       suffix = ' [unserializable payload]';
     }
   }
@@ -31,11 +33,19 @@ export function log(scope: string, message: string, extra?: unknown): void {
   chain = chain.then(async () => {
     try {
       const path = logFilePath();
+      // quiet: no file is the ordinary case on a first run, and appendFile creates
+      // it — a stat that failed for any other reason is answered by the same
+      // append, which throws into the catch below.
       const s = await stat(path).catch(() => null);
+      // quiet: a rotation that failed is retried on the very next line, since the
+      // size that triggered it does not go down. Nothing here can complain in any
+      // case: this is the log, and a complaint would come straight back to it.
       if (s && s.size > MAX_LOG_BYTES) await rename(path, `${path}.1`).catch(() => undefined);
       await appendFile(path, text, 'utf8');
     } catch {
-      // Logging is diagnostics only — swallow everything.
+      // quiet: this is the log. Reporting a failure to write the log has only
+      // one place to write it, and everything above (degrade included) ends up
+      // here — so a complaint would recurse rather than reach anybody.
     }
   });
 }

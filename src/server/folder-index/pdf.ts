@@ -89,13 +89,20 @@ export async function extractPdfText(data: Buffer, maxChars: number): Promise<Pd
         total += pageText.length;
       }
     }
+    // quiet: the metadata title is a nicety on top of the text, and plenty of
+    // PDFs carry none at all — the caller falls back to the filename either way.
     const meta = await doc.getMetadata().catch(() => null);
     const rawTitle = (meta?.info as { Title?: unknown } | undefined)?.Title;
     const title = typeof rawTitle === 'string' && rawTitle.trim() ? rawTitle.trim().slice(0, 200) : null;
     return { text: parts.join('\n\n').slice(0, maxChars).trim(), title };
   } catch {
+    // quiet: null is the answer. The caller counts it as an unreadable PDF in the
+    // skip stats the Folders tab shows.
     return null;
   } finally {
+    // quiet: this only releases pdf.js's own buffers on a document nothing will
+    // read again. Letting it through would be worse than dropping it: a throw in
+    // `finally` replaces the extracted text with the destroy's error.
     await task?.destroy().catch(() => {});
   }
 }

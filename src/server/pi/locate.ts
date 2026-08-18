@@ -98,6 +98,9 @@ async function readBundledVersion(cliPath: string): Promise<string | null> {
     const version = (JSON.parse(raw) as { version?: unknown }).version;
     return typeof version === 'string' ? version : null;
   } catch {
+    // quiet: null is what the field means — version unknown. Only the untested-pi
+    // warning reads it, and a bundled package whose cli.js just resolved but whose
+    // package.json will not is a broken install that pi's own spawn reports.
     return null;
   }
 }
@@ -117,7 +120,8 @@ async function locateBundledCli(): Promise<string | null> {
     await access(cli);
     return cli;
   } catch {
-    // fall through to a path relative to the built main bundle (dist/main/…)
+    // quiet: not resolvable as a package here — fall through to a path relative
+    // to the built main bundle (dist/main/…).
   }
   try {
     const cli = fileURLToPath(
@@ -126,6 +130,8 @@ async function locateBundledCli(): Promise<string | null> {
     await access(cli);
     return cli;
   } catch {
+    // quiet: no bundled pi. resolvePi falls through to a system one and, failing
+    // that, answers null — which the caller turns into the "pi not found" screen.
     return null;
   }
 }
@@ -146,7 +152,8 @@ async function locateNodeShim(): Promise<string | null> {
       await access(path);
       return path;
     } catch {
-      // keep looking
+      // quiet: keep looking. Every candidate missing means no shim, which costs
+      // the Dock-icon fix and nothing else (see the doc comment above).
     }
   }
   return null;
@@ -168,7 +175,8 @@ async function findSystemPi(): Promise<string | null> {
       await access(candidate);
       return candidate;
     } catch {
-      // keep looking
+      // quiet: keep looking — a candidate that is not there is the ordinary
+      // answer for all but one of these paths on any machine.
     }
   }
   return null;

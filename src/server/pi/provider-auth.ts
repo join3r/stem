@@ -213,6 +213,9 @@ export class ProviderAuth {
     try {
       return (await runtime.getAuth(provider)) !== undefined;
     } catch {
+      // quiet: a refresh that throws IS the signed-out answer this was asked for,
+      // and false puts the user on the re-auth screen — which is where the
+      // false negative from a flaky network lands too, with a way back out.
       return false;
     }
   }

@@ -207,7 +207,10 @@ async function readCatalogFile(): Promise<DeviceMcpCatalog> {
   try {
     raw = await readFile(piMcpDeviceCatalogPath(), 'utf8');
   } catch {
-    return emptyCatalog(); // never written yet
+    // quiet: absent until the first device announces what it hosts. A catalog
+    // that is there and unreadable is a different thing, and the parse below
+    // says so.
+    return emptyCatalog();
   }
   try {
     const parsed = JSON.parse(raw) as Partial<DeviceMcpCatalog>;
@@ -233,6 +236,9 @@ async function writeCatalogFile(next: DeviceMcpCatalog): Promise<void> {
     await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
     await rename(tmp, path);
   } finally {
+    // quiet: after a successful rename there is nothing left to remove, and after a
+    // failed write the error from the try is the one worth having — a stray `.tmp`
+    // beside the catalog is the same litter a force-quit leaves and never read.
     await rm(tmp, { force: true }).catch(() => undefined);
   }
 }
@@ -246,6 +252,9 @@ export function fileCatalogStore(): DeviceMcpCatalogStore {
   let tail: Promise<unknown> = Promise.resolve();
   const queue = <T>(work: () => Promise<T>): Promise<T> => {
     const next = tail.then(work, work);
+    // quiet: `next` is what the caller awaits and it keeps the rejection; this copy
+    // exists only so a failed read does not leave the tail rejected — which would
+    // both unhandled-reject and be re-thrown at whoever queues next.
     tail = next.catch(() => undefined);
     return next;
   };

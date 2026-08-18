@@ -1,4 +1,5 @@
 import { TaskScheduler } from '../scheduler';
+import { degrade } from '../degrade';
 import { pushTaskAlert } from '../push';
 import { noteSilentRun } from '../workspace/inbox';
 import { readSettings } from '../workspace/settings';
@@ -36,7 +37,13 @@ export function initTaskScheduler(deps: {
     onSilentRun: (threadId, before, at) => {
       void noteSilentRun(threadId, before, at)
         .then(() => deps.emit('chats:changed', undefined))
-        .catch(() => undefined);
+        .catch((err) => {
+          // Absorbing the bump is the only thing keeping a run that found nothing
+          // out of the Inbox. Unwritten, the thread lifts back out of the archive
+          // and bolds itself for a turn nobody took — which is the whole reason
+          // the before/after pair is carried down here.
+          degrade('tasks', 'left a silent scheduled run showing as new activity', err);
+        });
     }
   });
   deps.runtime.setTaskBridge({
@@ -62,6 +69,9 @@ export function initTaskScheduler(deps: {
       scheduler.noteNotify(threadId);
       // Read per notification rather than once at wiring time: a task fires long
       // after startup, and the toggle must apply to the very next run.
+      // quiet: readSettings answers with the defaults and degrades ('settings')
+      // itself rather than rejecting, so this catch is for a rejection it has not
+      // got — and 'alert', the default, is the mode that cannot be missed.
       const mode = (await readSettings().catch(() => null))?.tasks.notify ?? 'alert';
       if (mode === 'inbox') return;
       // Both louder modes wake a phone, and this is the line that says so: `alert`

@@ -44,6 +44,8 @@ async function seedWindowsGitBash(): Promise<void> {
     const found = await detectGitBash();
     if (found) await updateExecSettings({ gitBashPath: found, windowsShell: 'git-bash' });
   } catch {
-    // Detection is best-effort; resolveHostShell still falls back to cmd.
+    // quiet: pre-filling a Settings field is the entire point of this pass.
+    // Nothing depends on it — resolveHostShell still falls back to cmd, and
+    // Settings' own detect finds Git the next time somebody opens it.
   }
 }

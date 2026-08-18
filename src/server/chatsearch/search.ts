@@ -1,4 +1,5 @@
 import type { ChatSearchHit } from '../../shared/types';
+import { degrade } from '../degrade';
 import type { LlmClient } from '../recall/llm';
 import { buildMatchQuery } from '../recall/search';
 import { searchChatDocs } from './store';
@@ -32,8 +33,11 @@ async function runMatch(terms: string[], deps: ChatSearchDeps, limit: number): P
     let rows;
     try {
       rows = searchChatDocs(match, pageSize, offset);
-    } catch {
-      // A malformed index / unexpected SQL error must never surface as a broken search.
+    } catch (error) {
+      // A malformed index / unexpected SQL error must never surface as a broken
+      // search. But "nothing matched" is also what a healthy index says about a
+      // word nobody used, so the difference has to be recorded somewhere.
+      degrade('chatsearch.search', 'returned the chats found so far', error);
       return hits;
     }
     if (rows.length === 0) break;

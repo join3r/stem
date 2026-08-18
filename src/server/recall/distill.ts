@@ -4,6 +4,7 @@ import { getEmbeddingsClient } from './retrieval';
 import { cosineSim } from './vector';
 import { isRecallEnabled } from '../workspace/memory';
 import * as activity from '../activity';
+import { degrade } from '../degrade';
 import { classifyRelation, evidenceDateOf, sweepFactAgainstNeighbours, type SweepBudget } from './reconcile';
 import type { FactCategory, FactSensitivity } from '../../shared/types';
 import type { LlmClient } from './llm';
@@ -179,7 +180,10 @@ export function parseDistillOutput(output: string, maxTextLength = 300): ParsedD
         recognized = true;
       }
     } catch {
-      // Legacy/bullet fallback below.
+      // quiet: `recognized` stays false through here, and the caller treats an
+      // unrecognized reply as a model failure — strikes the segment, retries it,
+      // and never consumes the transcript on its strength. Legacy/bullet
+      // fallback below.
     }
   }
   if (raw.length === 0) {
@@ -241,6 +245,9 @@ export function parseFactUsage(output: string): FactUsageGrade[] {
         : [];
     });
   } catch {
+    // quiet: grading rides free on the distill call and is optional by design —
+    // an ungraded turn stays ungraded and the lexical heuristic covers it, which
+    // is exactly what a model that ignored the second duty produces anyway.
     return [];
   }
 }
@@ -347,7 +354,8 @@ export function parseFacts(output: string): string[] {
       const arr = JSON.parse(trimmed.slice(start, end + 1));
       if (Array.isArray(arr)) for (const v of arr) if (typeof v === 'string') raw.push(v);
     } catch {
-      // fall through to bullet parsing
+      // quiet: this parser exists to accept whatever shape the reply came in —
+      // fall through to bullet parsing.
     }
   }
   // Fallback: bullet/numbered lines.
@@ -466,7 +474,9 @@ function readCursorCount(key: string, cursor: DistillCursor): number {
       return Math.max(0, p.count!);
     }
   } catch {
-    // Stale/corrupt → no count.
+    // quiet: the counter is scoped to one cursor position, so anything this
+    // function cannot read means "no strikes recorded here" — the same answer a
+    // fresh segment gets, and the next attempt writes the record properly.
   }
   return 0;
 }
@@ -498,8 +508,11 @@ export function readDistillCursor(): DistillCursor {
       if (Number.isInteger(parsed.messageId) && Number.isInteger(parsed.offset)) {
         return { messageId: Math.max(1, parsed.messageId!), offset: Math.max(0, parsed.offset!) };
       }
-    } catch {
-      // Bootstrap from the v1 watermark below.
+    } catch (error) {
+      // Bootstrap from the v1 watermark below — which is this store's PRE-v2
+      // position, so distillation silently resumes somewhere else entirely and
+      // re-mines (or skips) whatever lies between the two.
+      degrade('recall.distill', 'restarted the cursor from the v1 watermark', error);
     }
   }
   const old = Number.parseInt(getMeta(WATERMARK) ?? '0', 10) || 0;
@@ -605,7 +618,12 @@ export async function scoreCandidatesAgainstFacts(
       return max;
     });
     return { vecs, model, maxSims };
-  } catch {
+  } catch (error) {
+    // null is also "no embeddings configured", and the caller cannot tell: it
+    // skips the write-time dedup signal AND the neighbour sweep (both are gated
+    // on this result), so the extractor-independent truth maintenance is off for
+    // every fact this batch writes, with nothing to mark them for a later pass.
+    degrade('recall.distill', 'wrote the batch without duplicate or neighbour checks', error);
     return null;
   }
 }

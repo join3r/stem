@@ -28,10 +28,20 @@ import {
   SERVICE_TIER_GATE_FILE
 } from './protocol';
 import { decryptSecretValue, encryptSecretValue, secretKeyAvailable } from './secrets';
+import { degrade } from '../degrade';
 
 // Stem's MCP config for the pi backend (mcp.json). Consumed by the bridge
 // extension (stem-mcp-extension.mjs), which pi loads via `-e`. Stem owns this file
 // end-to-end under the isolated pi home.
+
+/**
+ * ENOENT is the ordinary answer for every file under the pi home until whoever
+ * owns it writes it the first time; any other read failure is a file that exists
+ * and could not be read, which is a different story and worth telling.
+ */
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+}
 
 export interface PiMcpServer {
   /** stdio transport */
@@ -125,8 +135,14 @@ function bridgeCatalogText(): string {
       catalogCache = { mtime, text: typeof data.text === 'string' ? data.text : '' };
     }
     return catalogCache.text;
-  } catch {
-    catalogCache = { mtime: -1, text: '' }; // missing/corrupt → nothing from here
+  } catch (error) {
+    catalogCache = { mtime: -1, text: '' };
+    // No file at all until the bridge's first publish, and nothing to list then.
+    // A file that is there and unreadable is different: the extension rewrites it
+    // in place, so a turn can read it torn, and that turn goes out with no
+    // "Available tools" block — the model then says it has no such tool, which is
+    // indistinguishable from the user never having added the server.
+    if (!isMissing(error)) degrade('pi.mcpConfig', 'left every routed MCP tool out of this turn', error);
     return '';
   }
 }
@@ -151,6 +167,10 @@ function deviceCatalog(): DeviceMcpCatalog {
     }
     return deviceCatalogCache.catalog;
   } catch {
+    // quiet: this file is written temp-then-rename, so what lands here is a
+    // catalog no machine has announced into yet. One that truly cannot be read
+    // is reported where it is owned (mcp-device/catalog.ts) and rebuilt by the
+    // next announcement from every device.
     deviceCatalogCache = { mtime: -1, catalog: { version: 1, devices: {} } };
     return deviceCatalogCache.catalog;
   }
@@ -206,6 +226,10 @@ export async function buildMcpCatalogContext(): Promise<string | null> {
 async function buildExecHostSection(): Promise<string> {
   const hosts = Object.values(await execDeviceRouter().hosts()).filter((h) => h.enabled);
   if (!hosts.length) return '';
+  // quiet: loadDevices() already rebuilds an unreadable registry empty and
+  // degrades under transport.devices, so a rejection here is the queue itself
+  // failing — and the fault has been named once already, by the layer that has
+  // the file open.
   const devices = await readDevices().catch(() => []);
   const labels = new Map(devices.map((d) => [d.id, d.label]));
   const connected = connectedDeviceIds();
@@ -244,6 +268,9 @@ async function buildDeviceCatalogSection(): Promise<DeviceCatalogBlock> {
     (config) => config.servers,
     () => ({}) as Record<string, PiMcpServer>
   );
+  // quiet: same as buildExecHostSection — transport.devices owns this failure
+  // and reports it. Here it costs only the friendly names: `label` falls back
+  // to the device id, so the catalog still lists what can be called.
   const devices = await readDevices().catch(() => []);
   const labels = new Map(devices.map((d) => [d.id, d.label]));
   return renderDeviceCatalogBlock(catalog, {
@@ -332,8 +359,11 @@ async function readOAuthTokensWithFormat(): Promise<{
       }
       return { tokens: parsed as unknown as Record<string, OAuthToken>, encryptedAtRest: false };
     }
-  } catch {
-    // missing/corrupt → none
+  } catch (error) {
+    // No file until the first server is signed in. One that exists and does not
+    // parse costs every signed-in server its token at once, and the only thing
+    // the user sees is being asked to sign in again to all of them.
+    if (!isMissing(error)) degrade('pi.mcpConfig', 'read the OAuth token map as empty', error);
   }
   return { tokens: {}, encryptedAtRest: false };
 }
@@ -367,6 +397,9 @@ async function writeSecretFile(path: string, data: string): Promise<void> {
     await chmod(tmp, 0o600);
     await rename(tmp, path); // atomic on the same filesystem (same dir)
   } finally {
+    // quiet: the temp is created 0600 inside the 0700 dir, so one that survives
+    // is exactly as unreadable to anyone else as the file it was to become. It
+    // is litter, and litter is what the stray-`.tmp` note above already allows.
     await rm(tmp, { force: true }).catch(() => undefined);
   }
 }
@@ -393,12 +426,18 @@ async function reapAbandonedLock(lockPath: string): Promise<boolean> {
     try {
       if (Date.now() - statSync(lockPath).mtimeMs <= FILE_LOCK_STALE_MS) return false;
     } catch {
+      // quiet: the stat failing means the lock is already gone, which is the
+      // answer reaping it was looking for.
       return true;
     }
     await rm(lockPath, { force: true });
     return true;
   } finally {
+    // quiet: a descriptor this process holds until it exits.
     await reaper.close().catch(() => undefined);
+    // quiet: a reaper file that survives makes every later reap answer false on
+    // EEXIST, so a genuinely stale lock stops being recoverable — and that
+    // arrives as the lock timeout, which throws with its own message.
     await rm(reaperPath, { force: true }).catch(() => undefined);
   }
 }
@@ -423,7 +462,11 @@ async function withOwnedFileLock<T>(
       await handle.writeFile(owner, 'utf8');
     } catch (error) {
       if (handle) {
+        // quiet: a descriptor this process holds until it exits.
         await handle.close().catch(() => undefined);
+        // quiet: the lock file this branch is abandoning was never stamped with
+        // an owner, so it is already the stale case — the reap 30s later is the
+        // path that clears it, and it needs no help from here.
         await rm(lockPath, { force: true }).catch(() => undefined);
         handle = undefined;
       }
@@ -433,7 +476,9 @@ async function withOwnedFileLock<T>(
           if (await reapAbandonedLock(lockPath)) continue;
         }
       } catch {
-        continue; // it disappeared between open/stat; retry immediately
+        // quiet: it disappeared between open/stat, so the wait is over; retry
+        // immediately and take it.
+        continue;
       }
       if (Date.now() >= deadline) throw new Error(timeoutMessage);
       await new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -442,8 +487,14 @@ async function withOwnedFileLock<T>(
   try {
     return await operation();
   } finally {
+    // quiet: a descriptor this process holds until it exits.
     await handle.close().catch(() => undefined);
+    // quiet: '' is the safe answer and the one this check wants. It cannot equal
+    // `owner`, so an unreadable lock file is left alone rather than unlinked out
+    // from under whoever holds it now — the invariant the owner tag exists for.
     const currentOwner = await readFile(lockPath, 'utf8').catch(() => '');
+    // quiet: a lock that outlives its owner is what FILE_LOCK_STALE_MS is for;
+    // the next waiter reaps it 30s on. The cost is a wait, not a lost write.
     if (currentOwner === owner) await rm(lockPath, { force: true }).catch(() => undefined);
   }
 }
@@ -693,8 +744,12 @@ export async function readMcpConfig(): Promise<PiMcpConfig> {
   let raw: string;
   try {
     raw = await readFile(piMcpConfigPath(), 'utf8');
-  } catch {
-    return { servers: {} }; // genuinely missing → fresh
+  } catch (error) {
+    // ENOENT is the first run this promises to distinguish. Anything else is a
+    // file that IS there and did not open, and it lands on the same empty config
+    // — which ensureMcpConfig then writes back over every server the user added.
+    if (!isMissing(error)) degrade('pi.mcpConfig', 'read mcp.json as a first run and started from no servers', error);
+    return { servers: {} };
   }
   try {
     const parsed = JSON.parse(raw) as Partial<PiMcpConfig>;
@@ -707,7 +762,15 @@ export async function readMcpConfig(): Promise<PiMcpConfig> {
     }
     throw new Error('mcp.json has no "servers" object');
   } catch (e) {
-    await writeFile(`${piMcpConfigPath()}.corrupt`, raw, { encoding: 'utf8', mode: 0o600 }).catch(() => undefined);
+    await writeFile(`${piMcpConfigPath()}.corrupt`, raw, { encoding: 'utf8', mode: 0o600 }).catch(
+      (writeError) =>
+        // The throw below names a file to recover from, and ensureMcpConfig
+        // rebuilds mcp.json empty on the strength of it. If the copy never
+        // landed, that rebuild is the moment every user-added server is gone
+        // with nothing to restore — and the error the user reads still points
+        // at a path that does not exist.
+        degrade('pi.mcpConfig', 'kept no .corrupt copy of the unreadable mcp.json', writeError)
+    );
     throw new Error(`mcp.json is corrupt (preserved at ${piMcpConfigPath()}.corrupt): ${String(e)}`);
   }
 }
@@ -738,10 +801,13 @@ export async function ensureMcpConfig(): Promise<void> {
     let config: PiMcpConfig;
     try {
       config = await readMcpConfig();
-    } catch {
+    } catch (error) {
       // Corrupt mcp.json (already preserved as `.corrupt` by readMcpConfig). Start
       // fresh so recall and the app keep working; the backup keeps any recoverable
-      // user servers around instead of erasing them without a trace.
+      // user servers around instead of erasing them without a trace. The user's
+      // servers disappear from the MCP tab in the same breath, so say which run
+      // did it rather than leaving a `.corrupt` file to be found later.
+      degrade('pi.mcpConfig', 'rebuilt mcp.json without the user-added servers', error);
       config = { servers: {} };
     }
     config.servers[RECALL_MCP_NAME] = recallServerEntry();

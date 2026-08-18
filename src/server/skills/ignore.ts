@@ -1,5 +1,6 @@
 import { readdirSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { degrade } from '../degrade';
 import { skillsRoot } from '../workspace/paths';
 
 // Turning a skill off writes a `.disabled` marker inside its folder — and, on its
@@ -35,7 +36,13 @@ export function disabledSlugs(root = skillsRoot()): string[] {
     entries = readdirSync(root, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name);
-  } catch {
+  } catch (error) {
+    // No root yet means nothing is disabled either. Any other failure is worse
+    // than it looks: `syncSkillsIgnore` reads an empty list as "nothing to hide"
+    // and deletes the ignore file, putting every archived skill back in the prompt.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('skills.ignore', 'found no disabled skills to hide', error);
+    }
     return [];
   }
   return entries.filter((slug) => existsSync(join(root, slug, DISABLED_MARKER))).sort();
@@ -57,8 +64,11 @@ export function syncSkillsIgnore(root = skillsRoot()): string[] {
     } else {
       writeFileSync(file, `${[...HEADER, '', ...slugs.map((s) => `${s}/`)].join('\n')}\n`, 'utf8');
     }
-  } catch {
-    // best-effort — see above
+  } catch (error) {
+    // The toggle in Manage reports success off the `.disabled` marker alone, so
+    // without this the user turns a skill off, sees it turn off, and the backend
+    // keeps loading it.
+    degrade('skills.ignore', 'left a disabled skill loaded by the backend', error);
   }
   return slugs;
 }

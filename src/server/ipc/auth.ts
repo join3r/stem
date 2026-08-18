@@ -59,6 +59,7 @@ export function registerAuthIpc(deps: IpcDeps): void {
     try {
       await deps.providerAuth()!.setApiKey(provider, key);
     } catch (e) {
+      // quiet: the wizard puts this string under the key field.
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
     return { ok: true, status: await deps.onAuthenticated() };
@@ -76,6 +77,8 @@ export function registerAuthIpc(deps: IpcDeps): void {
       await relayCallback(redirectUri, params);
       return { ok: true };
     } catch (e) {
+      // quiet: the client that caught the callback is the one waiting on this
+      // answer, and a delivery that matched no outstanding sign-in has to say so.
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   });
@@ -115,6 +118,7 @@ export function registerAuthIpc(deps: IpcDeps): void {
       // onAuthenticated() lists models so the new registry is visible to it.
       await deps.runtime().restart();
     } catch (e) {
+      // quiet: the endpoint form shows this instead of closing.
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
     return { ok: true, status: await deps.onAuthenticated() };
@@ -141,6 +145,8 @@ export function registerAuthIpc(deps: IpcDeps): void {
       if (defaults.model?.startsWith(`${providerId}/`)) await updateDefaultModel(null);
       await deps.runtime().restart();
     } catch (e) {
+      // quiet: Settings keeps the provider on screen with this as the reason, so
+      // a half-finished disconnect is not mistaken for a finished one.
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
     return { ok: true, status: await deps.onAuthenticated() };

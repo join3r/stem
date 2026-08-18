@@ -89,6 +89,8 @@ export async function stageUpload(name: string, body: Readable): Promise<UploadR
   try {
     await pipeline(body, createWriteStream(target));
   } catch (e) {
+    // quiet: the upload's own failure is thrown on the next line, and a directory
+    // that will not delete is one the age sweep collects.
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     throw e;
   }
@@ -114,6 +116,8 @@ export async function resolveUploadHandle(handle: string): Promise<string | null
     const file = entries.find((e) => e.isFile());
     return file ? join(dir, file.name) : null;
   } catch {
+    // quiet: the contract above is that a handle naming nothing readable answers
+    // null, which callers already treat like any unreadable path.
     return null;
   }
 }
@@ -129,7 +133,7 @@ export async function sweepStagedUploads(now = Date.now()): Promise<number> {
   try {
     entries = await readdir(root, { withFileTypes: true });
   } catch {
-    return 0; // nothing has ever been uploaded here
+    return 0; // quiet: nothing has ever been uploaded here
   }
   let removed = 0;
   for (const entry of entries) {
@@ -141,7 +145,7 @@ export async function sweepStagedUploads(now = Date.now()): Promise<number> {
       await rm(dir, { recursive: true, force: true });
       removed++;
     } catch {
-      // Gone already, or unreadable. Either way the next sweep can have it.
+      // quiet: gone already, or unreadable. Either way the next sweep can have it.
     }
   }
   if (removed) log('uploads', 'swept staged uploads', { removed });
@@ -157,7 +161,11 @@ let sweeper: NodeJS.Timeout | null = null;
  */
 export function startStagingSweeper(): void {
   if (sweeper) return;
+  // quiet: the sweep swallows and explains its own per-entry failures already, so
+  // a rejection out here is the staging root itself being unreadable — and the
+  // cost of that is bytes waiting for the next pass.
   void sweepStagedUploads().catch(() => undefined);
+  // quiet: the same, ten minutes at a time.
   sweeper = setInterval(() => void sweepStagedUploads().catch(() => undefined), SWEEP_INTERVAL_MS);
   // Never hold the process open for housekeeping.
   sweeper.unref?.();

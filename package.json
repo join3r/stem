@@ -35,6 +35,7 @@
     "eval:skills": "node scripts/skill-author-eval.mjs",
     "eval:skill-retrieval": "node scripts/skill-retrieval-eval.mjs",
     "fixtures:skills": "node scripts/skill-fixtures.mjs",
+    "probe:quiet": "node scripts/quiet-mutants.mjs",
     "gen:shortcuts-doc": "node scripts/gen-shortcuts-doc.mjs"
   },
   "dependencies": {

@@ -8,6 +8,7 @@ import { constants } from 'node:fs';
 import { copyFile, mkdir, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve, sep } from 'node:path';
 import type { FileEntry, FilesListing } from '../../shared/types';
+import { degrade } from '../degrade';
 import { filesRoot } from '../workspace/paths';
 import { isUploadHandle, resolveUploadHandle } from './staging';
 
@@ -30,7 +31,13 @@ export async function listFiles(): Promise<FilesListing> {
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      // Absent is ordinary: the Files place is created on first use, and a
+      // subfolder can go while the walk is inside it. A folder that is there and
+      // will not read is the other thing, and it looks the same — empty.
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        degrade('files', 'left a folder out of the listing', error);
+      }
       return;
     }
     for (const e of entries) {
@@ -44,7 +51,8 @@ export async function listFiles(): Promise<FilesListing> {
         try {
           size = (await stat(abs)).size;
         } catch {
-          // unreadable — list it with size 0 rather than dropping it
+          // quiet: unreadable, but the file is there — listing it at size 0 beats
+          // dropping it out of the folder the user is looking at.
         }
         const rel = relative(rootDir, abs).split(sep).join('/');
         files.push({ rel, name: e.name, dir: dir === rootDir ? '' : topDir, size });
@@ -110,8 +118,11 @@ export async function addFiles(paths: string[], subdir = ''): Promise<FilesListi
     if (!from) continue;
     try {
       await copyToUniquePath(from, destDir, basename(from) || `file-${Date.now()}-${seq++}`);
-    } catch {
-      // Skip a single unreadable source rather than failing the whole drop.
+    } catch (error) {
+      // Skip a single unreadable source rather than failing the whole drop. The
+      // listing returned below is the only answer a drop gets, and a file missing
+      // from it looks exactly like a file that was never dropped.
+      degrade('files', 'skipped one dropped file', error);
     }
   }
   return listFiles();
@@ -155,7 +166,9 @@ export async function readableFilePath(rel: string): Promise<string | null> {
     if (real !== root && !real.startsWith(root + sep)) return null;
     return (await stat(real)).isFile() ? real : null;
   } catch {
-    return null; // missing, or a broken link
+    // quiet: missing, or a broken link. Either way the caller has its answer —
+    // there are no bytes here to serve.
+    return null;
   }
 }
 

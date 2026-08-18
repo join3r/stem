@@ -1,5 +1,6 @@
 
 import { isRecallEnabled } from '../workspace/memory';
+import { degrade } from '../degrade';
 import { PENDING_KEY } from './distill';
 import { getEmbeddingsClient } from './retrieval';
 import { cosineSim } from './vector';
@@ -69,7 +70,11 @@ export function parseConsolidation(output: string): ConsolidationOps {
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed.slice(start, end + 1));
-  } catch {
+  } catch (error) {
+    // Empty ops are also how the model says "nothing needs changing", and the
+    // caller believes it: the chunk counts as reviewed, the pending counter is
+    // cleared, and a model that never returns JSON simply retires consolidation.
+    degrade('recall.consolidate', 'read the reply as no changes', error);
     return { ...EMPTY_OPS };
   }
   if (!parsed || typeof parsed !== 'object') return { ...EMPTY_OPS };
@@ -263,6 +268,9 @@ async function chunkFacts(facts: Fact[], factsGeneration: number): Promise<Fact[
     }
     return greedyClusters(facts, getFactVectors(model), size);
   } catch {
+    // quiet: the size-chunk fallback still puts every fact in front of the
+    // model — only the clustering that would have put a duplicate pair in the
+    // same prompt is lost, and the next pass re-clusters from scratch.
     return sizeChunks(facts, size); // endpoint hiccup → still bounded, best effort
   }
 }
@@ -301,8 +309,12 @@ async function runConsolidation(
     let chunkOps: ConsolidationOps;
     try {
       chunkOps = parseConsolidation(await llm.complete(buildPrompt(chunk, evidenceTs)));
-    } catch {
+    } catch (error) {
       if (getFactsGeneration() !== factsGeneration) return ZERO;
+      // failedChunks holds the pending counter back so the chunk is retried, but
+      // it reaches nobody: the activity row for a pass where every chunk failed
+      // reads "Merged 0, corrected 0, dropped 0" — a healthy tidy-up's wording.
+      degrade('recall.consolidate', 'left the chunk for a later cycle', error);
       failedChunks += 1; // leave this chunk for a later cycle
       continue;
     }

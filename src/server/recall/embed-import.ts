@@ -3,6 +3,7 @@ import { basename, dirname, join, relative, sep } from 'node:path';
 import { EMBED_CATALOG, type LocalEmbedModelSpec } from './embed-catalog';
 import { RERANK_CATALOG, type LocalRerankModelSpec } from './rerank-catalog';
 import { missingModelFiles, weightsFile, type EmbedDtype } from './embed-files';
+import { degrade } from '../degrade';
 import type { CustomImportCandidate, ImportedModelInfo, ImportModelResult } from '../../shared/types';
 
 // Bringing model weights in from a folder the user already has — a colleague's
@@ -53,6 +54,9 @@ function dirsUnder(root: string): string[] {
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
+      // quiet: walking a folder someone picked routinely crosses ones the OS
+      // will not list. A directory we cannot read holds nothing importable, and
+      // the user is told plainly when the walk as a whole finds no model.
       continue;
     }
     for (const ent of entries) {
@@ -113,7 +117,12 @@ function filesUnder(root: string): string[] {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      // Unlike the walk above, this list IS the copy list: a folder that will
+      // not enumerate drops its files from the import, and the model then fails
+      // at load time on the machine that had no way to fetch it in the first
+      // place — which is the failure importing is supposed to prevent.
+      degrade('recall.embedImport', 'skipped the files in a folder it could not list', err);
       continue;
     }
     for (const ent of entries) {
@@ -272,6 +281,8 @@ export function importLocalModels(dir: string, cacheDir: string): ImportModelRes
   try {
     stats = statSync(dir);
   } catch {
+    // quiet: the refusal below IS the report — it goes back to the import
+    // dialog as the line the user reads.
     return { ok: false, error: `There is nothing at ${dir}.` };
   }
   if (!stats.isDirectory()) return { ok: false, error: `${dir} is a file — choose the folder holding the model.` };

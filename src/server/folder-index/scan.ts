@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, extname, join, relative, sep } from 'node:path';
+import { degrade } from '../degrade';
 import { extractPdfText } from './pdf';
 import { DOC_EMBED_MIN_CHARS, type FolderIndexStore } from './store';
 
@@ -96,8 +97,12 @@ export async function scanFolder(store: FolderIndexStore, root: string): Promise
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return; // Unreadable subdir: treat its contents as absent.
+    } catch (e) {
+      // The scan is a mirror: what it does not see, it prunes. A subtree that
+      // will not list takes every doc under it out of the index, and the pass
+      // reports that as a clean "N removed".
+      degrade('folder-index.scan', 'pruned the docs under an unreadable subfolder', e);
+      return;
     }
     for (const e of entries) {
       if (isHidden(e.name)) continue;
@@ -117,7 +122,9 @@ export async function scanFolder(store: FolderIndexStore, root: string): Promise
       try {
         s = await stat(abs);
       } catch {
-        continue; // Vanished mid-scan.
+        // quiet: listed moments ago and gone now — it vanished mid-scan, and the
+        // next scan indexes it if it comes back.
+        continue;
       }
       if (s.size > (kind === 'pdf' ? MAX_PDF_BYTES : MAX_DOC_BYTES)) {
         skip(SKIP_TOO_LARGE);
@@ -141,7 +148,7 @@ export async function scanFolder(store: FolderIndexStore, root: string): Promise
   try {
     priorPdfSkips = JSON.parse(store.readMeta(PDF_SKIP_CACHE_KEY) ?? '{}') as PdfSkipCache;
   } catch {
-    // Corrupt cache: re-extract everything once and rewrite it.
+    // quiet: corrupt cache — re-extract everything once and rewrite it.
   }
   const nextPdfSkips: PdfSkipCache = {};
   const known = store.knownDocs();
@@ -165,7 +172,9 @@ export async function scanFolder(store: FolderIndexStore, root: string): Promise
     try {
       buf = await readFile(c.abs);
     } catch {
-      continue; // Vanished/unreadable: absent this scan → pruned if it stays gone.
+      // quiet: statted moments ago and unreadable now, so it moved. Absent this
+      // scan, pruned if it stays gone, indexed again when it comes back.
+      continue;
     }
     if (c.kind === 'pdf') {
       const pdf = await extractPdfText(buf, MAX_DOC_BYTES);

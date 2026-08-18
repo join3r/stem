@@ -71,6 +71,61 @@ Implementation note: the fixture launches Electron via the project ROOT (so
 `app.getAppPath()` is the repo, and the runtime's source-relative paths — e.g. the
 pi extension under `src/server/pi` — resolve), not `dist/main/index.js` directly.
 
+## Silence — the guard, and the probe that checks it
+
+Three of the bugs that reached a 0.4.x release were not wrong values, they were
+missing sentences: a repair that rewrote a chat's mtime so the Inbox read it as
+activity, an approval card whose expiry "left no trace anywhere" and was reported to
+the assistant as a refusal, and recall search — every leg of which is
+`try { … } catch { return [] }`, so a malformed query, a schema drift or a corrupt
+vector blob all arrive as "nothing matched", which is what a healthy store says too.
+
+A test that asserts a value cannot separate a broken path from a working one when
+both return the same value. What separates them is whether anything was *said*. So
+the rule: an inline failure handler in `src/server` — a `catch { … }` block or a
+`.catch(… => …)` arrow — either says something (throws, logs, `degrade()`s, hands the
+error back to whoever asked) or carries a `// quiet: <reason>` line saying why its
+silence is correct.
+
+**`tests/unit/quiet-failures.test.ts` (in `npm test`)** is the cheap half. It reads
+the source through `tests/quiet-scan.ts` and fails on any handler that does neither,
+naming the line. It covers both forms — `catch { … }` blocks and `.catch(… => …)`
+arrows. The arrows were invisible to the first version of the scanner, and three
+separate sweeps found real degradations hiding in them; because an arrow body is
+often a single word, a `// quiet:` note is also accepted on the comment lines
+directly above the `.catch` line. New silence is a test failure rather than a review someone might
+skip. It is static — it proves a sentence exists, not that the sentence is true.
+
+**`npm run probe:quiet`** is the expensive half that checks the claim. For each
+swallowed `try` it inserts a throw and runs the whole unit suite, in a **copy** of the
+repo under the temp dir — the working tree is never written to, so interrupt it
+whenever you like. It proves the unmutated suite is green in that copy before
+probing: a sandbox missing a file the tests read would make every mutant report as
+killed, and the run would look like good news. One mutant costs a full run, so ~160
+sites is about an hour — run it against a subsystem you touched, or nightly, not in
+CI. `--list --roots <path>` gives the census without the hour, `--sample N` spreads a
+smaller probe across an area.
+
+It breaks the guarded WORK, not the silence, and that shapes how to read it. For an
+untriaged site, SURVIVING is the finding — a failure path nothing notices. For a
+`// quiet:` site, killed only means some test watches that work; SURVIVING is the
+interesting one, because it means nothing would ever contradict the note. Sites that
+call `degrade()` signal, so they are never probed; assert their reporting with a test
+that reads `degradations()`.
+
+Before the sweep: 10 of 26 sampled sites surviving, every one of them unexplained.
+Among them, episodic-store pruning could stop being requested entirely — the store
+grows without bound, nothing turns red, nothing is logged. After it: 159 sites
+probed, **0 untriaged survivors**, 70 `// quiet:` claims that no test would
+contradict — listed in `QUIET-FAILURE-SWEEP.md` as the remaining exposure.
+
+`degrade(scope, what, error)` (`src/server/degrade.ts`) is what a site calls when its
+fallback hides something. It logs, counts per scope and keeps a bounded ledger tests
+can read; pass `{ activity }` to also raise the sticky failure marker on the activity
+popover, for the few degradations a person needs to be told about rather than a
+maintainer reading a log afterwards. `QUIET-FAILURE-SWEEP.md` carries the design
+record and the remaining work.
+
 ## Latency — two layers, only one of which is a stopwatch
 
 Web search once cost nothing extra: it was the provider's own server-side tool,

@@ -100,7 +100,8 @@ function readLearnStrikes(store: FolderIndexStore, head: PendingLearnDoc): numbe
     const p = JSON.parse(raw) as Partial<{ docId: number; hash: string; count: number }>;
     if (p.docId === head.id && p.hash === head.hash && Number.isInteger(p.count)) return Math.max(0, p.count!);
   } catch {
-    // Stale/corrupt → no strikes.
+    // quiet: stale or corrupt means no strikes against this batch head, and the
+    // next unparseable reply writes the counter fresh.
   }
   return 0;
 }

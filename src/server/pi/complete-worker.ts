@@ -64,6 +64,10 @@ export async function spawnReadyCompleteChild(opts: CompleteChildOptions): Promi
     }
   } catch (e) {
     const reason = stderrReason(child.stderr);
+    // quiet: the throw below carries why the worker never came up, which is the
+    // error worth having. dispose() already resolves on exit with a SIGKILL
+    // backstop, so what a rejection here could leave is a child whose pipes are
+    // closed and which the app's own exit reaps.
     void child.dispose().catch(() => {});
     const err = e instanceof Error ? e : new Error(String(e));
     if (reason && !err.message.includes(reason)) {
@@ -131,6 +135,8 @@ export async function ensureCompleteThinking(
   if (!level || level === currentLevel) return currentLevel;
   const res = await child
     .request({ type: 'set_thinking_level', level }, COMPLETE_READY_TIMEOUT_MS)
+    // quiet: the reason is the doc comment above — a pi that will not take the
+    // level still answers the job, at whatever depth it does support.
     .catch(() => null);
   return res?.success ? level : currentLevel;
 }

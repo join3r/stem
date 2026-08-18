@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import type { Folder } from '../../shared/types';
+import { degrade } from '../degrade';
 import { chatStorePath } from './paths';
 
 // The Stem-owned chat-organization store. The backend owns the chats (threads);
@@ -72,7 +73,14 @@ export async function readStore(): Promise<ChatStore> {
       subjects: coerceMap(parsed.subjects),
       naming: coerceNaming(parsed.naming)
     };
-  } catch {
+  } catch (error) {
+    // Absent is the real fresh install. A file that is there and will not read is
+    // indistinguishable from one, and the next update() writes this empty store
+    // back over it — taking the folder tree, the subjects and every thread's
+    // naming schedule with it.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('chats', 'started from an empty folder store', error);
+    }
     return emptyStore();
   }
 }

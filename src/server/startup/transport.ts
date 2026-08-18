@@ -148,6 +148,8 @@ function originFor(host: string, port: number): string {
  */
 async function writeEndpointFile(endpoint: TransportEndpoint): Promise<void> {
   const path = serverEndpointPath();
+  // quiet: the writeFile below says when the endpoint could not be published, and
+  // a directory that will not be made is that same failure one line earlier.
   await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
   const body = { ...endpoint, pid: process.pid, startedAt: new Date().toISOString() };
   await writeFile(path, `${JSON.stringify(body, null, 2)}\n`, 'utf8').catch((e) =>

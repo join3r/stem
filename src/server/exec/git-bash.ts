@@ -58,6 +58,8 @@ export function isUsableGitBashPath(
   try {
     return exists(trimmed) && hasGitBeside(root, exists);
   } catch {
+    // quiet: a path we cannot stat is not one we will spawn, and every caller
+    // reads false as "keep looking" rather than as an answer.
     return false;
   }
 }
@@ -123,6 +125,8 @@ function execFileQuiet(command: string, args: string[]): Promise<string | null> 
         else resolve(typeof stdout === 'string' ? stdout : null);
       });
     } catch {
+      // quiet: where.exe and reg.exe are optional last resorts. A blocked binary
+      // means keep looking, never "Git Bash is absent".
       resolve(null);
     }
   });
@@ -192,11 +196,14 @@ export async function detectGitBash(deps: DetectGitBashDeps = {}): Promise<strin
     const fromWhere = await bashFromWhere(exists);
     if (fromWhere) return fromWhere;
   } catch {
-    // AppLocker / missing where.exe — keep going.
+    // quiet: AppLocker, or no where.exe at all. The registry probe below is the
+    // next place to look.
   }
   try {
     return await bashFromRegistry(exists);
   } catch {
+    // quiet: the last probe there is. No Git Bash means cmd.exe, which run_command
+    // supports on its own terms, and Settings still takes a path by hand.
     return null;
   }
 }

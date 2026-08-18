@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingHttpHeaders } from 'node:http';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { degrade } from '../degrade';
 import { devicesStorePath } from '../workspace/paths';
 import type { DeviceKind } from '../../shared/types';
 
@@ -141,6 +142,9 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 
 async function writeDevices(devices: DeviceRecord[]): Promise<void> {
   const path = devicesStorePath();
+  // quiet: a directory that genuinely could not be made takes the writeFile below
+  // down with it, and that throws to the caller — this only absorbs the racing
+  // second creator.
   await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
   const store: DeviceStore = { version: 2, devices };
   // `mode` only applies when the file is created, so chmod after the write is
@@ -148,7 +152,13 @@ async function writeDevices(devices: DeviceRecord[]): Promise<void> {
   // file holds no secrets now, but it still says which devices can reach this
   // server, and that is nobody else's business.
   await writeFile(path, `${JSON.stringify(store, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await chmod(path, 0o600).catch(() => undefined);
+  await chmod(path, 0o600).catch((err) =>
+    // The mode is the whole reason this call is here: without it a rewrite onto a
+    // file that predates the `mode` argument, or one a wide umask created, keeps
+    // whatever mode it had, and the list of who can reach this server stays
+    // readable. The write succeeded, so nothing else will look wrong.
+    degrade('transport.devices', 'left the device registry at a wider mode than 0600', err)
+  );
   cached = devices;
 }
 
@@ -156,7 +166,11 @@ function parseDevices(raw: string): DeviceRecord[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    // A registry that is there and will not parse is not the same as no registry:
+    // loadDevices rebuilds it empty below, so every paired phone and second
+    // desktop has to pair again, and the only way they learn is by being refused.
+    degrade('transport.devices', 'discarded an unparseable device registry', err);
     return null;
   }
   const devices = (parsed as Partial<DeviceStore> | null)?.devices;
@@ -215,8 +229,13 @@ async function loadDevices(): Promise<DeviceRecord[]> {
     }
     // Present but unreadable (truncated write, hand-edit): fall through and
     // rebuild rather than lock every device out of a machine nobody can log into.
-  } catch {
-    // Absent — first boot, or an install from before the registry existed.
+  } catch (err) {
+    // Absent is the ordinary case — first boot, or an install from before the
+    // registry existed. A read that fails for any other reason (a permission, a
+    // bad disk) also rebuilds the file empty and un-pairs every device.
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('transport.devices', 'rebuilt the device registry empty', err);
+    }
   }
   await writeDevices([]);
   return [];
@@ -381,6 +400,9 @@ function noteDeviceSeen(device: DeviceRecord): void {
     // The caller holds the pre-write object; keep it in step so the throttle
     // above sees the new timestamp without another read.
     device.lastSeenAt = seenAt;
+    // quiet: lastSeenAt is only advanced by a write that landed, so a stamp that
+    // failed leaves the throttle open and the next authenticated request past it
+    // tries again.
   }).catch(() => undefined);
 }
 
@@ -495,6 +517,8 @@ export function requestOriginProblem(headers: IncomingHttpHeaders, policy: Origi
     try {
       originHost = new URL(origin).host;
     } catch {
+      // quiet: the failure IS the answer. An Origin that will not parse is one
+      // this server refuses, and the caller gets that sentence to say so.
       return `unparseable Origin ${origin}`;
     }
     if (originHost.toLowerCase() !== host.toLowerCase()) return `Origin ${origin} does not match Host ${host}`;

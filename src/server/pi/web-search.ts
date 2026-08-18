@@ -111,8 +111,9 @@ export async function piWebAccessPath(): Promise<string | null> {
     await access(entry);
     return entry;
   } catch {
-    // Missing dependency: pi still starts, just without the search tools. Logged
-    // by the caller — a hard failure here would cost the user the whole backend.
+    // quiet: missing dependency — pi still starts, just without the search tools.
+    // Logged by the caller (resolveWebAccessExtension); a hard failure here would
+    // cost the user the whole backend.
     return null;
   }
 }
@@ -124,6 +125,9 @@ export async function webAccessVersion(): Promise<string | null> {
     const version = (JSON.parse(await readFile(manifest, 'utf8')) as { version?: unknown }).version;
     return typeof version === 'string' ? version : null;
   } catch {
+    // quiet: the caller resolves the same manifest one line earlier and only
+    // reads this to compare against the tested version, so null costs a drift
+    // warning and nothing a user would feel.
     return null;
   }
 }
@@ -275,6 +279,9 @@ function activeBackend(): string {
       backendCache = { key, provider: typeof raw.provider === 'string' ? raw.provider : 'auto' };
     }
   } catch {
+    // quiet: 'auto' is what an absent or unreadable file means to pi-web-access
+    // too — it walks the same keyless fallback chain — so the prompt still names
+    // the backend the search tools will actually use.
     backendCache = { key: '', provider: 'auto' };
   }
   return backendCache.provider;

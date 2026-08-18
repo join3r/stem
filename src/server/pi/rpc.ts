@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
+import { degrade } from '../degrade';
 
 // One `pi --mode rpc` child process and its JSONL transport.
 //
@@ -173,8 +174,14 @@ export class PiProcess extends EventEmitter {
     let msg: PiResponse | PiEvent;
     try {
       msg = JSON.parse(line) as PiResponse | PiEvent;
-    } catch {
-      return; // non-JSON (shouldn't happen on stdout in rpc mode)
+    } catch (error) {
+      // Nothing but framed JSONL belongs on stdout in rpc mode, so a line that
+      // does not parse is a message lost: a response leaves its caller waiting
+      // out the full two-minute timeout, and an event takes a piece of the turn —
+      // assistant text, a tool call — off the screen with the turn still looking
+      // healthy.
+      degrade('pi.rpc', 'dropped an unparseable line from pi', error);
+      return;
     }
     if (msg.type === 'response') {
       const res = msg as PiResponse;

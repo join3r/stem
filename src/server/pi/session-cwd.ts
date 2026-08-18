@@ -82,20 +82,34 @@ async function rewriteSessionCwd(
     if (!found) return false;
     const { header, end } = found;
     if (header.cwd === workspace || !shouldRewrite(header.cwd!)) return false;
+    // quiet: a chat whose original timestamps could not be read is one this
+    // rewrite then bumps, and the Inbox reads that bump as activity — the same
+    // cost as the utimes below, and unreportable for the same reason as the
+    // catch at the end of this function.
     const times = await stat(file).catch(() => null);
     const rest = (await readFile(file, 'utf8')).slice(end + 1);
     const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await writeFile(tmp, `${JSON.stringify({ ...header, cwd: workspace })}\n${rest}`, 'utf8');
       await rename(tmp, file);
-      // Best-effort: a chat whose timestamps could not be restored is still a
-      // chat that opens, which is what the rewrite was for.
+      // quiet: a chat whose timestamps could not be restored is still a chat
+      // that opens, which is what the rewrite was for. It costs the chat its
+      // place in the archive — the Inbox reads the repair as activity — and
+      // nothing here can say so; see the catch at the end of this function.
       if (times) await utimes(file, times.atime, times.mtime).catch(() => undefined);
     } finally {
+      // quiet: either the rename consumed the temp file or the write never
+      // reached it. What can survive is a `.tmp` beside the chat, which nothing
+      // reads — both walks here and the chat list take only `.jsonl`.
       await rm(tmp, { force: true }).catch(() => undefined);
     }
     return true;
   } catch {
+    // quiet: on a resume, a chat that could not be repaired is one pi then
+    // refuses to open, and its refusal is the better error to show. The other
+    // caller is `stem-server import`, whose whole point is that the state root
+    // comes out of the move without a log file in it — so this cannot be the
+    // place that speaks.
     return false;
   }
 }
@@ -124,6 +138,10 @@ export async function repairMissingSessionCwd(file: string, workspace: string): 
 export async function adoptSessionCwds(sessionsDir: string, workspace: string): Promise<number> {
   let adopted = 0;
   const walk = async (dir: string): Promise<void> => {
+    // quiet: a directory that will not list leaves the chats under it
+    // unadopted, which costs them the bulk repair, not the repair — each is
+    // still fixed by `repairMissingSessionCwd` the first time it is opened. The
+    // undercount this returns is the only report the import is allowed to make.
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
       const full = join(dir, entry.name);

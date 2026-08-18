@@ -1,3 +1,4 @@
+import { degrade } from '../degrade';
 import type { WorkerTransport } from './embed-worker-host';
 import type { ScanRequestOptions, ScanWorkerOutMessage } from './scan-worker';
 import type { CoreDocHit, CoreSearchHit, CoreSummaryHit, DocScanOptions } from './search-core';
@@ -101,7 +102,11 @@ export function createScanWorkerManager(deps: {
     let t: WorkerTransport;
     try {
       t = deps.spawn();
-    } catch {
+    } catch (err) {
+      // Callers only ever see 'not running'; the reason the spawn failed — a
+      // missing worker bundle, a sandbox refusing the process — lives here and
+      // nowhere else.
+      degrade('recall.scan', 'left the scan worker down and counted a strike', err);
       strikes += 1;
       lastStrikeAt = Date.now();
       return null;

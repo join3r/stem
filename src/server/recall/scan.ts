@@ -11,6 +11,7 @@ import {
   type DocScanOptions,
   type QueryEmbedding
 } from './search-core';
+import { degrade } from '../degrade';
 import { recallStore } from './store';
 const { dbHandle, enforceEpisodicLimit } = recallStore;
 
@@ -19,7 +20,9 @@ const { dbHandle, enforceEpisodicLimit } = recallStore;
 // search paths (search.ts, inject.ts) and the capture maintenance tap. Every
 // entry point degrades to the synchronous in-process implementation when the
 // worker is unset (unit tests) or failing — behavior is then byte-identical to
-// the pre-worker code, just back on the main event loop.
+// the pre-worker code, just back on the main event loop. Identical results are
+// exactly why a dead worker is invisible: nothing is wrong with the answers,
+// every scan is simply back on the hot path. So each fallback reports itself.
 
 let manager: ScanWorkerManager | null = null;
 
@@ -35,8 +38,8 @@ export async function scanMessagesOffThread(
   if (manager) {
     try {
       return await manager.scanMessages(qe.vec, qe.model, opts);
-    } catch {
-      // fall through to the in-process scan
+    } catch (err) {
+      degrade('recall.scan', 'scanned messages in-process instead of on the worker', err);
     }
   }
   return semanticSearchMessagesCore(dbHandle(), qe.vec, qe.model, opts);
@@ -50,8 +53,8 @@ export async function scanSummariesOffThread(
   if (manager) {
     try {
       return await manager.scanSummaries(qe.vec, qe.model, opts);
-    } catch {
-      // fall through to the in-process scan
+    } catch (err) {
+      degrade('recall.scan', 'scanned thread summaries in-process instead of on the worker', err);
     }
   }
   return semanticSearchSummariesCore(dbHandle(), qe.vec, qe.model, opts);
@@ -71,8 +74,8 @@ export async function scanDocsOffThread(
   if (manager) {
     try {
       return await manager.scanDocs(dbFile, qe.vec, qe.model, opts);
-    } catch {
-      // fall through to the in-process scan
+    } catch (err) {
+      degrade('recall.scan', 'scanned folder-index docs in-process instead of on the worker', err);
     }
   }
   return semanticSearchDocsCore(fallbackHandle(), qe.vec, qe.model, opts);
@@ -96,6 +99,9 @@ export async function evictDocScanHandle(dbFile: string): Promise<void> {
   if (!manager) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
+    // quiet: the timeout below is the real contract — a worker that is down or
+    // wedged never answers at all, and that path is already silent by design.
+    // The worker re-checks file identity on reuse, so a missed eviction heals.
     manager.evictDocDb(dbFile).catch(() => undefined),
     new Promise<void>((resolve) => {
       timer = setTimeout(resolve, EVICT_WAIT_MS);
@@ -114,8 +120,11 @@ export function requestEpisodicMaintenance(): void {
     manager.maintain().catch(() => {
       try {
         enforceEpisodicLimit();
-      } catch {
-        // Pruning must never break capture.
+      } catch (err) {
+        // Pruning must never break capture — but the worker and this fallback
+        // both failing means the store keeps growing against a cap the user
+        // set and no pass will notice on its own.
+        degrade('recall.maintenance', 'left the episodic store over its size cap', err);
       }
     });
     return;
@@ -129,8 +138,8 @@ export async function vacuumRecallDb(): Promise<void> {
     try {
       await manager.vacuum();
       return;
-    } catch {
-      // fall through to the in-process VACUUM
+    } catch (err) {
+      degrade('recall.scan', 'vacuumed recall.sqlite on the main thread instead of on the worker', err);
     }
   }
   dbHandle().exec('VACUUM');

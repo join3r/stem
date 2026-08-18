@@ -127,7 +127,8 @@ function evictDocDb(dbFile: string): void {
   try {
     cached?.db.close();
   } catch {
-    // Already broken — eviction is what matters.
+    // quiet: the handle is out of the map above either way, which is the whole
+    // point of an eviction. A connection that will not close is already broken.
   }
 }
 

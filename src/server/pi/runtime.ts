@@ -40,6 +40,7 @@ import {
 } from '../../shared/providers';
 import { stripCiteMarkers } from '../../shared/citations';
 import { log } from '../log';
+import { degrade } from '../degrade';
 import { isContextOverflowError } from '../backend/overflow';
 import { PLAIN_MD_DIRECTIVE, stemAssistantInstructions } from '../workspace/bootstrap';
 import { readSettings } from '../workspace/settings';
@@ -707,7 +708,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // execute on the app default, not the model the user chose for this
         // thread. Best-effort: a model that has since vanished from the registry
         // must degrade to the default, not skip the run.
-        const persisted = await this.threadTurnSettings(threadId).catch(() => null);
+        const persisted = await this.threadTurnSettings(threadId).catch((e) => {
+          // Nothing else re-reads these. The run then goes out on the app
+          // default model at the app default effort, and with `contextTokens`
+          // absent the condense below returns immediately — so a thread that is
+          // over the window runs anyway, at 3am, with nobody watching.
+          degrade('pi.thread', 'ran the scheduled task on the app defaults with no pre-run condense', e);
+          return null;
+        });
         if (persisted?.model) {
           try {
             await this.applyModel(persisted.model);
@@ -719,7 +727,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           }
         }
         if (!input.effort && persisted?.effort) await this.setThinking(persisted.effort);
-        await this.maybeCompactBeforeScheduledRun(threadId, persisted?.contextTokens).catch(() => undefined);
+        await this.maybeCompactBeforeScheduledRun(threadId, persisted?.contextTokens).catch((e) =>
+          // This is the guard, not a retry of it: the run proceeds either way,
+          // and if the thread really had outgrown the window the prompt below
+          // dies on overflow — which for a scheduled run is a task that simply
+          // did not happen.
+          degrade('pi.thread', 'sent the scheduled run without condensing an oversized thread', e)
+        );
       }
       if (input.effort) await this.setThinking(input.effort);
 
@@ -735,7 +749,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       turn.userText = input.input;
       // Folders connected memorize:false: if the assistant reads inside one this turn,
       // we suppress capturing its reply into Recall (see onPiEvent / isCaptureSuppressed).
-      turn.privateRoots = await getPrivateRoots().catch(() => []);
+      turn.privateRoots = await getPrivateRoots().catch((e) => {
+        // readStore() answers an empty registry rather than throwing, so what
+        // rejects here is canonicalizing a path. One folder that will not
+        // resolve empties the whole list, and an empty list taints nothing:
+        // every memorize:false folder read this turn goes into Recall.
+        degrade('pi.capture', 'captured the turn with no folder marked private', e);
+        return [];
+      });
       this.currentTurn = turn;
       this.skillsRevAtTurnStart = this.readSkillsRev();
       this.foreground.claimTurn();
@@ -743,8 +764,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       try {
         // Gate native web search for THIS turn (main vs Quick Chat share one process,
         // so the bridge can't tell them apart — we set the gate just before the prompt).
-        await writeNativeSearchGate(input.webSearch ?? true).catch(() => undefined);
-        await writeServiceTierGate(input.serviceTier ?? null).catch(() => undefined);
+        await writeNativeSearchGate(input.webSearch ?? true).catch((e) =>
+          // The bridge reads the file, not this argument. A write that does not
+          // land leaves whatever the previous turn wrote — so search stays on
+          // for a turn the user turned it off in, or off for one they turned it
+          // on in, and the two contexts sharing the process make either likely.
+          degrade('pi.gates', 'ran the turn on the previous turn\'s web-search setting', e)
+        );
+        await writeServiceTierGate(input.serviceTier ?? null).catch((e) =>
+          // Same file-not-argument contract, and this one is billed: Fast and
+          // Standard are the two settings, and the turn runs on whichever the
+          // last write left behind.
+          degrade('pi.gates', 'ran the turn on the previous turn\'s service tier', e)
+        );
 
         const buildStart = Date.now();
         const { message, images } = await this.buildMessage(input, threadId, turn.recall, turnId);
@@ -767,11 +799,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       this.unnamedThreads.delete(threadId);
       if (isNewThread) {
         const name = autoTitle(input.input);
+        // quiet: the sidebar falls back to "New chat" until something writes a
+        // name, and the step-0 schedule started just below is what writes one —
+        // this title is the placeholder the naming pass replaces anyway.
         if (name) await this.proc!.request({ type: 'set_session_name', name }).catch(() => undefined);
         // …and start the thread at the top of the naming schedule, so the model
         // written name is due once this turn settles. Step 0 is what marks the
         // thread as never-named; without it a new thread would be taken for one
         // that predates the schedule and re-checked instead of named.
+        // quiet: a thread with no record joins at PRE_EXISTING_STEP instead —
+        // due for a re-check rather than an opening naming (chats/subject.ts).
+        // It costs this chat its first model-written name, not its naming.
         void setNaming(threadId, { step: 0, since: 0 }).catch(() => undefined);
       }
 
@@ -840,6 +878,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private async waitForPiIdle(timeoutMs = PI_IDLE_WAIT_MS): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      // quiet: null lands on the same `return false` as an unsuccessful reply,
+      // which is this function's documented answer — and false leaves the
+      // prompt's original rejection to surface from sendPrompt.
       const state = await this.proc?.request({ type: 'get_state' }, 10_000).catch(() => null);
       if (!state?.success) return false;
       if (!(state.data as { isStreaming?: boolean } | undefined)?.isStreaming) return true;
@@ -935,8 +976,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     turn.pendingUserCapture = undefined;
     try {
       captureUserMessage({ threadId: turn.threadId, turnId: turn.turnId, text: pending.text, cwd: pending.cwd });
-    } catch {
-      // non-fatal; the live turn is already streaming
+    } catch (e) {
+      // Non-fatal for the live turn, which is already streaming — but the prompt
+      // never reaches Recall, and its reply is captured without it.
+      degrade('pi.capture', 'dropped one user message from Recall', e);
     }
   }
 
@@ -1083,6 +1126,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         log('pi.complete', 'one-shot completion timed out', { timeoutMs: ms, provider, model: modelId });
       });
     } finally {
+      // quiet: dispose() resolves on the child's exit with a SIGKILL backstop,
+      // so a rejection here is not a surviving process — and the completion's
+      // own error is what the caller is waiting on.
       void child.dispose().catch(() => {});
     }
   }
@@ -1116,6 +1162,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         modelId: resolved.modelId
       });
       if (generation !== this.completeWorkerGeneration) {
+        // quiet: the SIGKILL backstop inside dispose() is what stops this child
+        // outliving the shutdown; a rejection would mean the kill itself failed,
+        // and there is no second lever here to pull.
         void child.dispose().catch(() => {});
         throw new Error('The complete worker was shut down while starting.');
       }
@@ -1150,6 +1199,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     this.completeWorkerThinking = null;
     this.completeWorkerStarting = null;
     this.completeWorkerDirty = false;
+    // quiet: the fields above are already cleared, so this worker is
+    // unreachable either way, and dispose() kills rather than asks.
     if (worker) await worker.dispose().catch(() => undefined);
   }
 
@@ -1183,7 +1234,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     let text: string;
     try {
       text = await readFile(file, 'utf8');
-    } catch {
+    } catch (e) {
+      // An unreadable session file renders exactly like a chat nobody has said
+      // anything in yet, so the user reads their missing history as an empty one.
+      degrade('pi.thread', 'showed the chat as empty', e);
       return { title: 'New chat', messages: [] };
     }
     let title = 'New chat';
@@ -1203,6 +1257,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Service tier is not persisted (same as the old codex rollout format).
     let effortNow: string | undefined;
     let modelNow: string | undefined;
+    // Reported once at the end rather than per line: a transcript that lost half
+    // its entries should be one line in the log, not five hundred.
+    let unparsed = 0;
+    let unparsedError: unknown;
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
       let entry: {
@@ -1225,7 +1283,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       };
       try {
         entry = JSON.parse(line);
-      } catch {
+      } catch (e) {
+        // quiet: counted here and reported after the loop. A torn last line is
+        // ordinary in a file pi is still appending to; a line lost anywhere else
+        // is a message missing from the chat with nothing to show for it.
+        unparsed += 1;
+        unparsedError ??= e;
         continue;
       }
       if (entry.type === 'session_info' && typeof entry.name === 'string') {
@@ -1324,6 +1387,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         }
       }
     }
+    if (unparsed > 0) {
+      degrade('pi.thread', `dropped ${unparsed} unreadable lines from the transcript`, unparsedError);
+    }
     return { title, messages };
   }
 
@@ -1403,7 +1469,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
       this.sessionFiles.delete(threadId);
       this.unnamedThreads.delete(threadId);
-      if (file) await unlink(file).catch(() => undefined);
+      if (file) await unlink(file).catch((e) =>
+        // listThreads reads the sessions directory, so a file that survives is a
+        // chat the user deleted reappearing at the next refresh — with its
+        // messages still on disk, which is the part they meant to be rid of.
+        degrade('pi.sessions', 'left a deleted chat on disk, where the next list finds it again', e)
+      );
     });
   }
 
@@ -1509,6 +1580,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
       return { ok: true };
     } catch (e) {
+      // quiet: the failure IS the result — it goes back to the renderer and is
+      // shown on the sign-in card the user is looking at.
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
@@ -1533,7 +1606,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         }, 50);
       });
     } catch {
-      // best-effort: the panel still fetches on open
+      // quiet: watching a directory is the platform-dependent part; without it the
+      // Manage panel still fetches status when opened, so all that is lost is a
+      // starting→ready transition landing in a panel already on screen.
     }
   }
 
@@ -1549,7 +1624,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         out[name] = { status: s.status ?? 'unknown', error: s.error ?? null };
       }
       return out;
-    } catch {
+    } catch (e) {
+      // No file until the bridge connects something, which is the state most
+      // installs are in; anything else and the panel shows every routed server
+      // as status-less, which is what a server that never connected looks like.
+      if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        degrade('pi.mcpStatus', 'reported no MCP connection status', e);
+      }
       return {};
     }
   }
@@ -1576,7 +1657,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // current turn's normal finish barrier will apply it safely.
         if (!this.currentTurn) {
           this.pendingMcpReload = false;
-          void this.configMcpServerReload().catch(() => undefined);
+          void this.configMcpServerReload().catch((e) =>
+            // The flag was cleared before this ran, so nothing retries. mcp.json
+            // has the server the user just approved and the running bridge does
+            // not — and the card said yes.
+            degrade('pi.mcpAdmin', 'left the approved MCP change out of the running backend', e)
+          );
         }
       }
       this.emitEvent('mcp/admin/approvalResolved', { id: key });
@@ -1655,7 +1741,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         if (prevThread) await this.ensureActive(prevThread);
         if (prevModel) await this.applyModel(prevModel);
       } catch {
-        // Best-effort warm-up; the next turn re-establishes state on the normal path.
+        // quiet: this only pays the cold-start cost early. The mirrors are left
+        // unset, so the next turn re-activates the thread and applies the model on
+        // its normal path — the user waits, nothing is lost.
       }
     });
   }
@@ -1717,6 +1805,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // model; fall back to pi's live state so the judge stays on a signed-in provider.
         let currentModel = this.currentModel;
         if (!currentModel && this.proc?.running) {
+          // quiet: null leaves currentModel null, which resolveJudgeModel treats
+          // as "no live chat model" and answers with the shared background model
+          // or the app default. And a judge that cannot run at all escalates the
+          // command to an approval card rather than letting it through.
           const state = await this.proc.request({ type: 'get_state' }).catch(() => null);
           const data = state?.data as { model?: { provider?: string; id?: string } } | undefined;
           if (data?.model?.provider && data.model.id) {
@@ -1992,11 +2084,25 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Refresh the local-provider catalog (models.json) before the spawn: pi's RPC
     // mode reads the file once at startup and never again.
     this.lastLocalSyncAt = Date.now();
-    await syncModelsConfig().catch(() => undefined);
+    await syncModelsConfig().catch((e) =>
+      // pi reads models.json once, here, and never again for the life of the
+      // process. A sync that did not land means the local server the user just
+      // added is missing from the picker until the next restart — and naming it
+      // with --provider is fatal at spawn, not merely unusable.
+      degrade('pi.modelsConfig', 'spawned the backend against the last-synced provider catalog', e)
+    );
     // Same deal for web search: pi-web-access reads its workflow setting once at
     // extension-init, so the config file has to be correct BEFORE the spawn.
+    // quiet: readSettings() answers coerced defaults rather than rejecting, and
+    // reports an unreadable settings.json itself under the `settings` scope.
     const settings = await readSettings().catch(() => null);
-    if (settings) await writeWebSearchConfig(settings.webSearch).catch(() => undefined);
+    if (settings) await writeWebSearchConfig(settings.webSearch).catch((e) =>
+      // Same once-at-init read as models.json above: whatever this file says at
+      // spawn is what pi-web-access does until the process is replaced, so a
+      // failed write leaves web search configured the way it was two settings
+      // changes ago and no later turn can correct it.
+      degrade('pi.gates', 'spawned the backend on the previous web-search configuration', e)
+    );
     const webAccess = await this.resolveWebAccessExtension();
     const { provider, modelId } = await this.resolveDefaultModel();
 
@@ -2081,6 +2187,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // ensureStarted() doesn't mistake it for a running backend, and count it
       // toward the crash-loop breaker (deduped with the exit handler above).
       if (this.proc === proc) this.proc = null;
+      // quiet: the detach above is what stops ensureStarted() adopting this
+      // child; dispose is the kill, and it carries its own SIGKILL backstop.
       void proc.dispose().catch(() => undefined);
       // A child that hung instead of exiting (readiness timeout) never went
       // through PiProcess's exit path, so its stderr hasn't been quoted yet —
@@ -2218,8 +2326,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       turn.pendingUserCapture = undefined;
       try {
         captureUserMessage({ threadId: turn.threadId, turnId: turn.turnId, text: pending.text, cwd: pending.cwd });
-      } catch {
-        // non-fatal
+      } catch (e) {
+        // The turn is over and nothing else will retry this: the prompt is simply
+        // not in Recall, indistinguishable from a turn that was never asked.
+        degrade('pi.capture', 'dropped one user message from Recall', e);
       }
     }
     this.advancePhase(turn, [], now); // flush the trailing segment
@@ -2270,8 +2380,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (this.onTurnSettled) {
       try {
         void this.onTurnSettled(snapshot);
-      } catch {
-        // a throwing subscriber is its own problem, not this turn's
+      } catch (e) {
+        // A throwing subscriber is its own problem, not this turn's — but the
+        // skills pass then never sees this turn, so nothing grades or authors
+        // from it and the turn is gone from the ring before anyone notices.
+        degrade('pi.turnSettled', 'skipped the skills pass for one turn', e);
       }
     }
     // Count the turn against the thread's naming schedule, and let it re-name
@@ -2409,8 +2522,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           payload: { activity: turn.activity, sources: turn.sources }
         });
       }
-    } catch {
-      // best-effort; rollback/fork will surface a clear error if unresolved
+    } catch (e) {
+      // Rollback/fork surfaces a clear error when the entry id is unresolved, but
+      // the timing and activity rows are a different loss: they are simply never
+      // written, and the turn reopens looking like it ran no tools and took no time.
+      degrade('pi.turnEntry', 'left the turn without its persisted timing and activity', e);
     }
   }
 
@@ -2431,7 +2547,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (this.pendingMcpReload || this.pendingSkillReload) {
       this.pendingMcpReload = false;
       this.pendingSkillReload = false;
-      void this.configMcpServerReload().catch(() => undefined);
+      void this.configMcpServerReload().catch((e) =>
+        // Both flags are cleared above, so this is the only attempt: an approved
+        // MCP change or a skill written this turn stays out of the bridge until
+        // something else restarts it, and the turn that authored it reported
+        // success.
+        degrade('pi.mcpAdmin', 'left the deferred MCP and skill reload unapplied', e)
+      );
     }
   }
 
@@ -2447,6 +2569,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     try {
       return readFileSync(join(skillsRoot(), SKILLS_REV_FILE), 'utf8');
     } catch {
+      // quiet: there is no marker until the bridge writes one, and both reads of
+      // it in a turn come through here — an unreadable marker compares equal to
+      // itself, which is the same answer as "no skill was written".
       return '';
     }
   }
@@ -2474,8 +2599,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     let proposal: { action?: string; name?: string; input?: McpServerInput } | null = null;
     try {
       proposal = JSON.parse(message ?? '{}');
-    } catch {
-      // malformed
+    } catch (e) {
+      // Falls through to the decline below, and a decline is all the assistant is
+      // told — indistinguishable from the user having refused the change.
+      degrade('pi.mcpAdmin', 'declined an MCP change whose proposal did not parse', e);
     }
     if (!proposal || (proposal.action !== 'add' && proposal.action !== 'remove')) {
       this.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
@@ -2523,8 +2650,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     let proposal: { action?: string; incomingText?: string; surface?: string } | null = null;
     try {
       proposal = JSON.parse(message ?? '{}');
-    } catch {
-      // malformed
+    } catch (e) {
+      // Same shape as handleAdminApproval: the assistant sees a refusal it will
+      // report to the user as theirs, when nobody was ever shown a card.
+      degrade('pi.instructions', 'declined a custom-instructions change whose proposal did not parse', e);
     }
     const action = proposal?.action;
     if (action !== 'append' && action !== 'replace' && action !== 'clear') {
@@ -2607,7 +2736,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   ): Promise<{ model?: string; effort?: string; contextTokens?: number }> {
     const file = await this.resolveSessionFile(threadId);
     if (!file) return {};
-    const text = await readFile(file, 'utf8').catch(() => '');
+    const text = await readFile(file, 'utf8').catch((e) => {
+      // '' parses to {}, which is indistinguishable here from a chat that has
+      // never chosen a model — so the scheduled run pins nothing and, with no
+      // contextTokens, skips the pre-run condense that exists precisely for a
+      // thread this long. The Tasks tab shows the same emptiness as a default.
+      degrade('pi.thread', 'read the chat as having no saved model, effort or context size', e);
+      return '';
+    });
     let model: string | undefined;
     let effort: string | undefined;
     let usageTokens: number | undefined;
@@ -2624,6 +2760,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       try {
         entry = JSON.parse(line);
       } catch {
+        // quiet: this is an estimate feeding the pre-run condense guard. A line
+        // that will not parse only moves the token count, and the guard already
+        // condenses against a window-proportional reserve.
         continue;
       }
       if (entry.type === 'model_change' && entry.provider && entry.modelId) {
@@ -2675,6 +2814,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private async activeModelContextWindow(): Promise<number> {
     const current = this.currentModel ? this.parseModel(this.currentModel) : null;
     if (current) {
+      // quiet: null falls through to the same 128k this returns whenever the
+      // catalog has nothing to say about the active model — the documented
+      // default, and the number the condense reserve is sized against.
       const res = await this.proc!.request({ type: 'get_available_models' }).catch(() => null);
       const models = ((res?.data as { models?: PiModel[] } | undefined)?.models ?? []).filter(Boolean);
       const m = models.find((x) => x.provider === current.provider && x.id === current.modelId);
@@ -2708,6 +2850,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private async setThinking(effort: string): Promise<void> {
     const level = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(effort) ? effort : 'medium';
     if (level === this.currentThinking) return;
+    // quiet: the mirror is left untouched, so the next turn re-issues this
+    // rather than believing the level took. A request that rejects rather than
+    // answering unsuccessfully means the process is gone or wedged, and the
+    // prompt immediately after fails out loud on the same process.
     const res = await this.proc!.request({ type: 'set_thinking_level', level }).catch(() => null);
     if (res?.success) this.currentThinking = level;
   }
@@ -2739,8 +2885,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           model: defaults.model
         });
       }
-    } catch {
-      // settings unreadable → constant
+    } catch (e) {
+      // Settings unreadable → constant. The model the user picked at onboarding
+      // is quietly not the one answering, on every chat they start from here.
+      degrade('pi.defaultModel', 'used the built-in default model', e);
     }
     return { provider: DEFAULT_PROVIDER, modelId: DEFAULT_MODEL };
   }
@@ -2800,8 +2948,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         if (turnId && injectedDocs.length > 0) {
           recordTurnInjectedDocs(threadId, turnId, injectedDocs);
         }
-      } catch {
-        // Debug surface only — never let it break a turn.
+      } catch (e) {
+        // Never let it break a turn — but the Memory panel then shows a stale set
+        // of active facts, and the distill pass gets nothing to grade this turn
+        // against, which is the feedback signal usage-aware fact ranking runs on.
+        degrade('pi.recall', 'sent the turn without recording its injected facts', e);
       }
     }
     // Stem's own skill selection, in place of the backend's (spawned --no-skills).
@@ -2866,7 +3017,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         if (hint) blocks.push(hint);
       }
     } catch {
-      // Shell hint is convenience for the model; a turn must still go out.
+      // quiet: the hint only tells the model which shell it is writing commands
+      // for; a turn must still go out without it, and exec reads the same
+      // settings itself when a command actually runs.
     }
     if (input.format === 'md') blocks.push(PLAIN_MD_DIRECTIVE);
 
@@ -2915,7 +3068,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       let entries;
       try {
         entries = await readdir(dir, { withFileTypes: true });
-      } catch {
+      } catch (e) {
+        // No sessions dir before the first chat is the fresh-install state; any
+        // other failure drops every chat under it, and an empty chat list is
+        // exactly what a new install looks like.
+        if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+          degrade('pi.sessions', 'left a session directory out of the chat list', e);
+        }
         return [];
       }
       const results = await Promise.all(
@@ -2928,7 +3087,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           let mtimeMs: number | null = null;
           try {
             mtimeMs = Math.floor((await stat(full)).mtimeMs);
-          } catch {
+          } catch (e) {
+            // A chat deleted between the readdir and this stat is gone on purpose;
+            // anything else and a chat that still exists is missing from the list,
+            // which the user reads as it having been deleted.
+            if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+              degrade('pi.sessions', 'left one chat out of the list', e);
+            }
             return [];
           }
           const cached = this.metaCache.get(full);
@@ -2951,7 +3116,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     let text: string;
     try {
       text = await readFile(path, 'utf8');
-    } catch {
+    } catch (e) {
+      // Same as the stat above: deleted mid-scan is intentional, unreadable is a
+      // chat the user can no longer reach, since the list is the only way in.
+      if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        degrade('pi.sessions', 'left one chat out of the list', e);
+      }
       return null;
     }
     const lines = text.split('\n').filter((l) => l.trim());
@@ -2965,7 +3135,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       id = header.id ?? '';
       cwd = header.cwd ?? null;
       createdAt = header.timestamp ? Date.parse(header.timestamp) || 0 : 0;
-    } catch {
+    } catch (e) {
+      // The whole chat drops out of the list on one bad line, and the list is the
+      // only way to reach it — a corrupt header reads as a deleted chat.
+      degrade('pi.sessions', 'left one chat out of the list', e);
       return null;
     }
     if (!id) return null;
@@ -2976,7 +3149,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const e = JSON.parse(line) as { type?: string; name?: string };
         if (e.type === 'session_info' && typeof e.name === 'string') name = e.name;
       } catch {
-        // ignore
+        // quiet: the header parsed, so this is a torn line in a file pi is still
+        // appending to; the chat keeps the last name that did parse.
       }
     }
     return { id, path, name, cwd, createdAt: Math.floor(createdAt), updatedAt: mtimeMs, preview: this.previewOf(lines) };
@@ -3000,6 +3174,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       try {
         entry = JSON.parse(lines[i]);
       } catch {
+        // quiet: this walks backwards over candidates, so a line that will not
+        // parse just means the preview comes from the message before it.
         continue;
       }
       if (entry.type !== 'message') continue;
@@ -3057,6 +3233,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     try {
       return (JSON.parse(line) as { id?: string }).id ?? null;
     } catch {
+      // quiet: a line with no readable id is not the entry being looked for. If
+      // the target itself is the unreadable one, rollbackToTurn finds no index
+      // and tells the user it could not locate that message.
       return null;
     }
   }
@@ -3125,8 +3304,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (!Object.values(localProviders).some((p) => p.enabled)) return;
       const changed = await syncModelsConfig();
       if (changed && this.proc?.running && !this.currentTurn) await this.restart();
-    } catch {
-      // non-fatal: the model list just stays as pi last loaded it
+    } catch (e) {
+      // Non-fatal for the turn, but a probe that keeps failing means models the
+      // user pulled into Ollama or LM Studio never show up and nothing says why.
+      degrade('pi.localModels', 'kept the previous model catalog', e);
     }
   }
 
@@ -3168,7 +3349,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         if (hasApiKey || hasOAuth) providers.add(provider);
       }
       return providers;
-    } catch {
+    } catch (e) {
+      // No auth.json yet is the state before ensurePiHome seeds it; an unreadable
+      // one makes Stem believe nothing is connected and send a signed-in user
+      // back through onboarding.
+      if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        degrade('pi.auth', 'reported no authenticated providers', e);
+      }
       return new Set();
     }
   }
@@ -3185,16 +3372,35 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const dest = join(this.options.piHome, 'auth.json');
     if (this.options.seedGlobalAuth !== false && !(await this.fileExists(dest))) {
       const src = join(homedir(), '.pi', 'agent', 'auth.json');
+      // quiet: the seed is a convenience. Without it auth.json is simply absent,
+      // which is the state a machine with no global pi is in — the app opens
+      // onboarding and the user signs in there.
       if (await this.fileExists(src)) await copyFile(src, dest).catch(() => undefined);
     }
     // Ensure mcp.json (with the reserved stem-recall entry) for the bridge extension.
-    await ensureMcpConfig().catch(() => undefined);
+    await ensureMcpConfig().catch((e) =>
+      // The reserved stem-recall entry is written here or not at all this run.
+      // Without it the bridge starts with no memory server, so the assistant
+      // quietly has no recall tools for the life of the process.
+      degrade('pi.mcpConfig', 'started the backend with no recall entry in mcp.json', e)
+    );
     // Stamp pre-identity-migration OAuth tokens before the bridge reads them, or
     // every previously-signed-in remote server connects unauthenticated (401).
-    await migrateLegacyOAuthTokens().catch(() => undefined);
+    await migrateLegacyOAuthTokens().catch((e) =>
+      // Unstamped tokens are the 401 the comment above describes, and the user
+      // reads it as a remote server that has stopped working rather than as a
+      // migration that did not run.
+      degrade('pi.mcpConfig', 'left pre-identity OAuth tokens unstamped', e)
+    );
     // Prefer pi's SSE transport over its default WebSocket-first "auto", and give
     // auto-compaction enough headroom for Stem's heavy turns.
-    await this.ensurePiSettingsDefaults().catch(() => undefined);
+    await this.ensurePiSettingsDefaults().catch((e) =>
+      // Same loss the parse failure inside reports, by the other route — the
+      // write. pi then spawns WebSocket-first, so a mid-stream drop hard-fails a
+      // turn whose side effects already committed, and the compaction reserve is
+      // pi's rather than the one the scheduled-run guard is sized against.
+      degrade('pi.settings', 'spawned the backend without the transport and compaction defaults', e)
+    );
   }
 
   /**
@@ -3251,7 +3457,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     try {
       raw = await readFile(file, 'utf8');
     } catch {
-      raw = null; // absent — we create it
+      // quiet: absent on first run is the expected case — the file is written
+      // with the defaults below.
+      raw = null;
     }
     let settings: Record<string, unknown>;
     if (raw === null) {
@@ -3261,8 +3469,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return; // unexpected shape — leave it
         settings = parsed as Record<string, unknown>;
-      } catch {
-        return; // present but malformed — never destroy hand-authored content
+      } catch (e) {
+        // Never destroy hand-authored content — but the defaults then never land,
+        // so pi runs on its own transport and compaction reserve, and the guard
+        // that condenses before a scheduled run is sized against a number Stem
+        // believes it set.
+        degrade('pi.settings', 'left pi settings.json untouched', e);
+        return;
       }
     }
     let changed = false;
@@ -3282,6 +3495,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       await access(path);
       return true;
     } catch {
+      // quiet: access failing is the answer this returns.
       return false;
     }
   }

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { degrade } from '../degrade';
 import { skillsRoot } from '../workspace/paths';
 
 // Per-skill usage bookkeeping, kept in a sidecar JSON at the root of the skills
@@ -53,6 +54,8 @@ export function readUsage(): SkillsUsage {
   try {
     raw = readFileSync(usageFile(), 'utf8');
   } catch {
+    // quiet: no sidecar yet is every install before the first tick, and
+    // `ensureUsageTracking` writes one at startup.
     return freshUsage();
   }
   try {
@@ -77,7 +80,11 @@ export function readUsage(): SkillsUsage {
       };
     }
     return { trackingSince: data.trackingSince, skills };
-  } catch {
+  } catch (error) {
+    // Not recoverable: the next tick writes the fresh value over the file, so
+    // every skill's injected/used history is gone and the ranking blend goes
+    // neutral across the whole library with nothing to show for it.
+    degrade('skills.usage', 'started skill usage history over', error);
     return freshUsage();
   }
 }
@@ -85,8 +92,11 @@ export function readUsage(): SkillsUsage {
 function writeUsage(usage: SkillsUsage): void {
   try {
     writeFileSync(usageFile(), `${JSON.stringify(usage, null, 2)}\n`, 'utf8');
-  } catch {
-    // best-effort: usage is advisory; drop the tick rather than fail a turn
+  } catch (error) {
+    // Advisory data, so the tick is dropped rather than failing a turn — but a
+    // write that keeps failing stops the injected-then-graded loop dead, and a
+    // skill that is never observed can never be demoted.
+    degrade('skills.usage', 'dropped a usage update', error);
   }
 }
 
@@ -102,7 +112,8 @@ function isSkillSlug(slug: string): boolean {
 export function ensureUsageTracking(): void {
   try {
     mkdirSync(skillsRoot(), { recursive: true });
-  } catch {
+  } catch (error) {
+    degrade('skills.usage', 'ran with no usage tracking at all', error);
     return;
   }
   if (!existsSync(usageFile())) writeUsage(freshUsage());

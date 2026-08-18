@@ -182,6 +182,9 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
     // Mirrors the pi runtime: a brand-new thread starts at the top of the naming
     // schedule, so it is named once this turn settles rather than re-checked as
     // if it predated the schedule.
+    // quiet: this backend exists only under STEM_E2E, and a naming schedule that
+    // did not persist costs the fake its rename — which the test that cares about
+    // renaming asserts on directly.
     if (isNewThread) void setNaming(threadId, { step: 0, since: 0 }).catch(() => undefined);
 
     const turn: ActiveTurn = {

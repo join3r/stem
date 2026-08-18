@@ -13,6 +13,7 @@ import type {
 } from '../../shared/types';
 import type { ChatBackend, ExecBridge, ExecBridgeResult, ExecRequest } from '../backend/types';
 import { resolveRoleEffort } from '../../shared/modelRoles';
+import { degrade } from '../degrade';
 import { log } from '../log';
 import { ensureThreadScratch } from './scratch';
 import { clampTimeout, execEnv, resolveLoginPath, runCommand } from './executor';
@@ -157,6 +158,8 @@ export class ExecService implements ExecBridge {
     let cwd: string;
     if (req.cwd) {
       cwd = resolve(scratch, req.cwd);
+      // quiet: the stat failing IS the check — the branch below turns it into
+      // the error the assistant reads, naming the cwd it asked for.
       const info = await stat(cwd).catch(() => null);
       if (!info?.isDirectory()) {
         return { ok: false, error: `The requested cwd "${req.cwd}" does not exist or is not a directory.` };
@@ -218,7 +221,12 @@ export class ExecService implements ExecBridge {
       if (decision === 'alwaysAllow' && cls.prefixes.length) {
         const cur = (await this.deps.readSettings()).exec.allowlist;
         const merged = [...cur, ...cls.prefixes.filter((p) => !cur.includes(p))];
-        await this.deps.updateExecSettings({ allowlist: merged }).catch(() => undefined);
+        await this.deps.updateExecSettings({ allowlist: merged }).catch((e) => {
+          // This command runs either way, so nothing looks wrong now — the user
+          // is simply asked again next time for a prefix they were told they had
+          // allowed for good.
+          degrade('exec.allowlist', 'ran the command without remembering "always allow"', e);
+        });
       }
     }
 
@@ -362,7 +370,9 @@ export class ExecService implements ExecBridge {
           ...cur,
           [target.deviceId]: [...existing, ...cls.prefixes.filter((p) => !existing.includes(p))]
         };
-        await this.deps.updateExecSettings({ deviceAllowlists: merged }).catch(() => undefined);
+        await this.deps.updateExecSettings({ deviceAllowlists: merged }).catch((e) => {
+          degrade('exec.allowlist', 'ran the command without remembering "always allow" for that computer', e);
+        });
       }
     }
     return dispatch();
@@ -389,6 +399,11 @@ export class ExecService implements ExecBridge {
     if (this.modelsCache && Date.now() - this.modelsCache.at < MODELS_CACHE_TTL_MS) {
       return this.modelsCache.models;
     }
+    // quiet: an empty list is not an empty answer here. resolveJudgeModel returns
+    // null for it and complete() then picks its own default, which is the same
+    // model it would have chosen; the cache is left unset so the next judge
+    // asks again. A backend that is properly down fails at complete(), where the
+    // judge's own catch escalates to an approval card.
     const models = await this.deps.runtime().listModels().catch(() => []);
     if (models.length) this.modelsCache = { at: Date.now(), models };
     return models;
@@ -525,6 +540,8 @@ export class ExecService implements ExecBridge {
       ];
       return { ok: true, text: parts.join('\n\n') };
     } catch (e) {
+      // quiet: the message is the tool result — the assistant is told in the same
+      // breath that the command never ran, and why.
       return { ok: false, error: `The command could not be started: ${e instanceof Error ? e.message : String(e)}` };
     } finally {
       this.running.delete(entry);

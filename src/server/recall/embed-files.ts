@@ -28,6 +28,8 @@ function sizeOf(path: string): number | null {
   try {
     return statSync(path).size;
   } catch {
+    // quiet: no size means no sidecar rule to apply, and a weights file that
+    // cannot be stat'd is one missingModelFiles is about to call missing.
     return null;
   }
 }
@@ -51,6 +53,9 @@ export function missingModelFiles(root: string, repo: string, dtype: EmbedDtype)
   try {
     return requiredModelFiles(root, repo, dtype).filter((rel) => !existsSync(join(root, repo, ...rel.split('/'))));
   } catch {
+    // quiet: a cache we cannot read is a cache we must not go offline against —
+    // reporting everything missing is the strict answer the doc comment below
+    // is about, not a swallowed failure.
     return requiredModelFiles(root, repo, dtype);
   }
 }

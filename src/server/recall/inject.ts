@@ -4,6 +4,7 @@ import { hybridSearchSummaries } from './search-core';
 import { searchFolderDocs, type FolderDocHit } from '../folder-index';
 import { scanSummariesOffThread } from './scan';
 import { getEmbeddingsClient, getRerankClient } from './retrieval';
+import { degrade } from '../degrade';
 import type { EmbeddingsClient } from './embeddings';
 import { cosineSim, dot, magnitude } from './vector';
 import { recallStore, MAX_PINNED_FACTS, type Fact, type FactTier, type InjectedDocRef } from './store';
@@ -138,7 +139,12 @@ function makeQueryEmbedder(userText: string, timings?: RecallTimings): QueryEmbe
       try {
         const [vec] = await client.embed([userText], 'query');
         return { vec, model, client };
-      } catch {
+      } catch (error) {
+        // The client said it was available and named a model, so this is the
+        // embedder itself failing. The null is memoized for the whole turn: both
+        // the fact pipeline's semantic leg and the episodic semantic leg fall
+        // back, and the turn still looks exactly like a turn with no matches.
+        degrade('recall.inject', 'ran the turn without a query embedding', error);
         return null;
       } finally {
         if (timings) timings.embed = (timings.embed ?? 0) + (Date.now() - start);
@@ -287,7 +293,9 @@ function enqueueCoinjectedPairs(facts: Fact[], vectors: Map<number, Float32Array
     }
     if (pairs.length > 0) enqueueRelationChecks(pairs, 'coinject');
   } catch {
-    // Discovery is best-effort; a store hiccup must never cost the turn.
+    // quiet: discovery is best-effort and self-repeating — these facts are the
+    // ones that keep getting injected together, so the next turn that selects
+    // them offers the same pairs again.
   }
 }
 
@@ -320,7 +328,12 @@ async function chooseFacts(
   try {
     semantic = await rankSemanticCandidates(candidates, getQueryEmbedding, timings, factsGeneration, vectorSink);
   } catch {
-    // Gate stage below degrades: reranker over lexical-only, or pure lexical.
+    // quiet: what this catches is that function's own control flow — it throws
+    // for "embeddings unavailable" (a configuration, true on every turn for a
+    // user who turned them off) and for a facts reset (a deliberate barrier).
+    // The one real failure underneath, a dead embedder, is reported where it
+    // happens, in makeQueryEmbedder. Gate stage below degrades: reranker over
+    // lexical-only, or pure lexical.
   }
   // A reset invalidates pinned, semantic, and lexical snapshots alike. Do not
   // degrade to the old lexical snapshot or it would still inject cleared text.
@@ -374,9 +387,12 @@ async function chooseFacts(
       relevant = admitted;
       tier = 'reranked';
       if (timings) timings.rerank = Date.now() - rrStart;
-    } catch {
+    } catch (error) {
       // The reranker is the precision stage, but a down/misconfigured one must
-      // not cost the turn — fall through to the scale-free gates below.
+      // not cost the turn — fall through to the scale-free gates below. It had
+      // already reported itself available, and the fallbacks it drops to admit
+      // no sensitive facts at all, so the injected set silently narrows.
+      degrade('recall.inject', 'selected facts without the reranker', error);
       if (timings) timings.rerank = Date.now() - rrStart;
     }
   }

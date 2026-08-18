@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { InboxEntry, InboxState } from '../../shared/inbox';
 import { toMs } from '../../shared/inbox';
+import { degrade } from '../degrade';
 import { inboxStorePath } from './paths';
 
 // The Stem-owned inbox store: per-thread read / archived / snoozed state for the
@@ -69,6 +70,8 @@ function enqueue<T>(task: () => Promise<T>): Promise<T> {
 
 async function writeFileAtomic(store: InboxFile): Promise<void> {
   const path = inboxStorePath();
+  // quiet: the write below is the one that has to land, and it rejects to the
+  // mutator that called this if the directory really is not there.
   await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
   const tmp = `${path}.${randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify(store, null, 2), 'utf8');
@@ -92,12 +95,20 @@ export function readInbox(): Promise<InboxState> {
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
         const fresh = coerce({}, Date.now());
-        await writeFileAtomic(fresh).catch(() => undefined);
+        await writeFileAtomic(fresh).catch((err) =>
+          // The clean slate is clean because the baseline was stamped once. Left
+          // unwritten, every launch stamps a later one, and everything that
+          // happened while Stem was closed counts as read before anyone sees it.
+          degrade('inbox', 'left the inbox baseline unwritten', err)
+        );
         return fresh;
       }
       // Corrupt/unreadable: degrade to "everything in the Inbox, nothing unread"
       // rather than throwing. Baseline 0 would flag every thread unread, so keep
-      // the clean-slate promise by treating now as the baseline.
+      // the clean-slate promise by treating now as the baseline — which also
+      // means every archived and snoozed thread is back in the list, read, with
+      // nothing on screen to say why.
+      degrade('inbox', 'started from an empty inbox', err);
       return coerce({}, Date.now());
     }
   });
@@ -109,7 +120,14 @@ function update(mutate: (store: InboxFile) => void): Promise<InboxState> {
     let store: InboxFile;
     try {
       store = coerce(JSON.parse(await readFile(inboxStorePath(), 'utf8')), 0);
-    } catch {
+    } catch (err) {
+      // Unlike readInbox this is about to write what it read back out, so an
+      // unreadable file here is where the read, archived and snoozed state of
+      // every thread actually goes. (ENOENT is a first write on a fresh install,
+      // before anything has read the store.)
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        degrade('inbox', 'replaced the inbox with an empty one', err);
+      }
       store = coerce({}, Date.now());
     }
     mutate(store);

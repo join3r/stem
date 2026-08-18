@@ -1,3 +1,4 @@
+import { degrade } from '../degrade';
 import { getEmbeddingsClient } from '../recall/retrieval';
 import { dot, magnitude } from '../recall/vector';
 import { sectionText } from './grade';
@@ -106,7 +107,10 @@ export async function findDuplicateSkill(
     if (best) return best;
 
     return await findBodyDuplicate(draft.body ?? '', others, embedder);
-  } catch {
+  } catch (error) {
+    // null is also how this says "nothing resembles the draft", so a write that
+    // skipped the check entirely looks exactly like one that passed it.
+    degrade('skills.dedup', 'let a possible duplicate skill through', error);
     return null;
   }
 }

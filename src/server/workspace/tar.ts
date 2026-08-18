@@ -2,6 +2,7 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, open, utimes } from 'node:fs/promises';
 import { dirname, posix, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
+import { degrade } from '../degrade';
 
 // A tar reader and writer, written here rather than installed.
 //
@@ -211,6 +212,8 @@ export async function writeTar(out: string, entries: TarInput[]): Promise<void> 
     yield Buffer.alloc(BLOCK * 2);
   }
 
+  // quiet: if the directory really is not there, the write stream on the next
+  // line cannot open it and the pipeline rejects to the caller.
   await mkdir(dirname(out), { recursive: true }).catch(() => undefined);
   await pipeline(blocks(), createWriteStream(out, { mode: 0o600 }));
 }
@@ -403,6 +406,9 @@ function safeJoin(root: string, member: string): string {
  */
 export async function extractTar(archive: string, root: string): Promise<TarMemberInfo[]> {
   const landed: TarMemberInfo[] = [];
+  // Said once rather than once per member: a destination that cannot set times
+  // cannot set them for any of the thousands of files in a state root.
+  let timesReported = false;
   await scanTar(archive, async (member, body) => {
     const target = safeJoin(root, member.path);
     if (member.type === 'directory') {
@@ -416,11 +422,26 @@ export async function extractTar(archive: string, root: string): Promise<TarMemb
       await body.pipe((chunk) => handle.write(chunk).then(() => undefined));
       // `open` honours the mode only when it creates the file; re-assert it so an
       // overwrite of an existing, looser file still ends up 0600.
+      // quiet: which is the only case a failure here can matter in — a file this
+      // created is already at that mode or tighter — and the one caller refuses
+      // to unpack into a state root that has anything in it.
       await handle.chmod(member.mode || 0o644).catch(() => undefined);
     } finally {
       await handle.close();
     }
-    if (member.mtime > 0) await utimes(target, member.mtime, member.mtime).catch(() => undefined);
+    if (member.mtime > 0) {
+      await utimes(target, member.mtime, member.mtime).catch((error) => {
+        // A session file's mtime is the only record Stem has of when something
+        // last happened in that chat: the Inbox places rows by it and bolds them
+        // by it. Left at the unpack time, every chat in the archive arrives as
+        // activity from a minute ago — unread, top of the list, back out of the
+        // archived state it was in — for turns nobody took. That is the 0.4.x
+        // Inbox bug, over every chat at once.
+        if (timesReported) return;
+        timesReported = true;
+        degrade('import', 'left every restored chat looking like it just happened', error);
+      });
+    }
     landed.push(member);
   });
   return landed;

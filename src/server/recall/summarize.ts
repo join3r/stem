@@ -1,5 +1,6 @@
 
 import { getEmbeddingsClient } from './retrieval';
+import { degrade } from '../degrade';
 import { isRecallEnabled } from '../workspace/memory';
 import type { LlmClient } from './llm';
 import { recallStore, MAX_MERGED_SEGMENT_CHARS, MAX_SEGMENT_CHARS, MAX_SUMMARY_CHARS, type StoredMessage, type SummarySegmentRow } from './store';
@@ -85,7 +86,8 @@ export function parseSummary(output: string): string | null {
         return obj.summary.replace(/\s+/g, ' ').trim();
       }
     } catch {
-      // Plain-prose fallback below.
+      // quiet: models that answer in prose instead of JSON are the reason the
+      // fallback below exists — it reads the same reply and usually accepts it.
     }
   }
   // Some models reply with the summary as plain prose despite the JSON ask.
@@ -118,7 +120,9 @@ export function parseDualSummary(output: string): { segment: string | null; summ
           : null;
       if (summary || segment) return { segment, summary };
     } catch {
-      // Fall through to the single-summary/prose parser.
+      // quiet: same as parseSummary — the single-summary/prose parser below gets
+      // the same text, and a segment-less reply is an expected weak-model shape
+      // the caller already handles (it marks the thread's segment coverage gapped).
     }
   }
   return { segment: null, summary: parseSummary(output) };
@@ -160,7 +164,8 @@ async function embedSummary(summaryId: number, text: string, intact: () => boole
     const [vec] = await emb.embed([text], 'passage');
     if (vec && intact()) upsertSummaryVector(summaryId, model, vec);
   } catch {
-    // Non-fatal — getSummariesMissingVector picks it up later.
+    // quiet: this is a cache warm-up, not the write — the summary itself is
+    // already stored, and getSummariesMissingVector hands it to the embed pass.
   }
 }
 
@@ -258,7 +263,11 @@ export async function refreshThreadSummary(threadId: string, llm: LlmClient): Pr
       `${SUMMARY_INSTRUCTIONS}\n\nToday's date: ${today}.\n\nPrior summary:\n${prior?.text ?? '(none — this is the first summary of this thread)'}\n\nNew messages:\n${window.transcript}`
     );
     parsed = parseDualSummary(reply);
-  } catch {
+  } catch (error) {
+    // The retry is real, but so is the silence: `false` is also what a thread
+    // with nothing new returns, so a model that is down reports as "Summarised
+    // 0 chats" on the activity row for as long as it stays down.
+    degrade('recall.summarize', 'left the thread summary unrevised', error);
     return false; // watermark unmoved — retried on the next distill touch
   }
   if (!parsed.summary || !intact()) return false;
@@ -305,8 +314,11 @@ export async function refreshThreadSummary(threadId: string, llm: LlmClient): Pr
         });
         finalText = rebuilt;
       }
-    } catch {
-      // Keep the rolling revision; the rebuild retries on a later pass.
+    } catch (error) {
+      // Keep the rolling revision; the rebuild retries on a later pass. Until
+      // one lands, the whole anti-drift mechanism is off and the summary keeps
+      // re-compressing itself — visible only as summaries slowly going vague.
+      degrade('recall.summarize', 'kept the rolling summary', error);
     }
   }
   await embedSummary(id, finalText.slice(0, MAX_SUMMARY_CHARS), intact);

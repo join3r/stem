@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { hashEquals, hashToken, mintDevice, type MintedDevice } from './auth';
 import type { DeviceKind } from '../../shared/types';
+import { degrade } from '../degrade';
 import { pairingStorePath } from '../workspace/paths';
 import {
   normalizePairingCode,
@@ -106,7 +107,15 @@ async function readStore(): Promise<PairingStore> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(pairingStorePath(), 'utf8'));
-  } catch {
+  } catch (err) {
+    // No file is the ordinary case: nothing is outstanding until somebody asks
+    // for a code. A file that exists and cannot be read reads as exactly that,
+    // so the device spending a code it was handed a minute ago is told only
+    // that the code is wrong — and the failure count that locks the route is
+    // back at zero.
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('transport.pairing', 'read the pairing store as empty', err);
+    }
     return { ...EMPTY, codes: [] };
   }
   const store = parsed as Partial<PairingStore> | null;
@@ -129,9 +138,17 @@ async function readStore(): Promise<PairingStore> {
 
 async function writeStore(store: PairingStore): Promise<void> {
   const path = pairingStorePath();
+  // quiet: a directory that genuinely could not be made takes the writeFile below
+  // down with it, and that throws to the caller.
   await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
   await writeFile(path, `${JSON.stringify(store, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await chmod(path, 0o600).catch(() => undefined);
+  await chmod(path, 0o600).catch((err) =>
+    // `mode` only applies on create, so this is what keeps a rewrite onto an
+    // existing or umask-widened file at 0600. This file holds the hash of a live
+    // pairing code and the lockout counter that limits guesses at it; a wider
+    // mode means anyone with a login on this machine can read both.
+    degrade('transport.pairing', 'left the pairing store at a wider mode than 0600', err)
+  );
 }
 
 /** `ABCD-EFGH` — grouped for reading aloud, ungrouped by normalize(). */

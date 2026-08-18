@@ -232,6 +232,8 @@ export function parseAuthorReply(output: string): ParsedReply {
   try {
     parsed = JSON.parse(trimmed.slice(start, end + 1));
   } catch {
+    // quiet: 'unparseable' is carried back through the retry and out as a
+    // reason the caller reports — this is the answer, not a lost one.
     return { kind: 'unparseable' };
   }
   if (!parsed || typeof parsed !== 'object') return { kind: 'unparseable' };
@@ -290,6 +292,8 @@ export async function authorSkill(llm: LlmClient, input: AuthorInput): Promise<A
     try {
       reply = await llm.complete(prompt);
     } catch (error) {
+      // quiet: the message goes back as the outcome's `detail`, which is what
+      // the end-of-turn pass and `/learn` both report.
       return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error), attempts: attempt };
     }
 

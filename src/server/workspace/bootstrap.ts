@@ -208,10 +208,15 @@ export async function ensureWorkspace(): Promise<void> {
   // instruction suppressed DataTable/Chart/Tabs for the life of the install. The
   // system prompt is the single source now, so the duplicate is removed. No-op once
   // it's gone.
+  // quiet: a removal that fails leaves the duplicate instructions where they were
+  // and ensureWorkspace asks again on the next boot; force:true has already taken
+  // the absent case out of the question.
   await rm(agentsMdPath(), { force: true }).catch(() => {});
 
   // One-time cleanup: remove the retired codex backend's home so no unused data
   // is left on disk. No-op once it's gone. (pi's MCP config + admin tools are
   // managed by pi/mcp-config.ts and the bridge extension, not config.toml.)
+  // quiet: nothing reads the retired home, so a directory that will not go costs
+  // disk until the next boot tries again and nothing else.
   await rm(legacyCodexHome(), { recursive: true, force: true }).catch(() => {});
 }

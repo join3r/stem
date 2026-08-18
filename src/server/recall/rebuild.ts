@@ -1,5 +1,6 @@
 import type { MemoryRebuildStatus } from '../../shared/types';
 
+import { degrade } from '../degrade';
 import {
   buildDistillBatch,
   DISTILL_INSTRUCTIONS,
@@ -66,8 +67,11 @@ export function getMemoryRebuildStatus(): MemoryRebuildStatus {
     if (parsed && typeof parsed.cursorMessageId === 'number') {
       return { ...parsed, totalMessages: Math.max(parsed.totalMessages, messageCount()) };
     }
-  } catch {
-    // Reset corrupt progress without touching memories.
+  } catch (error) {
+    // Reset corrupt progress without touching memories — which means the offer
+    // reappears at zero and the rebuild re-mines transcripts it already paid a
+    // model call for, with the status object showing an ordinary fresh start.
+    degrade('recall.rebuild', 'restarted the rebuild from the first message', error);
   }
   return initialStatus();
 }
@@ -194,6 +198,10 @@ export async function runMemoryRebuildStep(llm: LlmClient): Promise<MemoryRebuil
       lastError: undefined
     });
   } catch (error) {
+    // quiet: the failure is the return value — it is persisted on the status row
+    // as lastError, and recall-tasks.ts turns that into activity.fail so the
+    // popover says "Memory rebuild failed" with this message.
+    //
     // Either reset — facts or episodic — invalidates the in-flight model call
     // and clears rebuild progress; resetEpisodic deletes the progress row
     // outright. Its rejection must not recreate that progress as a stale failed

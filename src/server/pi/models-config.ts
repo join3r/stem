@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { LocalProviderApi, LocalProviderTestResult, ModelOverride } from '../../shared/types';
 import { LOCAL_PROVIDER_IDS, isLocalProviderId } from '../../shared/providers';
+import { degrade } from '../degrade';
 import { log } from '../log';
 import { parseModelOverrides } from './model-overrides';
 import { piModelsConfigPath } from '../workspace/paths';
@@ -92,7 +93,9 @@ async function isToolCapable(base: string, id: string): Promise<boolean> {
     const body = (await res.json()) as { capabilities?: unknown };
     return !Array.isArray(body.capabilities) || body.capabilities.includes('tools');
   } catch {
-    return true; // can't tell → keep
+    // quiet: the probe not answering is the answer — /api/show is Ollama's, and
+    // every other server reaches here on every model. Keeping them is the point.
+    return true;
   }
 }
 
@@ -162,6 +165,8 @@ async function probeOneFlavor(
     const skipped = all.length - models.length;
     return { ok: true, api, models, ...(skipped > 0 ? { skippedNoTools: skipped } : {}) };
   } catch (e) {
+    // quiet: this catch IS the report. The error goes back as the result of the
+    // Test connection button the user just pressed, in their own words.
     const msg = e instanceof Error ? (e.name === 'TimeoutError' ? 'The server did not answer in time.' : e.message) : String(e);
     return { ok: false, error: msg };
   }
@@ -256,7 +261,13 @@ export async function readModelsConfig(): Promise<PiModelsConfig> {
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
-  } catch {
+  } catch (error) {
+    // ENOENT is the fresh install this tolerates. A file that IS there and did
+    // not open reads the same way — no providers — and the next sync writes that
+    // emptiness back over every local server the user set up.
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      degrade('pi.modelsConfig', 'read models.json as absent and started from no providers', error);
+    }
     return { providers: {} };
   }
   try {
@@ -265,10 +276,19 @@ export async function readModelsConfig(): Promise<PiModelsConfig> {
       return { providers: parsed.providers };
     }
     return { providers: {} };
-  } catch {
+  } catch (error) {
     // Uniquified like the write below: two readers hitting the same corrupt file
-    // must not overwrite each other's quarantine copy mid-write.
-    await writeFile(`${path}.${process.pid}.${randomUUID()}.corrupt`, raw, 'utf8').catch(() => undefined);
+    // must not overwrite each other's quarantine copy mid-write. The user's local
+    // providers vanish from the model picker at the same moment, so name the run
+    // that did it — the `.corrupt` sibling is only found by someone already
+    // looking.
+    degrade('pi.modelsConfig', 'quarantined models.json and started from no providers', error);
+    await writeFile(`${path}.${process.pid}.${randomUUID()}.corrupt`, raw, 'utf8').catch((e) =>
+      // The line above has already claimed the file was quarantined. If the copy
+      // did not land, the next sync overwrites the original and the hand-edits
+      // this whole path exists to preserve are gone with nothing left to restore.
+      degrade('pi.modelsConfig', 'kept no quarantine copy of the corrupt models.json', e)
+    );
     return { providers: {} };
   }
 }
@@ -289,6 +309,9 @@ async function writeModelsConfig(config: PiModelsConfig): Promise<void> {
     await writeFile(tmp, JSON.stringify(config, null, 2), 'utf8');
     await rename(tmp, path); // atomic in the same dir
   } finally {
+    // quiet: this is the accumulation guard the doc comment describes, not the
+    // write. A rename that succeeded already consumed the temp; one that failed
+    // leaves a single uniquified `.tmp` that no reader of models.json looks at.
     await rm(tmp, { force: true }).catch(() => undefined);
   }
 }
@@ -314,6 +337,10 @@ export async function providerIsSpawnable(provider: string): Promise<boolean> {
     const parsed = JSON.parse(await readFile(piModelsConfigPath(), 'utf8')) as Partial<PiModelsConfig>;
     return !!parsed?.providers?.[provider]?.models?.length;
   } catch {
+    // quiet: false is the true answer to what was asked — pi drops a config it
+    // cannot read, so a provider in an unreadable file is one a spawn would
+    // reject. readModelsConfig reports the file itself; this is a hot-path query
+    // on every listModels and has nothing of its own to add.
     return false;
   }
 }
