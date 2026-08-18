@@ -98,6 +98,15 @@ Maintainer notes:
 
 ### Fixed
 
+- **A command you allowed is no longer reported as one you refused.** An approval card gave you
+  two minutes and then quietly answered for you — with "the user declined", which the assistant
+  then repeated back as if you had said it. Worse, when a turn asked to run two commands at once
+  both cards were raised together while only the first was ever shown, so the second could run out
+  of time behind it. Cards now wait ten minutes, only the card actually in front of you counts
+  down, and running out of time tells the assistant that nobody answered — not that you said no.
+  The last two minutes show a countdown, an answer that arrives too late says so instead of
+  closing as though it worked, and a card raised while your phone was asleep is waiting for it
+  when it reconnects rather than being answerable only at the desk.
 - **Chats you moved to a server can be opened again.** After moving Stem to a server, every chat
   that came over listed normally and failed the moment anything opened it: the backend records
   the folder a chat ran in, and that folder was on the Mac the export came from. Scheduled tasks
