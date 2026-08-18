@@ -80,6 +80,18 @@ describe('spending a code', () => {
     await expect(redeemPairingCode(mangled)).resolves.toBeTruthy();
   });
 
+  it('two devices racing for one code mint exactly one credential', async () => {
+    const { code } = await createPairingCode('Laptop');
+    const results = await Promise.allSettled([redeemPairingCode(code), redeemPairingCode(code)]);
+
+    // Serialized inside the store: one wins, the other is told the same thing
+    // any wrong code is told — never handed a second copy of the credential.
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const loser = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(String(loser.reason)).toMatch(/not valid/);
+    expect((await readDevices()).length).toBe(1);
+  });
+
   it('cannot be spent twice', async () => {
     const { code } = await createPairingCode('Laptop');
     await redeemPairingCode(code);
@@ -131,6 +143,20 @@ describe('guessing at codes', () => {
     vi.setSystemTime(Date.now() + 16 * 60_000);
     const { code: fresh } = await createPairingCode('Laptop');
     await expect(redeemPairingCode(fresh)).resolves.toBeTruthy();
+  });
+
+  it('a lockout that has passed opens a fresh window, not a hair trigger', async () => {
+    // Burn a full window of guesses and let the lockout expire on its own.
+    for (let i = 0; i < 8; i++) await redeemPairingCode('ZZZZ-ZZZZ').catch(() => undefined);
+    vi.setSystemTime(Date.now() + 16 * 60_000);
+
+    // The person now legitimately pairing mistypes once. Before the window
+    // reset, the stale failure count sat at MAX forever and this single typo
+    // re-locked the route for another fifteen minutes — one attempt per quarter
+    // hour, when the cap's own math promises eight per window.
+    await expect(redeemPairingCode('YYYY-YYYY')).rejects.toThrow(/not valid/);
+    const { code } = await createPairingCode('Laptop');
+    await expect(redeemPairingCode(code)).resolves.toBeTruthy();
   });
 
   it('forgets the failures once somebody gets it right', async () => {

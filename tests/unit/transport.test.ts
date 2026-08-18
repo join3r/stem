@@ -448,6 +448,86 @@ describe('resuming a dropped stream', () => {
   });
 });
 
+// The other axis of the same resume machine: what the server does with the
+// BOOKMARK itself. The client-side suite above exercises live→replay→resync as
+// one healthy client experiences them; these are the bookmarks a healthy client
+// never sends — a previous run of the server, a corrupted header, a position
+// ahead of the stream — each of which must land in exactly one of the three
+// answers, and always err toward resync ("refetch everything") over "you are up
+// to date", because a wrong "up to date" silently loses whatever the gap held.
+describe('what a presented bookmark is worth', () => {
+  let token: string;
+
+  beforeAll(async () => {
+    token = (await clientCredentials(serverUrl, { external: false })).token;
+  });
+
+  /** Open /events with `lastEventId`, capture the handshake frames, hang up. */
+  async function handshake(lastEventId: string | null): Promise<string> {
+    const controller = new AbortController();
+    const res = await fetch(`${serverUrl}/events`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(lastEventId ? { 'last-event-id': lastEventId } : {})
+      },
+      signal: controller.signal
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    let text = '';
+    // The handshake is written synchronously at connect, so it arrives in the
+    // first chunk or two; stop as soon as the stream goes quiet for a beat.
+    for (;;) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<null>((r) => setTimeout(() => r(null), 200))
+      ]);
+      if (!chunk || chunk.done) break;
+      text += Buffer.from(chunk.value).toString('utf8');
+    }
+    controller.abort();
+    return text;
+  }
+
+  /** The `head` bookmark a resync frame carries. */
+  function headOf(frames: string): string {
+    const m = /event: resync\ndata: (\{[^\n]*\})/.exec(frames);
+    expect(m).not.toBeNull();
+    return (JSON.parse(m![1]) as { head: string }).head;
+  }
+
+  it('a bookmark from a previous run of the server is a resync, never a position', async () => {
+    // Whatever sequence this run is at, `00000000.3` is from some other life:
+    // the epoch prefix exists precisely so this cannot be read as "3 frames in".
+    const frames = await handshake('00000000.3');
+    expect(frames).toContain('event: resync');
+    // And the resync moves the client's bookmark to this run's head.
+    expect(headOf(frames)).toMatch(/^\w+\.\d+$/);
+  });
+
+  it('a bookmark that does not even parse is a resync, not "up to date"', async () => {
+    const frames = await handshake('not-a-bookmark');
+    expect(frames).toContain('event: resync');
+  });
+
+  it('the head bookmark itself attaches live: no replay, no resync', async () => {
+    const head = headOf(await handshake('00000000.1'));
+    const frames = await handshake(head);
+    expect(frames).not.toContain('event: resync');
+    // No data frames either — `id:` lines only ride on replayed/live pushes.
+    expect(frames).not.toContain('\nid: ');
+  });
+
+  it('a bookmark ahead of the stream reads as live, by documented choice', async () => {
+    // Only a corrupted bookmark can be ahead of the head. resumeFor treats it as
+    // "nothing missed" — this test pins that as a decision, not an accident.
+    const head = headOf(await handshake('00000000.1'));
+    const [epoch, seq] = head.split('.');
+    const frames = await handshake(`${epoch}.${Number(seq) + 50}`);
+    expect(frames).not.toContain('event: resync');
+  });
+});
+
 // How a client gets a credential at all, now that the server keeps none to hand
 // out: a token this machine already holds, one minted off a shared state root, or
 // a pairing code spent over the wire.

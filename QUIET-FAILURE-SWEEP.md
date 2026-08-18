@@ -63,6 +63,8 @@ claim `npm run probe:quiet` can go and check.
       could not see: 52 became `degrade()`, 67 got a `// quiet:` note
 - [x] Re-run the probe over the swept tree — 159 sites, result below
 - [x] Fix every defect the sweep found, with a test that fails without the fix
+- [x] Enumerate the edge-state matrices (approval queue, scheduler, pairing,
+      stream-resume) — two more live bugs found and fixed
 - [ ] Re-read the 70 `// quiet:` notes no test would contradict (list below)
 - [ ] Decide whether the ledger earns a diagnostics surface, or whether the log
       plus the activity marker is enough
@@ -385,6 +387,38 @@ write was refused rather than merely impossible. Six of its seven cases fail aga
 the pre-fix tree; the seventh is the control that proves the ignore file is still
 deleted when nothing is actually hidden.
 
+### The edge-state matrices
+
+The third failure shape behind the 0.4.x bugs — combinations of states nobody
+enumerated — is now enumerated for the four machines that hold user-facing state
+across time. Each file names its machine's axes at the top and tests the cells
+where two of them meet, because that is where all four of the original approval
+bugs lived:
+
+| File | Machine | Axes |
+| --- | --- | --- |
+| `tests/unit/exec-approval-matrix.test.ts` | the approval-card queue | card position (armed / queued) × exit (answer, timeout, late answer, thread abort, settleAll) × client (connected / reconnecting) |
+| `tests/unit/scheduler-matrix.test.ts` | a scheduled run's lifecycle | run state (queued / deferred / building / running / retrying) × user action (pause, delete, delete chat, preempt, run-now) |
+| `tests/unit/pairing.test.ts` (extended) | the pairing lockout | code (right / wrong / raced) × window (counting / locked / lock expired) |
+| `tests/unit/transport.test.ts` (extended) | stream-resume bookmarks | bookmark (previous epoch / garbage / at head / past head) → exactly one of live / replay / resync |
+
+Walking the cells found two live bugs, both fixed with their failing test in place
+first:
+
+- **One typo per quarter hour.** `redeemPairingCode` never reset the failure
+  counter when a lockout expired, so after the first lockout it sat at MAX forever
+  and every single wrong code re-locked `/pair` for another fifteen minutes — the
+  cap's own comment promises eight tries per window. An expired lockout now opens
+  a fresh window.
+- **A wordless "failed".** A task whose chat had been deleted was paused with
+  `lastStatus: 'failed'` and nothing else — the one path into `recordOutcome`'s own
+  failure shape that skipped it. The row now says the chat no longer exists.
+
+Two cells pinned decisions rather than bugs, on purpose: run-now on a paused task
+does nothing (defense in depth today; the test makes changing that an explicit
+choice), and a bookmark *ahead* of the stream reads as live (only a corrupted
+bookmark can be there, and the comment in `resumeFor` already owned the trade).
+
 ## Two places the rule had to bend
 
 Worth recording, because both are load-bearing and neither was in the plan.
@@ -415,5 +449,7 @@ mechanises best. The other two are still open:
   rule about catches.
 - **Unexercised edge states in state machines.** The approval bug was four bugs —
   timeout × queued-behind × late answer × client-away — each one cell of a matrix
-  nobody enumerated. Fake timers are already used in 13 test files; the seam exists,
-  the enumeration does not.
+  nobody enumerated. **Fixed:** the matrices are now enumerated for the four machines
+  that carry user-facing state across time — see "The edge-state matrices" below.
+  Walking them found two live bugs (the pairing lockout hair trigger, the scheduler's
+  wordless "failed" on a deleted chat), both fixed in the same pass.

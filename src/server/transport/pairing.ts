@@ -208,6 +208,15 @@ export function redeemPairingCode(presented: string, kind: DeviceKind = 'desktop
     if (Number.isFinite(lockedUntil) && lockedUntil > Date.now()) {
       throw new PairingError('too many pairing attempts; try again later', 429);
     }
+    // A lockout that has passed is a window that was spent, so the count starts
+    // over. Left standing, `failures` would sit at MAX forever and every single
+    // wrong code after the first lockout would re-lock the route for another
+    // fifteen minutes — one typo per quarter hour for whoever is legitimately
+    // pairing, and nothing like the "8 tries per window" the cap promises.
+    if (store.lockedUntil) {
+      store.failures = 0;
+      store.lockedUntil = null;
+    }
 
     const normalized = normalizeCode(presented);
     const hash = normalized ? hashToken(normalized) : '';

@@ -394,6 +394,10 @@ export class TaskScheduler {
       task.enabled = false;
       task.lastStatus = 'failed';
       task.nextRunAt = null;
+      // Through recordOutcome, not a bare status: "failed" with nothing beside it
+      // is the exact shape recordOutcome exists to prevent, and this branch used
+      // to be the one path into it that skipped the explanation.
+      this.recordOutcome(task, 'The chat this task belonged to no longer exists, so the task was paused.');
       await this.persistAndArm();
       return;
     }
