@@ -100,14 +100,17 @@ describe('the mirror host, end to end against the real server modules', () => {
 
     await host.addFolder(CLIENT_DIR);
     const id = folderId();
-    await until(() => existsSync(join(mirrorRoot(id), 'sub', 'b.md')), 'the first sync');
+    // Wait for the round's report (lastSyncedAt), not for any one file: puts land
+    // in upload-completion order, so b.md existing does not mean a.md does yet.
+    await until(() => !!JSON.parse(readFileSync(process.env.STEM_CONNECTED_FOLDERS_STORE!, 'utf8')).folders[0].lastSyncedAt, 'the first sync');
 
     expect(readFileSync(join(mirrorRoot(id), 'a.md'), 'utf8')).toBe('alpha');
+    expect(readFileSync(join(mirrorRoot(id), 'sub', 'b.md'), 'utf8')).toBe('beta');
     expect(existsSync(join(mirrorRoot(id), 'node_modules'))).toBe(false);
     expect(existsSync(join(mirrorRoot(id), '.DS_Store'))).toBe(false);
     expect(existsSync(join(mirrorRoot(id), 'link.md'))).toBe(false);
-    // The round closed: lastSyncedAt stamped, the symlink skip reported.
-    await until(() => !!JSON.parse(readFileSync(process.env.STEM_CONNECTED_FOLDERS_STORE!, 'utf8')).folders[0].lastSyncedAt, 'the report');
+    // The report handler stores the skipped list before it stamps lastSyncedAt,
+    // so the manifest is readable the moment the first-sync wait above passed.
     const manifest = JSON.parse(readFileSync(join(root, 'mirrors', `${id}.manifest.json`), 'utf8'));
     expect(manifest.skipped).toEqual([{ rel: 'link.md', reason: 'symbolic link' }]);
     // And this machine remembers what it mirrors.
