@@ -82,4 +82,30 @@ describe('http embeddings client timeouts', () => {
     expect(inputLength(fetchMock.mock.calls[0][1])).toBe(32);
     expect(inputLength(fetchMock.mock.calls[1][1])).toBe(1);
   });
+
+  it('splits long texts by estimated tokens, not just count', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => okResponse(inputLength(init)));
+    vi.stubGlobal('fetch', fetchMock);
+
+    // 9 texts of ~1500 est. tokens each (6000 chars / 4) — the 2026-08-18
+    // incident shape. Under the 8k-token cap they must pack 5+4, never 9 at once.
+    const client = createHttpEmbeddingsClient(CFG);
+    const vecs = await client.embed(Array.from({ length: 9 }, () => 'x'.repeat(6000)), 'passage');
+    expect(vecs).toHaveLength(9);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(inputLength(fetchMock.mock.calls[0][1])).toBe(5);
+    expect(inputLength(fetchMock.mock.calls[1][1])).toBe(4);
+  });
+
+  it('a single text over the token cap still ships, alone', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => okResponse(inputLength(init)));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = createHttpEmbeddingsClient(CFG);
+    const vecs = await client.embed(['x'.repeat(40_000), 'short'], 'passage');
+    expect(vecs).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(inputLength(fetchMock.mock.calls[0][1])).toBe(1);
+    expect(inputLength(fetchMock.mock.calls[1][1])).toBe(1);
+  });
 });

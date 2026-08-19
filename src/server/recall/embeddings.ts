@@ -53,6 +53,36 @@ const DEFAULT_PASSAGE_TIMEOUT_MS = 120_000;
 // way. 32 rather than 64 because a 64-passage batch alone can eat a whole
 // timeout budget on CPU, and a timed-out batch that retries redoes half as much.
 const MAX_BATCH = 32;
+// A count cap alone is not enough: the budget is spent per token, not per text
+// (measured 2026-08-19 on the VPS: qwen3-4b embeds ~95 tok/s on CPU, so 120s
+// covers ~11k tokens — a batch of 9 long memories blew it twice, and the retry
+// was doomed to the same overrun). Cap each request by estimated tokens so it
+// fits the budget with retry headroom; a single oversized text still ships
+// alone rather than never. chars/4 is the usual rough tokens estimate.
+const MAX_BATCH_EST_TOKENS = 8_000;
+
+function estTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/** Greedy packing under both caps; every text lands in exactly one batch. */
+function packBatches(texts: string[]): string[][] {
+  const out: string[][] = [];
+  let batch: string[] = [];
+  let tokens = 0;
+  for (const text of texts) {
+    const t = estTokens(text);
+    if (batch.length > 0 && (batch.length >= MAX_BATCH || tokens + t > MAX_BATCH_EST_TOKENS)) {
+      out.push(batch);
+      batch = [];
+      tokens = 0;
+    }
+    batch.push(text);
+    tokens += t;
+  }
+  if (batch.length > 0) out.push(batch);
+  return out;
+}
 
 /** A request cut off by our own timeout — the one failure worth retrying. */
 class EmbeddingsTimeoutError extends Error {}
@@ -130,8 +160,7 @@ export function createHttpEmbeddingsClient(
       if (texts.length === 0) return [];
       const budgetMs = kind === 'passage' ? passageTimeoutMs : timeoutMs;
       const out: Float32Array[] = [];
-      for (let i = 0; i < texts.length; i += MAX_BATCH) {
-        const batch = texts.slice(i, i + MAX_BATCH);
+      for (const batch of packBatches(texts)) {
         try {
           out.push(...(await embedBatch(cfg, batch, budgetMs)));
         } catch (err) {
