@@ -122,11 +122,19 @@ services:
     # the internet is somebody else's GPU bill.
     environment:
       TZ: ${TZ:-UTC}
-      # Both of these are memory, not speed. A VPS runs models on the CPU, and
-      # the failure that matters on a small box is not "slow" but "the kernel
-      # killed something": one model resident, one request at a time.
+      # Memory, not speed: a VPS runs models on the CPU, and the failure that
+      # matters on a small box is not "slow" but "the kernel killed something" —
+      # one model resident.
       OLLAMA_MAX_LOADED_MODELS: '1'
-      OLLAMA_NUM_PARALLEL: '1'
+      # Two request slots, not one, and this one IS speed: an embedding backfill
+      # batch runs a minute-plus on CPU, and with a single slot a chat turn's
+      # tiny query embed queues behind it past its 30s budget — surfacing as the
+      # "embeddings failed" banner for as long as the backfill runs. A second
+      # slot lets the query slip past; the cost is one more context allocation
+      # (a few hundred MB for an embedding model), not a second model. Set
+      # STEM_OLLAMA_NUM_PARALLEL=1 in .env on a box where that allocation is
+      # the difference between running and OOM.
+      OLLAMA_NUM_PARALLEL: ${STEM_OLLAMA_NUM_PARALLEL:-2}
       # How long a model stays resident after the last call. Ollama's default is
       # 5m, which for fact ranking means most turns pay a cold load — the calls
       # come minutes apart, not seconds. Raise it (`24h`, or `-1` for "never
