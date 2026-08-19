@@ -1,4 +1,5 @@
 import type { ConnectedFolder } from '../../shared/types';
+import { readMirrorSkipped } from '../mirror';
 import { readDevices } from '../transport/auth';
 import { connectedDeviceIds } from '../startup/transport';
 
@@ -14,16 +15,20 @@ export async function enrichConnectedFolders(folders: ConnectedFolder[]): Promis
   const devices = await readDevices();
   const labels = new Map(devices.map((d) => [d.id, d.label]));
   const connected = connectedDeviceIds();
-  return folders.map((f) => {
-    if (!f.origin) return f;
-    const label = labels.get(f.origin.deviceId);
-    return {
-      ...f,
-      // No label = the device was unpaired. The folder stays, marked — a person
-      // decides what happens to it (the MCP pinning rule ⑩, held here too).
-      ...(label ? { deviceLabel: label } : { orphaned: true }),
-      deviceConnected: connected.has(f.origin.deviceId),
-      syncState: f.rootMissing ? 'root-missing' : f.lastSyncedAt ? 'ok' : 'awaiting-sync'
-    };
-  });
+  return Promise.all(
+    folders.map(async (f) => {
+      if (!f.origin) return f;
+      const label = labels.get(f.origin.deviceId);
+      const skipped = (await readMirrorSkipped(f.id)).length;
+      return {
+        ...f,
+        // No label = the device was unpaired. The folder stays, marked — a person
+        // decides what happens to it (the MCP pinning rule ⑩, held here too).
+        ...(label ? { deviceLabel: label } : { orphaned: true }),
+        deviceConnected: connected.has(f.origin.deviceId),
+        syncState: f.rootMissing ? 'root-missing' : f.lastSyncedAt ? 'ok' : ('awaiting-sync' as const),
+        ...(skipped ? { skippedCount: skipped } : {})
+      };
+    })
+  );
 }

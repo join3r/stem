@@ -6,11 +6,17 @@ import { addFiles, createSubdir, listFiles, removeFile, removeSubdir } from '../
 import {
   addClientFolder,
   addConnectedFolders,
+  clientFoldersForDevice,
   listConnectedFolders,
+  recordFolderSynced,
   removeConnectedFolder,
+  setFolderRootMissing,
   updateConnectedFolder
 } from '../workspace/connected-folders';
 import { enrichConnectedFolders } from '../connected-folders/enrich';
+import { applyMirror, coerceManifestEntries, diffMirror, recordMirrorSkipped } from '../mirror';
+import type { CallerContext } from './guard';
+import type { ConnectedFolder, MirrorApplyInput, MirrorFolderInfo, MirrorReportInput } from '../../shared/types';
 import { browseServerFolders } from '../workspace/browse';
 import { getFolderIndexStatuses, seedFolderLearnMarks, syncFolderIndexes } from '../folder-index';
 import { clearScratch, listScratchUsage, UNFILED_KEY } from '../exec/scratch';
@@ -162,6 +168,55 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   // default; pinned facts always survive (enforced in the store).
   registerServer('cfolders:forgetFacts', (_e, id: string) => recallStore.forgetFactsBySource(`folder:${id}`));
   registerServer('cfolders:indexStatus', () => getFolderIndexStatuses());
+
+  // ---- client-folder mirror sync (see server/mirror) ----
+  // Every mirror channel follows the execHost/mcpHost rule: no device id in the
+  // arguments, the caller IS the device, and a folder id that does not live on
+  // the calling machine is refused — one paired machine must never be able to
+  // write into (or diff, or freeze) another machine's mirror.
+  const clientFolderOf = async (caller: CallerContext, folderId: string): Promise<ConnectedFolder> => {
+    if (!caller) {
+      throw new Error('mirror channels need a paired device — a mirror belongs to the CALLER’s machine.');
+    }
+    const folder = (await clientFoldersForDevice(caller.deviceId)).find((f) => f.id === folderId);
+    if (!folder) throw new Error('No connected folder with that id lives on the calling computer.');
+    return folder;
+  };
+  registerServer('mirror:hello', async (caller: CallerContext): Promise<MirrorFolderInfo[]> => {
+    if (!caller) {
+      throw new Error('mirror:hello needs a paired device — it answers for the CALLER’s machine.');
+    }
+    return (await clientFoldersForDevice(caller.deviceId)).map((f) => ({
+      folderId: f.id,
+      clientPath: f.origin!.clientPath,
+      mode: f.mode,
+      label: f.label
+    }));
+  });
+  registerServer('mirror:diff', async (caller: CallerContext, folderId: string, payload: { files?: unknown }) => {
+    await clientFolderOf(caller, folderId);
+    return diffMirror(folderId, coerceManifestEntries(payload.files));
+  });
+  registerServer('mirror:apply', async (caller: CallerContext, folderId: string, payload: Partial<MirrorApplyInput>) => {
+    await clientFolderOf(caller, folderId);
+    return applyMirror(folderId, {
+      puts: Array.isArray(payload.puts) ? payload.puts : [],
+      deletes: Array.isArray(payload.deletes) ? payload.deletes : []
+    });
+  });
+  registerServer('mirror:report', async (caller: CallerContext, folderId: string, report: Partial<MirrorReportInput>) => {
+    const folder = await clientFolderOf(caller, folderId);
+    if (report.state === 'root-missing') {
+      await setFolderRootMissing(folderId, true);
+      return;
+    }
+    if (report.state !== 'ok') throw new Error('A mirror report is either "ok" or "root-missing".');
+    if (Array.isArray(report.skipped)) await recordMirrorSkipped(folderId, report.skipped);
+    await recordFolderSynced(folderId, new Date().toISOString());
+    // A round that changed an indexed mirror should surface in recall without
+    // waiting out the 15-minute rescan timer.
+    if (folder.index) deps.scheduleFolderIndexScan(2_000);
+  });
 
   // Scheduled tasks. Mutations return the fresh list (like the cfolders handlers).
   registerServer('tasks:list', (): ScheduledTask[] => deps.scheduler()?.snapshot() ?? []);

@@ -327,6 +327,32 @@ export async function removeConnectedFolder(id: string): Promise<ConnectedFolder
   return folders;
 }
 
+/** The client folders that live on `deviceId` (what mirror:hello answers from). */
+export async function clientFoldersForDevice(deviceId: string): Promise<ConnectedFolder[]> {
+  const { folders } = await readStore();
+  return folders.filter((f) => f.origin?.deviceId === deviceId);
+}
+
+/** Stamp a completed sync round: lastSyncedAt now, any root-missing freeze lifted. */
+export function recordFolderSynced(id: string, at: string): Promise<void> {
+  return update((store) => {
+    const f = store.folders.find((x) => x.id === id);
+    if (!f) return;
+    f.lastSyncedAt = at;
+    delete f.rootMissing;
+  });
+}
+
+/** The owning device reported its folder root gone (or back). */
+export function setFolderRootMissing(id: string, missing: boolean): Promise<void> {
+  return update((store) => {
+    const f = store.folders.find((x) => x.id === id);
+    if (!f) return;
+    if (missing) f.rootMissing = true;
+    else delete f.rootMissing;
+  });
+}
+
 /** Absolute path of a connected folder by id, or null if unknown. */
 export async function connectedFolderPath(id: string): Promise<string | null> {
   const { folders } = await readStore();

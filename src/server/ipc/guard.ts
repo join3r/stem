@@ -81,6 +81,12 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   // The client path and an optional label. No device id: the caller is the
   // device, the folder lives on the caller's machine (see ipc/workspace.ts).
   'cfolders:addClient': [a.string, a.optional(a.nullish(a.string))],
+  // The mirror-sync channels: folder id + a payload reshaped where it lands
+  // (server/mirror coerces every rel/size/mtime; handles resolve through the
+  // staging shape check). 'mirror:hello' takes no arguments, so it is absent.
+  'mirror:diff': [a.string, a.object],
+  'mirror:apply': [a.string, a.object],
+  'mirror:report': [a.string, a.object],
   'cfolders:update': [a.string, a.object],
   'cfolders:remove': [a.string],
   'cfolders:forgetFacts': [a.string],

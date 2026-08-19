@@ -624,12 +624,60 @@ export interface ConnectedFolder {
   orphaned?: boolean;
   /** Computed on list: where the mirror stands (client folders only). */
   syncState?: 'ok' | 'awaiting-sync' | 'root-missing';
+  /** Computed on list: files the last sync could not mirror (too big, unreadable). */
+  skippedCount?: number;
 }
 
 /** The mutable fields of a connected folder (label/mode/memorize/note/index/learn*). */
 export type ConnectedFolderPatch = Partial<
   Pick<ConnectedFolder, 'label' | 'mode' | 'memorize' | 'note' | 'index' | 'learnMode' | 'learnModel'>
 >;
+
+// ---- Client-folder mirror sync (one-way, client → server) ----
+//
+// The owning device scans its folder, asks the server what differs
+// (mirror:diff), streams the wanted files through POST /upload, lands them
+// with mirror:apply, and closes the round with mirror:report. The server
+// keeps a per-folder manifest of {size, client mtime} — its own filesystem
+// mtimes mean nothing next to another machine's — and never initiates
+// anything: the client list is authoritative over what leaves its disk.
+
+/** One file as the owning device sees it, `rel` always '/'-separated. */
+export interface MirrorManifestEntry {
+  rel: string;
+  size: number;
+  mtimeMs: number;
+}
+
+/** One client folder bound to the calling device, as mirror:hello answers. */
+export interface MirrorFolderInfo {
+  folderId: string;
+  clientPath: string;
+  mode: 'read' | 'readwrite';
+  label: string;
+}
+
+/** What mirror:diff answers: upload these, then ask apply to drop those. */
+export interface MirrorDiffResult {
+  want: string[];
+  delete: string[];
+}
+
+/** One mirror:apply batch: staged handles to land, and rels to remove. */
+export interface MirrorApplyInput {
+  puts: { rel: string; handle: string; size: number; mtimeMs: number }[];
+  deletes: string[];
+}
+
+/**
+ * Closes a sync round (state 'ok': stamps lastSyncedAt, records what the scan
+ * skipped) or freezes it (state 'root-missing': the folder is unreachable on
+ * the device — never treated as "everything was deleted").
+ */
+export interface MirrorReportInput {
+  state: 'ok' | 'root-missing';
+  skipped?: { rel: string; reason: string }[];
+}
 
 /**
  * One directory of the SERVER's filesystem, as the remote folder picker walks
