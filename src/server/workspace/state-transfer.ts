@@ -747,9 +747,22 @@ async function assess(root: string, secrets: StateImportReport['secrets']): Prom
   });
   if (foldersRaw) {
     try {
-      const parsed = JSON.parse(foldersRaw) as { folders?: Array<{ path?: string; name?: string }> };
-      const missing = (parsed.folders ?? []).filter((f) => typeof f.path === 'string' && !existsSync(f.path));
-      for (const folder of missing) {
+      const parsed = JSON.parse(foldersRaw) as {
+        folders?: Array<{ path?: string; name?: string; label?: string; origin?: { clientPath?: string } }>;
+      };
+      for (const folder of parsed.folders ?? []) {
+        // A client folder's mirror bytes deliberately do not travel, and pairing
+        // does not either — the device that owns it will re-pair under a NEW
+        // identity, so the entry cannot self-heal. Say exactly what to do.
+        if (folder.origin) {
+          attention.push(
+            `The connected folder "${folder.label ?? folder.origin.clientPath}" lives on another computer ` +
+              `(${folder.origin.clientPath}), and mirrors do not travel in an export. Pair that computer with ` +
+              'this Stem again, then reconnect the folder from it: Folders tab → + → On this computer.'
+          );
+          continue;
+        }
+        if (typeof folder.path !== 'string' || existsSync(folder.path)) continue;
         attention.push(
           `The connected folder "${folder.name ?? folder.path}" is ${folder.path}, which does not exist here. ` +
             'Its search index came over; the folder itself has to be somewhere this Stem can read.'

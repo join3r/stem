@@ -231,6 +231,13 @@ including from your phone, whenever your Mac is awake with Stem running. When it
 asleep, the tools are still listed and Stem says which machine is away rather than
 pretending the tools are gone.
 
+Folders work the same way. A connected folder step 4 flagged as living on your Mac —
+or any folder there you want the assistant to read — is connected FROM the Mac:
+sidebar → **Connected folders** → **+** → **On this computer**. The Mac mirrors it up
+to the server as it changes, so the assistant can read it even while the Mac sleeps;
+[Connected folders](user/connected-folders.md) has the details, including what
+**Writable** means for a mirrored folder.
+
 ## 8. Check it
 
 Open Stem after the restart and confirm all four:

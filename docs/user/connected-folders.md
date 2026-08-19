@@ -67,3 +67,31 @@ cost. **Full history** shows an estimate before it starts.
 
 Learned facts remain if their source file is deleted. On disconnect, Stem offers to
 forget facts learned from that folder; pinned facts are kept.
+
+## Folders on your other computers
+
+When Stem runs on a server, **+** asks where the folder lives: **On the server**
+(browse the server's own disk — the folders above) or **On this computer**. Picking a
+folder on this computer connects it as a **mirror**: this computer watches the folder
+and copies changes one way, up to the server, so Stem can read it even while this
+computer is asleep. This is the one kind of connected folder that IS copied — the
+Folders tab groups it under this computer's name and shows when it last synced.
+
+- Changes sync within seconds while this computer is online; deletes and renames
+  follow. The folder on this computer is always the original — nothing Stem does can
+  change the mirror's contents from the server side.
+- Mirrors skip `.git`, `node_modules`, OS junk files, symbolic links, and files over
+  25 MB. Anything else skipped is counted on the folder's card.
+- If the folder disappears (an unplugged drive, a rename), syncing freezes and the
+  card says so — the mirror keeps its last state rather than treating it as deleted.
+  Disconnecting the folder in Stem is how you delete the mirror.
+- **Writable** means something different here: Stem edits the folder by running
+  commands **on this computer** (so [command execution](../running-on-a-server.md)
+  must be switched on here), never by writing into the mirror. The edit then syncs
+  up like any other change.
+- Index, Memorize and Learn facts work exactly as above — they operate on the
+  server's mirror copy.
+
+Unpairing the computer leaves the folder listed and frozen, never silently deleted.
+Mirrors do not travel in a [backup or move](moving-and-backups.md); after an import,
+reconnect the folder from the computer it lives on.

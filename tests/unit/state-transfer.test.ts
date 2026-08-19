@@ -377,7 +377,20 @@ describe('what the import tells you to go and fix', () => {
     );
     writeFileSync(
       join(from, 'connected-folders.json'),
-      JSON.stringify({ folders: [{ id: 'v', name: 'Personal Obsidian', path: '/Users/someone/Obsidian' }] })
+      JSON.stringify({
+        folders: [
+          { id: 'v', name: 'Personal Obsidian', path: '/Users/someone/Obsidian' },
+          // A client folder: its path is a mirror that deliberately does not
+          // travel, and its device will re-pair under a new identity — the
+          // report has to say "reconnect it from that computer", not "missing".
+          {
+            id: 'c',
+            label: 'work-notes',
+            path: '/old/mirrors/c',
+            origin: { deviceId: 'mac-1', clientPath: '/Users/someone/work-notes' }
+          }
+        ]
+      })
     );
     const archive = join(scratch(), 'move.tar');
     await exportState({ out: archive, passphrase: PASSPHRASE });
@@ -389,6 +402,10 @@ describe('what the import tells you to go and fix', () => {
     expect(attention).toContain('/opt/somewhere-else/bin/uvx');
     expect(attention).toContain('homeassistant.local');
     expect(attention).toContain('Personal Obsidian');
+    // The client folder gets its own instruction, naming where it really lives.
+    expect(attention).toContain('work-notes');
+    expect(attention).toContain('On this computer');
+    expect(attention).not.toContain('/old/mirrors/c');
     // A public URL is not device-shaped and must not be flagged: a report that
     // lists everything is one nobody reads to the end.
     expect(attention).not.toContain('fastmail');
