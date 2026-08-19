@@ -2,8 +2,11 @@ import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { log } from '../../server/log';
 import { clampTimeout, execEnv, resolveLoginPath, runCommand } from '../../server/exec/executor';
+import { scanCommandAgainstRoots } from '../../server/exec/protected';
+import { hostShellFromPlatform } from '../../server/exec/host-shell';
 import { host } from '../../server/host';
 import type { DeviceExecRequest, DeviceExecResult, ExecHostLocalState } from '../../shared/types';
+import { readMirroredFolders } from '../mirror-host/store';
 import { readExecHostEnabled, writeExecHostEnabled } from './store';
 
 // The client half of run_command's `device` target: THIS machine, running a
@@ -112,6 +115,23 @@ export function createExecHost(deps: ExecHostDeps): ExecHost {
         error:
           'This computer does not accept commands from Stem. The switch is in Settings → Chat → ' +
           'Command execution, on this computer.'
+      };
+    }
+    // The read-only re-check, against THIS machine's own mirror list — the copy
+    // of the answer a compromised server cannot edit. The server already ran
+    // the same scan and refused politely; this one is the guard that holds when
+    // it didn't (fail-closed, same token scan as the local protected-roots gate).
+    const readOnlyRoots = (await readMirroredFolders())
+      .filter((f) => f.mode === 'read')
+      .map((f) => f.clientPath);
+    const scan = scanCommandAgainstRoots(request.command, request.cwd ?? null, readOnlyRoots, hostShellFromPlatform());
+    if (scan.blocked) {
+      return {
+        ok: false,
+        error:
+          `The command touches "${scan.root}", a folder this computer mirrors to Stem read-only. ` +
+          'Commands cannot run against read-only folders; read it through the server-side mirror instead, ' +
+          'or ask the user to switch the folder to read & write in the Folders tab.'
       };
     }
     let cwd: string;

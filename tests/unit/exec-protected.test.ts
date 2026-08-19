@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { scanProtected, msysToWindows } from '../../src/server/exec/protected';
+import { scanCommandAgainstRoots, scanProtected, msysToWindows } from '../../src/server/exec/protected';
 
 // The main-side fail-closed guard for read-only connected folders: any command
 // or cwd referencing a protected root is blocked; unreadable gate state blocks
@@ -135,6 +135,28 @@ describe('scanProtected on Git Bash paths', () => {
 
   it('does not treat a cmd /b flag as drive B:', () => {
     expect(scan('ls /b').blocked).toBe(false);
+  });
+});
+
+// The explicit-roots scan behind the per-device guard: the roots are paths on
+// ANOTHER machine, so nothing here exists on this disk — the shape check alone
+// has to hold (docs: client-connected folders).
+describe('scanCommandAgainstRoots with roots from another machine', () => {
+  it('blocks a POSIX client path that does not exist locally, naming the root as given', () => {
+    const res = scanCommandAgainstRoots('rm -rf /Users/somebody-else/vault/x', null, ['/Users/somebody-else/vault'], 'zsh');
+    expect(res.blocked).toBe(true);
+    expect(res.root).toBe('/Users/somebody-else/vault');
+  });
+
+  it('blocks a Windows client root against both native and MSYS token shapes', () => {
+    const roots = ['C:\\Users\\me\\vault'];
+    expect(scanCommandAgainstRoots('type C:\\Users\\me\\vault\\a.txt', null, roots, 'git-bash').blocked).toBe(true);
+    expect(scanCommandAgainstRoots('cat /c/Users/me/vault/a.txt', null, roots, 'git-bash').blocked).toBe(true);
+  });
+
+  it('blocks by cwd alone, and passes an unrelated command', () => {
+    expect(scanCommandAgainstRoots('touch plan.md', '/Users/x/notes', ['/Users/x/notes'], 'zsh').blocked).toBe(true);
+    expect(scanCommandAgainstRoots('echo hi', '/tmp', ['/Users/x/notes'], 'zsh').blocked).toBe(false);
   });
 });
 

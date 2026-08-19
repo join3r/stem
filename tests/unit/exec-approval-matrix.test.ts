@@ -62,6 +62,10 @@ describe('the approval matrix', () => {
       emitApprovalResolved: (id) => resolved.push(id),
       emitApprovalArmed: (a) => armed.push(a),
       resolveDevice: async () => ({ ok: true, deviceId: 'mac-1', label: "Vlado's MacBook" }),
+      // Stubbed for the reason the sibling suites stub it: the real one reads
+      // the connected-folders store, and real I/O under fake timers reorders
+      // the very sequences this matrix pins down.
+      clientFolders: async () => [],
       deviceRouter: () =>
         ({
           announce: async () => undefined,

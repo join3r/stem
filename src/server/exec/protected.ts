@@ -75,6 +75,8 @@ function isInside(path: string, root: string, h: Host): boolean {
 export interface ProtectedScanResult {
   blocked: boolean;
   reason?: string;
+  /** The root that was hit, verbatim as given — for naming the folder in a refusal. */
+  root?: string;
 }
 
 /**
@@ -128,6 +130,39 @@ function pathTokens(command: string, shell: HostShell, h: Host): string[] {
 }
 
 /**
+ * Fail-closed scan of a command (+ optionally its cwd) against an explicit set
+ * of read-only roots. The roots may belong to ANOTHER machine — a client
+ * folder's path on its own device — so they are resolved shape-only when they
+ * do not exist on this disk, which canonicalish already does. Any hit blocks.
+ */
+export function scanCommandAgainstRoots(
+  command: string,
+  cwd: string | null,
+  rawRoots: string[],
+  shell: HostShell
+): ProtectedScanResult {
+  if (!rawRoots.length) return { blocked: false };
+  const h = host(shell);
+  const roots = rawRoots.map((r) => ({ raw: r, canonical: canonicalish(r, h) }));
+  const targets = [...(cwd ? [cwd] : []), ...pathTokens(command, shell, h)];
+  for (const target of targets) {
+    const canonical = canonicalish(target, h);
+    const hit = roots.find((root) => isInside(canonical, root.canonical, h));
+    if (hit) {
+      return {
+        blocked: true,
+        root: hit.raw,
+        reason:
+          `The command touches "${hit.raw}", a folder connected to Stem read-only. Commands cannot run ` +
+          'against read-only folders (Stem cannot tell reads from writes). Use the built-in read/grep/find ' +
+          'tools there instead, or ask the user to switch the folder to read & write in the Folders tab.'
+      };
+    }
+  }
+  return { blocked: false };
+}
+
+/**
  * Fail-closed scan of a command + its resolved cwd against the read-only
  * connected-folder roots. Any hit (or unreadable gate state) blocks.
  */
@@ -137,7 +172,6 @@ export function scanProtected(
   rootsPath: string = protectedRootsPath(),
   shell: HostShell = hostShellFromPlatform()
 ): ProtectedScanResult {
-  const h = host(shell);
   let roots: string[];
   try {
     roots = readProtectedRoots(rootsPath, shell);
@@ -147,21 +181,5 @@ export function scanProtected(
       reason: 'The read-only folder list could not be read, so the command was blocked to be safe.'
     };
   }
-  if (!roots.length) return { blocked: false };
-
-  const targets = [cwd, ...pathTokens(command, shell, h)];
-  for (const target of targets) {
-    const canonical = canonicalish(target, h);
-    const hit = roots.find((root) => isInside(canonical, root, h));
-    if (hit) {
-      return {
-        blocked: true,
-        reason:
-          `The command touches "${hit}", a folder connected to Stem read-only. Commands cannot run ` +
-          'against read-only folders (Stem cannot tell reads from writes). Use the built-in read/grep/find ' +
-          'tools there instead, or ask the user to switch the folder to read & write in the Folders tab.'
-      };
-    }
-  }
-  return { blocked: false };
+  return scanCommandAgainstRoots(command, cwd, roots, shell);
 }

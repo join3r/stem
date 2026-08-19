@@ -343,6 +343,7 @@ describe('ExecService device targeting', () => {
         nameOrId === "Vlado's MacBook" || nameOrId === 'mac-1'
           ? { ok: true, deviceId: 'mac-1', label: "Vlado's MacBook" }
           : { ok: false, error: `No paired computer is called “${nameOrId}”.` },
+      clientFolders: async () => [],
       deviceRouter: () => ({
         announce: async () => undefined,
         hosts: async () => (hostEntry ? { 'mac-1': hostEntry } : {}),
@@ -440,6 +441,55 @@ describe('ExecService device targeting', () => {
     expect(approvals).toHaveLength(0);
     expect(ran[0]).toMatchObject({ command: 'yt-dlp https://x.test', cwd: '/Users/vlado/Downloads' });
   });
+
+  // Read-only client folders on the target device (docs: client-connected
+  // folders). The scan runs BEFORE the Yolo branch: Yolo skips approval, never
+  // the user's read-only decision — the same rule the local gate holds to.
+  describe('read-only client folders on the device', () => {
+    const notesFolder = (mode: 'read' | 'readwrite', deviceId = 'mac-1') => ({
+      id: 'f1',
+      path: '/srv/mirrors/f1',
+      label: 'notes',
+      mode,
+      memorize: true,
+      origin: { deviceId, clientPath: '/Users/vlado/notes' }
+    });
+
+    it('blocks a command touching one, even in yolo, naming folder and device', async () => {
+      (settings.exec as unknown as { approvalMode: string }).approvalMode = 'yolo';
+      (service as unknown as { deps: { clientFolders: unknown } }).deps.clientFolders = async () => [
+        notesFolder('read')
+      ];
+      const result = await request({ command: 'echo pwned > /Users/vlado/notes/plan.md' });
+      expect(result.ok).toBe(false);
+      const error = (result as { error: string }).error;
+      expect(error).toContain('notes');
+      expect(error).toContain("Vlado's MacBook");
+      expect(error).toContain('read-only');
+      expect(ran).toHaveLength(0);
+    });
+
+    it('blocks by cwd too, and lets the same command run once the folder is writable', async () => {
+      (settings.exec as unknown as { approvalMode: string }).approvalMode = 'yolo';
+      const deps = (service as unknown as { deps: { clientFolders: unknown } }).deps;
+      deps.clientFolders = async () => [notesFolder('read')];
+      const blocked = await request({ command: 'touch plan.md', cwd: '/Users/vlado/notes' });
+      expect(blocked.ok).toBe(false);
+      deps.clientFolders = async () => [notesFolder('readwrite')];
+      const allowed = await request({ command: 'touch plan.md', cwd: '/Users/vlado/notes' });
+      expect(allowed.ok).toBe(true);
+      expect(ran).toHaveLength(1);
+    });
+
+    it("another device's read-only folder never blocks this one", async () => {
+      (settings.exec as unknown as { approvalMode: string }).approvalMode = 'yolo';
+      (service as unknown as { deps: { clientFolders: unknown } }).deps.clientFolders = async (
+        deviceId: string
+      ) => (deviceId === 'mac-1' ? [] : [notesFolder('read', 'other')]);
+      const result = await request({ command: 'touch /Users/vlado/notes/plan.md' });
+      expect(result.ok).toBe(true);
+    });
+  });
 });
 
 // The approval queue itself: what a card that nobody answers means, when its
@@ -472,6 +522,10 @@ describe('ExecService approval queue', () => {
       emitApprovalResolved: (id) => resolved.push(id),
       emitApprovalArmed: (a) => armed.push(a),
       resolveDevice: async () => ({ ok: true, deviceId: 'mac-1', label: "Vlado's MacBook" }),
+      // Stubbed so the device path stays filesystem-free (see the header note):
+      // the real one reads the connected-folders store, and real I/O under fake
+      // timers is exactly the nondeterminism these tests exist to avoid.
+      clientFolders: async () => [],
       deviceRouter: () => ({
         announce: async () => undefined,
         hosts: async () => ({}),

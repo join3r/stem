@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createExecHost, type ExecHost } from '../../src/desktop/exec-host';
 import { writeExecHostEnabled } from '../../src/desktop/exec-host/store';
+import { writeMirroredFolders } from '../../src/desktop/mirror-host/store';
 
 // The client half: the machine that actually runs a device-targeted command.
 // What must hold here is the consent gate — the opt-in switch on THIS disk is
@@ -20,6 +21,7 @@ describe('createExecHost', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'stem-exec-host-'));
     process.env.STEM_EXEC_HOST_FILE = join(dir, 'exec-host.json');
+    process.env.STEM_MIRRORS_FILE = join(dir, 'mirrors.json');
     calls = [];
     host = createExecHost({
       invoke: (channel, args) => {
@@ -31,6 +33,7 @@ describe('createExecHost', () => {
 
   afterEach(() => {
     delete process.env.STEM_EXEC_HOST_FILE;
+    delete process.env.STEM_MIRRORS_FILE;
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -76,6 +79,27 @@ describe('createExecHost', () => {
     expect(result.text).toContain('Exit code: 0');
     expect(result.text).toContain(join('exec-scratch', 'thread-a'));
     expect(result.text).toContain('done');
+  });
+
+  // This machine's OWN copy of the read-only answer, from mirrors.json — the
+  // guard that holds when the server's copy of the same check was bypassed.
+  it('refuses to run a command touching a folder it mirrors read-only', async () => {
+    await writeExecHostEnabled(true);
+    const folder = join(dir, 'notes');
+    await writeMirroredFolders([{ folderId: 'f1', clientPath: folder, mode: 'read' }]);
+    host.onRequest({ requestId: 'r-ro', threadId: 't1', command: `touch ${join(folder, 'x.md')}`, timeoutMs: 5_000 });
+    const refused = await lastResult();
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain('mirrors to Stem read-only');
+  });
+
+  it.skipIf(winlt)('runs the same command once the folder is writable', async () => {
+    await writeExecHostEnabled(true);
+    const folder = join(dir, 'notes');
+    await writeMirroredFolders([{ folderId: 'f1', clientPath: folder, mode: 'readwrite' }]);
+    host.onRequest({ requestId: 'r-rw', threadId: 't1', command: `echo ${join(folder, 'x.md')}`, timeoutMs: 30_000 });
+    const allowed = await lastResult();
+    expect(allowed.ok).toBe(true);
   });
 
   it('refuses a cwd that does not exist on this machine', async () => {

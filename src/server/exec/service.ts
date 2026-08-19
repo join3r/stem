@@ -20,8 +20,9 @@ import { clampTimeout, execEnv, resolveLoginPath, runCommand } from './executor'
 import { gitBashPathEnv, resolveHostShellTarget, type HostShellTarget } from './git-bash';
 import { hostShellFromPlatform } from './host-shell';
 import { buildJudgePrompt, classify, deviceShellLabel, parseJudgeVerdict, resolveJudgeModel } from './policy';
-import { scanProtected } from './protected';
+import { scanCommandAgainstRoots, scanProtected } from './protected';
 import { execDeviceRouter, resolveExecTarget } from '../exec-device/router';
+import { clientFoldersForDevice } from '../workspace/connected-folders';
 
 // Orchestrates one run_command request end to end: settings gate → cwd resolve →
 // protected-roots guard → tiered policy (allowlist / LLM judge / approval card) →
@@ -88,6 +89,8 @@ export interface ExecServiceDeps {
   /** Injection seams for tests; default to the wired exec-device router. */
   deviceRouter?: () => import('../exec-device/router').ExecDeviceRouter;
   resolveDevice?: typeof resolveExecTarget;
+  /** Test seam for the per-device read-only client-folder roots. */
+  clientFolders?: typeof clientFoldersForDevice;
 }
 
 /**
@@ -275,9 +278,12 @@ export class ExecService implements ExecBridge {
    * remote machine's tier 1 is exactly its own learned allowlist, which starts
    * empty — and "Always allow" learns into that device's bucket, never the
    * shared one. What is absent is absent for a reason, not forgotten: scratch
-   * and cwd resolution happen on the device (only it can stat its own disk),
-   * and the protected-roots scan guards server-side connected folders, of which
-   * the target machine has none.
+   * and cwd resolution happen on the device (only it can stat its own disk).
+   * The protected-roots GATE FILE guards server-side folders and stays out of
+   * this path — but the target machine can own client-connected folders, and
+   * the read-only ones among them are scanned below, BEFORE the Yolo branch,
+   * because read-only holds in Yolo for local folders and must hold the same
+   * way here. The device re-checks against its own list too (exec-host).
    */
   private async handleDeviceExec(
     command: string,
@@ -312,6 +318,33 @@ export class ExecService implements ExecBridge {
     const cwd = req.cwd?.trim() || undefined;
     const cwdLabel = cwd ?? `this chat's scratch folder on ${label}`;
     const dispatch = (): Promise<ExecBridgeResult> => this.runOnDevice(command, cwd, req, target.deviceId);
+
+    // Read-only client folders on the target device, scanned fail-closed like
+    // the local protected-roots guard — and like it, ahead of Yolo: Yolo skips
+    // the approval tiers, never the user's read-only decision.
+    const clientFolders = await (this.deps.clientFolders ?? clientFoldersForDevice)(target.deviceId);
+    const readOnly = clientFolders.filter((f) => f.mode === 'read' && f.origin);
+    if (readOnly.length) {
+      // Windows scans both native and MSYS path shapes; everything else POSIX.
+      const shell: HostShell = host.platform === 'win32' ? 'git-bash' : 'zsh';
+      const scan = scanCommandAgainstRoots(
+        command,
+        cwd ?? null,
+        readOnly.map((f) => f.origin!.clientPath),
+        shell
+      );
+      if (scan.blocked) {
+        const folder = readOnly.find((f) => f.origin!.clientPath === scan.root);
+        return {
+          ok: false,
+          error:
+            `The command touches "${scan.root}" on ${label} — the folder “${folder?.label ?? scan.root}” is ` +
+            'connected to Stem read-only, and commands cannot run against read-only folders (Stem cannot ' +
+            'tell reads from writes). Read it through the server-side mirror instead, or ask the user to ' +
+            'switch the folder to read & write in the Folders tab.'
+        };
+      }
+    }
 
     if (settings.approvalMode === 'yolo') return dispatch();
 
