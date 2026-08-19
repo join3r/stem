@@ -154,6 +154,9 @@ function LearnStatusLine({ status }: { status: FolderIndexStatus }) {
 function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
   const [folders, setFolders] = useState<ConnectedFolder[]>([]);
   const [indexStatus, setIndexStatus] = useState<Record<string, FolderIndexStatus>>({});
+  // THIS machine's mirror engine, by folder id — the only place a failed sync
+  // round is visible (the server just never hears from a client that errors).
+  const [localSync, setLocalSync] = useState<Record<string, { phase: string; lastError?: string }>>({});
   const [busy, setBusy] = useState(false);
   // Folder ids with an unconfirmed "Full history" selection (cost confirm shown).
   const [confirmAll, setConfirmAll] = useState<Record<string, boolean>>({});
@@ -206,6 +209,28 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
     const timer = setInterval(refreshStatus, 10_000);
     return () => clearInterval(timer);
   }, [folders, refreshStatus]);
+
+  // A client folder's card is driven by state that changes without user action —
+  // the first sync landing, the root vanishing, its device reconnecting — so the
+  // list itself is polled while one is on screen (else "Waiting for first sync"
+  // outlives the sync it waits for), and the local mirror engine is asked for
+  // the error a failed round leaves behind.
+  const hasClientFolders = folders.some((f) => f.origin);
+  useEffect(() => {
+    if (!hasClientFolders) return;
+    const tick = () => {
+      window.stem.listConnectedFolders().then(setFolders).catch(() => undefined);
+      window.stem
+        .mirrorLocalState()
+        .then((states) =>
+          setLocalSync(Object.fromEntries(states.map((s) => [s.folderId, { phase: s.phase, ...(s.lastError ? { lastError: s.lastError } : {}) }])))
+        )
+        .catch(() => undefined);
+    };
+    tick();
+    const timer = setInterval(tick, 10_000);
+    return () => clearInterval(timer);
+  }, [hasClientFolders]);
 
   function adopt(before: Set<string>, next: ConnectedFolder[]) {
     setFolders(next);
@@ -466,7 +491,14 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
                     <div className="muted cfolder-index-status">
                       {f.orphaned
                         ? 'Its computer is no longer paired — the mirror is frozen as it last synced.'
-                        : `Mirrored one-way from ${f.deviceLabel ?? 'its computer'} · ${cardSummary(f, undefined).split(' · ')[0]}`}
+                        : `Mirrored one-way from ${f.deviceLabel ?? 'its computer'} · ${
+                            localSync[f.id]?.phase === 'syncing'
+                              ? 'Syncing now…'
+                              : cardSummary(f, undefined).split(' · ')[0]
+                          }`}
+                      {localSync[f.id]?.lastError && (
+                        <span className="error"> · Last sync failed: {localSync[f.id]!.lastError}</span>
+                      )}
                     </div>
                   )}
                   <div className="cfolder-opt">
