@@ -31,7 +31,7 @@ function inputLength(init: RequestInit | undefined): number {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('http embeddings client timeouts', () => {
-  it('retries a timed-out passage batch once and returns its vectors', async () => {
+  it('retries a timed-out single-text passage once and returns its vector', async () => {
     const fetchMock = vi
       .fn<(url: string, init?: RequestInit) => Promise<Response>>()
       .mockImplementationOnce((_url, init) => hang(init!.signal as AbortSignal))
@@ -39,9 +39,27 @@ describe('http embeddings client timeouts', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const client = createHttpEmbeddingsClient(CFG, { timeoutMs: 5, passageTimeoutMs: 5 });
-    const vecs = await client.embed(['a', 'b'], 'passage');
-    expect(vecs).toHaveLength(2);
+    const vecs = await client.embed(['a'], 'passage');
+    expect(vecs).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Resending a mis-sized batch verbatim is doomed to the same overrun (observed
+  // live 2026-08-19: 2m timeout, identical retry, 2m timeout, pass dead). The
+  // retry that changes the outcome is a smaller request.
+  it('bisects a timed-out multi-text passage batch instead of resending it', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (inputLength(init) > 2) return hang(init!.signal as AbortSignal);
+      return okResponse(inputLength(init));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = createHttpEmbeddingsClient(CFG, { timeoutMs: 5, passageTimeoutMs: 5 });
+    const vecs = await client.embed(['a', 'b', 'c', 'd'], 'passage');
+    expect(vecs).toHaveLength(4);
+    // 1 timed-out attempt at 4, then two successful halves of 2.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map((c) => inputLength(c[1]))).toEqual([4, 2, 2]);
   });
 
   it('a passage batch that times out twice fails, named as slowness', async () => {
@@ -88,13 +106,12 @@ describe('http embeddings client timeouts', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     // 9 texts of ~1500 est. tokens each (6000 chars / 4) — the 2026-08-18
-    // incident shape. Under the 8k-token cap they must pack 5+4, never 9 at once.
+    // incident shape. Under the 4k-token cap they must pack in pairs, never 9 at once.
     const client = createHttpEmbeddingsClient(CFG);
     const vecs = await client.embed(Array.from({ length: 9 }, () => 'x'.repeat(6000)), 'passage');
     expect(vecs).toHaveLength(9);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(inputLength(fetchMock.mock.calls[0][1])).toBe(5);
-    expect(inputLength(fetchMock.mock.calls[1][1])).toBe(4);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(fetchMock.mock.calls.map((c) => inputLength(c[1]))).toEqual([2, 2, 2, 2, 1]);
   });
 
   it('a single text over the token cap still ships, alone', async () => {

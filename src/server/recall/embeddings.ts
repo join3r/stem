@@ -58,8 +58,11 @@ const MAX_BATCH = 32;
 // covers ~11k tokens — a batch of 9 long memories blew it twice, and the retry
 // was doomed to the same overrun). Cap each request by estimated tokens so it
 // fits the budget with retry headroom; a single oversized text still ships
-// alone rather than never. chars/4 is the usual rough tokens estimate.
-const MAX_BATCH_EST_TOKENS = 8_000;
+// alone rather than never. chars/4 is the usual rough tokens estimate — but it
+// undershoots by ~1.5–2× on diacritic-heavy text (Slovak history chunks: an
+// "8k-token" batch really carried 11k+ and still blew the budget), hence a cap
+// sized for the undershoot, with timeout bisection below as the backstop.
+const MAX_BATCH_EST_TOKENS = 4_000;
 
 function estTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -159,20 +162,31 @@ export function createHttpEmbeddingsClient(
       if (!cfg) throw new EmbeddingsUnavailableError();
       if (texts.length === 0) return [];
       const budgetMs = kind === 'passage' ? passageTimeoutMs : timeoutMs;
+      // Only passage work retries on timeout: it's background, so the extra
+      // wait costs nobody, whereas a query retry would double a turn's stall
+      // when lexical fallback is standing right there. Anything else (HTTP
+      // status, response shape) fails the same way twice; rethrow.
+      //
+      // The retry must change the outcome, not repeat it. A multi-text batch
+      // that overran its budget was mis-sized (the token estimate undershot),
+      // and resending it verbatim is doomed to the same overrun — observed live
+      // on 2026-08-19: 400 at 2m0s, retry, 400 at 2m0s, pass dead, watermark
+      // stuck. Bisect instead, down to a single text, which does get one
+      // verbatim retry — momentary contention is the only thing left to blame.
+      async function embedPassage(batch: string[]): Promise<Float32Array[]> {
+        try {
+          return await embedBatch(cfg!, batch, budgetMs);
+        } catch (err) {
+          if (!(err instanceof EmbeddingsTimeoutError)) throw err;
+          if (batch.length === 1) return embedBatch(cfg!, batch, budgetMs);
+          const mid = Math.ceil(batch.length / 2);
+          const left = await embedPassage(batch.slice(0, mid));
+          return [...left, ...(await embedPassage(batch.slice(mid)))];
+        }
+      }
       const out: Float32Array[] = [];
       for (const batch of packBatches(texts)) {
-        try {
-          out.push(...(await embedBatch(cfg, batch, budgetMs)));
-        } catch (err) {
-          // A timeout is the one failure a second attempt tends to fix — the
-          // endpoint is up, just momentarily over budget behind another request
-          // — and only passage work retries: it's background, so the extra wait
-          // costs nobody, whereas a query retry would double a turn's stall
-          // when lexical fallback is standing right there. Anything else (HTTP
-          // status, response shape) fails the same way twice; rethrow.
-          if (kind !== 'passage' || !(err instanceof EmbeddingsTimeoutError)) throw err;
-          out.push(...(await embedBatch(cfg, batch, budgetMs)));
-        }
+        out.push(...(kind === 'passage' ? await embedPassage(batch) : await embedBatch(cfg, batch, budgetMs)));
       }
       return out;
     }
