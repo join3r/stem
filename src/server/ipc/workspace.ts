@@ -14,7 +14,7 @@ import {
   updateConnectedFolder
 } from '../workspace/connected-folders';
 import { enrichConnectedFolders } from '../connected-folders/enrich';
-import { applyMirror, coerceManifestEntries, diffMirror, recordMirrorSkipped } from '../mirror';
+import { applyMirror, coerceManifestEntries, diffMirror, readMirrorSkipped, recordMirrorSkipped } from '../mirror';
 import { mirrorSyncApplied, mirrorSyncEnded, mirrorSyncPlanned } from '../mirror/sync-activity';
 import type { CallerContext } from './guard';
 import type { ConnectedFolder, MirrorApplyInput, MirrorFolderInfo, MirrorReportInput } from '../../shared/types';
@@ -170,6 +170,11 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   // default; pinned facts always survive (enforced in the store).
   registerServer('cfolders:forgetFacts', (_e, id: string) => recallStore.forgetFactsBySource(`folder:${id}`));
   registerServer('cfolders:indexStatus', () => getFolderIndexStatuses());
+  // The owning device's skipped-files report, per file with the reason (backs
+  // the "N not mirrored" note on an expanded folder card). An unknown id
+  // answers [] — the manifest read degrades to empty, and the list already
+  // tells every client which folders exist.
+  registerServer('cfolders:skipped', (_e, id: string) => readMirrorSkipped(id));
 
   // ---- client-folder mirror sync (see server/mirror) ----
   // Every mirror channel follows the execHost/mcpHost rule: no device id in the

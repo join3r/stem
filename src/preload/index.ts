@@ -128,6 +128,7 @@ const api: StemApi = {
   browseServerFolders: (path?: string) => ipcRenderer.invoke('cfolders:browse', path),
   addClientFolders: (paths: string[]) => ipcRenderer.invoke('mirror:addLocal', paths),
   mirrorLocalState: () => ipcRenderer.invoke('mirror:localState'),
+  mirrorSkippedFiles: (id: string) => ipcRenderer.invoke('cfolders:skipped', id),
 
   listTasks: () => ipcRenderer.invoke('tasks:list'),
   taskThreadSettings: (threadId: string) => ipcRenderer.invoke('tasks:threadSettings', threadId),

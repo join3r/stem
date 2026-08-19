@@ -90,6 +90,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'cfolders:update': [a.string, a.object],
   'cfolders:remove': [a.string],
   'cfolders:forgetFacts': [a.string],
+  'cfolders:skipped': [a.string],
   'tasks:setEnabled': [a.string, a.boolean],
   'tasks:threadSettings': [a.string],
   'tasks:runNow': [a.string],

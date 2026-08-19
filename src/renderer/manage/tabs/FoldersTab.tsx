@@ -134,6 +134,52 @@ function IndexStatusLine({ status }: { status: FolderIndexStatus }) {
   );
 }
 
+/** Past this many, the "not mirrored" popover says only how many more there are. */
+const MAX_SKIPPED_SHOWN = 12;
+
+/**
+ * "7 not mirrored" with the per-file reasons in an InfoTip — the expanded-card
+ * counterpart of the collapsed summary's bare count. Fetched on mount (i.e. on
+ * expand), not with the folder list: the report can run to hundreds of paths
+ * and only matters once someone is looking at this card.
+ */
+function MirrorSkippedNote({ folderId, count }: { folderId: string; count: number }) {
+  const [skipped, setSkipped] = useState<{ rel: string; reason: string }[]>([]);
+  useEffect(() => {
+    let stale = false;
+    window.stem
+      .mirrorSkippedFiles(folderId)
+      .then((s) => {
+        if (!stale) setSkipped(s);
+      })
+      .catch(() => undefined);
+    return () => {
+      stale = true;
+    };
+  }, [folderId, count]);
+  return (
+    <>
+      {' · '}
+      {count.toLocaleString()} not mirrored
+      <InfoTip label="Which files were not mirrored">
+        The sync copies regular, readable files up to the size limit; symbolic links and anything
+        unreadable stay on their computer.
+        {skipped.length > 0 && (
+          <>
+            {' '}Not mirrored:{' '}
+            {skipped
+              .slice(0, MAX_SKIPPED_SHOWN)
+              .map((s) => `${s.rel} (${s.reason})`)
+              .join(', ')}
+            {skipped.length > MAX_SKIPPED_SHOWN && ` — and ${skipped.length - MAX_SKIPPED_SHOWN} more`}
+            .
+          </>
+        )}
+      </InfoTip>
+    </>
+  );
+}
+
 /** "Learned 38 facts · 12 Mar" — what this folder has contributed to memory so far. */
 function LearnStatusLine({ status }: { status: FolderIndexStatus }) {
   const { facts, lastTs } = status.learn;
@@ -491,11 +537,18 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
                     <div className="muted cfolder-index-status">
                       {f.orphaned
                         ? 'Its computer is no longer paired — the mirror is frozen as it last synced.'
-                        : `Mirrored one-way from ${f.deviceLabel ?? 'its computer'} · ${
-                            localSync[f.id]?.phase === 'syncing'
-                              ? 'Syncing now…'
-                              : cardSummary(f, undefined).split(' · ')[0]
-                          }`}
+                        : (
+                            <>
+                              {`Mirrored one-way from ${f.deviceLabel ?? 'its computer'} · ${
+                                localSync[f.id]?.phase === 'syncing'
+                                  ? 'Syncing now…'
+                                  : cardSummary(f, undefined).split(' · ')[0]
+                              }`}
+                              {!!f.skippedCount && (
+                                <MirrorSkippedNote folderId={f.id} count={f.skippedCount} />
+                              )}
+                            </>
+                          )}
                       {localSync[f.id]?.lastError && (
                         <span className="error"> · Last sync failed: {localSync[f.id]!.lastError}</span>
                       )}

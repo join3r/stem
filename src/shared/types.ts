@@ -2833,6 +2833,8 @@ export interface StemApi {
   addClientFolders(paths: string[]): Promise<ConnectedFolder[]>;
   /** This machine's per-folder sync phase (see desktop/mirror-host). */
   mirrorLocalState(): Promise<{ folderId: string; clientPath: string; phase: 'idle' | 'syncing' | 'frozen'; lastError?: string }[]>;
+  /** The files the owning device's last scan could not mirror, with the reason each. */
+  mirrorSkippedFiles(id: string): Promise<{ rel: string; reason: string }[]>;
   /**
    * List one directory of the SERVER's filesystem (omit `path` for the server
    * user's home). Backs the remote folder picker, where the native dialog above
