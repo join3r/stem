@@ -370,20 +370,23 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
       </div>
 
       {adding && (
-        <div className="push-row cfolder-add-choice">
+        <div className="cfolder-add-choice">
           <span className="muted">Where does the folder live?</span>
           <button
             type="button"
-            className="push"
+            className="cfolder-add-option"
+            disabled={busy}
             onClick={() => {
               setAdding(false);
               setPicking(true);
             }}
           >
-            On the server…
+            <strong>On the server…</strong>
+            <span className="muted">Browse the server's own disk. Files are read in place.</span>
           </button>
-          <button type="button" className="push" onClick={() => void connectClient()}>
-            On this computer…
+          <button type="button" className="cfolder-add-option" disabled={busy} onClick={() => void connectClient()}>
+            <strong>On this computer…</strong>
+            <span className="muted">Pick a folder here; it mirrors one way up to the server.</span>
           </button>
         </div>
       )}

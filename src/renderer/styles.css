@@ -2546,6 +2546,26 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 
 /* ---- Connected folders (Sources tab → Connected folders sub-tab) ---- */
 .cfolders-head { display: flex; align-items: center; justify-content: space-between; }
+/* Add flow (remote only): where does the new folder live? Stacked full-width
+   options — the manage panel is too narrow for side-by-side buttons. */
+.cfolder-add-choice { display: flex; flex-direction: column; gap: var(--sp-3); margin: var(--sp-3) 0 var(--sp-5); }
+.cfolder-add-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-13);
+  color: var(--ink);
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 11px;
+  cursor: pointer;
+}
+.cfolder-add-option:hover:not(:disabled) { border-color: var(--accent); }
+.cfolder-add-option:disabled { opacity: 0.5; cursor: default; }
+.cfolder-add-option .muted { font-size: var(--fs-12); }
 .cfolder-item { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
 .cfolder-item + .cfolder-item { border-top: 0.5px solid var(--hair); }
 .cfolder-head { display: flex; align-items: center; gap: var(--sp-3); }
