@@ -1614,6 +1614,7 @@ export type ActivityKind =
   | 'folders.scan'
   | 'folders.embed'
   | 'folders.learn'
+  | 'mirror.sync'
   | 'chatIndex.backfill'
   | 'models.embed'
   | 'models.rerank'

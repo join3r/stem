@@ -77,9 +77,18 @@ and copies changes one way, up to the server, so Stem can read it even while thi
 computer is asleep. This is the one kind of connected folder that IS copied — the
 Folders tab groups it under this computer's name and shows when it last synced.
 
-- Changes sync within seconds while this computer is online; deletes and renames
-  follow. The folder on this computer is always the original — nothing Stem does can
-  change the mirror's contents from the server side.
+- The first sync copies the whole folder, one file at a time — for a folder with
+  tens of thousands of files that takes minutes to hours, not seconds. The card says
+  **Waiting for first sync** until the entire first pass lands, and the toolbar's
+  background-activity panel shows a **Syncing** row with a file-count progress bar.
+  A long "Waiting for first sync" with a moving progress row is a big first upload
+  doing its job, not a problem.
+- Interruptions are safe: quitting the app, the server restarting, or the
+  connection dropping pauses the sync, and the next round resumes from what already
+  arrived instead of starting over.
+- After the first sync, changes sync within seconds while this computer is online;
+  deletes and renames follow. The folder on this computer is always the original —
+  nothing Stem does can change the mirror's contents from the server side.
 - Mirrors skip `.git`, `node_modules`, OS junk files, symbolic links, and files over
   25 MB. Anything else skipped is counted on the folder's card.
 - If the folder disappears (an unplugged drive, a rename), syncing freezes and the

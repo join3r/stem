@@ -15,6 +15,7 @@ import {
 } from '../workspace/connected-folders';
 import { enrichConnectedFolders } from '../connected-folders/enrich';
 import { applyMirror, coerceManifestEntries, diffMirror, recordMirrorSkipped } from '../mirror';
+import { mirrorSyncApplied, mirrorSyncEnded, mirrorSyncPlanned } from '../mirror/sync-activity';
 import type { CallerContext } from './guard';
 import type { ConnectedFolder, MirrorApplyInput, MirrorFolderInfo, MirrorReportInput } from '../../shared/types';
 import { browseServerFolders } from '../workspace/browse';
@@ -160,6 +161,7 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   });
   registerServer('cfolders:remove', async (_e, id: string) => {
     const folders = await removeConnectedFolder(id);
+    mirrorSyncEnded(id); // Disconnecting a client folder mid-sync closes its activity row.
     void syncFolderIndexes(); // Drops the disconnected folder's index DB.
     return enrichConnectedFolders(folders);
   });
@@ -194,18 +196,25 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     }));
   });
   registerServer('mirror:diff', async (caller: CallerContext, folderId: string, payload: { files?: unknown }) => {
-    await clientFolderOf(caller, folderId);
-    return diffMirror(folderId, coerceManifestEntries(payload.files));
+    const folder = await clientFolderOf(caller, folderId);
+    const diff = await diffMirror(folderId, coerceManifestEntries(payload.files));
+    // The diff is where the server first learns a round's size — a first sync
+    // of a big folder runs for a long time, and belongs in background activity.
+    mirrorSyncPlanned(folderId, folder.label, diff.want.length + diff.delete.length);
+    return diff;
   });
   registerServer('mirror:apply', async (caller: CallerContext, folderId: string, payload: Partial<MirrorApplyInput>) => {
     await clientFolderOf(caller, folderId);
-    return applyMirror(folderId, {
+    const result = await applyMirror(folderId, {
       puts: Array.isArray(payload.puts) ? payload.puts : [],
       deletes: Array.isArray(payload.deletes) ? payload.deletes : []
     });
+    mirrorSyncApplied(folderId, result.applied + result.deleted);
+    return result;
   });
   registerServer('mirror:report', async (caller: CallerContext, folderId: string, report: Partial<MirrorReportInput>) => {
     const folder = await clientFolderOf(caller, folderId);
+    mirrorSyncEnded(folderId);
     if (report.state === 'root-missing') {
       await setFolderRootMissing(folderId, true);
       return;

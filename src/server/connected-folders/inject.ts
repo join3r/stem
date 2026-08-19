@@ -37,7 +37,7 @@ export async function buildConnectedFoldersContext(): Promise<string | null> {
         ? 'sync frozen: the folder is unreachable on its computer'
         : f.lastSyncedAt
           ? `last synced ${f.lastSyncedAt}`
-          : 'not yet synced — the mirror may be empty';
+          : 'first sync not finished — the mirror may be empty or still filling, so absence proves nothing yet';
     return (
       `- ${f.label}: \`${f.path}\` (${access}${privacy})${note}` +
       ` — lives on ${device} at \`${f.origin.clientPath}\` (${reach}; ${freshness})`

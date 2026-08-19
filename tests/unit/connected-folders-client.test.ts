@@ -136,7 +136,7 @@ describe('enrichment and injection', () => {
     });
     const ctx = await buildConnectedFoldersContext();
     expect(ctx).toContain('lives on MacBook at `/Users/v/notes`');
-    expect(ctx).toContain('not yet synced');
+    expect(ctx).toContain('first sync not finished');
     expect(ctx).toContain('one-way mirrors');
     expect(ctx).toContain('`node_modules`'); // the ignore disclosure
   });
