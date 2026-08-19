@@ -49,10 +49,10 @@ Open **Scheduled tasks**, then:
 - A run marked **(failed)** carries the reason: hover it. The same line is in the log
   (`stem.log` in Stem’s state folder), which is where to look if the row is gone.
 - Click the task text to show the full instruction.
-- Each task has a model row. Left on **Chat model**, runs follow whatever model is
-  selected in the task’s chat — the “uses …” line names it, so a task stuck on an
-  old model is visible here. Pick a model (and optionally an effort) to pin runs of
-  this task to it, regardless of what the chat later switches to.
+- The dotted model label on each row names what its runs execute on. Click it to
+  change that: left on **Chat model**, runs follow whatever model is selected in
+  the task’s chat; pick a model (and optionally an effort) to pin runs of this
+  task to it, regardless of what the chat later switches to.
 - **Open chat** to inspect its history or change its model.
 - **Run now** to test it without changing the next scheduled time.
 - **Pause** to keep the task without running it.

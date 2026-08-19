@@ -7,8 +7,20 @@ import type {
 } from '../../../shared/types';
 import { ModelPicker } from '../../ui/ModelPicker';
 import { clampEffort, effortsOf, EffortSelect } from '../../ui/EffortSelect';
+import { EFFORT_LABELS } from '../../modelLabels';
 
 // ---- Tasks tab: scheduled autonomous re-runs ----
+
+/** "GPT-5.6 Sol · High" — what a run of this task will execute on: its own pin,
+ *  else the model selected in its chat. The collapsed face of the editor row. */
+function runsOnLabel(task: ScheduledTask, thread: ThreadTurnSettings, models: ModelSummary[]): string {
+  const modelId = task.model ?? thread.model;
+  if (!modelId) return 'Chat model';
+  const m = models.find((x) => x.id === modelId);
+  const name = m ? m.displayName : modelId.split('/').pop() ?? modelId;
+  const effort = task.effort ?? thread.effort;
+  return effort ? `${name} · ${EFFORT_LABELS[effort] ?? effort}` : name;
+}
 
 /** Human-readable schedule, e.g. "cron 0 8 * * 1-5" or "once · Jul 1, 08:00". */
 function describeSchedule(task: ScheduledTask): string {
@@ -39,6 +51,16 @@ export function TasksTab({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleExpanded = (id: string) =>
     setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  // The model editors stay folded behind the "runs on" chip: most visits are a
+  // glance at next-run times, and a picker per row would bury them.
+  const [modelOpen, setModelOpen] = useState<Set<string>>(new Set());
+  const toggleModelOpen = (id: string) =>
+    setModelOpen((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -154,11 +176,21 @@ export function TasksTab({
                     )}
                   </>
                 )}
+                {' · '}
+                <button
+                  className="task-runs-on"
+                  onClick={() => toggleModelOpen(t.id)}
+                  title="The model this task's runs execute on — click to change it"
+                  aria-expanded={modelOpen.has(t.id)}
+                >
+                  {runsOnLabel(t, thread, models)}
+                </button>
               </div>
               {/* The model this task's runs execute on. Unset = the pinless
                   inheritance every task starts with: the model selected in its
                   chat, named by the picker's "uses …" line so an outdated one
                   is visible right where it can be overridden. */}
+              {modelOpen.has(t.id) && (
               <div className="task-model">
                 <ModelPicker
                   models={models}
@@ -179,6 +211,7 @@ export function TasksTab({
                   onChange={(effort) => pinModel(t, t.model ?? null, effort)}
                 />
               </div>
+              )}
             </div>
             );
           })}

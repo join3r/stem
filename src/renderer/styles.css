@@ -2630,6 +2630,20 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .row-main strong.task-title.expanded { -webkit-line-clamp: unset; }
 .task-meta { font-size: var(--fs-11); padding-left: 2px; }
 .task-running { color: var(--accent); }
+/* The collapsed face of the model editor: reads as one more meta fact ("· GPT-5.6
+   Sol · High"), the dotted underline being the only hint it opens something. A
+   text button rather than a field so a page of tasks stays a glanceable list. */
+.task-runs-on {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.task-runs-on:hover { color: var(--ink); }
 /* Per-task model pin: a narrow field pair under the meta line, not a full-width
    form row — it is a property of the task, not a section of its own. The gap
    matches what .mp-effort's negative top margin was tuned against. */
