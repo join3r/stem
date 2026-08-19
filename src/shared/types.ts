@@ -599,8 +599,31 @@ export interface ConnectedFolder {
   learnMode?: 'off' | 'use' | 'new' | 'all';
   /** Model for 'new'/'all' distillation; absent = the Settings → Memory model. */
   learnModel?: string;
+  /**
+   * Present on a folder that lives on a paired desktop, not on this machine.
+   * `path` is then the server-side mirror the client syncs one-way into (see
+   * docs: client-connected folders); `clientPath` is where the folder really
+   * lives on that device — the path device-targeted commands write to.
+   */
+  origin?: { deviceId: string; clientPath: string };
+  /** ISO timestamp of the last completed mirror sync (client folders only). */
+  lastSyncedAt?: string;
+  /**
+   * The owning device reported its folder root gone (unmounted disk, renamed
+   * folder). Sync is frozen — never treated as "delete everything" — until the
+   * device reports the root back. Client folders only.
+   */
+  rootMissing?: boolean;
   /** Computed on list: the path no longer exists on disk. Not persisted. */
   missing?: boolean;
+  /** Computed on list: label of the owning device (client folders only). */
+  deviceLabel?: string;
+  /** Computed on list: the owning device has an open event stream right now. */
+  deviceConnected?: boolean;
+  /** Computed on list: the owning device is no longer paired (see MCP pinning ⑩). */
+  orphaned?: boolean;
+  /** Computed on list: where the mirror stands (client folders only). */
+  syncState?: 'ok' | 'awaiting-sync' | 'root-missing';
 }
 
 /** The mutable fields of a connected folder (label/mode/memorize/note/index/learn*). */

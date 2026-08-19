@@ -78,6 +78,9 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'files:rmdir': [a.string],
   'cfolders:browse': [a.optional(a.nullish(a.string))],
   'cfolders:add': [a.stringArray],
+  // The client path and an optional label. No device id: the caller is the
+  // device, the folder lives on the caller's machine (see ipc/workspace.ts).
+  'cfolders:addClient': [a.string, a.optional(a.nullish(a.string))],
   'cfolders:update': [a.string, a.object],
   'cfolders:remove': [a.string],
   'cfolders:forgetFacts': [a.string],

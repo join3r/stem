@@ -208,6 +208,33 @@ export function uploadStagingRoot(): string {
 }
 
 /**
+ * Server-side mirrors of client-connected folders (folders that live on a paired
+ * desktop and sync one-way up; see workspace/connected-folders.ts). One directory
+ * per folder id — that directory IS the connected folder's `path`, so everything
+ * downstream (indexing, injection, the protected-roots gate) treats it like any
+ * other connected folder.
+ */
+export function mirrorsDir(): string {
+  // STEM_MIRRORS_DIR lets unit tests point at a throwaway directory (and avoids
+  // touching Electron's `app` when run outside the app), like its neighbours.
+  return process.env.STEM_MIRRORS_DIR ?? join(userDataRoot(), 'mirrors');
+}
+
+/** The mirror tree of one client-connected folder. */
+export function mirrorRoot(folderId: string): string {
+  return join(mirrorsDir(), folderId);
+}
+
+/**
+ * The sync manifest of one client-connected folder: rel → {size, client mtime}
+ * as of the last applied sync. A sibling of the mirror tree, deliberately NOT
+ * inside it — the agent reads the tree, and the manifest is bookkeeping.
+ */
+export function mirrorManifestPath(folderId: string): string {
+  return join(mirrorsDir(), `${folderId}.manifest.json`);
+}
+
+/**
  * Stem-owned chat-organization store: the user's folder tree and the
  * chat->folder assignments. Chats themselves are backend threads on disk; this
  * file only holds the organization layer the backend has no concept of.

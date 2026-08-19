@@ -4,11 +4,13 @@ import * as activity from '../activity';
 import { listSkills, setSkillEnabled } from '../workspace/skills';
 import { addFiles, createSubdir, listFiles, removeFile, removeSubdir } from '../files/store';
 import {
+  addClientFolder,
   addConnectedFolders,
   listConnectedFolders,
   removeConnectedFolder,
   updateConnectedFolder
 } from '../workspace/connected-folders';
+import { enrichConnectedFolders } from '../connected-folders/enrich';
 import { browseServerFolders } from '../workspace/browse';
 import { getFolderIndexStatuses, seedFolderLearnMarks, syncFolderIndexes } from '../folder-index';
 import { clearScratch, listScratchUsage, UNFILED_KEY } from '../exec/scratch';
@@ -113,11 +115,25 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
 
   // ---- connected folders (external folders the assistant reads in place) ----
   // Distinct `cfolders:*` namespace — `folders:*` is the chat-folder tree.
-  registerServer('cfolders:list', () => listConnectedFolders());
+  registerServer('cfolders:list', async () => enrichConnectedFolders(await listConnectedFolders()));
   // The remote picker: walks THIS machine's directories so a client whose native
   // dialog is on the wrong computer can still choose a folder that exists here.
   registerServer('cfolders:browse', (_e, path?: string | null) => browseServerFolders(path));
   registerServer('cfolders:add', (_e, paths: string[]) => addConnectedFolders(paths));
+  // A folder that lives on the CALLING device (docs: client-connected folders).
+  // No device id argument, deliberately — the caller IS the device, resolved from
+  // the bearer token (the execHost/mcpHost rule): one paired machine must not be
+  // able to claim a folder lives on another, and the machine that registers a
+  // folder is the one whose own mirror list stays authoritative over what it
+  // reads and uploads.
+  registerServer('cfolders:addClient', async (caller, clientPath: string, label?: string | null) => {
+    if (!caller) {
+      throw new Error('cfolders:addClient needs a paired device — the folder lives on the CALLER’s machine.');
+    }
+    return enrichConnectedFolders(
+      await addClientFolder({ deviceId: caller.deviceId, clientPath, label: label ?? undefined })
+    );
+  });
   registerServer('cfolders:update', async (_e, id: string, patch: ConnectedFolderPatch) => {
     const folders = await updateConnectedFolder(id, patch);
     // Index toggled: reconcile now (off → the DB file is deleted) and, when
@@ -134,12 +150,12 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
       if (patch.learnMode === 'new') await seedFolderLearnMarks(id);
       if (patch.learnMode === 'new' || patch.learnMode === 'all') deps.scheduleFolderLearn(1_000);
     }
-    return folders;
+    return enrichConnectedFolders(folders);
   });
   registerServer('cfolders:remove', async (_e, id: string) => {
     const folders = await removeConnectedFolder(id);
     void syncFolderIndexes(); // Drops the disconnected folder's index DB.
-    return folders;
+    return enrichConnectedFolders(folders);
   });
   // The disconnect flow's "also forget the facts learned from this folder"
   // choice. Separate from cfolders:remove so keeping the facts stays the

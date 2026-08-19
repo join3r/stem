@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { ConnectedFolder, ConnectedFolderPatch } from '../../shared/types';
 import { degrade } from '../degrade';
-import { connectedFoldersStorePath, piHome, protectedRootsPath } from './paths';
+import { deviceKind, readDevices } from '../transport/auth';
+import { connectedFoldersStorePath, mirrorManifestPath, mirrorRoot, piHome, protectedRootsPath } from './paths';
 
 // The Stem-owned registry of external "connected folders" the assistant may read
 // in place (an Obsidian vault, a financials folder, …). The folders themselves
@@ -26,6 +27,12 @@ function coerce(raw: unknown): ConnectedFolder | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Partial<ConnectedFolder>;
   if (typeof r.path !== 'string' || !r.path) return null;
+  const origin =
+    r.origin && typeof r.origin === 'object' &&
+    typeof r.origin.deviceId === 'string' && r.origin.deviceId &&
+    typeof r.origin.clientPath === 'string' && r.origin.clientPath
+      ? { deviceId: r.origin.deviceId, clientPath: r.origin.clientPath }
+      : null;
   return {
     id: typeof r.id === 'string' && r.id ? r.id : randomUUID(),
     path: r.path,
@@ -36,8 +43,37 @@ function coerce(raw: unknown): ConnectedFolder | null {
     ...(r.index === true ? { index: true } : {}), // default off
     // Only non-default modes are persisted; absent = 'use' (learn on use).
     ...(r.learnMode === 'off' || r.learnMode === 'new' || r.learnMode === 'all' ? { learnMode: r.learnMode } : {}),
-    ...(typeof r.learnModel === 'string' && r.learnModel ? { learnModel: r.learnModel } : {})
+    ...(typeof r.learnModel === 'string' && r.learnModel ? { learnModel: r.learnModel } : {}),
+    ...(origin ? { origin } : {}),
+    ...(typeof r.lastSyncedAt === 'string' && r.lastSyncedAt ? { lastSyncedAt: r.lastSyncedAt } : {}),
+    ...(r.rootMissing === true ? { rootMissing: true } : {})
   };
+}
+
+/**
+ * Whether `label` (case-insensitive) is already the label of another folder.
+ * Labels are the assistant's and the user's handle on a folder, and two folders
+ * answering to one name is exactly the ambiguity client folders make worse
+ * ("notes" here vs "notes" on the MacBook) — so the registry keeps them unique.
+ */
+function labelInUse(folders: ConnectedFolder[], label: string, exceptId?: string): boolean {
+  const wanted = label.trim().toLowerCase();
+  return folders.some((f) => f.id !== exceptId && f.label.trim().toLowerCase() === wanted);
+}
+
+/** `base` if free, else the first free `base-2`, `base-3`, … */
+function freeLabel(folders: ConnectedFolder[], base: string): string {
+  if (!labelInUse(folders, base)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`;
+    if (!labelInUse(folders, candidate)) return candidate;
+  }
+}
+
+/** Last path segment of a path from ANOTHER machine (may use either separator). */
+function clientBasename(p: string): string {
+  const segments = p.split(/[\\/]+/).filter(Boolean);
+  return segments[segments.length - 1] ?? p;
 }
 
 /**
@@ -162,7 +198,10 @@ export async function addConnectedFolders(paths: string[]): Promise<ConnectedFol
       store.folders.push({
         id: randomUUID(),
         path,
-        label: basename(path) || path,
+        // The user picked a path, not a name — a basename collision is resolved
+        // here (notes → notes-2) instead of failing the add. Chosen labels
+        // (rename, client folders) collide loudly instead; see updateConnectedFolder.
+        label: freeLabel(store.folders, basename(path) || path),
         mode: 'read',
         memorize: true
       });
@@ -171,11 +210,78 @@ export async function addConnectedFolders(paths: string[]): Promise<ConnectedFol
   });
 }
 
+/**
+ * Register a folder that lives on a paired desktop. The mirror directory this
+ * side is created first and becomes the folder's `path`, so indexing, injection
+ * and the protected-roots gate treat it like any other connected folder; where
+ * it really lives is kept in `origin`. Called by `cfolders:addClient` with the
+ * CALLER's device id — the client that owns the folder is the only one that can
+ * connect it, which is also what keeps its own mirror list authoritative.
+ */
+export async function addClientFolder(input: {
+  deviceId: string;
+  clientPath: string;
+  label?: string;
+}): Promise<ConnectedFolder[]> {
+  const clientPath = input.clientPath.trim();
+  // An absolute path on SOME machine — never resolved here (it is not this disk).
+  if (!/^([/\\]|[A-Za-z]:[/\\])/.test(clientPath)) {
+    throw new Error('A client folder needs the absolute path of the folder on that computer.');
+  }
+  const device = (await readDevices()).find((d) => d.id === input.deviceId);
+  if (!device) throw new Error('That computer is not paired with this Stem.');
+  if (deviceKind(device) !== 'desktop') {
+    throw new Error(`“${device.label}” is a phone, and folders can only be mirrored from computers.`);
+  }
+  const id = randomUUID();
+  await mkdir(mirrorRoot(id), { recursive: true });
+  let added = false;
+  try {
+    const folders = await update((store) => {
+      const existing = store.folders.find(
+        (f) => f.origin?.deviceId === input.deviceId && f.origin.clientPath === clientPath
+      );
+      if (existing) return store.folders; // already connected; leave it untouched
+      const wanted = input.label?.trim();
+      if (wanted && labelInUse(store.folders, wanted)) {
+        throw new Error(
+          `A connected folder is already called “${wanted}” — try “${freeLabel(store.folders, wanted)}”.`
+        );
+      }
+      store.folders.push({
+        id,
+        path: mirrorRoot(id),
+        label: wanted || freeLabel(store.folders, clientBasename(clientPath)),
+        mode: 'read',
+        memorize: true,
+        origin: { deviceId: input.deviceId, clientPath }
+      });
+      added = true;
+      return store.folders;
+    });
+    return folders;
+  } finally {
+    // The dedupe and label checks live inside the serialized mutate, so the
+    // mirror directory is made optimistically — take it back when nothing was
+    // registered, or `mirrors/` accumulates unowned empties.
+    // quiet: an empty directory that would not delete costs nothing and owns nothing.
+    if (!added) await rm(mirrorRoot(id), { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export function updateConnectedFolder(id: string, patch: ConnectedFolderPatch): Promise<ConnectedFolder[]> {
   return update((store) => {
     const f = store.folders.find((x) => x.id === id);
     if (f) {
-      if (typeof patch.label === 'string') f.label = patch.label.trim() || f.label;
+      if (typeof patch.label === 'string') {
+        const label = patch.label.trim();
+        if (label && labelInUse(store.folders, label, id)) {
+          throw new Error(
+            `A connected folder is already called “${label}” — try “${freeLabel(store.folders, label)}”.`
+          );
+        }
+        f.label = label || f.label;
+      }
       if (patch.mode === 'read' || patch.mode === 'readwrite') f.mode = patch.mode;
       if (typeof patch.memorize === 'boolean') f.memorize = patch.memorize;
       if (typeof patch.index === 'boolean') {
@@ -201,11 +307,24 @@ export function updateConnectedFolder(id: string, patch: ConnectedFolderPatch): 
   });
 }
 
-export function removeConnectedFolder(id: string): Promise<ConnectedFolder[]> {
-  return update((store) => {
+export async function removeConnectedFolder(id: string): Promise<ConnectedFolder[]> {
+  let removed: ConnectedFolder | undefined;
+  const folders = await update((store) => {
+    removed = store.folders.find((f) => f.id === id);
     store.folders = store.folders.filter((f) => f.id !== id);
     return store.folders;
   });
+  // A client folder's mirror is Stem's own copy — disconnecting deletes it (and
+  // its manifest), exactly like the index. The real folder on the device is
+  // never touched; reconnecting simply re-syncs.
+  if (removed?.origin) {
+    await rm(mirrorRoot(id), { recursive: true, force: true }).catch((error) => {
+      degrade('folders', 'left a disconnected folder’s mirror directory behind', error);
+    });
+    // quiet: bookkeeping for a mirror that is already gone; a leftover manifest is inert.
+    await rm(mirrorManifestPath(id), { force: true }).catch(() => undefined);
+  }
+  return folders;
 }
 
 /** Absolute path of a connected folder by id, or null if unknown. */
@@ -229,7 +348,14 @@ export async function getPrivateRoots(): Promise<string[]> {
  * mutation and once at startup (see publishProtectedRootsNow).
  */
 async function publishProtectedRoots(store: ConnectedFoldersStore): Promise<void> {
-  const roots = await Promise.all(store.folders.filter((f) => f.mode === 'read').map((f) => canonical(f.path)));
+  // A client folder's mirror is in the gate UNCONDITIONALLY, whatever its mode:
+  // the client is the single source of truth and nothing on this machine may
+  // ever make the mirror diverge. 'readwrite' on a client folder means the
+  // assistant may modify the folder ON THE DEVICE (device-targeted commands
+  // against origin.clientPath) — never the mirror.
+  const roots = await Promise.all(
+    store.folders.filter((f) => f.mode === 'read' || f.origin).map((f) => canonical(f.path))
+  );
   await mkdir(piHome(), { recursive: true });
   // Atomic: the bridge reads this mid-turn, and a half-written file must never
   // exist — its gate fails closed (keeps the previous roots) on a corrupt read,
