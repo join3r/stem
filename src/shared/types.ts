@@ -2826,6 +2826,13 @@ export interface StemApi {
   /** Open a native directory picker; returns chosen absolute paths ([] if canceled). */
   pickDirectory(): Promise<string[]>;
   /**
+   * Connect folders that live on THIS computer, mirroring them to the server
+   * (remote installs only; the picker already ran). Returns the fresh list.
+   */
+  addClientFolders(paths: string[]): Promise<ConnectedFolder[]>;
+  /** This machine's per-folder sync phase (see desktop/mirror-host). */
+  mirrorLocalState(): Promise<{ folderId: string; clientPath: string; phase: 'idle' | 'syncing' | 'frozen'; lastError?: string }[]>;
+  /**
    * List one directory of the SERVER's filesystem (omit `path` for the server
    * user's home). Backs the remote folder picker, where the native dialog above
    * would browse the wrong machine.

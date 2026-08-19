@@ -35,6 +35,12 @@ export type { ExecHostLocalState };
 export interface ExecHostDeps {
   /** Call a server channel through the proxy (late-bound, like the MCP host's). */
   invoke(channel: string, args: unknown[]): Promise<unknown>;
+  /**
+   * A command finished running here, however it ended. The mirror host listens
+   * so a command that wrote into a mirrored folder is pushed up in seconds
+   * rather than waiting for the watcher or the reconcile timer.
+   */
+  commandFinished?(request: DeviceExecRequest): void;
 }
 
 export interface ExecHost {
@@ -167,6 +173,7 @@ export function createExecHost(deps: ExecHostDeps): ExecHost {
             error: e instanceof Error ? e.message : String(e)
           });
         });
+        deps.commandFinished?.(request);
       })();
     },
 

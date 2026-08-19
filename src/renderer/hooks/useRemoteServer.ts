@@ -44,3 +44,25 @@ export function useRemoteServer(): boolean {
   }, []);
   return remote;
 }
+
+/**
+ * This client's own device id (devices.json registry id), or null before the
+ * answer lands / on an unpaired client. The Folders tab uses it to tell "a
+ * folder on THIS computer" from one on some other paired machine — same cached
+ * fetch as useRemoteServer, same cannot-change-while-running reasoning.
+ */
+export function useClientDeviceId(): string | null {
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    clientInfo()
+      .then((info) => {
+        if (live) setDeviceId(info.deviceId);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  return deviceId;
+}

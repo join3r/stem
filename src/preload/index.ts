@@ -126,6 +126,8 @@ const api: StemApi = {
   openWorkspaceFolder: () => ipcRenderer.invoke('cfolders:revealWorkspace'),
   pickDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
   browseServerFolders: (path?: string) => ipcRenderer.invoke('cfolders:browse', path),
+  addClientFolders: (paths: string[]) => ipcRenderer.invoke('mirror:addLocal', paths),
+  mirrorLocalState: () => ipcRenderer.invoke('mirror:localState'),
 
   listTasks: () => ipcRenderer.invoke('tasks:list'),
   taskThreadSettings: (threadId: string) => ipcRenderer.invoke('tasks:threadSettings', threadId),

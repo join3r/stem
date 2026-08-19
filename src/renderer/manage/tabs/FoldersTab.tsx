@@ -6,7 +6,7 @@ import type {
   ModelSummary
 } from '../../../shared/types';
 import { resolveMemoryModel } from '../../../shared/modelRoles';
-import { useRemoteServer } from '../../hooks/useRemoteServer';
+import { useClientDeviceId, useRemoteServer } from '../../hooks/useRemoteServer';
 import { ServerFolderPicker } from '../ServerFolderPicker';
 import { InfoTip } from '../../ui/InfoTip';
 import { ModelPicker } from '../../ui/ModelPicker';
@@ -75,6 +75,15 @@ const CONFIRM_DROP_INDEX_MIN_DOCS = 100;
  */
 function cardSummary(f: ConnectedFolder, status: FolderIndexStatus | undefined): string {
   const parts = [f.mode === 'readwrite' ? 'Writable' : 'Read-only'];
+  if (f.origin) {
+    // The mirror's state leads for a client folder: it decides whether what the
+    // assistant reads is current, stale, or not there yet.
+    if (f.orphaned) parts.unshift('Computer unpaired');
+    else if (f.syncState === 'root-missing') parts.unshift('Sync frozen — folder unreachable on its computer');
+    else if (f.syncState === 'awaiting-sync') parts.unshift('Waiting for first sync');
+    else if (f.lastSyncedAt) parts.unshift(`Synced ${new Date(f.lastSyncedAt).toLocaleString()}`);
+    if (f.skippedCount) parts.push(`${f.skippedCount.toLocaleString()} not mirrored`);
+  }
   if (!f.memorize) parts.push('Private');
   if (f.index) {
     parts.push(
@@ -156,7 +165,12 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
   // the same fact in the other direction: the native picker browses THIS disk,
   // so a remote server gets the server-side picker dialog instead.
   const remote = useRemoteServer();
+  const deviceId = useClientDeviceId();
   const [picking, setPicking] = useState(false);
+  // Remote only: the "+" offers two places a folder can live (the server's own
+  // disk via the server-side picker, or THIS computer via the native one and a
+  // mirror), and this holds that choice open.
+  const [adding, setAdding] = useState(false);
   // What "Memory default" on a folder's model picker actually means today: the
   // memory model if one is set, else whatever the backend defaults to. Read here
   // rather than passed in, because Sources knows nothing about Memory's settings.
@@ -193,20 +207,36 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
     return () => clearInterval(timer);
   }, [folders, refreshStatus]);
 
-  async function connect(paths: string[]) {
-    if (!paths.length) return;
-    const before = new Set(folders.map((x) => x.id));
-    const next = await window.stem.addConnectedFolders(paths);
+  function adopt(before: Set<string>, next: ConnectedFolder[]) {
     setFolders(next);
     // A just-connected folder is about to be configured — open its card.
     setExpanded((s) => new Set([...s, ...next.filter((x) => !before.has(x.id)).map((x) => x.id)]));
   }
 
+  async function connect(paths: string[]) {
+    if (!paths.length) return;
+    adopt(new Set(folders.map((x) => x.id)), await window.stem.addConnectedFolders(paths));
+  }
+
+  /** Connect folders that live on THIS computer, mirrored up to the server. */
+  async function connectClient() {
+    setAdding(false);
+    setBusy(true);
+    try {
+      const paths = await window.stem.pickDirectory();
+      if (!paths.length) return;
+      adopt(new Set(folders.map((x) => x.id)), await window.stem.addClientFolders(paths));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function add() {
     // The native dialog picks from THIS machine's disk — the right disk only
-    // when the server shares it. Remote, the server-side picker takes over.
+    // when the server shares it. Remote, the user chooses which machine the
+    // folder lives on: the server (its picker) or this computer (a mirror).
     if (remote) {
-      setPicking(true);
+      setAdding((v) => !v);
       return;
     }
     setBusy(true);
@@ -283,6 +313,43 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
   const learnCalls = (status: FolderIndexStatus | undefined): number | null =>
     status ? Math.max(1, Math.ceil(status.totalTextChars / LEARN_CHARS_PER_CALL)) : null;
 
+  /**
+   * Folders grouped by the machine they live on — the McpTab placeGroups shape:
+   * headers only when a client folder exists (one header over one list
+   * distinguishes nothing), one group per owning device, orphans last.
+   */
+  const groups = ((): { key: string; head: string | null; items: ConnectedFolder[] }[] => {
+    if (!folders.some((f) => f.origin)) return [{ key: 'all', head: null, items: folders }];
+    const out: { key: string; head: string | null; items: ConnectedFolder[] }[] = [];
+    const server = folders.filter((f) => !f.origin);
+    if (server.length) {
+      out.push({ key: 'server', head: remote ? 'On your Stem server' : 'On this computer', items: server });
+    }
+    const byDevice = new Map<string, ConnectedFolder[]>();
+    const orphans: ConnectedFolder[] = [];
+    for (const f of folders) {
+      if (!f.origin) continue;
+      if (f.orphaned) {
+        orphans.push(f);
+        continue;
+      }
+      byDevice.set(f.origin.deviceId, [...(byDevice.get(f.origin.deviceId) ?? []), f]);
+    }
+    out.push(
+      ...[...byDevice.entries()]
+        .map(([id, items]) => ({
+          key: id,
+          head:
+            (id === deviceId ? 'On this computer' : `On ${items[0]!.deviceLabel ?? 'another computer'}`) +
+            (items[0]!.deviceConnected === false ? ' — offline' : ''),
+          items
+        }))
+        .sort((a, b) => a.head.localeCompare(b.head))
+    );
+    if (orphans.length) out.push({ key: 'orphans', head: 'Nowhere — that computer is gone', items: orphans });
+    return out;
+  })();
+
   return (
     <div>
       {picking && (
@@ -302,6 +369,25 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
         </span>
       </div>
 
+      {adding && (
+        <div className="push-row cfolder-add-choice">
+          <span className="muted">Where does the folder live?</span>
+          <button
+            type="button"
+            className="push"
+            onClick={() => {
+              setAdding(false);
+              setPicking(true);
+            }}
+          >
+            On the server…
+          </button>
+          <button type="button" className="push" onClick={() => void connectClient()}>
+            On this computer…
+          </button>
+        </div>
+      )}
+
       {folders.length === 0 ? (
         <p className="muted">
           Connect a folder — an Obsidian vault, a project folder — and Stem can read its files in
@@ -309,8 +395,11 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
           contents out of Stem's memory.
         </p>
       ) : (
+        groups.map((group) => (
+        <div key={group.key}>
+        {group.head && <div className="grp-head">{group.head}</div>}
         <div className="group">
-          {folders.map((f) => {
+          {group.items.map((f) => {
             const status = indexStatus[f.id];
             const mode = shownLearnMode(f);
             const learnRows = !!f.index && f.memorize;
@@ -336,10 +425,13 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
                       {f.missing && <span className="muted cfolder-missing"> · missing</span>}
                     </strong>
                     {/* LRM guards stop the RTL truncation trick (styles.css) from
-                        visually relocating the path's leading slash to the end. */}
-                    <em title={f.path}>{`‎${f.path}‎`}</em>
+                        visually relocating the path's leading slash to the end.
+                        A client folder shows the path on ITS computer — the
+                        server-side mirror path is plumbing, not an address the
+                        user ever picked. */}
+                    <em title={f.origin?.clientPath ?? f.path}>{`‎${f.origin?.clientPath ?? f.path}‎`}</em>
                   </span>
-                  {!remote && (
+                  {(!remote || f.origin?.deviceId === deviceId) && (
                     <button
                       className="icon-action sm"
                       onClick={(e) => {
@@ -367,6 +459,13 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
                 {!open && <div className="muted cfolder-summary">{cardSummary(f, status)}</div>}
                 {open && (
                 <div className="cfolder-opts">
+                  {f.origin && (
+                    <div className="muted cfolder-index-status">
+                      {f.orphaned
+                        ? 'Its computer is no longer paired — the mirror is frozen as it last synced.'
+                        : `Mirrored one-way from ${f.deviceLabel ?? 'its computer'} · ${cardSummary(f, undefined).split(' · ')[0]}`}
+                    </div>
+                  )}
                   <div className="cfolder-opt">
                     <span className="cfolder-opt-label">Writable</span>
                     <button
@@ -374,7 +473,11 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
                       role="switch"
                       aria-checked={f.mode === 'readwrite'}
                       aria-label="Writable"
-                      title="Allow Stem to edit files in this folder (off = read-only, enforced by Stem)"
+                      title={
+                        f.origin
+                          ? `Allow Stem to modify this folder by running commands on ${f.deviceLabel ?? 'its computer'} (the server-side mirror is never written)`
+                          : 'Allow Stem to edit files in this folder (off = read-only, enforced by Stem)'
+                      }
                       onClick={() => setMode(f.id, f.mode !== 'readwrite')}
                     />
                   </div>
@@ -503,6 +606,8 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
             );
           })}
         </div>
+        </div>
+        ))
       )}
     </div>
   );

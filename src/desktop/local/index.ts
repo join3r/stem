@@ -13,6 +13,7 @@ import { pairWithServer, useBuiltInServer, type ServerCredentials } from '../ser
 import { updateClientReleaseNotes, updateClientUpdates, withClientSettings } from '../settings';
 import type { McpHost } from '../mcp-host';
 import type { ExecHost, ExecHostLocalState } from '../exec-host';
+import type { MirrorFolderLocalState, MirrorHost } from '../mirror-host';
 import type { Updates } from '../updates';
 import type {
   AppSettings,
@@ -79,6 +80,12 @@ export interface LocalIpcDeps {
   mcpHost: McpHost;
   /** Whether this machine accepts commands from its server (see desktop/exec-host/). */
   execHost: ExecHost;
+  /**
+   * The folders THIS machine mirrors to its server (see desktop/mirror-host/).
+   * Null when the server runs on this computer — a folder here is connected
+   * directly then, and mirroring it to itself would be a copy with no purpose.
+   */
+  mirrorHost: MirrorHost | null;
 }
 
 /**
@@ -198,6 +205,23 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     (_e, enabled: boolean): Promise<ExecHostLocalState> => deps.execHost.setEnabled(enabled)
   );
 
+  // Connect folders that live on THIS machine. Client-owned for the mcpHost
+  // reason at its sharpest: the machine-local mirror list is the authority over
+  // what this computer reads and uploads (see desktop/mirror-host/store.ts), so
+  // the channel that appends to it must not exist anywhere but here. The picker
+  // already ran (dialog:openDirectory); this takes its result.
+  handleLocal('mirror:addLocal', async (_e, paths: string[]) => {
+    if (!deps.mirrorHost) {
+      throw new Error(
+        'Stem is running on this computer — connect the folder directly instead of mirroring it to itself.'
+      );
+    }
+    let folders: unknown = [];
+    for (const path of paths) folders = await deps.mirrorHost.addFolder(path);
+    return folders;
+  });
+  handleLocal('mirror:localState', (): MirrorFolderLocalState[] => deps.mirrorHost?.localState() ?? []);
+
   handleLocal('dialog:openFiles', () =>
     dialog
       .showOpenDialog(deps.mainWindow()!, { properties: ['openFile', 'multiSelections'] })
@@ -291,6 +315,14 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
   );
 
   handleLocal('cfolders:reveal', async (_e, id: string) => {
+    // A folder THIS machine mirrors is the one case where the right disk is the
+    // local one even against a remote server: the folder the user means is the
+    // one they picked here, and this machine knows where that is.
+    const mirrored = deps.mirrorHost?.localState().find((f) => f.folderId === id);
+    if (mirrored) {
+      await shell.openPath(mirrored.clientPath);
+      return;
+    }
     revealable('That folder');
     const path = await connectedFolderPath(id);
     if (path) await shell.openPath(path);

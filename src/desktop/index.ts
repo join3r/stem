@@ -21,6 +21,7 @@ import { bindServerChannels } from './ipc-bridge';
 import { registerLocalIpc } from './local';
 import { createMcpHost, type McpHost } from './mcp-host';
 import { createExecHost, type ExecHost } from './exec-host';
+import { createMirrorHost, type MirrorHost } from './mirror-host';
 import { createOAuthCourier, type OAuthCourier } from './oauth-courier';
 import { enableGlobalShortcutPortal, isLinux, isMac, mainWindowChromeOptions, requestAttention } from './platform';
 import { createPresenceHeartbeat, type PresenceHeartbeat } from './presence';
@@ -321,6 +322,7 @@ let oauthCourier: OAuthCourier | null = null;
 let presence: PresenceHeartbeat | null = null;
 let mcpHost: McpHost | null = null;
 let execHost: ExecHost | null = null;
+let mirrorHost: MirrorHost | null = null;
 
 /**
  * Whether the server is answering, as last reported by the proxy. Kept here
@@ -416,8 +418,21 @@ app.whenReady().then(async () => {
   // target). Same late-bound relationship with the proxy as the MCP host's, and
   // the same off-by-default posture: until the switch in Settings is flipped on
   // this computer, every request is refused here whatever the server believes.
+  // The folders THIS machine mirrors up to its server. Only when the server is
+  // elsewhere: on a single machine a folder is connected directly, and this
+  // whole apparatus would be a copy of a disk onto itself.
+  mirrorHost = server
+    ? null
+    : createMirrorHost({
+        invoke: (channel, args) => proxy!.invoke(channel, args),
+        creds: () => endpoint
+      });
+
   execHost = createExecHost({
-    invoke: (channel, args) => proxy!.invoke(channel, args)
+    invoke: (channel, args) => proxy!.invoke(channel, args),
+    // A device command may have written into a mirrored folder; push it now so
+    // the assistant's next read of the mirror sees what it just did.
+    commandFinished: (request) => mirrorHost?.commandTouched(request.command, request.cwd)
   });
 
   proxy = createServerProxy({
@@ -456,6 +471,9 @@ app.whenReady().then(async () => {
       // Re-announce whether this machine runs commands: the server may have
       // restarted and an announcement is the only way it learns.
       if (reachable) void execHost?.refresh();
+      // And reconcile + rescan the mirrored folders: edits made while the
+      // stream was down are exactly what a reconnect has to catch up on.
+      if (reachable) void mirrorHost?.refresh();
     }
   });
   // Subscribe before any window exists, so nothing the server pushes during
@@ -473,7 +491,8 @@ app.whenReady().then(async () => {
     settings: () => proxy!.invoke('settings:get', []) as Promise<AppSettings>,
     updates,
     mcpHost,
-    execHost
+    execHost,
+    mirrorHost
   });
   quickChat.registerIpc();
   ipcMain.on('renderer:ready', (event) => {
@@ -513,6 +532,7 @@ app.whenReady().then(async () => {
     // they wait in the Manage panel.
     void mcpHost?.start();
     void execHost?.start();
+    void mirrorHost?.start();
   });
 
   quickChat.start(settings.quickChat);

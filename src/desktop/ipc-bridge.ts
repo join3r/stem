@@ -49,6 +49,9 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   'mcpHost:test': [a.string],
   // The exec host's switch ('execHost:localState' takes no arguments).
   'execHost:setEnabled': [a.boolean],
+  // Folders this machine mirrors: the native picker's absolute paths.
+  // ('mirror:localState' takes no arguments, so it is absent.)
+  'mirror:addLocal': [a.stringArray],
   'quickchat:run': [a.object],
   'quickchat:handoff': [a.object]
 };
