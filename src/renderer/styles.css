@@ -2630,6 +2630,10 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .row-main strong.task-title.expanded { -webkit-line-clamp: unset; }
 .task-meta { font-size: var(--fs-11); padding-left: 2px; }
 .task-running { color: var(--accent); }
+/* Per-task model pin: a narrow field pair under the meta line, not a full-width
+   form row — it is a property of the task, not a section of its own. The gap
+   matches what .mp-effort's negative top margin was tuned against. */
+.task-model { display: flex; flex-direction: column; gap: var(--sp-3); max-width: 320px; padding-left: 2px; }
 /* Hover carries the reason the run failed, so the mark has to invite the hover. */
 .task-failed { color: var(--warn); cursor: help; }
 

@@ -706,6 +706,14 @@ export interface ScheduledTask {
   lastError?: string;
   /** Short human label derived from the prompt, for the list + chat badge. */
   title: string;
+  /**
+   * Model pinned to THIS task (`provider/modelId`), set from the Tasks tab.
+   * Absent → the run inherits the thread's last explicitly selected model
+   * (see {@link ThreadTurnSettings}), which is how every task started out.
+   */
+  model?: string;
+  /** Reasoning effort pinned to this task; absent → the thread's persisted level. */
+  effort?: string;
 }
 
 /** What the assistant's `schedule_task` tool passes (exactly one of cron/at). */
@@ -719,6 +727,9 @@ export interface ScheduleTaskRequest {
 
 /** Editable fields when updating a task's schedule from the Tasks tab. */
 export type TaskSchedulePatch = { schedule: TaskSchedule };
+
+/** The Tasks tab's model row: null clears a pin back to "the chat's model". */
+export type TaskModelPatch = { model: string | null; effort: string | null };
 
 /** Main → renderer: a scheduled run just started (insert a collapsed run row live). */
 export interface ScheduledRunPayload {
@@ -2762,6 +2773,8 @@ export interface StemApi {
   deleteTask(id: string): Promise<ScheduledTask[]>;
   /** Replace a task's schedule (cron/once). Returns the fresh list. */
   updateTaskSchedule(id: string, patch: TaskSchedulePatch): Promise<ScheduledTask[]>;
+  /** Pin (or clear) the model/effort this task's runs execute on. Returns the fresh list. */
+  updateTaskModel(id: string, patch: TaskModelPatch): Promise<ScheduledTask[]>;
   /** Fired whenever the task list changes (created/updated/run/deleted). */
   onTasksChanged(listener: (tasks: ScheduledTask[]) => void): () => void;
   /** Fired when a scheduled run starts, so the open thread can show a collapsed run row. */

@@ -28,8 +28,9 @@ Future runs and their answers return to that same conversation.
 - Stem must be running. If Stem is closed or the computer sleeps, each overdue task
   runs once when Stem can run again.
 - Times use the computer’s local time.
-- Runs use the task chat’s last selected model and effort. Speed, output format, and
-  custom instructions do not carry over.
+- Runs use the task chat’s last selected model and effort, unless the task pins its
+  own in **Scheduled tasks** (see below). Speed, output format, and custom
+  instructions do not carry over.
 - Runs can use enabled tools. Web-search tasks request search automatically. Native
   search needs a compatible model; otherwise enable a search-capable tool.
 - Every run and answer is recorded in that chat. Stem speaks up only when the task
@@ -48,6 +49,10 @@ Open **Scheduled tasks**, then:
 - A run marked **(failed)** carries the reason: hover it. The same line is in the log
   (`stem.log` in Stem’s state folder), which is where to look if the row is gone.
 - Click the task text to show the full instruction.
+- Each task has a model row. Left on **Chat model**, runs follow whatever model is
+  selected in the task’s chat — the “uses …” line names it, so a task stuck on an
+  old model is visible here. Pick a model (and optionally an effort) to pin runs of
+  this task to it, regardless of what the chat later switches to.
 - **Open chat** to inspect its history or change its model.
 - **Run now** to test it without changing the next scheduled time.
 - **Pause** to keep the task without running it.

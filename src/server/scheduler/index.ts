@@ -227,6 +227,24 @@ export class TaskScheduler {
     return this.snapshot();
   }
 
+  /**
+   * Pin (or clear, with nulls) the model/effort this task's runs execute on.
+   * No validation against the model catalog here: the Tasks tab only offers
+   * catalog entries, and the runtime already degrades a vanished model to the
+   * thread's own (then the app default) rather than skipping the run.
+   */
+  async updateModel(id: string, model: string | null, effort: string | null): Promise<ScheduledTask[]> {
+    const task = this.tasks.find((t) => t.id === id);
+    if (task) {
+      if (model) task.model = model;
+      else delete task.model;
+      if (effort) task.effort = effort;
+      else delete task.effort;
+      await this.persistAndArm();
+    }
+    return this.snapshot();
+  }
+
   async remove(id: string): Promise<ScheduledTask[]> {
     this.tasks = this.tasks.filter((t) => t.id !== id);
     await this.persistAndArm();
@@ -429,6 +447,10 @@ export class TaskScheduler {
       const { turnId } = await this.opts.runtime.startTurn({
         input: task.prompt,
         threadId: task.threadId,
+        // The task's own pin, when set; the runtime falls back to the thread's
+        // persisted model/effort (then the app default) when these are absent.
+        ...(task.model ? { model: task.model } : {}),
+        ...(task.effort ? { effort: task.effort } : {}),
         webSearch: true,
         scheduled: { at: atIso, taskId: task.id }
       });
@@ -468,6 +490,8 @@ export class TaskScheduler {
             const retry = await this.opts.runtime.startTurn({
               input: task.prompt,
               threadId: task.threadId,
+              ...(task.model ? { model: task.model } : {}),
+              ...(task.effort ? { effort: task.effort } : {}),
               webSearch: true,
               scheduled: { at: atIso, taskId: task.id }
             });

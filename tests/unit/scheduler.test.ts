@@ -304,6 +304,42 @@ describe('TaskScheduler.runNow + management', () => {
     scheduler.stop();
   });
 
+  // The per-task model pin (Tasks tab): persisted on the task, carried into every
+  // run as an explicit startTurn model/effort, and cleared back to "the chat's
+  // model" with nulls — an unpinned task must keep sending no model at all, since
+  // absence is what makes the runtime fall back to the thread's own.
+  it('pins a model/effort onto runs and clears it back to the thread default', async () => {
+    const runtime = new FakeRuntime();
+    const { scheduler } = makeScheduler(runtime);
+    const res = await scheduler.create({ prompt: 'digest', cron: '0 8 * * *' }, 't1');
+    if (!res.ok) throw new Error('create failed');
+    const id = res.task.id;
+
+    // Unpinned: the run carries no model/effort keys.
+    scheduler.runNow(id);
+    await until(() => runtime.starts.length === 1, 'the unpinned run');
+    expect('model' in runtime.starts[0]).toBe(false);
+    expect('effort' in runtime.starts[0]).toBe(false);
+
+    let list = await scheduler.updateModel(id, 'openai-codex/gpt-5.6-sol', 'high');
+    expect(list[0]).toMatchObject({ model: 'openai-codex/gpt-5.6-sol', effort: 'high' });
+    expect((await readTasks())[0]).toMatchObject({ model: 'openai-codex/gpt-5.6-sol', effort: 'high' });
+
+    scheduler.runNow(id);
+    await until(() => runtime.starts.length === 2, 'the pinned run');
+    expect(runtime.starts[1]).toMatchObject({ model: 'openai-codex/gpt-5.6-sol', effort: 'high' });
+
+    list = await scheduler.updateModel(id, null, null);
+    expect(list[0].model).toBeUndefined();
+    expect(list[0].effort).toBeUndefined();
+    expect((await readTasks())[0].model).toBeUndefined();
+
+    scheduler.runNow(id);
+    await until(() => runtime.starts.length === 3, 'the cleared run');
+    expect('model' in runtime.starts[2]).toBe(false);
+    scheduler.stop();
+  });
+
   it('pause/resume and delete update the store', async () => {
     const runtime = new FakeRuntime();
     const { scheduler } = makeScheduler(runtime);

@@ -5,18 +5,10 @@ import type {
   ScheduledTask,
   ThreadTurnSettings
 } from '../../../shared/types';
-import { EFFORT_LABELS } from '../../modelLabels';
+import { ModelPicker } from '../../ui/ModelPicker';
+import { clampEffort, effortsOf, EffortSelect } from '../../ui/EffortSelect';
 
 // ---- Tasks tab: scheduled autonomous re-runs ----
-
-/** "GPT-5.6 Sol · High" — what a run of this task will execute on. */
-function runsOnLabel(settings: ThreadTurnSettings | undefined, models: ModelSummary[]): string | null {
-  if (!settings?.model) return null;
-  const m = models.find((x) => x.id === settings.model);
-  const name = m ? m.displayName : settings.model.split('/').pop() ?? settings.model;
-  const effort = settings.effort ? (EFFORT_LABELS[settings.effort] ?? settings.effort) : null;
-  return effort ? `${name} · ${effort}` : name;
-}
 
 /** Human-readable schedule, e.g. "cron 0 8 * * 1-5" or "once · Jul 1, 08:00". */
 function describeSchedule(task: ScheduledTask): string {
@@ -75,6 +67,8 @@ export function TasksTab({
   const toggle = async (t: ScheduledTask) => setTasks(await window.stem.setTaskEnabled(t.id, !t.enabled));
   const runNow = async (t: ScheduledTask) => setTasks(await window.stem.runTaskNow(t.id));
   const remove = async (t: ScheduledTask) => setTasks(await window.stem.deleteTask(t.id));
+  const pinModel = async (t: ScheduledTask, model: string | null, effort: string | null) =>
+    setTasks(await window.stem.updateTaskModel(t.id, { model, effort }));
 
   return (
     <div>
@@ -88,7 +82,7 @@ export function TasksTab({
       ) : (
         <div className="group">
           {tasks.map((t) => {
-            const runsOn = runsOnLabel(settings[t.threadId], models);
+            const thread: ThreadTurnSettings = settings[t.threadId] ?? {};
             return (
             <div key={t.id} className={`task-item${t.enabled ? '' : ' paused'}`}>
               <div className="task-head">
@@ -160,7 +154,30 @@ export function TasksTab({
                     )}
                   </>
                 )}
-                {runsOn && <span title="The model this task's runs execute on — the one selected in its chat">{' · '}{runsOn}</span>}
+              </div>
+              {/* The model this task's runs execute on. Unset = the pinless
+                  inheritance every task starts with: the model selected in its
+                  chat, named by the picker's "uses …" line so an outdated one
+                  is visible right where it can be overridden. */}
+              <div className="task-model">
+                <ModelPicker
+                  models={models}
+                  value={t.model ?? null}
+                  onChange={(id) =>
+                    pinModel(t, id, clampEffort(models, id ?? thread.model ?? null, t.effort ?? null))
+                  }
+                  emptyLabel="Chat model"
+                  ariaLabel="Model this task runs on"
+                  resolvedDefault={thread.model ?? null}
+                />
+                <EffortSelect
+                  label="Effort this task runs at"
+                  value={t.effort ?? null}
+                  efforts={effortsOf(models, t.model ?? thread.model ?? null)}
+                  emptyLabel="Chat effort"
+                  resolved={thread.effort ?? null}
+                  onChange={(effort) => pinModel(t, t.model ?? null, effort)}
+                />
               </div>
             </div>
             );

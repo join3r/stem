@@ -27,6 +27,7 @@ import type {
   ScheduledTask,
   ScratchUsageRow,
   SkillsMode,
+  TaskModelPatch,
   TaskSchedulePatch
 } from '../../shared/types';
 
@@ -162,6 +163,10 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   registerServer('tasks:updateSchedule', (_e, id: string, patch: TaskSchedulePatch) => {
     const scheduler = deps.scheduler();
     return scheduler ? scheduler.updateSchedule(id, patch.schedule) : [];
+  });
+  registerServer('tasks:updateModel', (_e, id: string, patch: TaskModelPatch) => {
+    const scheduler = deps.scheduler();
+    return scheduler ? scheduler.updateModel(id, patch.model ?? null, patch.effort ?? null) : [];
   });
 
   // What each chat's shell commands have left on disk. Measured here rather than

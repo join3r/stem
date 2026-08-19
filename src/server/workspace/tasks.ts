@@ -54,6 +54,8 @@ function coerce(raw: unknown): ScheduledTask | null {
     enabled: r.enabled !== false, // default true
     createdAt: typeof r.createdAt === 'string' && r.createdAt ? r.createdAt : new Date().toISOString(),
     title: typeof r.title === 'string' && r.title ? r.title : titleFromPrompt(r.prompt),
+    ...(typeof r.model === 'string' && r.model ? { model: r.model } : {}),
+    ...(typeof r.effort === 'string' && r.effort ? { effort: r.effort } : {}),
     ...(typeof r.lastRunAt === 'string' ? { lastRunAt: r.lastRunAt } : {}),
     ...(typeof r.nextRunAt === 'string' || r.nextRunAt === null ? { nextRunAt: r.nextRunAt } : {}),
     ...(r.lastStatus === 'ok' || r.lastStatus === 'failed' || r.lastStatus === 'running'

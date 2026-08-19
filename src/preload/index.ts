@@ -51,6 +51,7 @@ import type {
   StartTurnInput,
   StemApi,
   TaskNotifyPayload,
+  TaskModelPatch,
   TaskSchedulePatch,
   TasksSettings,
   UpdateStatus,
@@ -133,6 +134,8 @@ const api: StemApi = {
   deleteTask: (id: string) => ipcRenderer.invoke('tasks:delete', id),
   updateTaskSchedule: (id: string, patch: TaskSchedulePatch) =>
     ipcRenderer.invoke('tasks:updateSchedule', id, patch),
+  updateTaskModel: (id: string, patch: TaskModelPatch) =>
+    ipcRenderer.invoke('tasks:updateModel', id, patch),
   onTasksChanged: (listener: (tasks: ScheduledTask[]) => void) => {
     const handler = (_e: unknown, tasks: ScheduledTask[]) => listener(tasks);
     ipcRenderer.on('tasks:changed', handler);

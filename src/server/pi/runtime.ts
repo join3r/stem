@@ -699,15 +699,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // session pre-created via createThread (Quick Chat) that hasn't been prompted.
       const isNewThread = !input.threadId || this.unnamedThreads.has(input.threadId);
       const threadId = input.threadId ? await this.ensureActive(input.threadId) : await this.newSession();
-      if (input.model) {
-        await this.applyModel(input.model);
-      } else if (input.scheduled) {
-        // Scheduled runs carry no renderer-selected model, and pi does NOT restore
-        // the session's own model on switch_session (the spawn-time --model pins
-        // every runtime rebuild) — without an explicit re-apply the run would
-        // execute on the app default, not the model the user chose for this
-        // thread. Best-effort: a model that has since vanished from the registry
-        // must degrade to the default, not skip the run.
+      if (input.scheduled) {
+        // pi does NOT restore the session's own model on switch_session (the
+        // spawn-time --model pins every runtime rebuild) — without an explicit
+        // re-apply the run would execute on the app default, not the model the
+        // user chose. `input.model` here is the task's own pin (Tasks tab); the
+        // thread's last explicitly selected model is the fallback for the pinless
+        // tasks every one started out as. Still read the thread settings even
+        // under a pin: they carry the effort fallback and `contextTokens` for the
+        // pre-run condense below.
         const persisted = await this.threadTurnSettings(threadId).catch((e) => {
           // Nothing else re-reads these. The run then goes out on the app
           // default model at the app default effort, and with `contextTokens`
@@ -716,12 +716,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           degrade('pi.thread', 'ran the scheduled task on the app defaults with no pre-run condense', e);
           return null;
         });
-        if (persisted?.model) {
+        // Best-effort, in preference order: a model that has since vanished from
+        // the registry must degrade to the next candidate, not skip the run.
+        for (const model of [input.model, persisted?.model]) {
+          if (!model) continue;
           try {
-            await this.applyModel(persisted.model);
+            await this.applyModel(model);
+            break;
           } catch (error) {
-            log('pi', 'scheduled run: could not apply thread model', {
-              model: persisted.model,
+            log('pi', 'scheduled run: could not apply model', {
+              model,
               error: error instanceof Error ? error.message : String(error)
             });
           }
@@ -734,6 +738,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           // did not happen.
           degrade('pi.thread', 'sent the scheduled run without condensing an oversized thread', e)
         );
+      } else if (input.model) {
+        await this.applyModel(input.model);
       }
       if (input.effort) await this.setThinking(input.effort);
 

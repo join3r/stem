@@ -782,6 +782,55 @@ describe('scheduled-run model restore', () => {
     expect(types.indexOf('set_thinking_level')).toBeLessThan(types.indexOf('prompt'));
   });
 
+  it('lets a task-pinned model outrank the thread model, keeping the thread effort', async () => {
+    // A task pin (Tasks tab) arrives as input.model on a scheduled turn. It must
+    // win over the thread's own model_change — pinning exists precisely because
+    // the thread's last selected model can be an outdated one — while an unpinned
+    // effort still falls back to the thread's persisted level.
+    const { runtime, requests } = await scheduledRuntime();
+    await runtime.startTurn({
+      input: 'check the news',
+      threadId: 'sched-1',
+      model: 'openai-codex/gpt-5.6-terra',
+      scheduled: { at: '2026-07-24T06:00:00.000Z', taskId: 'task-1' }
+    });
+
+    const types = requests.map((r) => r.type);
+    expect(requests.filter((r) => r.type === 'set_model')).toEqual([
+      expect.objectContaining({ provider: 'openai-codex', modelId: 'gpt-5.6-terra' })
+    ]);
+    expect(requests.find((r) => r.type === 'set_thinking_level')).toMatchObject({ level: 'high' });
+    expect(types.indexOf('set_model')).toBeLessThan(types.indexOf('prompt'));
+  });
+
+  it('degrades a pin that cannot be applied to the thread model, not the app default', async () => {
+    const { runtime, internal, requests } = await scheduledRuntime();
+    const base = internal.proc.request;
+    internal.proc.request = async (cmd) => {
+      // The pinned model has vanished from the registry; the thread's own still works.
+      if (cmd.type === 'set_model' && cmd.modelId === 'gpt-5.6-terra') {
+        requests.push(cmd);
+        return { success: false, error: 'model unavailable' };
+      }
+      return base(cmd);
+    };
+
+    await expect(
+      runtime.startTurn({
+        input: 'check the news',
+        threadId: 'sched-1',
+        model: 'openai-codex/gpt-5.6-terra',
+        scheduled: { at: '2026-07-24T06:00:00.000Z', taskId: 'task-1' }
+      })
+    ).resolves.toMatchObject({ threadId: 'sched-1' });
+
+    expect(requests.filter((r) => r.type === 'set_model').map((r) => r.modelId)).toEqual([
+      'gpt-5.6-terra',
+      'gpt-5.6-sol'
+    ]);
+    expect(requests.map((r) => r.type)).toContain('prompt');
+  });
+
   it('falls back to the active model instead of failing the run when set_model is rejected', async () => {
     const { runtime, internal, requests } = await scheduledRuntime();
     const base = internal.proc.request;
