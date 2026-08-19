@@ -285,12 +285,8 @@ export function initRetrieval(deps: {
         // episodic search). Watermark-driven and self-guarding, so a concurrent
         // post-turn kick can't double-embed.
         pruneMessageVectorsExceptModel(key);
-        await activity.track(
-          'memory.episodicEmbed',
-          'Embedding messages',
-          () => embedNewMessages(localEmbeddings),
-          (n) => ({ worked: n > 0, detail: `Embedded ${n.toLocaleString()} message${n === 1 ? '' : 's'}` })
-        );
+        // Activity (with progress) is reported by the pass itself.
+        await embedNewMessages(localEmbeddings);
         // Indexed connected folders: top up their doc vectors now that the
         // model is up (the scan pass is incremental and self-guarding).
         await scanAllIndexedFolders();

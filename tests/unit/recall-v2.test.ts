@@ -499,6 +499,38 @@ describe('Recall v2 episodic chunks and rebuild', () => {
     expect(hits[0]?.snippet).toContain('unique-tail-observatory-code');
   });
 
+  // A model switch queues the whole history behind a slow endpoint; without a
+  // counter the hour-long pass is indistinguishable from a hung one.
+  it('reports backfill progress and a completed row to the activity registry', async () => {
+    activity.resetActivity();
+    try {
+      for (let i = 0; i < 3; i++) {
+        store.recordMessage({ threadId: 'progress', role: 'user', text: `A long-enough message about topic number ${i}.` });
+      }
+      const seen: Array<{ done: number; total: number } | undefined> = [];
+      const client = {
+        available: async () => true,
+        modelId: async () => 'progress-model',
+        embed: async (texts: string[]) => {
+          seen.push(activity.snapshot().running.find((e) => e.kind === 'memory.episodicEmbed')?.progress);
+          return texts.map(() => Float32Array.from([1, 0]));
+        }
+      };
+      await embedNewMessages(client, { batchSize: 2 });
+      // Second batch's embed call sees the first batch already counted.
+      expect(seen[1]).toEqual({ done: 2, total: 3 });
+      const snap = activity.snapshot();
+      expect(snap.running).toHaveLength(0);
+      expect(snap.history[0]).toMatchObject({
+        kind: 'memory.episodicEmbed',
+        state: 'done',
+        detail: 'Embedded 3 messages'
+      });
+    } finally {
+      activity.resetActivity();
+    }
+  });
+
   it('requires consent, persists pause/resume, and preserves legacy facts during rebuild', async () => {
     const legacyId = store.upsertFact('A legacy fact remains', 'legacy')!;
     store.recordMessage({ threadId: 'rebuild', role: 'user', text: 'The user enjoys astronomy.' });

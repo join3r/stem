@@ -2512,6 +2512,15 @@ export class RecallStore {
    * Messages with id greater than `afterId`, oldest first — the episodic embed
    * pass walks these in batches, watermark-style (mirrors getMessagesForDistill).
    */
+  /** How many messages sit past the embed watermark — the honest total for progress. */
+  countMessagesForEmbedding = (afterId: number): number => {
+    const row = this.open().prepare(`SELECT COUNT(*) AS n FROM messages WHERE id > ?`).get(afterId) as {
+      n: number;
+    };
+    return row.n;
+  };
+
+
   getMessagesForEmbedding = (afterId: number, limit = 200): StoredMessage[] => {
     const rows = this.open()
       .prepare(

@@ -191,14 +191,8 @@ export function initRecallTasks(deps: {
     episodicEmbedTimer = setTimeout(() => {
       const client = getEmbeddingsClient();
       if (!client) return;
-      void activity
-        .track('memory.episodicEmbed', 'Embedding messages', () => embedNewMessages(client), (n) => ({
-          worked: n > 0,
-          detail: `Embedded ${n.toLocaleString()} message${n === 1 ? '' : 's'}`
-        }))
-        .catch(() => {
-          // quiet: reported by track(); embedding failures stay non-fatal as before.
-        });
+      // Activity (with progress) is reported by the pass itself; it never throws.
+      void embedNewMessages(client);
     }, delayMs);
   };
 

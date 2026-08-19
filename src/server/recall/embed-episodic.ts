@@ -1,7 +1,8 @@
+import * as activity from '../activity';
 import { degrade } from '../degrade';
 import type { EmbeddingsClient } from './embeddings';
 import { recallStore } from './store';
-const { getEpisodicGeneration, getMessageEmbedWatermark, getMessagesForEmbedding, replaceMessageChunks, setMessageEmbedWatermark, upsertMessageChunkVector, upsertMessageVector } = recallStore;
+const { countMessagesForEmbedding, getEpisodicGeneration, getMessageEmbedWatermark, getMessagesForEmbedding, replaceMessageChunks, setMessageEmbedWatermark, upsertMessageChunkVector, upsertMessageVector } = recallStore;
 
 // Background embedding of captured messages for semantic episodic search.
 // Watermark-driven (meta key, model-tagged) and always off the turn path: the
@@ -86,10 +87,20 @@ export async function embedNewMessages(
   running = true;
   const batchSize = opts.batchSize ?? 64;
   let written = 0;
+  // The pass owns its activity entry (rather than callers wrapping it) so it can
+  // report progress: after a model switch this is the whole message history on a
+  // slow endpoint — an hour of unnannotated "Embedding messages" reads as hung.
+  // Stepped, so a pass that dies mid-backlog and re-kicks resumes the same row.
+  let handle: activity.ActivityHandle | null = null;
   try {
     if (!(await emb.available())) return written;
     const model = await emb.modelId();
     if (!model) return written;
+    // Progress counts messages, not chunks: the chunk total isn't knowable until
+    // each batch is chunked, and "messages" is the unit the label claims.
+    const total = countMessagesForEmbedding(getMessageEmbedWatermark(model));
+    if (total > 0) handle = activity.begin('memory.episodicEmbed', 'Embedding messages', { stepped: true });
+    let processed = 0;
     // Reset recall mid-pass reuses message rowids (VACUUM), so every write below
     // an await belongs to the erased store. The watermark is the one that hurts:
     // getMessagesForEmbedding selects `WHERE id > watermark`, so resurrecting it
@@ -117,11 +128,23 @@ export async function embedNewMessages(
             // completed its chunk-schema migration.
             if (e.chunkIndex === 0) upsertMessageVector(e.messageId, model, vecs[j]);
           });
+          if (handle) {
+            // A 64-message batch can chunk into several embed calls, minutes on a
+            // CPU endpoint — advance the counter per slice (pro-rated within the
+            // batch) so the bar moves at the pace the endpoint actually works.
+            const frac = Math.min(1, (i + slice.length) / embeddable.length);
+            activity.progress(handle, {
+              done: Math.min(total, processed + Math.floor(batch.length * frac)),
+              total
+            });
+          }
         }
         written += new Set(embeddable.map((e) => e.messageId)).size;
       }
       if (!intact()) return written;
       setMessageEmbedWatermark(model, batch[batch.length - 1].id);
+      processed += batch.length;
+      if (handle) activity.progress(handle, { done: Math.min(total, processed), total });
     }
   } catch (err) {
     // Embed failure mid-pass: stop here. The watermark only moved past batches
@@ -133,6 +156,15 @@ export async function embedNewMessages(
     });
   } finally {
     running = false;
+    // On the failure path degrade() already closed the entry via activity.fail,
+    // so this end() finds nothing open and no-ops. worked: false discards a pass
+    // that wrote nothing rather than filing an empty history row.
+    if (handle) {
+      activity.end(handle, {
+        worked: written > 0,
+        detail: `Embedded ${written.toLocaleString()} message${written === 1 ? '' : 's'}`
+      });
+    }
   }
   return written;
 }
