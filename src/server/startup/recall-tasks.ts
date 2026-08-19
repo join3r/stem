@@ -308,6 +308,11 @@ export function initRecallTasks(deps: {
   // pass runs too, covering remote embeddings mode (no ready-transition there).
   scheduleDistill(20_000);
   scheduleEpisodicEmbed(25_000);
+  // And keep it kicked: the pass dies with its endpoint (an ollama restart, a
+  // network blip mid-backlog) and its only other trigger is turn completion —
+  // on a headless server that can be hours away, leaving a half-done backfill
+  // stalled invisibly. A watermark-current pass no-ops for the price of a COUNT.
+  setInterval(() => scheduleEpisodicEmbed(), 10 * 60_000);
 
   return { scheduleMemoryRebuild, scheduleDistill, scheduleEpisodicEmbed, scheduleCurateAfterCreate };
 }
