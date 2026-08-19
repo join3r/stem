@@ -43,7 +43,9 @@ const CLIENT_DIR = join(root, 'the-folder');
 let macId: string;
 let host: MirrorHost;
 
-async function until(check: () => boolean, what: string, ms = 5_000): Promise<void> {
+// Generous: refresh() schedules syncs behind the host's 2s debounce, so a
+// round is never faster than that, and CI runners add real load on top.
+async function until(check: () => boolean, what: string, ms = 10_000): Promise<void> {
   const deadline = Date.now() + ms;
   while (!check()) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
@@ -119,7 +121,7 @@ describe('the mirror host, end to end against the real server modules', () => {
     await host.refresh();
     await until(() => !existsSync(join(mirrorRoot(id), 'sub')), 'the delete to propagate');
     await until(() => readFileSync(join(mirrorRoot(id), 'a.md'), 'utf8') === 'alpha v2', 'the edit to propagate');
-  });
+  }, 30_000);
 
   it('freezes on a vanished root instead of wiping the mirror', async () => {
     writeFileSync(join(CLIENT_DIR, 'keep.md'), 'precious');
@@ -141,9 +143,15 @@ describe('the mirror host, end to end against the real server modules', () => {
     writeFileSync(join(CLIENT_DIR, 'keep.md'), 'precious');
     writeFileSync(join(CLIENT_DIR, 'new.md'), 'fresh');
     await host.refresh();
-    await until(() => existsSync(join(mirrorRoot(id), 'new.md')), 'the thaw');
+    // Wait for the flag, not the file: the round applies files BEFORE the
+    // report that clears rootMissing, so watching new.md races the round's tail.
+    await until(
+      () => JSON.parse(readFileSync(process.env.STEM_CONNECTED_FOLDERS_STORE!, 'utf8')).folders[0].rootMissing !== true,
+      'the thaw'
+    );
+    expect(readFileSync(join(mirrorRoot(id), 'new.md'), 'utf8')).toBe('fresh');
     expect((await readStore()).folders[0]!.rootMissing).toBeUndefined();
-  });
+  }, 30_000);
 
   it('prunes the local entry when the folder was disconnected server-side', async () => {
     writeFileSync(join(CLIENT_DIR, 'a.md'), 'alpha');
@@ -156,5 +164,5 @@ describe('the mirror host, end to end against the real server modules', () => {
     // reconcile inside refresh() awaits the prune before resolving.
     await host.refresh();
     expect(await readMirroredFolders()).toEqual([]);
-  });
+  }, 15_000);
 });

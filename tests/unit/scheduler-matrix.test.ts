@@ -96,9 +96,18 @@ beforeEach(() => {
   rmSync(STORE, { force: true });
 });
 
+// Captured at import time, before the fake clock replaces the global: drainIo
+// needs a way to spend real wall time while setTimeout is faked.
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+
 /** Let real file IO land between fake-clock steps (see the toFake note above). */
 async function drainIo(rounds = 20): Promise<void> {
-  for (let i = 0; i < rounds; i++) await new Promise<void>((r) => setImmediate(r));
+  for (let i = 0; i < rounds; i++) {
+    await new Promise<void>((r) => setImmediate(r));
+    // setImmediate rounds spin in microseconds — faster than the store's
+    // threadpool write can complete on a loaded runner. Yield real time too.
+    if (i % 5 === 4) await new Promise<void>((r) => realSetTimeout(r, 1));
+  }
 }
 
 afterEach(() => {
@@ -283,9 +292,15 @@ describe('once-task × manual run', () => {
     expect(task).toBeDefined();
     expect(task.nextRunAt).toBe(new Date(at).toISOString());
 
-    // And when the real slot arrives, it fires once and retires.
+    // And when the real slot arrives, it fires once and retires. If the manual
+    // run's persist lands mid-advance, arm() re-targets a short timer that the
+    // big advance has already passed — give such re-arms a few extra beats.
     await vi.advanceTimersByTimeAsync(60 * 60_000 + 1_000);
     await drainIo();
+    for (let i = 0; i < 10 && runtime.starts.length < 2; i++) {
+      await vi.advanceTimersByTimeAsync(500);
+      await drainIo();
+    }
     expect(runtime.starts).toHaveLength(2);
     runtime.settle('turn-2');
     await drainIo();
