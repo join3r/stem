@@ -69,9 +69,18 @@ export function placement(chat: InboxSubject, state: InboxState, now: number): I
   return 'inbox';
 }
 
-export function isUnread(chat: InboxSubject, state: InboxState): boolean {
+/**
+ * `turnRunning` = a turn is generating into this thread right now. A running
+ * turn appends to the session file as it works — every tool call bumps the mtime
+ * long before there is an answer to read — so while it runs, the mtime says
+ * nothing about unread mail and the row stays quiet. It goes bold when the turn
+ * settles (the status dot covers the meantime). A thread the user explicitly
+ * marked unread stays bold regardless: that was a decision, not an mtime.
+ */
+export function isUnread(chat: InboxSubject, state: InboxState, turnRunning = false): boolean {
   const entry = state.entries[chat.threadId];
   if (entry?.forcedUnread) return true;
+  if (turnRunning) return false;
   return toMs(chat.updatedAt) > Math.max(entry?.readAt ?? 0, state.baseline);
 }
 

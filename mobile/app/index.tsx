@@ -54,8 +54,17 @@ export default function ChatsScreen(): ReactElement {
 
   const chats = useMemo(() => list?.chats ?? [], [list]);
   const inbox = list?.inbox ?? emptyInboxState();
-  const rows = useMemo(() => inboxRows(chats, inbox, filter, now), [chats, inbox, filter, now]);
-  const unread = useMemo(() => inboxUnreadCount(chats, inbox, now), [chats, inbox, now]);
+  // A working thread's row stays quiet (the green dot says why) until the turn
+  // settles — mid-turn file writes must not paint it bold; see @shared/inbox.
+  const running = useMemo(() => new Set(live.keys()), [live]);
+  const rows = useMemo(
+    () => inboxRows(chats, inbox, filter, now, running),
+    [chats, inbox, filter, now, running]
+  );
+  const unread = useMemo(
+    () => inboxUnreadCount(chats, inbox, now, running),
+    [chats, inbox, now, running]
+  );
 
   useEffect(() => {
     const delay = msUntilNextWake(chats, inbox, now);

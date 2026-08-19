@@ -360,8 +360,8 @@ export function ChatList(props: ChatListProps) {
   }, [data, now]);
 
   const unreadCount = useMemo(
-    () => buckets.inbox.filter((c) => isUnread(c, data.inbox)).length,
-    [buckets.inbox, data.inbox]
+    () => buckets.inbox.filter((c) => isUnread(c, data.inbox, props.statuses[c.threadId] === 'running')).length,
+    [buckets.inbox, data.inbox, props.statuses]
   );
 
   // ---- selection ----
@@ -595,7 +595,7 @@ export function ChatList(props: ChatListProps) {
   ) => {
     const isEditing = editing?.kind === 'chat' && editing.id === chat.threadId;
     const status = props.statuses[chat.threadId] ?? 'idle';
-    const unread = isUnread(chat, data.inbox);
+    const unread = isUnread(chat, data.inbox, status === 'running');
     const wake = data.inbox.entries[chat.threadId]?.snoozedUntil;
     const isSelected = selected.has(chat.threadId);
     const subject = chat.subject ?? chat.title;
@@ -999,7 +999,11 @@ export function ChatList(props: ChatListProps) {
               const ids = targets(menu.id);
               const chat = data.chats.find((c) => c.threadId === menu.id);
               const where = chat ? placement(chat, data.inbox, now) : 'inbox';
-              const unread = chat ? isUnread(chat, data.inbox) : false;
+              // Same running-suppressed unread the row paints, so the menu's
+              // read/unread verb matches what the user is looking at.
+              const unread = chat
+                ? isUnread(chat, data.inbox, props.statuses[chat.threadId] === 'running')
+                : false;
               return (
                 <>
                   <button

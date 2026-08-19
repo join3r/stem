@@ -59,6 +59,17 @@ describe('inboxRows', () => {
       ['c', true]
     ]);
   });
+
+  it('keeps a working thread quiet — bold waits for the turn to settle', () => {
+    // 'a' was read an hour ago and a turn is generating into it now: its mtime
+    // has moved, but the row stays read while the green dot does the talking.
+    const read = state({ a: { readAt: NOW - 3600_000 } });
+    const rows = inboxRows(chats, read, 'inbox', NOW, new Set(['a']));
+    expect(rows.find((r) => r.chat.threadId === 'a')?.unread).toBe(false);
+    // The same state with the turn settled reads as unread.
+    const settled = inboxRows(chats, read, 'inbox', NOW);
+    expect(settled.find((r) => r.chat.threadId === 'a')?.unread).toBe(true);
+  });
 });
 
 describe('inboxUnreadCount', () => {
@@ -74,6 +85,13 @@ describe('inboxUnreadCount', () => {
   it('is zero on a fresh store, because the baseline predates every thread', () => {
     const chats = [chat('a', 5), chat('b', 60)];
     expect(inboxUnreadCount(chats, state({}, NOW), NOW)).toBe(0);
+  });
+
+  it('leaves working threads out of the badge until their turn settles', () => {
+    const chats = [chat('a', 5), chat('b', 60)];
+    const read = state({ a: { readAt: NOW - 3600_000 } });
+    expect(inboxUnreadCount(chats, read, NOW, new Set(['a']))).toBe(1); // just b
+    expect(inboxUnreadCount(chats, read, NOW)).toBe(2);
   });
 });
 

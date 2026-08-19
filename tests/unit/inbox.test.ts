@@ -118,6 +118,20 @@ describe('isUnread', () => {
     const s = state({ a: { readAt: now, forcedUnread: true } }, 0);
     expect(isUnread(chat('a', now - DAY), s)).toBe(true);
   });
+
+  it('stays read while a turn is generating — mid-turn writes are not an answer', () => {
+    // Every tool call appends to the session file, so the mtime runs ahead of
+    // readAt long before there is anything new to read.
+    const s = state({ a: { readAt: now - HOUR } }, 0);
+    expect(isUnread(chat('a', now), s, true)).toBe(false);
+    // The same mtime goes bold the moment the turn settles.
+    expect(isUnread(chat('a', now), s, false)).toBe(true);
+  });
+
+  it('keeps an explicit mark-as-unread bold even while a turn runs', () => {
+    const s = state({ a: { forcedUnread: true } }, 0);
+    expect(isUnread(chat('a', now), s, true)).toBe(true);
+  });
 });
 
 describe('nextWakeAt', () => {

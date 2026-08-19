@@ -225,9 +225,11 @@ export default function App() {
   const inboxUnreadCount = useMemo(
     () =>
       displayList.chats.filter(
-        (c) => placement(c, displayList.inbox, Date.now()) === 'inbox' && isUnread(c, displayList.inbox)
+        (c) =>
+          placement(c, displayList.inbox, Date.now()) === 'inbox' &&
+          isUnread(c, displayList.inbox, threadStatuses[c.threadId] === 'running')
       ).length,
-    [displayList]
+    [displayList, threadStatuses]
   );
 
   // Thread ids that own at least one scheduled task → a clock badge on those chat rows.
@@ -1115,7 +1117,7 @@ export default function App() {
     // "mark unread and move on"; a selection with anything unread in it clears.
     const anyUnread = ids.some((id) => {
       const chat = displayList.chats.find((c) => c.threadId === id);
-      return !!chat && isUnread(chat, displayList.inbox);
+      return !!chat && isUnread(chat, displayList.inbox, threadStatuses[id] === 'running');
     });
     onSetRead(ids, anyUnread);
     inboxSelection.current?.clear();

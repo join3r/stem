@@ -36,14 +36,16 @@ export function inboxRows(
   chats: ChatSummary[],
   state: InboxState,
   filter: InboxFilter,
-  now: number
+  now: number,
+  /** Threads with a turn generating right now — their mid-turn mtime bumps don't read as unread. */
+  running: ReadonlySet<string> = new Set()
 ): InboxRow[] {
   return chats
     .filter((chat) => placement(chat, state, now) === filter)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .map((chat) => ({
       chat,
-      unread: isUnread(chat, state),
+      unread: isUnread(chat, state, running.has(chat.threadId)),
       wakeAt: snoozedUntil(chat, state, now)
     }));
 }
@@ -53,8 +55,16 @@ export function inboxRows(
  * and archived threads are excluded even when unread, which is the entire
  * promise of snoozing: it stops the thread counting against you until it wakes.
  */
-export function inboxUnreadCount(chats: ChatSummary[], state: InboxState, now: number): number {
-  return chats.filter((chat) => placement(chat, state, now) === 'inbox' && isUnread(chat, state)).length;
+export function inboxUnreadCount(
+  chats: ChatSummary[],
+  state: InboxState,
+  now: number,
+  running: ReadonlySet<string> = new Set()
+): number {
+  return chats.filter(
+    (chat) =>
+      placement(chat, state, now) === 'inbox' && isUnread(chat, state, running.has(chat.threadId))
+  ).length;
 }
 
 /**
