@@ -1828,6 +1828,12 @@ export interface QuickChatSettings {
   followAcrossSpaces: boolean;
   /** Play a macOS chime when a turn finishes while the progress pill is visible. */
   finishSound: boolean;
+  /**
+   * Quick Chat conversations skip the Inbox: archived as each turn settles, so
+   * a throwaway question never sits in the Inbox waiting to be triaged. Opening
+   * one in the main window (hand-off) pulls it back out of the Archive.
+   */
+  skipInbox: boolean;
 }
 
 /**

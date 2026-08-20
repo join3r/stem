@@ -189,6 +189,10 @@ are added on top of the standing instructions.
 **Show on all displays** lets the overlay follow Spaces and displays. **Show progress
 on other Spaces** can also show progress for the main Stem window.
 
+**Skip the Inbox** sends quick chats straight to **Archived** once answered, so a
+throwaway question never waits in the Inbox. **Open in Stem** brings the
+conversation back to the Inbox, as does continuing it from the main window.
+
 On Linux with Wayland, set the command shown in Settings as a desktop keyboard
 shortcut; the recorded global shortcut cannot fire there.
 

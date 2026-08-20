@@ -266,7 +266,8 @@ describe('the fields a machine owns rather than Stem', () => {
       'defaultModel',
       'defaultServiceTier',
       'finishSound',
-      'newThreadTimeoutMs'
+      'newThreadTimeoutMs',
+      'skipInbox'
     ]);
   });
 
@@ -284,6 +285,14 @@ describe('the fields a machine owns rather than Stem', () => {
     const next = await updateQuickChat({ shortcut: 'Alt+Space', finishSound: true });
     expect(next.quickChat.finishSound).toBe(true);
     expect(next.quickChat).not.toHaveProperty('shortcut');
+  });
+
+  it('round-trips the Quick Chat skip-Inbox toggle, defaulting off', async () => {
+    // Off by default: an existing install must not wake up to quick chats
+    // silently vanishing from its Inbox.
+    expect((await readSettings()).quickChat.skipInbox).toBe(false);
+    expect((await updateQuickChat({ skipInbox: true })).quickChat.skipInbox).toBe(true);
+    expect((await readSettings()).quickChat.skipInbox).toBe(true);
   });
 
   it('no longer touches the seen-marker when onboarding completes', async () => {

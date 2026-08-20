@@ -33,6 +33,8 @@ import {
 } from './startup/transport';
 import { setActivityEmitter } from './activity';
 import { foldTurnEvent, liveTurnCount, noteTurnStart } from './live-turns';
+import { isQuickChatThread, noteTurnSurface } from './quickchat-threads';
+import { setArchived } from './workspace/inbox';
 import { pushApprovalRequest, pushTurnFinished, type ApprovalPushKind } from './push';
 import { closeApns } from './push/apns';
 import { closeDeviceMcpRouter } from './mcp-device/router';
@@ -205,6 +207,23 @@ function pushApproval(kind: ApprovalPushKind, params: unknown): void {
   pushApprovalRequest(kind, { id: card.id, ...(card.threadId ? { threadId: card.threadId } : {}) });
 }
 
+/**
+ * Quick Chat skip-Inbox: archive a quick chat's thread so it never sits in the
+ * Inbox waiting to be triaged. Archive is a timestamp compared against the
+ * session file's mtime (see shared/inbox.ts), so this cannot run once at thread
+ * creation — it re-fires on every settled turn AND on the automatic subject
+ * write, each of which bumps the mtime past the previous stamp.
+ */
+async function archiveQuickChatThread(threadId: string): Promise<void> {
+  try {
+    if (!(await readSettings()).quickChat.skipInbox) return;
+    await setArchived([threadId], true);
+    emit('chats:changed', undefined);
+  } catch (err) {
+    degrade('inbox', 'left a quick chat in the Inbox', err);
+  }
+}
+
 /** Pick a sensible app default from the models the signed-in providers expose. */
 function chooseDefaultModel(models: ModelSummary[]): string | null {
   const pick =
@@ -350,6 +369,9 @@ function registerIpc(): void {
     if (started.threadId && started.turnId && !runtime!.isInternalThread(started.threadId)) {
       noteTurnStart(started.threadId, started.turnId);
     }
+    // Remember (or reclassify) the thread's surface, so the skip-Inbox setting
+    // can archive quick chats as their turns settle — see the event tap below.
+    if (started.threadId) noteTurnSurface(started.threadId, quickChat);
     return started;
   });
   registerServer('backend:interruptTurn', (_e, turnId: string) => {
@@ -752,6 +774,10 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     // The rename went round the backend, not through chats:rename, so the search
     // index needs the same nudge that handler gives it.
     void reindexChatThread(runtime!, threadId);
+    // The rename also bumped the session file's mtime — past the archive stamp a
+    // skip-Inbox quick chat got when its turn settled, which would resurrect it
+    // into the Inbox. Re-stamp the archive on the far side of the rename.
+    if (isQuickChatThread(threadId)) void archiveQuickChatThread(threadId);
     emit('chats:changed', undefined);
   });
 
@@ -832,6 +858,16 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     // was worth interrupting anybody is a question its own notify_user answers
     // (see startup/scheduler.ts) — treating "it finished" as news would put a
     // notification on the phone every time a watch task ticked.
+    // Skip-Inbox quick chats: archive the thread each time one of its turns
+    // settles. Terminal events only — the turn has finished writing the session
+    // file, so the archive stamp lands at/after the mtime and actually holds.
+    if (
+      threadId &&
+      (event.method === 'turn/completed' || event.method === 'turn/failed' || event.method === 'turn/aborted') &&
+      isQuickChatThread(threadId)
+    ) {
+      void archiveQuickChatThread(threadId);
+    }
     if (threadId && ranForMs !== null && !scheduler?.runningTask(threadId)) {
       pushTurnFinished({
         threadId,

@@ -61,7 +61,9 @@ const DEFAULTS: ServerSettings = {
     // After 5 minutes idle, re-summoning the overlay starts a fresh thread.
     newThreadTimeoutMs: 5 * 60_000,
     // Opt-in chime when a turn finishes while the pill is visible.
-    finishSound: false
+    finishSound: false,
+    // Quick chats land in the Inbox like any other thread unless opted out.
+    skipInbox: false
   },
   // Web search defaults on for both contexts, on every provider. `auto` walks
   // pi-web-access's backend chain, which ends at keyless Exa MCP — so search
@@ -580,7 +582,8 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
         typeof qc.newThreadTimeoutMs === 'number' && qc.newThreadTimeoutMs >= 0
           ? qc.newThreadTimeoutMs
           : d.newThreadTimeoutMs,
-      finishSound: typeof qc.finishSound === 'boolean' ? qc.finishSound : d.finishSound
+      finishSound: typeof qc.finishSound === 'boolean' ? qc.finishSound : d.finishSound,
+      skipInbox: typeof qc.skipInbox === 'boolean' ? qc.skipInbox : d.skipInbox
     },
     webSearch: ws,
     memory: mem,

@@ -30,7 +30,9 @@ again or click the pill.
 - **Esc** hides Quick Chat. In Note mode, the first **Esc** leaves Note mode; press it
   again to hide.
 - **Open in Stem** hands the live conversation to the main window.
-- **New thread** starts fresh. The previous conversation remains in **Chats**.
+- **New thread** starts fresh. The previous conversation remains in **Chats** —
+  in the Inbox, or under **Archived** if **Settings → Quick Chat → Skip the
+  Inbox** is on.
 - Effort and speed affect this conversation only. **Web** is Quick Chat's own
   web-search switch: it stays where you leave it, separately from the main window,
   and is the same switch as **Settings → Quick Chat → Web search**.

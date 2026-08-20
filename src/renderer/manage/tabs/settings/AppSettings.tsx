@@ -416,6 +416,20 @@ function QuickChatSection({ models }: { models: ModelSummary[] }) {
           />
         </div>
 
+        <div className="set-row">
+          <span className="set-label">
+            <strong>Skip the Inbox</strong>
+            <em>Quick chats go straight to Archived once answered — opening one in Stem brings it back</em>
+          </span>
+          <button
+            className={`switch${qc.skipInbox ? ' on' : ''}`}
+            role="switch"
+            aria-checked={qc.skipInbox}
+            aria-label="Skip the Inbox"
+            onClick={() => update({ skipInbox: !qc.skipInbox })}
+          />
+        </div>
+
         <div className="set-block">
           <span className="set-sub">New thread after idle</span>
           <div className="seg-ctl">
