@@ -1432,6 +1432,9 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .chats-panel .row-icon { width: 22px; height: 18px; box-shadow: none; }
 .chats-panel .row-icon.folder { background: transparent; color: var(--accent); }
 .chats-panel .row-icon.chat { background: transparent; color: var(--muted); }
+/* Closed folder holding unread threads: the same small accent count the mode
+   tabs use, so nothing bold can hide behind a collapsed folder. */
+.folder-unread { flex: none; font-size: var(--fs-10); font-weight: 700; color: var(--accent); }
 .chat-caret { color: var(--muted); flex: none; transition: transform var(--motion-fast) ease; }
 .chat-caret.open { transform: rotate(90deg); }
 .chat-row .chat-caret { visibility: hidden; }

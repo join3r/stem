@@ -364,6 +364,22 @@ export function ChatList(props: ChatListProps) {
     [buckets.inbox, data.inbox, props.statuses]
   );
 
+  // Unread rolled up per folder (ancestors included), so a bold row can't hide
+  // inside a collapsed folder. Same predicate as the tree rows — placement is
+  // ignored on purpose, so the count always agrees with what opening reveals.
+  const folderUnread = useMemo(() => {
+    const parents = new Map(data.folders.map((f) => [f.id, f.parentId]));
+    const counts = new Map<string, number>();
+    for (const chat of data.chats) {
+      if (!chat.folderId) continue;
+      if (!isUnread(chat, data.inbox, props.statuses[chat.threadId] === 'running')) continue;
+      for (let id: string | null = chat.folderId; id != null; id = parents.get(id) ?? null) {
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [data.chats, data.folders, data.inbox, props.statuses]);
+
   // ---- selection ----
   // Only the Inbox selects; the tree keeps its single meaning (click = open).
   const selectable = tab === 'inbox' && results === null && !searching;
@@ -531,6 +547,9 @@ export function ChatList(props: ChatListProps) {
   const renderFolder = (folder: Folder, depth: number) => {
     const open = expanded.has(folder.id);
     const isEditing = editing?.kind === 'folder' && editing.id === folder.id;
+    // Only while closed: once open, the unread rows (or a nested closed
+    // folder's own count) carry the signal themselves.
+    const unreadInside = open ? 0 : folderUnread.get(folder.id) ?? 0;
     return (
       <div key={folder.id}>
         <div
@@ -560,6 +579,11 @@ export function ChatList(props: ChatListProps) {
               <strong title={folder.name}>{folder.name}</strong>
             )}
           </span>
+          {unreadInside > 0 && (
+            <span className="folder-unread" title={`${unreadInside} unread`}>
+              {unreadInside}
+            </span>
+          )}
           <button
             className="row-action"
             title="New chat in folder"
