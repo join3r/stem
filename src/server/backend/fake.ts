@@ -161,7 +161,9 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
 
   async startTurn(input: StartTurnInput): Promise<StartTurnResult> {
     const threadId = input.threadId ?? (await this.createThread(input.model));
-    const turnId = `e2e-turn-${++this.seq}`;
+    // Adopt the client-minted id like the pi runtime does, so Stop-by-id works
+    // in e2e the same way it does for real turns.
+    const turnId = input.turnId ?? `e2e-turn-${++this.seq}`;
     const thread = this.ensureThread(threadId);
     const text = input.input;
     const isNewThread = !thread.title;

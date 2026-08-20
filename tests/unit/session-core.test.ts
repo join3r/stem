@@ -437,6 +437,78 @@ describe('interrupt and rerun', () => {
     expect(core.store.getThread('k')).toMatchObject({ running: false, activeTurnId: null, activities: [] });
   });
 
+  it('interrupts a pending start immediately via its client-minted turn id', async () => {
+    // The old behavior parked Stop on the start promise — which could sit behind
+    // another turn's foreground gate for minutes. The minted id lets the
+    // interrupt go out while the start is still in flight.
+    const core = createSessionCore();
+    let mintedId: string | null = null;
+    void sendTurn(core, {
+      key: 'k',
+      text: 'x',
+      attachments: [],
+      meta: {},
+      isNewChat: false,
+      start: (input: { turnId: string }) => {
+        mintedId = input.turnId;
+        return new Promise<StartTurnResult>(() => {}); // never resolves
+      }
+    } as never);
+    await flushMicrotasks();
+    expect(mintedId).toBeTruthy();
+    expect(core.pendingSends.get('k')?.turnId).toBe(mintedId);
+
+    const interrupted: string[] = [];
+    await interruptActiveTurn(core, {
+      pendingKey: 'k',
+      interrupt: async (id) => {
+        interrupted.push(id);
+      }
+    });
+    expect(interrupted).toEqual([mintedId]);
+    expect(core.store.getThread('k')).toMatchObject({ running: false, status: 'idle' });
+  });
+
+  it('events from a stopped turn cannot flip the slice back to running', async () => {
+    // The backend abort is not instantaneous; the turn may stream a few more
+    // events while it winds down. Content still applies (truthful transcript),
+    // but reviving the spinner reads as the Stop button silently failing.
+    const core = createSessionCore();
+    const emit = attach(core);
+    emit('item/started', { threadId: 't1', turnId: 'turn1', item: { id: 'r1', type: 'reasoning' } });
+    expect(core.store.getThread('t1')?.running).toBe(true);
+
+    await interruptActiveTurn(core, { pendingKey: 't1', interrupt: async () => {} });
+    expect(core.store.getThread('t1')?.running).toBe(false);
+
+    emit('item/agentMessage/delta', { threadId: 't1', turnId: 'turn1', itemId: 'a', delta: 'late' });
+    const slice = core.store.getThread('t1')!;
+    expect(slice.running).toBe(false);
+    expect(slice.activeTurnId).toBeNull();
+    expect(slice.messages.at(-1)?.content).toBe('late');
+
+    // The terminal event clears the latch so the id doesn't linger.
+    emit('turn/completed', settledEvent('t1', 'turn1'));
+    expect(core.interruptedTurns.has('turn1')).toBe(false);
+  });
+
+  it('a failed interrupt un-latches the turn so live events resume', async () => {
+    const core = createSessionCore();
+    const emit = attach(core);
+    emit('item/started', { threadId: 't1', turnId: 'turn1', item: { id: 'r1', type: 'reasoning' } });
+
+    await interruptActiveTurn(core, {
+      pendingKey: 't1',
+      interrupt: async () => {
+        throw new Error('offline');
+      }
+    });
+    expect(core.interruptedTurns.has('turn1')).toBe(false);
+
+    emit('item/agentMessage/delta', { threadId: 't1', turnId: 'turn1', itemId: 'a', delta: 'x' });
+    expect(core.store.getThread('t1')?.running).toBe(true);
+  });
+
   it('rerunFromTurn rolls back, truncates to before the turn, and re-sends with original attachments', async () => {
     const core = createSessionCore();
     core.store.patch('t', () => ({

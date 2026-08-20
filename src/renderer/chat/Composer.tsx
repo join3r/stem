@@ -127,6 +127,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   // Escape retract the just-stopped message. Cleared the moment the user acts
   // (types, sends, blurs); a chat switch remounts the composer, resetting it too.
   const [armed, setArmed] = useState(false);
+  // Stop was clicked but the turn hasn't ended yet. The interrupt round-trips
+  // through the backend (and may have to cancel a start that is still queued),
+  // so without this the press gives no feedback at all — which reads as the
+  // button not working. Cleared when `running` flips off.
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (!running) setStopping(false);
+  }, [running]);
+  const requestStop = useCallback(() => {
+    setStopping(true);
+    onInterrupt();
+  }, [onInterrupt]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Stem's offline mode is read-only by decision, not by accident: there is no
@@ -306,7 +318,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   });
   useShortcut('attach', () => void pickFiles());
   useShortcut('stop', () => {
-    if (running) onInterrupt();
+    if (running) requestStop();
   });
 
   // Hover labels carry their keycap — but only where the keycap is real. This is
@@ -551,7 +563,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 if (running && !armed) {
                   // First Escape: stop only; the message stays, like ⌘.
                   e.preventDefault();
-                  onInterrupt();
+                  requestStop();
                   setArmed(true);
                 } else if (armed) {
                   // Second Escape: retract the just-stopped message.
@@ -575,9 +587,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           {running && !noteMode ? (
             <button
               type="button"
-              className="icon-btn stop"
-              onClick={onInterrupt}
-              title={withKey('Stop', 'stop')}
+              className={stopping ? 'icon-btn stop stopping' : 'icon-btn stop'}
+              onClick={requestStop}
+              // Not disabled while stopping: a second press re-sends the
+              // interrupt, which is idempotent — and a user mashing Stop on a
+              // stuck turn deserves retries, not a dead control.
+              aria-label={stopping ? 'Stopping…' : 'Stop'}
+              title={stopping ? 'Stopping…' : withKey('Stop', 'stop')}
             >
               <Square size={16} />
             </button>

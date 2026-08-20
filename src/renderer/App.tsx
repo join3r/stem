@@ -52,6 +52,7 @@ import {
   createSessionCore,
   deleteFromTurn,
   interruptActiveTurn,
+  noteInterruptedTurn,
   removeFailedSend,
   rerunFromTurn as rerunFromTurnShared,
   sendTurn,
@@ -549,6 +550,7 @@ export default function App() {
         start: (input) =>
           window.stem.startTurn({
             input: input.text,
+            turnId: input.turnId,
             threadId: sendKey === DRAFT ? undefined : sendKey,
             model: modelId ?? undefined,
             effort: effort ?? undefined,
@@ -1223,6 +1225,8 @@ export default function App() {
     let turnId = core.store.getThread(key)?.activeTurnId ?? pending?.turnId ?? null;
     if (!turnId && pending) {
       // Escape beat startTurn's resolution — wait for it to learn the turn id.
+      // (Sends mint their id client-side now, so this only covers a pending
+      // entry without one — e.g. an adopted Quick Chat turn.)
       await pending.promise.catch(() => undefined);
       turnId = pending.turnId;
     }
@@ -1240,7 +1244,26 @@ export default function App() {
     };
 
     // Stop the turn (idempotent if a prior Escape already did in two-stage mode).
-    if (turnId) await window.stem.interruptTurn(turnId);
+    // Valid even while startTurn is still in flight — the client-minted id lets
+    // the backend cancel the queued start or abort the live turn.
+    if (turnId) {
+      noteInterruptedTurn(core, turnId);
+      try {
+        await window.stem.interruptTurn(turnId);
+      } catch (e) {
+        // The stop never landed; the turn is still live, so let its events run.
+        core.interruptedTurns.delete(turnId);
+        throw e;
+      }
+    }
+
+    // How did the (possibly canceled) start actually end? A canceled or failed
+    // start never made a backend turn — rolling one back would only error.
+    let backendTurnExists = true;
+    if (pending) {
+      const outcome = await pending.promise.catch(() => null);
+      backendTurnExists = !!outcome && !outcome.handled;
+    }
 
     // A new chat's only turn has no earlier history to roll back to — delete the
     // whole chat (which also aborts it backend-side) and return to a fresh draft.
@@ -1258,7 +1281,7 @@ export default function App() {
     }
 
     const threadId = pending?.threadId ?? activeThreadIdRef.current;
-    if (!threadId || !turnId) {
+    if (!threadId || !turnId || !backendTurnExists) {
       // No backend turn to roll back; just stop locally and restore the text.
       setThread(key, () => ({ running: false, streamingId: null, activity: null, activeTurnId: null, status: 'idle' }));
       core.pendingSends.delete(key);

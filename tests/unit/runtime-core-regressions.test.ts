@@ -657,6 +657,57 @@ describe('prompting a pi that says it is still busy', () => {
   });
 });
 
+describe('stopping a turn before its start completes', () => {
+  // Sends mint their turn id client-side, so Stop can name a turn whose start
+  // RPC is still in flight. The failure this kills: Stop clicked during the
+  // "Working…" phase silently waited for the whole start — including minutes
+  // queued behind another turn's foreground gate — before interrupting anything.
+  const TURN_ID = '11111111-2222-4333-8444-555555555555';
+
+  it('cancels a start still queued behind the foreground gate without touching pi', async () => {
+    const { runtime } = await tempRuntime();
+    const internal = runtime as unknown as {
+      proc: unknown;
+      foreground: { claimTurn(): void; finishTurn(): void };
+    };
+    // A previous turn is still streaming: the new start parks on the gate.
+    internal.foreground.claimTurn();
+
+    const start = runtime.startTurn({ input: 'hello', turnId: TURN_ID });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await runtime.interruptTurn(TURN_ID);
+
+    // The start answers now — Stop must not wait out the previous turn.
+    await expect(start).resolves.toEqual({ handled: true, canceled: true });
+
+    // And when the gate finally opens, the abandoned task bails before pi spawns.
+    internal.foreground.finishTurn();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(internal.proc).toBeNull();
+  });
+
+  it('consumes a cancel that overtook its start on the wire', async () => {
+    // Stop and Send are separate HTTP requests, so the cancel can arrive first.
+    const { runtime } = await tempRuntime();
+    await runtime.interruptTurn(TURN_ID);
+    await expect(runtime.startTurn({ input: 'hello', turnId: TURN_ID })).resolves.toEqual({
+      handled: true,
+      canceled: true
+    });
+    const internal = runtime as unknown as { proc: unknown };
+    expect(internal.proc).toBeNull();
+  });
+
+  it('a pre-start cancel also suppresses the remember fast path', async () => {
+    // The user stopped the send; "I'll remember that." must not still mint a fact.
+    const { runtime } = await tempRuntime();
+    await runtime.interruptTurn(TURN_ID);
+    const result = await runtime.startTurn({ input: 'remember that I like tea', turnId: TURN_ID });
+    expect(result).toEqual({ handled: true, canceled: true });
+    expect(result.rememberedPath).toBeUndefined();
+  });
+});
+
 describe('readThread meta hydration', () => {
   // Reopened chats must keep the per-reply model/effort hover label ("Stem ·
   // <model> · <effort>"). It regressed silently in the codex→pi migration: the

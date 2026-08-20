@@ -239,6 +239,7 @@ export function QuickChat() {
         start: (input) =>
           window.stem.runQuickChat({
             input: input.text,
+            turnId: input.turnId,
             model: modelId,
             effort,
             serviceTier,

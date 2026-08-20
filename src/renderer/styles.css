@@ -740,6 +740,12 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 }
 .icon-btn.explain:hover, .icon-btn.explain.on { opacity: 1; color: var(--ink); }
 .icon-btn.stop { background: var(--danger); }
+/* Stop pressed, turn not settled yet: pulse so the press is visibly taken. */
+.icon-btn.stop.stopping { animation: stop-pulse 1s ease-in-out infinite; }
+@keyframes stop-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 
 /* effort + speed controls above the field */
 .composer-controls { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin: 0 auto 8px; width: 100%; }

@@ -33,9 +33,12 @@ export function pendingStartBlocksSend(
 }
 
 /**
- * Resolve the turn id Stop should interrupt. If the start IPC has not returned
- * yet, keep the UI blocked and wait for its result instead of pretending the
- * turn stopped locally while the backend continues.
+ * Resolve the turn id Stop should interrupt. Sends mint their turn id client-side
+ * now, so a pending start normally carries it from the first moment — Stop can
+ * cancel a turn whose start IPC is still in flight. The await remains as the
+ * fallback for pending entries without a pre-minted id (none should exist any
+ * more, but pretending the turn stopped locally while the backend continues is
+ * the failure mode this guards).
  */
 export async function interruptibleTurnId(
   activeTurnId: string | null | undefined,
@@ -43,6 +46,7 @@ export async function interruptibleTurnId(
 ): Promise<string | null> {
   if (activeTurnId) return activeTurnId;
   if (!pending) return null;
+  if (pending.turnId) return pending.turnId;
   await pending.promise.catch(() => undefined);
   return pending.turnId;
 }

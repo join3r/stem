@@ -212,6 +212,22 @@ const SKILL_APPROVAL_TIMEOUT_MS = 120_000;
 const PI_IDLE_WAIT_MS = 30_000;
 const PI_IDLE_POLL_MS = 250;
 
+/** Cancellation token for a start whose RPC has not returned yet (see pendingStarts). */
+interface PendingStartCancel {
+  canceled: boolean;
+  /** Latch the cancel: flips `canceled` (the start's checkpoints abandon the
+   * turn), aborts pi if the prompt is already out, and answers the start RPC. */
+  cancel(): void;
+}
+
+/** Bound on preStartCancels; entries are consumed by their start or aged out. */
+const PRE_START_CANCEL_CAP = 32;
+
+/** Accept a client-minted turn id only in canonical UUID form; anything else is
+ * replaced with a server-minted one (the turn still runs, it just cannot be
+ * canceled before its start returns). */
+const CLIENT_TURN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** pi refusing a prompt because a run is still in flight — a "not yet", not a failure. */
 function isBusyRejection(error: string | undefined): boolean {
   return /already processing/i.test(error ?? '');
@@ -494,6 +510,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   /** The turn currently streaming on the foreground process (one at a time). */
   private currentTurn: TurnContext | null = null;
   /**
+   * Starts whose RPC is still in flight, keyed by their (client-minted) turn id.
+   * interruptTurn cancels through the token: a start queued behind the foreground
+   * gate — or still building its prompt — is abandoned before it touches pi,
+   * instead of Stop having to wait for the whole start to complete first.
+   */
+  private pendingStarts = new Map<string, PendingStartCancel>();
+  /**
+   * Cancellations that arrived before their start did. The two RPCs are separate
+   * HTTP requests, so a Stop clicked immediately after Send can overtake the
+   * start; the latched id is consumed at startTurn entry. Stale ids (e.g. the
+   * scheduler's timeout cleanup for a turn that already settled) age out of the
+   * cap — turn ids are never reused, so a stale latch can't cancel anything.
+   */
+  private preStartCancels = new Set<string>();
+  /**
    * The last turn that settled, so post-run auto-compaction (which pi runs AFTER
    * agent_end, when no live turn exists) can still be surfaced on its bubble.
    */
@@ -672,6 +703,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   }
 
   async startTurn(input: StartTurnInput): Promise<StartTurnResult> {
+    const turnId = input.turnId && CLIENT_TURN_ID.test(input.turnId) ? input.turnId : randomUUID();
+    // Stop overtook this start on the wire (they are separate HTTP requests):
+    // the send is abandoned before it does anything — including the remember
+    // fast path below, whose fact the user just asked not to store.
+    if (this.preStartCancels.delete(turnId)) return { handled: true, canceled: true };
+
     // The explicit-remember fast path is for text the user TYPED. A scheduled
     // run's prompt re-enters here too, and schedule_task needs no approval — so
     // without this gate a model-authored task prompt saying "Remember that …"
@@ -690,7 +727,34 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       return { handled: true, assistantMessage: "I'll remember that.", rememberedPath: memory.path };
     }
 
-    return this.foreground.run(async () => {
+    // Registered before the gate so Stop can cancel this start at any phase:
+    // queued behind the gate (checkpointed at task entry), building the prompt
+    // (checkpointed just before sendPrompt), or already streaming (the token
+    // aborts pi directly). The race answers the RPC the moment the cancel lands
+    // rather than after the abandoned start unwinds.
+    const canceledResult: StartTurnResult = { handled: true, canceled: true };
+    let answerCanceled!: () => void;
+    const canceledAnswer = new Promise<StartTurnResult>((resolve) => {
+      answerCanceled = () => resolve(canceledResult);
+    });
+    const token: PendingStartCancel = {
+      canceled: false,
+      cancel: () => {
+        token.canceled = true;
+        // promptSentAt is stamped just before the prompt RPC is written, so a
+        // live match here means pi (may) already have the turn — abort it. An
+        // earlier cancel must NOT abort: pi could still be running the previous
+        // turn's post-run work, and the checkpoints abandon ours anyway.
+        const live = this.currentTurn;
+        if (live && live.turnId === turnId && live.promptSentAt) this.abortLiveTurn(live);
+        answerCanceled();
+      }
+    };
+    this.pendingStarts.set(turnId, token);
+    try {
+      const run = this.foreground.run(async () => {
+      // Canceled while queued behind the gate — the turn never touches pi.
+      if (token.canceled) return canceledResult;
       const startedAt = Date.now();
       await this.ensureStarted();
       const ensureMs = Date.now() - startedAt;
@@ -743,7 +807,6 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
       if (input.effort) await this.setThinking(input.effort);
 
-      const turnId = randomUUID();
       const turn = newTurnContext(threadId, turnId);
       turn.startedAt = startedAt;
       turn.ensureMs = ensureMs;
@@ -788,6 +851,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const buildStart = Date.now();
         const { message, images } = await this.buildMessage(input, threadId, turn.recall, turnId);
         turn.buildMs = Date.now() - buildStart;
+        // Canceled while the prompt was being prepared (gates, recall build) —
+        // abandon before pi sees anything. finishTurn drops the claim taken above.
+        if (token.canceled) {
+          this.finishTurn();
+          return canceledResult;
+        }
         // Anchor "send" at the write itself so send→firstToken is independent of how
         // pi acks the prompt command. The pre-first-event wait is attributed to no
         // phase bucket (it's TTFT, not thinking) — see advancePhase.
@@ -836,7 +905,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         turn.pendingUserCapture = { text: input.input, cwd: this.options.workspaceRoot };
       }
       return { threadId, turnId };
-    });
+      });
+      run.catch((e) => {
+        // Only reachable when the cancel already answered the RPC — otherwise
+        // the race below surfaces this same rejection to the caller.
+        if (token.canceled) {
+          log('pi', 'canceled start failed while unwinding', {
+            turnId,
+            error: e instanceof Error ? e.message : String(e)
+          });
+        }
+      });
+      return await Promise.race([run, canceledAnswer]);
+    } finally {
+      this.pendingStarts.delete(turnId);
+    }
   }
 
   /**
@@ -897,15 +980,39 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   }
 
   async interruptTurn(turnId: string): Promise<void> {
-    // Ignore stale cancellation requests. In particular, the scheduler's timeout
-    // cleanup must never abort a newer interactive turn if its original turn has
-    // already settled without the scheduler observing the terminal event.
-    if (!this.proc || !this.currentTurn || this.currentTurn.turnId !== turnId) return;
-    this.currentTurn.aborted = true;
-    // Interrupting the turn must also stop any command it is running: pi's abort
-    // reaches the extension tool, but the actual child process lives in main.
-    this.execBridge?.abortThread(this.currentTurn.threadId);
-    this.proc.send({ type: 'abort' });
+    // A start still in flight for this id owns the cancellation: its token knows
+    // whether the prompt is already out (abort pi) or not yet (abandon the start
+    // before it touches pi at all). Checked before the live-turn match because
+    // the turn can be live while its start RPC has not returned.
+    const pending = this.pendingStarts.get(turnId);
+    if (pending) {
+      pending.cancel();
+      return;
+    }
+    if (this.proc && this.currentTurn && this.currentTurn.turnId === turnId) {
+      this.abortLiveTurn(this.currentTurn);
+      return;
+    }
+    // Neither live nor starting. Either the start RPC hasn't arrived yet (Stop
+    // and Send are separate HTTP requests, so ordering isn't guaranteed) — latch
+    // the id for startTurn to consume — or this is a stale cancellation. In
+    // particular, the scheduler's timeout cleanup must never abort a newer
+    // interactive turn if its original turn settled unobserved; a stale latch is
+    // harmless instead (turn ids are never reused) and ages out of the cap.
+    this.preStartCancels.add(turnId);
+    while (this.preStartCancels.size > PRE_START_CANCEL_CAP) {
+      const oldest = this.preStartCancels.values().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.preStartCancels.delete(oldest);
+    }
+  }
+
+  /** Abort the streaming turn: pi's abort reaches the extension tool, but the
+   * actual child process of any command it is running lives in main — stop both. */
+  private abortLiveTurn(turn: TurnContext): void {
+    turn.aborted = true;
+    this.execBridge?.abortThread(turn.threadId);
+    this.proc?.send({ type: 'abort' });
   }
 
   async listModels(): Promise<ModelSummary[]> {

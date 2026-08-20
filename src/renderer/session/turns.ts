@@ -64,7 +64,29 @@ export interface SessionCore {
   turnMeta: Map<string, MessageMeta>;
   settledTurns: SettledTurns;
   pendingSends: Map<string, PendingSend>;
+  /**
+   * Turns the user stopped that have not settled backend-side yet. The abort is
+   * not instantaneous — pi may stream a few more events while it winds down —
+   * and without this latch those events would flip the slice back to
+   * `running: true`, which reads as "the Stop button didn't work". Ids are
+   * removed by the turn's terminal event (or on process exit / interrupt error).
+   */
+  interruptedTurns: Set<string>;
   nextSendNonce(): number;
+}
+
+/** Bound on interruptedTurns: a settled event normally clears the id, this cap
+ * only guards against terminal events lost to a reconnect. */
+const INTERRUPTED_TURN_CAP = 32;
+
+/** Latch a turn as user-stopped, aging out the oldest id past the cap. */
+export function noteInterruptedTurn(core: SessionCore, turnId: string): void {
+  core.interruptedTurns.add(turnId);
+  while (core.interruptedTurns.size > INTERRUPTED_TURN_CAP) {
+    const oldest = core.interruptedTurns.values().next().value as string | undefined;
+    if (oldest === undefined) break;
+    core.interruptedTurns.delete(oldest);
+  }
 }
 
 export function createSessionCore(): SessionCore {
@@ -74,6 +96,7 @@ export function createSessionCore(): SessionCore {
     turnMeta: new Map(),
     settledTurns: new SettledTurns(),
     pendingSends: new Map(),
+    interruptedTurns: new Set(),
     nextSendNonce: () => ++nonce
   };
 }
@@ -131,6 +154,7 @@ export function attachBackendEvents(
         return next;
       });
       core.pendingSends.clear();
+      core.interruptedTurns.clear();
       host.onProcessExit?.(wasRunning);
       return;
     }
@@ -147,6 +171,7 @@ export function attachBackendEvents(
         // ignored) thread still clears its pending record and the settled-race
         // guard still sees the terminal event.
         core.settledTurns.note(turnId);
+        core.interruptedTurns.delete(turnId);
         for (const [key, pending] of core.pendingSends) {
           if (pending.turnId === turnId) core.pendingSends.delete(key);
         }
@@ -160,7 +185,27 @@ export function attachBackendEvents(
         turnMeta: core.turnMeta,
         settledStatus: (method, id) => host.settledStatus(method, id)
       });
-      return next ? { ...prev, [key]: next } : prev;
+      if (!next) return prev;
+      // A turn the user stopped keeps streaming briefly while the backend abort
+      // takes effect. Its content still applies (the transcript stays truthful),
+      // but it must not resurrect the running state Stop just cleared — that
+      // reads as the Stop button silently failing. Terminal events are exempt:
+      // their id was removed from the latch above, so they settle normally.
+      const eventTurn = (event.params as { turnId?: string } | undefined)?.turnId;
+      const stopped = eventTurn !== undefined && core.interruptedTurns.has(eventTurn);
+      return {
+        ...prev,
+        [key]: stopped
+          ? {
+              ...next,
+              running: false,
+              streamingId: null,
+              activeTurnId: null,
+              activity: null,
+              status: next.status === 'running' ? ('idle' as const) : next.status
+            }
+          : next
+      };
     });
   };
 
@@ -235,7 +280,10 @@ export interface SendSpec {
   draftGeneration?: number;
   /** Capture the sent slice for a later draft→real migration (main window). */
   captureDraftMessages?: boolean;
-  start(input: { text: string; attachments: TurnAttachment[] }): Promise<StartTurnResult>;
+  /** `turnId` is minted here, before the call, and must be forwarded into
+   * StartTurnInput — it is what lets Stop cancel this send while the start is
+   * still in flight. */
+  start(input: { text: string; attachments: TurnAttachment[]; turnId: string }): Promise<StartTurnResult>;
   /** Host continuation for a real (non-handled) start: draft→real migration in
    * main, thread adoption in the overlay. Runs regardless of ownership — hosts
    * do their own ownership checks (main still migrates a superseded draft's turn
@@ -253,6 +301,13 @@ export interface SendSpec {
  * pending-send registration, async attachment-thumbnail upgrade, settled-race
  * handling, handled-result application, and the ownership-guarded error path.
  */
+/** Client-side turn id. crypto.randomUUID exists in Chromium and Node; the
+ * fallback only serves exotic test environments — the backend re-mints any id it
+ * cannot validate as a UUID, so a fallback id merely loses pre-start Stop. */
+function mintTurnId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `turn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 export async function sendTurn(core: SessionCore, spec: SendSpec): Promise<void> {
   const { store, pendingSends } = core;
   const { key } = spec;
@@ -287,12 +342,16 @@ export async function sendTurn(core: SessionCore, spec: SendSpec): Promise<void>
     status: 'running'
   }));
 
+  // Minted client-side so Stop can name this turn from the very first moment —
+  // the backend adopts the id, and can cancel the start it identifies even
+  // while the RPC is still queued behind another turn.
+  const turnId = mintTurnId();
   const startPromise = Promise.resolve().then(() =>
-    spec.start({ text: spec.text, attachments: sentAttachments })
+    spec.start({ text: spec.text, attachments: sentAttachments, turnId })
   );
   const pending: PendingSend = {
     promise: startPromise,
-    turnId: null,
+    turnId,
     threadId: null,
     isNewChat: spec.isNewChat,
     text: spec.text,
@@ -418,15 +477,17 @@ interface InterruptOptions {
   interrupt?(turnId: string): Promise<void>;
 }
 
-/** Stop the visible chat's running turn. If the start IPC has not returned yet,
- * wait for it to learn the interruptible turn id instead of pretending the turn
- * stopped locally while the backend continues. */
+/** Stop the visible chat's running turn. Sends carry a client-minted turn id, so
+ * this can interrupt (or cancel) a turn whose start IPC is still in flight. */
 export async function interruptActiveTurn(core: SessionCore, opts: InterruptOptions): Promise<void> {
   const pending = core.pendingSends.get(opts.pendingKey);
   const turnId = await interruptibleTurnId(core.store.getThread(opts.pendingKey)?.activeTurnId, pending);
   if (!turnId) return; // handled/rejected starts settle through their own send path
   const targetKey = opts.resolveTargetKey?.(pending) ?? opts.pendingKey;
   const doInterrupt = opts.interrupt ?? ((id: string) => window.stem.interruptTurn(id));
+  // Latched before the call: the backend abort is not instantaneous, and events
+  // it still emits while winding down must not flip the slice back to running.
+  noteInterruptedTurn(core, turnId);
   try {
     await doInterrupt(turnId);
     core.store.patch(targetKey, () => ({
@@ -438,6 +499,9 @@ export async function interruptActiveTurn(core: SessionCore, opts: InterruptOpti
       status: 'idle' as const
     }));
   } catch (e) {
+    // The stop never reached the backend — the turn is genuinely still running,
+    // so let its events keep the slice live again.
+    core.interruptedTurns.delete(turnId);
     core.store.patch(targetKey, (s) => appendSystemMessage(s, e));
   }
 }

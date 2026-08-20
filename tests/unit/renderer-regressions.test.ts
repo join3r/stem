@@ -58,6 +58,13 @@ describe('renderer async race regressions', () => {
     await expect(result).resolves.toBe('turn-late');
   });
 
+  it('answers immediately when the pending start carries a client-minted id', async () => {
+    // Sends mint their turn id up front now, so Stop must not park on a start
+    // that may be queued behind another turn for minutes.
+    const pending = { promise: new Promise<never>(() => {}), turnId: 'turn-preminted' };
+    await expect(interruptibleTurnId(null, pending)).resolves.toBe('turn-preminted');
+  });
+
   it('allows only the newest navigation or provider probe to commit', async () => {
     const gate = new RequestGate();
     const slow = deferred<string>();

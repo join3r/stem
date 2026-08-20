@@ -537,6 +537,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       const result = (await deps.invoke('backend:startTurn', [
         {
           input: prompt.input,
+          turnId: prompt.turnId,
           threadId,
           model: prompt.model ?? undefined,
           effort: prompt.effort ?? undefined,
@@ -562,10 +563,12 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
         } satisfies BackendEventEnvelope);
       }
       // The memory shortcut ("remember that …") completes with no stream — jump the
-      // HUD straight to finished.
+      // HUD straight to finished. A canceled start also comes back handled, but
+      // there is no answer to announce: the user stopped it, so just stand down.
       if (result.handled) {
         overlay.stopTurn();
-        showHud({ phase: 'finished', label: 'Answer ready' }, 'quickchat');
+        if (result.canceled) hideHud();
+        else showHud({ phase: 'finished', label: 'Answer ready' }, 'quickchat');
       }
       return result;
     } catch (e) {

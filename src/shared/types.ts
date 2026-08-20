@@ -321,6 +321,14 @@ export interface TurnAttachment {
 
 export interface StartTurnInput {
   input: string;
+  /**
+   * Client-minted turn id (UUID). Lets Stop interrupt a turn from the moment it
+   * is sent — even while the start call is still queued behind the foreground
+   * gate or building its prompt — instead of waiting for this call to return an
+   * id. The backend validates the format and mints its own when absent or
+   * malformed (scheduled runs and the mobile client never send one).
+   */
+  turnId?: string;
   threadId?: string;
   model?: string;
   /** Reasoning effort override (low/medium/high/xhigh). */
@@ -397,6 +405,9 @@ export interface StartTurnResult {
   threadId?: string;
   turnId?: string;
   handled?: boolean;
+  /** The user stopped this turn before it reached the model — no turn ran, no
+   * reply is coming. Always paired with `handled: true`. */
+  canceled?: boolean;
   assistantMessage?: string;
   rememberedPath?: string;
 }
@@ -2506,6 +2517,8 @@ export interface ClientSettings {
  */
 export interface QuickChatPrompt {
   input: string;
+  /** Client-minted turn id, forwarded into StartTurnInput — see its doc there. */
+  turnId?: string;
   /** Model chosen in the overlay; null = use the overlay's default model. */
   model: string | null;
   effort: string | null;
