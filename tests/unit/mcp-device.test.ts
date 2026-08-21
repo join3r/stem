@@ -414,6 +414,7 @@ describe('a call to a device, end to end', () => {
           void proxy.invoke('execHost:result', [request.requestId, { ok: true, text: `ran: ${request.command}` }]);
         }
       },
+      harnessHost: { onRequest: () => undefined, onCancel: () => undefined },
       oauthCourier: { expectSignIn: () => undefined, offer: () => undefined, close: () => undefined },
       sendToMain: () => undefined,
       sendToOverlay: () => undefined,

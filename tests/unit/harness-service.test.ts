@@ -199,19 +199,46 @@ describe('device targeting', () => {
     expect(!res.ok && res.error).toContain('No paired computer');
   });
 
-  it('refuses honestly while the device path is not wired', async () => {
+  it('refuses a machine that never announced (or switched off), naming its switch', async () => {
     const { service } = makeService(scriptedHost({}), {
-      resolveDevice: async () => ({ ok: true, deviceId: 'dev-1', label: 'Mac' })
+      resolveDevice: async () => ({ ok: true, deviceId: 'dev-1', label: 'Mac' }),
+      deviceHost: async () => null
     });
     const res = await service.handleHarnessRequest({ ...REQ, device: 'Mac', cwd: '/tmp/proj' });
-    expect(!res.ok && res.error).toContain('not supported yet');
+    expect(!res.ok && res.error).toContain('does not run coding agents');
+    expect(!res.ok && res.error).toContain('ON that computer');
+  });
+
+  it('refuses a disconnected machine with the awake sentence', async () => {
+    const deviceHost = scriptedHost({ label: 'Mac', available: false });
+    const { service } = makeService(scriptedHost({}), {
+      resolveDevice: async () => ({ ok: true, deviceId: 'dev-1', label: 'Mac' }),
+      deviceHost: async () => deviceHost
+    });
+    const res = await service.handleHarnessRequest({ ...REQ, device: 'Mac', cwd: '/tmp/proj' });
+    expect(!res.ok && res.error).toContain('awake');
+  });
+
+  it('runs on the device host with the session keyed to that device', async () => {
+    const deviceHost = scriptedHost({ label: 'Mac', ensure: () => ({ ok: true, sessionId: 'dev-session' }) });
+    const { service } = makeService(scriptedHost({}), {
+      resolveDevice: async () => ({ ok: true, deviceId: 'dev-1', label: 'Mac' }),
+      deviceHost: async () => deviceHost
+    });
+    const res = await service.handleHarnessRequest({ ...REQ, device: 'Mac', cwd: '/tmp/proj' });
+    expect(res.ok).toBe(true);
+    expect(deviceHost.turns[0]).toMatchObject({ cwd: '/tmp/proj', sessionId: 'dev-session' });
+    expect(await lookupSession({ threadId: 'thread-1', host: 'dev-1', agent: 'claude', cwd: '/tmp/proj' })).toBe(
+      'dev-session'
+    );
+    expect((await readHarnessRuns())[0]).toMatchObject({ device: 'Mac', status: 'ok' });
   });
 
   it('requires an absolute cwd for device runs', async () => {
     const deviceHost = scriptedHost({ label: 'Mac' });
     const { service } = makeService(scriptedHost({}), {
       resolveDevice: async () => ({ ok: true, deviceId: 'dev-1', label: 'Mac' }),
-      deviceHost: () => deviceHost
+      deviceHost: async () => deviceHost
     });
     const res = await service.handleHarnessRequest({ ...REQ, device: 'Mac' });
     expect(!res.ok && res.error).toContain('absolute cwd');

@@ -110,6 +110,14 @@ export function execDeviceHostsPath(): string {
 }
 
 /**
+ * Which paired computers said they run coding agents (server/harness/
+ * device-host.ts). Survives restarts for the reason its exec sibling does.
+ */
+export function harnessDeviceHostsPath(): string {
+  return process.env.STEM_HARNESS_DEVICE_HOSTS ?? join(piHome(), 'harness-device-hosts.json');
+}
+
+/**
  * The safeStorage-wrapped AES key that encrypts MCP secrets at rest (see
  * pi/secrets.ts). The env override lets unit tests use a throwaway key file.
  */

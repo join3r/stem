@@ -25,6 +25,8 @@ import { startScratchSweeper, stopScratchSweeper } from './exec/scratch';
 import { initExecService } from './startup/exec';
 import { initHarness } from './startup/harness';
 import type { HarnessService } from './harness/service';
+import { registerHarnessIpc } from './harness/ipc';
+import { closeHarnessDeviceRouter } from './harness/device-host';
 import { initSkills } from './startup/skills';
 import {
   closeTransport,
@@ -341,6 +343,7 @@ function registerIpc(): void {
   registerMemoryIpc(deps);
   registerChatsIpc(deps);
   registerDevicesIpc();
+  registerHarnessIpc();
 
   registerServer('backend:startTurn', async (_e, input: StartTurnInput) => {
     // The user is actively chatting: yield any scheduler-owned turn (frees the
@@ -999,6 +1002,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
       closeDeviceMcpRouter();
       // And every held device command, for the same reason.
       closeExecDeviceRouter();
+      // And every held device coding-agent turn.
+      closeHarnessDeviceRouter();
       // Cancel live coding-agent turns gracefully and close the acpx adapters;
       // their sessions persist on disk for the next boot.
       void harness?.close();

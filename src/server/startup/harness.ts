@@ -1,6 +1,7 @@
 import * as activity from '../activity';
 import type { ActivityHandle } from '../activity';
 import { HarnessService } from '../harness/service';
+import { DeviceHarnessHost, harnessDeviceRouter } from '../harness/device-host';
 import { LocalHarnessHost } from '../harness/local-host';
 import type { HarnessHost } from '../harness/host';
 import type { HarnessProgressUpdate } from '../harness/service';
@@ -62,6 +63,13 @@ export function initHarness(deps: {
         );
       }
       return localHost;
+    },
+    // A paired computer is a target only after ITS owner flipped the local
+    // switch there; the announcement is how this server hears about it.
+    deviceHost: async (deviceId, label): Promise<HarnessHost | null> => {
+      const entry = await harnessDeviceRouter().hostFor(deviceId);
+      if (!entry?.enabled) return null;
+      return new DeviceHarnessHost(harnessDeviceRouter(), deviceId, label);
     },
     emitApprovalRequest: deps.emitApprovalRequest,
     emitApprovalResolved: deps.emitApprovalResolved,

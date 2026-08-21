@@ -13,6 +13,8 @@ import { pairWithServer, useBuiltInServer, type ServerCredentials } from '../ser
 import { updateClientReleaseNotes, updateClientUpdates, withClientSettings } from '../settings';
 import type { McpHost } from '../mcp-host';
 import type { ExecHost, ExecHostLocalState } from '../exec-host';
+import type { DesktopHarnessHost } from '../harness-host';
+import type { HarnessHostLocalState } from '../../shared/types';
 import type { MirrorFolderLocalState, MirrorHost } from '../mirror-host';
 import type { Updates } from '../updates';
 import type {
@@ -80,6 +82,8 @@ export interface LocalIpcDeps {
   mcpHost: McpHost;
   /** Whether this machine accepts commands from its server (see desktop/exec-host/). */
   execHost: ExecHost;
+  /** Whether this machine runs coding agents for its server (see desktop/harness-host/). */
+  harnessHost: DesktopHarnessHost;
   /**
    * The folders THIS machine mirrors to its server (see desktop/mirror-host/).
    * Null when the server runs on this computer — a folder here is connected
@@ -203,6 +207,15 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
   handleLocal(
     'execHost:setEnabled',
     (_e, enabled: boolean): Promise<ExecHostLocalState> => deps.execHost.setEnabled(enabled)
+  );
+
+  // Whether THIS computer runs coding agents. Client-owned for exactly the
+  // execHost reason above: the switch is the consent, so the channel that
+  // flips it must not exist anywhere but on the machine consenting.
+  handleLocal('harnessHost:localState', (): Promise<HarnessHostLocalState> => deps.harnessHost.localState());
+  handleLocal(
+    'harnessHost:setEnabled',
+    (_e, enabled: boolean): Promise<HarnessHostLocalState> => deps.harnessHost.setEnabled(enabled)
   );
 
   // Connect folders that live on THIS machine. Client-owned for the mcpHost

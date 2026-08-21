@@ -3,11 +3,15 @@ import { request as httpsRequest } from 'node:https';
 import { log } from '../server/log';
 import {
   EXEC_REQUEST_FRAME,
+  HARNESS_CANCEL_FRAME,
+  HARNESS_REQUEST_FRAME,
   MCP_ASSIGNMENTS_FRAME,
   MCP_REQUEST_FRAME,
   type AuthUiEvent,
   type BackendEventEnvelope,
   type DeviceExecRequest,
+  type DeviceHarnessCancel,
+  type DeviceHarnessRequest,
   type DeviceMcpRequest,
   type ExecApprovalRequest,
   type HarnessApprovalRequest,
@@ -223,6 +227,16 @@ export interface DeviceExecHostBinding {
   onRequest(request: DeviceExecRequest): void;
 }
 
+/**
+ * Same seam for the coding agents this device runs (coding_agent's `device`
+ * target). Results, events and permission asks all go back as ordinary RPCs
+ * whenever they are ready; nothing here waits.
+ */
+export interface DeviceHarnessHostBinding {
+  onRequest(request: DeviceHarnessRequest): void;
+  onCancel(cancel: DeviceHarnessCancel): void;
+}
+
 export interface ProxyDeps {
   /** Origin of the server, e.g. `http://127.0.0.1:52413`. */
   url: string;
@@ -275,6 +289,8 @@ export interface ProxyDeps {
   mcpHost: DeviceMcpHostBinding;
   /** Runs the commands addressed to this device. See DeviceExecHostBinding. */
   execHost: DeviceExecHostBinding;
+  /** Runs the coding agents addressed to this device. See DeviceHarnessHostBinding. */
+  harnessHost: DeviceHarnessHostBinding;
   /** Quick Chat settings were persisted: apply the parts that are not settings. */
   applyQuickChatSettings(patch: Partial<QuickChatSettings>, next: QuickChatSettings): void;
 }
@@ -528,6 +544,20 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       if (request) deps.execHost.onRequest(request);
       return;
     }
+    // A coding-agent ensure/run for THIS machine, and the graceful cancel of
+    // one. Addressed and off the ring like the frames above; an unreadable
+    // frame is dropped silently for the same reason — without a requestId
+    // there is nothing to answer, and the server's own timeouts cover it.
+    if (name === HARNESS_REQUEST_FRAME) {
+      const request = asHarnessRequest(data);
+      if (request) deps.harnessHost.onRequest(request);
+      return;
+    }
+    if (name === HARNESS_CANCEL_FRAME) {
+      const turnId = (data as { turnId?: unknown } | null)?.turnId;
+      if (typeof turnId === 'string' && turnId) deps.harnessHost.onCancel({ turnId });
+      return;
+    }
     if (name === 'snapshot') {
       const turns = data.liveTurns;
       // Absent (a server with nothing to say) leaves the client's own view alone;
@@ -574,6 +604,38 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
    * one ends in a process being spawned or a URL being opened on this machine,
    * so the shape is established before it is handed anywhere.
    */
+  /** Same establish-the-shape-first rule for a harness frame. */
+  function asHarnessRequest(data: unknown): DeviceHarnessRequest | null {
+    const frame = data as Partial<DeviceHarnessRequest> | null;
+    if (!frame || typeof frame.requestId !== 'string' || !frame.requestId) return null;
+    if (typeof frame.agent !== 'string' || !frame.agent) return null;
+    if (typeof frame.cwd !== 'string' || !frame.cwd) return null;
+    if (frame.op === 'ensure') {
+      return {
+        requestId: frame.requestId,
+        op: 'ensure',
+        agent: frame.agent,
+        cwd: frame.cwd,
+        ...(typeof frame.sessionId === 'string' && frame.sessionId ? { sessionId: frame.sessionId } : {})
+      };
+    }
+    if (frame.op === 'run') {
+      const run = frame as Partial<Extract<DeviceHarnessRequest, { op: 'run' }>>;
+      if (typeof run.sessionId !== 'string' || !run.sessionId) return null;
+      if (typeof run.prompt !== 'string' || !run.prompt) return null;
+      return {
+        requestId: frame.requestId,
+        op: 'run',
+        agent: frame.agent,
+        cwd: frame.cwd,
+        sessionId: run.sessionId,
+        prompt: run.prompt,
+        ...(typeof run.maxTurnMs === 'number' && Number.isFinite(run.maxTurnMs) ? { maxTurnMs: run.maxTurnMs } : {})
+      };
+    }
+    return null;
+  }
+
   function asExecRequest(data: unknown): DeviceExecRequest | null {
     const frame = data as Partial<DeviceExecRequest> | null;
     if (!frame || typeof frame.requestId !== 'string' || !frame.requestId) return null;

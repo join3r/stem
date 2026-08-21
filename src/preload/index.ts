@@ -183,6 +183,8 @@ const api: StemApi = {
   },
   execHostState: () => ipcRenderer.invoke('execHost:localState'),
   setExecHostEnabled: (enabled: boolean) => ipcRenderer.invoke('execHost:setEnabled', enabled),
+  harnessHostState: () => ipcRenderer.invoke('harnessHost:localState'),
+  setHarnessHostEnabled: (enabled: boolean) => ipcRenderer.invoke('harnessHost:setEnabled', enabled),
   onMcpAdminApproval: (listener: (proposal: McpAdminProposal) => void) => {
     const handler = (_e: unknown, proposal: McpAdminProposal) => listener(proposal);
     ipcRenderer.on('mcp:adminApproval', handler);

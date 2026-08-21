@@ -5,6 +5,7 @@ import { createPairingCode, pendingPairings } from '../transport/pairing';
 import { dropDeviceStreams } from '../startup/transport';
 import { deviceMcpRouter } from '../mcp-device/router';
 import { execDeviceRouter } from '../exec-device/router';
+import { harnessDeviceRouter } from '../harness/device-host';
 import { log } from '../log';
 import type { DeviceInfo, DevicesSnapshot, PairingCodeInfo } from '../../shared/types';
 
@@ -57,6 +58,9 @@ export function registerDevicesIpc(): void {
     // machine is not a place commands can go, and its in-flight ones are
     // answered now rather than left to time out against cut streams.
     if (removed) await execDeviceRouter().forget(id);
+    // And what it said about running coding agents, for the same reason — its
+    // in-flight turns are failed now rather than left to the idle timeout.
+    if (removed) await harnessDeviceRouter().forget(id);
     if (removed) log('devices', 'revoked a device', { id, streamsDropped: dropped });
     return snapshot();
   });

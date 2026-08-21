@@ -101,6 +101,7 @@ beforeAll(async () => {
     // uses this has its own file (mcp-device.test.ts).
     mcpHost: { onRequest: () => undefined, onAssignmentsChanged: () => undefined },
     execHost: { onRequest: () => undefined },
+    harnessHost: { onRequest: () => undefined, onCancel: () => undefined },
     threadOpened: async (threadId) => {
       clientSide.push(`client:threadOpened(${threadId})`);
       if (refuseHandoff) throw refuseHandoff;
@@ -229,6 +230,7 @@ describe('when the server is somewhere else', () => {
       oauthCourier: { expectSignIn: () => undefined, offer: () => undefined, close: () => undefined },
       mcpHost: { onRequest: () => undefined, onAssignmentsChanged: () => undefined },
     execHost: { onRequest: () => undefined },
+    harnessHost: { onRequest: () => undefined, onCancel: () => undefined },
       threadOpened: async () => undefined,
       applyQuickChatSettings: () => undefined,
       resync: () => undefined,
@@ -376,6 +378,7 @@ describe('resuming a dropped stream', () => {
       oauthCourier: { expectSignIn: () => undefined, offer: () => undefined, close: () => undefined },
       mcpHost: { onRequest: () => undefined, onAssignmentsChanged: () => undefined },
     execHost: { onRequest: () => undefined },
+    harnessHost: { onRequest: () => undefined, onCancel: () => undefined },
       threadOpened: async () => undefined,
       applyQuickChatSettings: () => undefined,
       resync: () => {
@@ -614,6 +617,7 @@ describe('a server reached over TLS', () => {
     oauthCourier: { expectSignIn: () => undefined, offer: () => undefined, close: () => undefined },
     mcpHost: { onRequest: () => undefined, onAssignmentsChanged: () => undefined },
     execHost: { onRequest: () => undefined },
+    harnessHost: { onRequest: () => undefined, onCancel: () => undefined },
     threadOpened: async () => undefined,
     applyQuickChatSettings: () => undefined,
     resync: () => undefined,

@@ -38,8 +38,8 @@ export interface HarnessServiceDeps {
   /** The harness section of settings, read fresh per request. */
   settings: () => Promise<{ enabled: boolean; agents?: Record<string, { command?: string }> }>;
   localHost: () => HarnessHost;
-  /** Stage 6 wires the device path; until then any `device` request refuses. */
-  deviceHost?: (deviceId: string, label: string) => HarnessHost | null;
+  /** The device path: null when that machine never announced (or switched off). */
+  deviceHost?: (deviceId: string, label: string) => Promise<HarnessHost | null>;
   emitApprovalRequest: (request: HarnessApprovalRequest) => void;
   emitApprovalResolved: (id: string) => void;
   emitApprovalArmed?: (armed: HarnessApprovalArmed) => void;
@@ -104,11 +104,13 @@ export class HarnessService implements HarnessBridge {
     if (req.device?.trim()) {
       const target = await (this.deps.resolveDevice ?? resolveHarnessTarget)(req.device.trim());
       if (!target.ok) return { ok: false, error: target.error };
-      const deviceHost = this.deps.deviceHost?.(target.deviceId, target.label) ?? null;
+      const deviceHost = (await this.deps.deviceHost?.(target.deviceId, target.label)) ?? null;
       if (!deviceHost) {
         return {
           ok: false,
-          error: `Running coding agents on “${target.label}” is not supported yet — run without \`device\` to use this machine.`
+          error:
+            `“${target.label}” does not run coding agents for this Stem. Only its owner can change that, in ` +
+            `Settings → Chat → Coding agents ON that computer — tell them so rather than retrying.`
         };
       }
       if (!deviceHost.available()) {

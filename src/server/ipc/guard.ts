@@ -122,6 +122,10 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   // land (exec-device/router.ts asAnnouncement/asResult).
   'execHost:announce': [a.object],
   'execHost:result': [a.string, a.object],
+  'harnessHost:announce': [a.object],
+  'harnessHost:result': [a.string, a.object],
+  'harnessHost:event': [a.object],
+  'harnessHost:permission': [a.object],
   'instructions:resolveApproval': [a.id, a.boolean, a.oneOf(['main', 'quickChat']), a.string],
   'skills:resolveApproval': [a.id, a.boolean, a.nullish(a.object)],
   'skills:reset': [a.boolean, a.oneOf(['off', 'ask', 'auto'])],

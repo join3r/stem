@@ -79,6 +79,7 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
   // to accept commands from.
   const remote = useRemoteServer();
   const [execHostEnabled, setExecHostEnabled] = useState<boolean | null>(null);
+  const [harnessHostEnabled, setHarnessHostEnabled] = useState<boolean | null>(null);
   // Labels for the per-device allowlist groups. Devices that were unpaired keep
   // their entries readable (and deletable) under the raw id.
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
@@ -103,6 +104,7 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
       .then(setHostShell)
       .catch(() => setHostShell(null));
     void window.stem.execHostState().then((s) => setExecHostEnabled(s.enabled)).catch(() => undefined);
+    void window.stem.harnessHostState().then((s) => setHarnessHostEnabled(s.enabled)).catch(() => undefined);
     void window.stem
       .listDevices()
       .then((snap) => setDevices(snap.devices))
@@ -637,6 +639,38 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
             onClick={() => harness && updateHarness({ enabled: !harness.enabled })}
           />
         </div>
+
+        {/* THIS computer's consent to run coding agents the server sends it.
+            Only offered when the server is elsewhere, for the exec-host reason:
+            on a local install the switch above already governs the only machine
+            there is. Client-local state, never on the wire. */}
+        {remote && harnessHostEnabled !== null && (
+          <div className="set-row">
+            <span className="set-label">
+              <strong>Run coding agents on this computer</strong>
+              <em>
+                Let your Stem server drive a coding agent installed here{' '}
+                <InfoTip label="What switching this on means">
+                  With this on, the assistant can target this computer by name and a coding agent
+                  (Claude Code, OpenCode) runs here with this machine's own logins and files.
+                  Risky commands still pause on an approval card. Switching this off stops new
+                  runs immediately. Leave it off if this Stem server isn't yours alone.
+                </InfoTip>
+              </em>
+            </span>
+            <button
+              className={`switch${harnessHostEnabled ? ' on' : ''}`}
+              role="switch"
+              aria-checked={harnessHostEnabled}
+              aria-label="Run coding agents on this computer"
+              onClick={() =>
+                void window.stem
+                  .setHarnessHostEnabled(!harnessHostEnabled)
+                  .then((s) => setHarnessHostEnabled(s.enabled))
+              }
+            />
+          </div>
+        )}
       </div>
     </div>
   );

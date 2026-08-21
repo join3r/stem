@@ -1187,6 +1187,120 @@ export interface ExecHostLocalState {
   enabled: boolean;
 }
 
+// ---- Coding agents on the user's own devices (coding_agent's `device`) ----
+//
+// Same rails as the exec device path: addressed control frames out (one
+// device's streams only, never the replay ring), ordinary authenticated RPCs
+// back, 128-bit single-use requestIds as the whole correlation story, and a
+// client-local consent switch the server only ever hears announcements about.
+// What is different is deliberate: a harness turn has no self-bound, so —
+// unlike exec's no-cancel rule (exec-device/router.ts) — there IS a cancel
+// frame. It maps to ACP's graceful turn cancel on the client, never a process
+// signal, and it can only name a turnId the server itself minted, so the
+// bigger-capability argument that rules out killing processes does not apply.
+
+/** Addressed control frame carrying one ensure/run to the hosting device. */
+export const HARNESS_REQUEST_FRAME = 'harness-request';
+/** Addressed control frame asking the device to gracefully cancel one turn. */
+export const HARNESS_CANCEL_FRAME = 'harness-cancel';
+
+/** One harness operation, addressed to the device that will run it. */
+export type DeviceHarnessRequest =
+  | {
+      /** Unguessable and single-use — same defence as {@link DeviceExecRequest.requestId}. */
+      requestId: string;
+      op: 'ensure';
+      agent: string;
+      /** Absolute path ON THE TARGET machine; the device validates it. */
+      cwd: string;
+      /** A session the device minted earlier, to resume; absent starts fresh. */
+      sessionId?: string;
+    }
+  | {
+      /** For a run the requestId IS the turnId — events and the cancel frame cite it. */
+      requestId: string;
+      op: 'run';
+      agent: string;
+      cwd: string;
+      sessionId: string;
+      prompt: string;
+      /** Enforced by the CLIENT (it owns the adapter); default ~2h there. */
+      maxTurnMs?: number;
+    };
+
+export interface DeviceHarnessCancel {
+  turnId: string;
+}
+
+/**
+ * What the device answers a held request with — `harnessHost:result`.
+ * Ensure answers a sessionId; run answers the turn's outcome and the last
+ * event sequence it sent (gaps below it are log lines, not failures — the
+ * result is the sole authority).
+ */
+export type DeviceHarnessResult =
+  | { ok: true; sessionId: string }
+  | { ok: true; stopReason: 'end_turn' | 'cancelled' | 'max_turn'; text: string; finalSeq: number }
+  | { ok: false; error: string };
+
+/**
+ * One flushed batch of live turn events — `harnessHost:event`, POSTed every
+ * 250ms/64 events while a turn runs; an EMPTY batch every 15s is the
+ * heartbeat. The ack ({action}) is load-bearing: every POST is a cancellation
+ * delivery opportunity, which is what covers a lost cancel frame.
+ */
+export interface DeviceHarnessEventBatch {
+  turnId: string;
+  /** Sequence of the first event in this batch; stale batches are dropped. */
+  firstSeq: number;
+  events: unknown[];
+  state: 'running' | 'awaiting-permission';
+}
+
+/** The server's ack to an event batch. */
+export interface DeviceHarnessEventAck {
+  action: 'continue' | 'cancel';
+}
+
+/**
+ * A permission ask escalated from the device's harness —
+ * `harnessHost:permission`, a BLOCKING RPC answered when the card settles.
+ * `permissionId` is the client-minted idempotency key: a retry after a
+ * transport drop reuses it and gets the same answer, never a second card.
+ */
+export interface DeviceHarnessPermissionAsk {
+  turnId: string;
+  permissionId: string;
+  title: string;
+  toolName?: string;
+  description?: string;
+  options: HarnessApprovalOption[];
+  content?: HarnessApprovalContent[];
+}
+
+/** The card's answer to a device ask; `expired` means nobody answered. */
+export type DeviceHarnessPermissionDecision = { optionId: string } | { expired: true };
+
+/**
+ * A device's account of whether it runs coding agents — `harnessHost:announce`,
+ * sent on connect and whenever the switch is flipped.
+ */
+export interface DeviceHarnessAnnouncement {
+  enabled: boolean;
+  platform: 'darwin' | 'linux' | 'win32';
+}
+
+/** One device's last harness announcement, as the server remembers it. */
+export interface DeviceHarnessHostEntry extends DeviceHarnessAnnouncement {
+  deviceId: string;
+  announcedAt: string;
+}
+
+/** The harness host's account of THIS machine — client-owned, never on the wire. */
+export interface HarnessHostLocalState {
+  enabled: boolean;
+}
+
 // ---- What the MCP host on THIS machine has to say about itself ----
 //
 // The types below never go on the wire. They are the answer to
@@ -3009,6 +3123,10 @@ export interface StemApi {
   // only on the machine consenting. The server just hears the announcement.
   /** Whether this computer accepts commands. */
   execHostState(): Promise<ExecHostLocalState>;
+  /** Whether THIS computer runs coding agents for its server (client-owned). */
+  harnessHostState(): Promise<HarnessHostLocalState>;
+  /** Flip the local coding-agents consent switch (client-owned). */
+  setHarnessHostEnabled(enabled: boolean): Promise<HarnessHostLocalState>;
   /** Flip the switch, persist it here, and tell the server. */
   setExecHostEnabled(enabled: boolean): Promise<ExecHostLocalState>;
 
