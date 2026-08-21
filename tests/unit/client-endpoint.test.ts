@@ -8,7 +8,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { clientStorePath, writeClientIdentity } from '../../src/desktop/client-store';
+import {
+  clearClientIdentity,
+  clientStorePath,
+  storedServerUrl,
+  writeClientIdentity
+} from '../../src/desktop/client-store';
 import { clientCredentials, pairWithServer, resolveServerUrl } from '../../src/desktop/server-endpoint';
 import { serverEndpointPath } from '../../src/server/workspace/paths';
 
@@ -109,5 +114,35 @@ describe('pairing', () => {
     await expect(pairWithServer('stem.example.com', 'ABCD-EFGH')).rejects.toThrow(
       /needs to start with http:\/\/ or https:\/\//
     );
+  });
+});
+
+// A stored address is the difference between "my server is unreachable" (visible,
+// fixable) and a silently-booted empty embedded server ("my Stem is gone" — the
+// 2026-08-15 and 2026-08-21 incidents, both a stray mint against the real
+// profile). So the address only leaves this file by the explicit built-in action.
+describe('the stored address is sticky', () => {
+  it('survives an identity rewrite that names no address', async () => {
+    await writeClientIdentity({ deviceId: 'dev-2', token: 'vps-token' }, 'https://stem.example.com');
+    await writeClientIdentity({ deviceId: 'dev-3', token: 'minted-token' }, null);
+
+    expect(await storedServerUrl()).toBe('https://stem.example.com');
+  });
+
+  it('survives an embedded mint against a shared state root', async () => {
+    await writeClientIdentity({ deviceId: 'dev-2', token: 'vps-token' }, 'https://stem.example.com');
+    shareStateRoot();
+
+    // The mismatch mints a fresh embedded credential (asserted above) — but the
+    // next ordinary launch must still dial the user's server, not boot its own.
+    await clientCredentials('http://127.0.0.1:52413', { external: false });
+    expect(await storedServerUrl()).toBe('https://stem.example.com');
+  });
+
+  it('leaves only the explicit built-in action to forget it', async () => {
+    await writeClientIdentity({ deviceId: 'dev-2', token: 'vps-token' }, 'https://stem.example.com');
+    await clearClientIdentity();
+
+    expect(await storedServerUrl()).toBeNull();
   });
 });

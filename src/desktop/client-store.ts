@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { host } from '../server/host';
 import { log } from '../server/log';
@@ -20,10 +20,14 @@ import type { ClientSettings } from '../shared/types';
 // a Linux box with no keyring must still be able to run Stem, and 0600 in a
 // directory that already holds the chat database is not a new exposure.
 //
-// `serverUrl` and the identity are one unit and are always written and cleared
-// together. A token means nothing to a server that never issued it, so carrying
-// one across a change of address is not a saving — it is a 401 loop with no way
-// out but deleting this file by hand.
+// `serverUrl` is deliberately sticky: once a machine has been pointed at a
+// server, only the explicit "use the built-in server" action (clearClientIdentity)
+// forgets the address. Rewriting the identity never does. Losing the address is
+// strictly worse than holding a stale credential for it: a stale token is a 401
+// against the right server, visible and fixable by re-pairing, while a lost
+// address silently boots an empty embedded server that reads as "my Stem is
+// gone" (happened twice — 2026-08-15 and 2026-08-21, both times a test run
+// against the real profile minted an identity and took the address with it).
 
 /** This client's identity as far as the server is concerned. */
 export interface ClientIdentity {
@@ -79,11 +83,19 @@ export function updateClientDocument<T>(mutate: (doc: StoredClient) => T | Promi
     const result = await mutate(doc);
     const path = clientStorePath();
     await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
-    await writeFile(path, `${JSON.stringify({ ...doc, version: 1 }, null, 2)}\n`, {
+    // Write-then-rename, so a kill mid-write can't leave a half-written file.
+    // A torn client.json parses as "fresh install" (readClientDocument above),
+    // and a fresh install silently starts an embedded server where the user's
+    // real one used to be — the address and credential must survive or the file
+    // must stay whole, never in between.
+    const tmp = `${path}.tmp`;
+    await writeFile(tmp, `${JSON.stringify({ ...doc, version: 1 }, null, 2)}\n`, {
       encoding: 'utf8',
       mode: 0o600
     });
-    // An existing file keeps the mode it was created with, so re-assert it.
+    await rename(tmp, path);
+    // The rename carries the tmp file's 0600 along, but an existing file replaced
+    // on Windows can differ; re-assert either way.
     await chmod(path, 0o600).catch(() => undefined);
     return result;
   };
@@ -125,6 +137,13 @@ export async function readClientIdentity(): Promise<ClientIdentity | null> {
  * `serverUrl` is the address it belongs to, or null for a server this machine
  * starts itself (whose port is ephemeral, so there is no address worth storing).
  *
+ * Null PRESERVES a stored address rather than deleting it (see the header): an
+ * embedded-server mint can only happen when no address is stored — the launch
+ * would have dialled the address otherwise — so on every legitimate path this
+ * is a no-op, and on the illegitimate one (a stray process minting against this
+ * file) it keeps the user's server reachable. Only clearClientIdentity, the
+ * explicit "use the built-in server" action, forgets an address.
+ *
  * The machine's settings are deliberately untouched: re-pairing a laptop is not
  * a reason to forget its hotkey.
  */
@@ -134,7 +153,6 @@ export function writeClientIdentity(identity: ClientIdentity, serverUrl: string 
     delete doc.tokenEnc;
     doc.deviceId = identity.deviceId;
     if (serverUrl) doc.serverUrl = serverUrl;
-    else delete doc.serverUrl;
 
     const wrapper = host().keyWrapper();
     if (wrapper) {
