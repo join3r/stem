@@ -6,6 +6,8 @@
 // LlmClient pattern, so a settings change takes effect on the next turn with no
 // restart.
 
+import { embedSchedule, type EmbedSchedule } from './embed-schedule';
+
 export interface EmbeddingsConfig {
   baseUrl: string;
   model: string;
@@ -43,6 +45,14 @@ export class EmbeddingsUnavailableError extends Error {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+// A query that arrives while a background passage request is already at the
+// endpoint queues behind it (Ollama and friends run FIFO), so its real cost is
+// the remainder of that batch plus its own run — routinely past 30s on CPU.
+// That endpoint is busy, not broken: give the query the time to survive rather
+// than stamping a red "server failed" verdict on an indexing pass (observed
+// live 2026-08-21). The schedule keeps background batches short and spaced, so
+// this budget is the backstop, not the norm.
+const DEFAULT_BUSY_QUERY_TIMEOUT_MS = 90_000;
 // Passage batches get a separate, much longer budget. They are backfill work
 // nobody is waiting on, and on a CPU endpoint a full batch routinely runs
 // 12–20s — a 30s ceiling sits inside normal variance there and cuts off work
@@ -96,10 +106,17 @@ function trimUrl(base: string): string {
 
 export function createHttpEmbeddingsClient(
   getConfig: () => Promise<EmbeddingsConfig | null>,
-  opts: { timeoutMs?: number; passageTimeoutMs?: number } = {}
+  opts: {
+    timeoutMs?: number;
+    passageTimeoutMs?: number;
+    busyQueryTimeoutMs?: number;
+    schedule?: EmbedSchedule;
+  } = {}
 ): EmbeddingsClient {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const passageTimeoutMs = opts.passageTimeoutMs ?? DEFAULT_PASSAGE_TIMEOUT_MS;
+  const busyQueryTimeoutMs = opts.busyQueryTimeoutMs ?? DEFAULT_BUSY_QUERY_TIMEOUT_MS;
+  const schedule = opts.schedule ?? embedSchedule;
 
   async function embedBatch(cfg: EmbeddingsConfig, texts: string[], budgetMs: number): Promise<Float32Array[]> {
     const url = `${trimUrl(cfg.baseUrl)}/v1/embeddings`;
@@ -161,7 +178,20 @@ export function createHttpEmbeddingsClient(
       const cfg = await getConfig();
       if (!cfg) throw new EmbeddingsUnavailableError();
       if (texts.length === 0) return [];
-      const budgetMs = kind === 'passage' ? passageTimeoutMs : timeoutMs;
+      // Every passage request first waits out any in-flight query (plus a lull —
+      // the rest of that turn runs on the same box), and is marked while at the
+      // endpoint so queries know to take the busy budget. Per-request rather
+      // than per-call: a large backfill call spans several requests, and the
+      // gaps between them are exactly where a chat turn's query slips in.
+      async function passageRequest(batch: string[]): Promise<Float32Array[]> {
+        await schedule.waitForQueryLull();
+        const end = schedule.beginPassage();
+        try {
+          return await embedBatch(cfg!, batch, passageTimeoutMs);
+        } finally {
+          end();
+        }
+      }
       // Only passage work retries on timeout: it's background, so the extra
       // wait costs nobody, whereas a query retry would double a turn's stall
       // when lexical fallback is standing right there. Anything else (HTTP
@@ -175,20 +205,34 @@ export function createHttpEmbeddingsClient(
       // verbatim retry — momentary contention is the only thing left to blame.
       async function embedPassage(batch: string[]): Promise<Float32Array[]> {
         try {
-          return await embedBatch(cfg!, batch, budgetMs);
+          return await passageRequest(batch);
         } catch (err) {
           if (!(err instanceof EmbeddingsTimeoutError)) throw err;
-          if (batch.length === 1) return embedBatch(cfg!, batch, budgetMs);
+          if (batch.length === 1) return passageRequest(batch);
           const mid = Math.ceil(batch.length / 2);
           const left = await embedPassage(batch.slice(0, mid));
           return [...left, ...(await embedPassage(batch.slice(mid)))];
         }
       }
-      const out: Float32Array[] = [];
-      for (const batch of packBatches(texts)) {
-        out.push(...(kind === 'passage' ? await embedPassage(batch) : await embedBatch(cfg, batch, budgetMs)));
+      if (kind === 'passage') {
+        const out: Float32Array[] = [];
+        for (const batch of packBatches(texts)) out.push(...(await embedPassage(batch)));
+        return out;
       }
-      return out;
+      // A query: registered so background work yields, and budgeted per batch —
+      // busy is read at send time because a passage request may start or finish
+      // while an earlier batch of this same call runs.
+      const end = schedule.beginQuery();
+      try {
+        const out: Float32Array[] = [];
+        for (const batch of packBatches(texts)) {
+          const budgetMs = schedule.passageBusy() ? busyQueryTimeoutMs : timeoutMs;
+          out.push(...(await embedBatch(cfg, batch, budgetMs)));
+        }
+        return out;
+      } finally {
+        end();
+      }
     }
   };
 }
