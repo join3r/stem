@@ -338,8 +338,25 @@ export function closeExecDeviceRouter(): void {
 export async function resolveExecTarget(
   nameOrId: string
 ): Promise<{ ok: true; deviceId: string; label: string } | { ok: false; error: string }> {
+  return resolveDesktopTarget(nameOrId, { singular: 'the command', plural: 'commands' });
+}
+
+/**
+ * The same resolution for coding_agent's `device` parameter: same registry,
+ * same desktops-only rule, same refusal of an ambiguous label.
+ */
+export async function resolveHarnessTarget(
+  nameOrId: string
+): Promise<{ ok: true; deviceId: string; label: string } | { ok: false; error: string }> {
+  return resolveDesktopTarget(nameOrId, { singular: 'the coding agent', plural: 'coding agents' });
+}
+
+async function resolveDesktopTarget(
+  nameOrId: string,
+  subject: { singular: string; plural: string }
+): Promise<{ ok: true; deviceId: string; label: string } | { ok: false; error: string }> {
   const wanted = nameOrId.trim();
-  if (!wanted) return { ok: false, error: 'Name the computer the command should run on.' };
+  if (!wanted) return { ok: false, error: `Name the computer ${subject.singular} should run on.` };
   // The empty list is indistinguishable from "nothing is paired", and that is
   // what the assistant is told — and repeats to the user — about a machine that
   // is sitting there paired.
@@ -370,7 +387,7 @@ export async function resolveExecTarget(
   }
   const device = matches[0]!;
   if ((device.kind ?? 'desktop') !== 'desktop') {
-    return { ok: false, error: `“${device.label}” is a phone, and commands only run on computers.` };
+    return { ok: false, error: `“${device.label}” is a phone, and ${subject.plural} only run on computers.` };
   }
   return { ok: true, deviceId: device.id, label: device.label };
 }

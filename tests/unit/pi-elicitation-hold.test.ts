@@ -71,10 +71,7 @@ global.setTimeout = fast;
 function fakeOpenAI(): Promise<{ server: Server; port: number }> {
   let calls = 0;
   const server = createServer((req, res) => {
-    let body = '';
-    req.on('data', (chunk) => {
-      body += chunk;
-    });
+    req.resume();
     req.on('end', () => {
       calls++;
       res.writeHead(200, { 'content-type': 'text/event-stream' });

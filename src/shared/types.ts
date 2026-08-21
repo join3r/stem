@@ -1429,6 +1429,48 @@ export interface ExecApprovalArmed {
 /** The user's answer to an exec approval card. */
 export type ExecDecision = 'allowOnce' | 'alwaysAllow' | 'deny';
 
+// ---- Coding harness (coding_agent) approvals ----
+
+/** A piece of the ACP permission request's tool content the card can render. */
+export type HarnessApprovalContent =
+  | { type: 'diff'; path: string; oldText?: string; newText?: string }
+  | { type: 'text'; text: string };
+
+/** One choice the harness offered (ACP permission options, passed through). */
+export interface HarnessApprovalOption {
+  optionId: string;
+  /** ACP option kind ('allow_once', 'allow_always', 'reject_once', ...). */
+  kind?: string;
+  name?: string;
+}
+
+/**
+ * `harness:approvalRequest` — an external coding agent escalated a tool call
+ * and Stem raises a card. Unlike an exec card there is no command/allowlist
+ * pair to learn: the options are the harness's own, passed through verbatim,
+ * and the answer goes back to the harness rather than into any Stem policy.
+ */
+export interface HarnessApprovalRequest {
+  id: string;
+  threadId: string;
+  agent: string;
+  /** "this server" or the hosting device's label — approving WHERE it runs matters. */
+  hostLabel: string;
+  /** The harness's own title for the ask (usually the command or tool name). */
+  title: string;
+  description?: string;
+  options: HarnessApprovalOption[];
+  content?: HarnessApprovalContent[];
+  /** Same visible-clock contract as {@link ExecApprovalRequest.expiresAt}. */
+  expiresAt?: number;
+}
+
+/** `harness:approvalArmed` — a queued harness card reached the head of the queue. */
+export interface HarnessApprovalArmed {
+  id: string;
+  expiresAt: number;
+}
+
 /** `mcp/login/url` — the OAuth authorize URL, streamed mid-login as a fallback link. */
 export interface McpLoginUrlParams {
   name: string;
