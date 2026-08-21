@@ -3,13 +3,15 @@ import type { EscapeAction, ReleaseNotesSnapshot, TaskNotifyMode, UpdateStatus }
 import { ReleaseNotesModal } from '../../../ReleaseNotesModal';
 import { InfoTip } from '../../../ui/InfoTip';
 import { RowSelect, ValueRow } from './rows';
+import { AutonomySections } from './AutonomySettings';
 
 /**
  * Settings → App: the shell around the conversation — what the keyboard does,
- * how loudly Stem may interrupt, and which build this is. Everything about
- * TALKING to Stem (the main chat and the Quick Chat overlay alike) lives under
- * Chat; this tab deliberately holds only what's left, so the split is
- * "conversation vs shell" rather than "window vs window".
+ * how loudly Stem may interrupt, what the assistant may DO on your machines
+ * (commands, coding agents), and which build this is. Everything about TALKING
+ * to Stem (the main chat and the Quick Chat overlay alike) lives under Chat;
+ * the split is "conversation vs shell" rather than "window vs window", and
+ * autonomy sits here because one policy governs every conversation at once.
  *
  * Layout is the settings-row idiom (rows.tsx): one row per setting, current
  * value visible on the right, so the tab reads as an answer sheet.
@@ -19,6 +21,7 @@ export function AppSettings() {
     <div>
       <KeyboardSection />
       <NotificationsSection />
+      <AutonomySections />
       <AboutSection />
     </div>
   );
