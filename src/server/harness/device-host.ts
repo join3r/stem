@@ -175,7 +175,8 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
         op: 'ensure',
         agent: spec.agent,
         cwd: spec.cwd,
-        ...(spec.sessionId ? { sessionId: spec.sessionId } : {})
+        ...(spec.sessionId ? { sessionId: spec.sessionId } : {}),
+        ...(spec.model ? { model: spec.model } : {})
       };
       const reached = deps.pushTo(deviceId, HARNESS_REQUEST_FRAME, frame);
       if (reached === 0) {
@@ -208,6 +209,7 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
         cwd: input.cwd,
         sessionId: input.sessionId,
         prompt: input.prompt,
+        ...(input.model ? { model: input.model } : {}),
         ...(input.maxTurnMs ? { maxTurnMs: input.maxTurnMs } : {})
       };
       const reached = deps.pushTo(deviceId, HARNESS_REQUEST_FRAME, frame);

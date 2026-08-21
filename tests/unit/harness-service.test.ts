@@ -181,6 +181,31 @@ describe('sessions', () => {
     );
   });
 
+  it('carries the settings model pin on the ensure, the retry, and the turn', async () => {
+    await rememberSession({ threadId: 'thread-1', host: 'server', agent: 'claude', cwd: scratch, sessionId: 'stale' });
+    const host = scriptedHost({
+      ensure: (spec) =>
+        spec.sessionId ? { ok: false, error: 'unknown session' } : { ok: true, sessionId: 'session-new' }
+    });
+    const { service } = makeService(host, {
+      settings: async () => ({ enabled: true, agents: { claude: { model: 'claude-fable-5' } } })
+    });
+    const res = await service.handleHarnessRequest(REQ);
+    expect(res.ok).toBe(true);
+    expect(host.ensures.map((e) => e.model)).toEqual(['claude-fable-5', 'claude-fable-5']);
+    expect(host.turns[0]).toMatchObject({ model: 'claude-fable-5' });
+  });
+
+  it('sends no model when settings pin none for the agent', async () => {
+    const host = scriptedHost({});
+    const { service } = makeService(host, {
+      settings: async () => ({ enabled: true, agents: { claude: { command: 'my-claude acp' } } })
+    });
+    await service.handleHarnessRequest(REQ);
+    expect(host.ensures[0].model).toBeUndefined();
+    expect(host.turns[0].model).toBeUndefined();
+  });
+
   it('reports an honest error when even a fresh ensure fails', async () => {
     const host = scriptedHost({ ensure: () => ({ ok: false, error: 'adapter missing' }) });
     const { service } = makeService(host);

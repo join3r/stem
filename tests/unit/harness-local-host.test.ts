@@ -24,7 +24,7 @@ interface FakeRuntimeScript {
 
 function fakeRuntime(script: FakeRuntimeScript = {}) {
   const calls = {
-    ensures: [] as Array<{ sessionKey: string; agent: string; cwd?: string }>,
+    ensures: [] as Array<{ sessionKey: string; agent: string; cwd?: string; model?: string }>,
     modes: [] as string[],
     cancels: 0,
     closes: 0
@@ -34,7 +34,12 @@ function fakeRuntime(script: FakeRuntimeScript = {}) {
 
   const runtime: AcpRuntime = {
     async ensureSession(input) {
-      calls.ensures.push({ sessionKey: input.sessionKey, agent: input.agent, cwd: input.cwd });
+      calls.ensures.push({
+        sessionKey: input.sessionKey,
+        agent: input.agent,
+        cwd: input.cwd,
+        model: input.sessionOptions?.model
+      });
       if (script.ensureError) throw new Error(script.ensureError);
       return {
         sessionKey: input.sessionKey,
@@ -113,6 +118,14 @@ describe('sessions', () => {
     const refused = await failing.ensureSession({ agent: 'claude', cwd: '/tmp/p' });
     expect(refused).toMatchObject({ ok: false });
     expect(!refused.ok && refused.error).toContain('no such mode');
+  });
+
+  it('forwards a model pin as acpx sessionOptions, and omits it when unset', async () => {
+    const { factory, calls } = fakeRuntime();
+    const host = new LocalHarnessHost({ runtimeFactory: factory });
+    await host.ensureSession({ agent: 'claude', cwd: '/tmp/p', model: 'claude-fable-5' });
+    await host.ensureSession({ agent: 'claude', cwd: '/tmp/p' });
+    expect(calls.ensures.map((e) => e.model)).toEqual(['claude-fable-5', undefined]);
   });
 
   it('reports an ensure failure as words, not a throw', async () => {

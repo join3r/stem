@@ -52,8 +52,11 @@ export function initHarness(deps: {
     settings: async () => {
       const harness = (await readSettings()).harness;
       // Latched for the lazy host construction below; the acpx registry is
-      // built once per process.
-      overrides = Object.fromEntries(Object.entries(harness.agents).map(([name, a]) => [name, a.command]));
+      // built once per process. Model-only entries don't touch the registry —
+      // the pin rides each request's spec instead (and applies immediately).
+      overrides = Object.fromEntries(
+        Object.entries(harness.agents).flatMap(([name, a]) => (a.command ? [[name, a.command]] : []))
+      );
       return harness;
     },
     localHost: (): HarnessHost => {

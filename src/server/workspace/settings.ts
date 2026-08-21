@@ -508,17 +508,19 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
   const rawHarness = (parsed?.harness ?? {}) as Partial<HarnessSettings>;
   const harness: HarnessSettings = {
     enabled: typeof rawHarness.enabled === 'boolean' ? rawHarness.enabled : DEFAULTS.harness.enabled,
-    // Same laundering stance as the exec allowlists: only {name -> {command}}
-    // pairs that are really strings survive, trimmed and capped.
+    // Same laundering stance as the exec allowlists: only string fields
+    // survive, trimmed and capped; an entry needs at least one of them.
     agents: (() => {
       const raw = rawHarness.agents && typeof rawHarness.agents === 'object' ? rawHarness.agents : {};
-      const agents: Record<string, { command: string }> = {};
+      const agents: Record<string, { command?: string; model?: string }> = {};
       for (const [rawName, value] of Object.entries(raw)) {
         if (Object.keys(agents).length >= 25) break;
         const name = rawName.trim();
-        const command = value && typeof value === 'object' ? (value as { command?: unknown }).command : undefined;
-        if (!name || name.length > 64 || typeof command !== 'string' || !command.trim()) continue;
-        agents[name] = { command: command.trim().slice(0, 500) };
+        const fields = value && typeof value === 'object' ? (value as { command?: unknown; model?: unknown }) : {};
+        const command = typeof fields.command === 'string' && fields.command.trim() ? fields.command.trim().slice(0, 500) : undefined;
+        const model = typeof fields.model === 'string' && fields.model.trim() ? fields.model.trim().slice(0, 100) : undefined;
+        if (!name || name.length > 64 || (!command && !model)) continue;
+        agents[name] = { ...(command ? { command } : {}), ...(model ? { model } : {}) };
       }
       return agents;
     })()

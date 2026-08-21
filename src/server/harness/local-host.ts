@@ -130,7 +130,14 @@ export class LocalHarnessHost implements HarnessHost {
         sessionKey: sessionId,
         agent: spec.agent,
         mode: 'persistent',
-        cwd: spec.cwd
+        cwd: spec.cwd,
+        // The pin must ride the session options: acpx deliberately hides
+        // ~/.claude/settings.json from claude sessions (settingSources without
+        // "user"), so a model pinned there never reaches the spawned agent —
+        // while the adapter still REPORTS that pin as current. An explicit
+        // model here is forwarded to the agent and is the only spelling that
+        // actually holds.
+        ...(spec.model ? { sessionOptions: { model: spec.model } } : {})
       });
       if (spec.agent === 'claude') {
         // Verified 2026-08-21 against claude-agent-acp@0.60: the adapter's
@@ -177,7 +184,8 @@ export class LocalHarnessHost implements HarnessHost {
         const ensured = await this.ensureSession({
           agent: input.agent,
           cwd: input.cwd,
-          sessionId: input.sessionId
+          sessionId: input.sessionId,
+          ...(input.model ? { model: input.model } : {})
         });
         if (!ensured.ok) return { ok: false, error: ensured.error };
         handle = this.handles.get(input.sessionId)!;

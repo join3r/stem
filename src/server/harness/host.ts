@@ -18,6 +18,11 @@ export interface HarnessSessionSpec {
    * its own ensure minted.
    */
   sessionId?: string;
+  /**
+   * Model pin for the agent (alias or full id, e.g. "claude-fable-5"), from
+   * the server's harness settings. Absent = whatever the agent defaults to.
+   */
+  model?: string;
 }
 
 export type HarnessEnsureResult = { ok: true; sessionId: string } | { ok: false; error: string };
@@ -58,6 +63,8 @@ export interface HarnessRunTurnInput {
   cwd: string;
   sessionId: string;
   prompt: string;
+  /** Model pin, carried so a restart's re-ensure keeps it (same as the spec's). */
+  model?: string;
   maxTurnMs?: number;
 }
 

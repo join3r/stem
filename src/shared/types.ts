@@ -1215,6 +1215,8 @@ export type DeviceHarnessRequest =
       cwd: string;
       /** A session the device minted earlier, to resume; absent starts fresh. */
       sessionId?: string;
+      /** Model pin from the server's harness settings; absent = agent default. */
+      model?: string;
     }
   | {
       /** For a run the requestId IS the turnId — events and the cancel frame cite it. */
@@ -1224,6 +1226,8 @@ export type DeviceHarnessRequest =
       cwd: string;
       sessionId: string;
       prompt: string;
+      /** Model pin, re-sent so the device's restart re-ensure keeps it. */
+      model?: string;
       /** Enforced by the CLIENT (it owns the adapter); default ~2h there. */
       maxTurnMs?: number;
     };
@@ -2243,10 +2247,13 @@ export interface HarnessSettings {
   /** Master switch for the coding_agent tool. */
   enabled: boolean;
   /**
-   * Registry overrides: agent name -> the command acpx should spawn for it.
-   * Unset names resolve through acpx's built-in registry (claude, opencode, …).
+   * Per-agent overrides. `command` replaces acpx's built-in registry entry
+   * (claude, opencode, …); `model` pins the model the agent runs (an alias or
+   * full id, e.g. "fable" or "claude-fable-5") — needed because acpx isolates
+   * claude sessions from ~/.claude/settings.json, so a model pinned there
+   * never reaches the spawned agent. Either field may appear alone.
    */
-  agents: Record<string, { command: string }>;
+  agents: Record<string, { command?: string; model?: string }>;
 }
 
 /** One chat's scratch folder in Settings → Chat → Command execution → Scratch files. */

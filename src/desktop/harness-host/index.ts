@@ -201,6 +201,7 @@ export function createDesktopHarnessHost(deps: HarnessHostDeps): DesktopHarnessH
         cwd: request.cwd,
         sessionId: request.sessionId,
         prompt: request.prompt,
+        ...(request.model ? { model: request.model } : {}),
         maxTurnMs: request.maxTurnMs ?? DEVICE_MAX_TURN_MS
       },
       {
@@ -283,7 +284,8 @@ export function createDesktopHarnessHost(deps: HarnessHostDeps): DesktopHarnessH
           const ensured = await acpxHost().ensureSession({
             agent: request.agent,
             cwd: request.cwd,
-            ...(request.sessionId ? { sessionId: request.sessionId } : {})
+            ...(request.sessionId ? { sessionId: request.sessionId } : {}),
+            ...(request.model ? { model: request.model } : {})
           });
           deliverResult(
             request.requestId,

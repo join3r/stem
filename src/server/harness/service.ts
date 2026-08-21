@@ -36,7 +36,7 @@ export type HarnessProgressUpdate = HarnessProgress;
 
 export interface HarnessServiceDeps {
   /** The harness section of settings, read fresh per request. */
-  settings: () => Promise<{ enabled: boolean; agents?: Record<string, { command?: string }> }>;
+  settings: () => Promise<{ enabled: boolean; agents?: Record<string, { command?: string; model?: string }> }>;
   localHost: () => HarnessHost;
   /** The device path: null when that machine never announced (or switched off). */
   deviceHost?: (deviceId: string, label: string) => Promise<HarnessHost | null>;
@@ -151,16 +151,22 @@ export class HarnessService implements HarnessBridge {
       if (guard.blocked) return { ok: false, error: guard.reason ?? 'Blocked by the read-only folder guard.' };
     }
 
+    // A per-agent model pin from settings rides every ensure and turn: agents
+    // don't reliably inherit the user's own model config (acpx hides user
+    // settings from claude sessions), so the pin travels explicitly.
+    const model = settings.agents?.[agent]?.model?.trim() || undefined;
+
     // Session continuity: the mapping is a cache of the host's truth.
     const key = { threadId: req.threadId, host: hostKey, agent, cwd };
     if (req.freshSession) await forgetSession(key);
     const remembered = req.freshSession ? null : await lookupSession(key);
-    let ensured = await host.ensureSession({ agent, cwd, ...(remembered ? { sessionId: remembered } : {}) });
+    const spec = { agent, cwd, ...(model ? { model } : {}) };
+    let ensured = await host.ensureSession({ ...spec, ...(remembered ? { sessionId: remembered } : {}) });
     if (!ensured.ok && remembered) {
       // The host lost or refused the remembered session; a fresh one beats an error.
       log('harness', 'remembered session refused, starting fresh', { agent, error: ensured.error });
       await forgetSession(key);
-      ensured = await host.ensureSession({ agent, cwd });
+      ensured = await host.ensureSession(spec);
     }
     if (!ensured.ok) {
       return { ok: false, error: `The ${agent} agent could not start on ${host.label()}: ${ensured.error}` };
@@ -214,6 +220,7 @@ export class HarnessService implements HarnessBridge {
         agent,
         cwd,
         sessionId,
+        ...(model ? { model } : {}),
         prompt: await this.promptWithFacts(prompt)
       },
       {
