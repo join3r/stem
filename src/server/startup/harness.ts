@@ -1,3 +1,5 @@
+import * as activity from '../activity';
+import type { ActivityHandle } from '../activity';
 import { HarnessService } from '../harness/service';
 import { LocalHarnessHost } from '../harness/local-host';
 import type { HarnessHost } from '../harness/host';
@@ -23,6 +25,28 @@ export function initHarness(deps: {
 }): { service: HarnessService; close: () => Promise<void> } {
   let localHost: LocalHarnessHost | null = null;
   let overrides: Record<string, string> = {};
+  // One background-activity entry per run, held by runId rather than the
+  // registry's stepped-by-kind correlation: two chats can run two agents at
+  // once, and stepped correlation would fold them into one row
+  // (mirror/sync-activity.ts precedent).
+  const openRuns = new Map<string, ActivityHandle>();
+  const onProgress = (update: HarnessProgressUpdate): void => {
+    const handle = openRuns.get(update.runId);
+    if (update.settled) {
+      if (handle) {
+        openRuns.delete(update.runId);
+        activity.end(handle, { worked: true, detail: update.detail });
+      }
+    } else if (handle) {
+      activity.setDetail(handle, update.detail);
+    } else {
+      openRuns.set(
+        update.runId,
+        activity.begin('harness.run', `Coding agent (${update.agent})`, { detail: update.detail })
+      );
+    }
+    deps.onProgress?.(update);
+  };
   const service = new HarnessService({
     settings: async () => {
       const harness = (await readSettings()).harness;
@@ -42,7 +66,7 @@ export function initHarness(deps: {
     emitApprovalRequest: deps.emitApprovalRequest,
     emitApprovalResolved: deps.emitApprovalResolved,
     emitApprovalArmed: deps.emitApprovalArmed,
-    ...(deps.onProgress ? { onProgress: deps.onProgress } : {})
+    onProgress
   });
   deps.runtime.setHarnessBridge(service);
   return {

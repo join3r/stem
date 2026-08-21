@@ -1985,6 +1985,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           cwd?: string;
           device?: string;
           fresh_session?: boolean;
+          item_id?: string;
         };
         const result = await bridge.handleHarnessRequest({
           agent: req.agent ?? '',
@@ -1992,6 +1993,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           cwd: typeof req.cwd === 'string' && req.cwd.trim() ? req.cwd : undefined,
           device: typeof req.device === 'string' && req.device.trim() ? req.device : undefined,
           freshSession: req.fresh_session === true,
+          itemId: typeof req.item_id === 'string' && req.item_id ? req.item_id : undefined,
           threadId: turn?.threadId ?? '',
           isScheduled: turn?.isScheduled === true
         });

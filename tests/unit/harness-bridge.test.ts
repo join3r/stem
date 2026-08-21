@@ -85,7 +85,9 @@ describe('extension side', () => {
       agent: 'claude',
       prompt: 'add a flag',
       cwd: '/tmp/proj',
-      fresh_session: true
+      fresh_session: true,
+      // The tool call id, echoed back on harness:progress to target the row.
+      item_id: 'call-1'
     });
     expect(result.isError).toBeFalsy();
     expect(result.content[0]?.text).toBe('flag added');

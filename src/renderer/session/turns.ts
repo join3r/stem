@@ -212,8 +212,21 @@ export function attachBackendEvents(
   const batcher = (opts.makeBatcher ?? createEventBatcher)(applyEvent);
   const subscribe = opts.subscribe ?? ((handler) => window.stem.onBackendEvent(handler));
   const unsubscribe = subscribe((event) => batcher.push(event));
+  // Live coding-agent progress rides its own channel (it comes from the
+  // HarnessService, not from pi), folded here into the same batcher as a
+  // synthesized envelope so the reducer stays the single writer of thread state.
+  // Guarded like a seam because the pipeline tests drive this under plain node.
+  const unsubscribeHarness =
+    typeof window === 'undefined'
+      ? undefined
+      : window.stem.onHarnessProgress((update) =>
+          batcher.push({ method: 'harness/progress', params: update, receivedAt: new Date().toISOString() })
+        );
   return {
-    detach: unsubscribe,
+    detach: () => {
+      unsubscribe();
+      unsubscribeHarness?.();
+    },
     flush: () => batcher.flush()
   };
 }

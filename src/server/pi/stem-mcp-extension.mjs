@@ -2170,7 +2170,7 @@ function registerHarnessTools(pi) {
       },
       required: ['agent', 'prompt']
     },
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(id, params, _signal, _onUpdate, ctx) {
       const agent = String((params && params.agent) || '').trim();
       const prompt = String((params && params.prompt) || '').trim();
       if (!agent) return taskErr('Name the coding agent to run (e.g. "claude").');
@@ -2178,6 +2178,9 @@ function registerHarnessTools(pi) {
       const res = await harnessBridge(ctx, {
         agent,
         prompt,
+        // The tool call id doubles as the turn strip's row id; main echoes it
+        // on harness:progress so the row can update live.
+        item_id: typeof id === 'string' ? id : undefined,
         cwd: params && typeof params.cwd === 'string' && params.cwd.trim() ? params.cwd : undefined,
         device: params && typeof params.device === 'string' && params.device.trim() ? params.device : undefined,
         fresh_session: params && params.fresh_session === true ? true : undefined

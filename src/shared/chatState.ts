@@ -324,6 +324,19 @@ export function applyBackendEventToThread(
             );
       return { ...state, messages: stampActivity(messages, p.turnId, state.activities), streamingId: null };
     }
+    case 'harness/progress': {
+      // A live detail update for a running coding_agent row (synthesized from
+      // the harness:progress channel, not a pi event). Missing one is harmless:
+      // the final state arrives with the tool call's own completion.
+      const p = event.params as { itemId?: string; detail?: string };
+      if (typeof p.detail !== 'string') return null;
+      const idx = state.activities.findIndex((a) =>
+        p.itemId ? a.id === p.itemId : a.type === 'codingAgent' && a.status === 'running'
+      );
+      if (idx === -1) return null;
+      const activities = state.activities.map((a, i) => (i === idx ? { ...a, detail: p.detail } : a));
+      return { ...state, activity: runningLabel(activities) ?? state.activity, activities };
+    }
     case 'turn/sources': {
       const p = event.params as TurnSourcesParams;
       if (!p.sources?.length) return null;

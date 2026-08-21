@@ -118,6 +118,14 @@ export function begin(
   return { id, kind };
 }
 
+/** Refresh an open run's detail line (ignored for runs already closed). */
+export function setDetail(handle: ActivityHandle, detail: string): void {
+  const entry = open.get(handle.id);
+  if (!entry) return;
+  entry.detail = detail;
+  scheduleEmit();
+}
+
 /** Update a stepped run's progress counter (ignored for runs already closed). */
 export function progress(handle: ActivityHandle, next: { done: number; total: number }): void {
   const entry = open.get(handle.id);

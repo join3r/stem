@@ -735,6 +735,11 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     },
     emitApprovalArmed: (armed) => {
       emit('harness:approvalArmed', armed);
+    },
+    // The live row: throttled detail updates for the running coding_agent tool
+    // call. Missing a frame is harmless — the final state rides the tool result.
+    onProgress: (update) => {
+      emit('harness:progress', update);
     }
   });
 

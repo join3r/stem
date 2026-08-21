@@ -81,6 +81,11 @@ export interface HarnessRequest {
   cwd?: string;
   device?: string;
   freshSession?: boolean;
+  /**
+   * The tool call's own id in the turn strip, passed through so live progress
+   * can target that row. Advisory and UI-only — nothing trusts it.
+   */
+  itemId?: string;
   /** Injected by PiRuntime from the live turn, never trusted from the payload. */
   threadId: string;
   isScheduled?: boolean;

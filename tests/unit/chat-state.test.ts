@@ -428,4 +428,34 @@ describe('chatState reducer', () => {
     )!;
     expect(s.messages[0].sources).toEqual([{ url: 'https://example.com', title: 'Example' }]);
   });
+
+  it('updates a running coding_agent row live from harness/progress, by id then by type', () => {
+    const started = applyBackendEventToThread(
+      EMPTY_STATE,
+      event('item/started', {
+        threadId: 't1',
+        turnId: 'turn1',
+        item: { type: 'codingAgent', id: 'call-1', name: 'coding_agent', detail: 'claude' }
+      })
+    )!;
+    const byId = applyBackendEventToThread(
+      started,
+      event('harness/progress', { threadId: 't1', itemId: 'call-1', detail: 'claude: editing src/foo.ts · 3 tool calls' })
+    )!;
+    expect(byId.activities[0].detail).toBe('claude: editing src/foo.ts · 3 tool calls');
+    expect(byId.activity).toContain('claude: editing src/foo.ts');
+    // Without an itemId the update lands on the running codingAgent row.
+    const byType = applyBackendEventToThread(
+      byId,
+      event('harness/progress', { threadId: 't1', detail: 'claude: working · $0.10' })
+    )!;
+    expect(byType.activities[0].detail).toBe('claude: working · $0.10');
+    // An update for a row that is gone (turn settled meanwhile) changes nothing.
+    expect(
+      applyBackendEventToThread(
+        EMPTY_STATE,
+        event('harness/progress', { threadId: 't1', itemId: 'call-1', detail: 'late' })
+      )
+    ).toBeNull();
+  });
 });

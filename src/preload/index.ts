@@ -19,6 +19,7 @@ import type {
   ExecSettings,
   HarnessApprovalArmed,
   HarnessApprovalRequest,
+  HarnessProgress,
   HarnessSettings,
   InstructionsProposal,
   LiveTurn,
@@ -254,6 +255,11 @@ const api: StemApi = {
   },
   respondHarnessApproval: (id: string, optionId: string) =>
     ipcRenderer.invoke('harness:resolveApproval', id, optionId),
+  onHarnessProgress: (listener: (update: HarnessProgress) => void) => {
+    const handler = (_e: unknown, update: HarnessProgress) => listener(update);
+    ipcRenderer.on('harness:progress', handler);
+    return () => ipcRenderer.removeListener('harness:progress', handler);
+  },
   execHostShellInfo: () => ipcRenderer.invoke('exec:hostShellInfo'),
   importModels: (dir: string) => ipcRenderer.invoke('models:import', dir),
   importCustomModel: (dir: string, stage: 'embed' | 'rerank', model: CustomEmbedModel | CustomRerankModel) =>

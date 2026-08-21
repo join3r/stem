@@ -1471,6 +1471,22 @@ export interface HarnessApprovalArmed {
   expiresAt: number;
 }
 
+/**
+ * `harness:progress` — a throttled live update for a running coding_agent
+ * call ("claude: editing src/foo.ts · 12 tool calls · $0.40"). Missing one is
+ * harmless: the final state rides the tool result when the turn settles.
+ */
+export interface HarnessProgress {
+  threadId: string;
+  runId: string;
+  agent: string;
+  detail: string;
+  /** The turn strip row to update, when the tool call said which one it is. */
+  itemId?: string;
+  /** True on the run's last update. */
+  settled?: boolean;
+}
+
 /** `mcp/login/url` — the OAuth authorize URL, streamed mid-login as a fallback link. */
 export interface McpLoginUrlParams {
   name: string;
@@ -1668,6 +1684,7 @@ export type ActivityKind =
   | 'folders.embed'
   | 'folders.learn'
   | 'mirror.sync'
+  | 'harness.run'
   | 'chatIndex.backfill'
   | 'models.embed'
   | 'models.rerank'
@@ -3232,6 +3249,8 @@ export interface StemApi {
    * gone and the harness turn moved on without this answer.
    */
   respondHarnessApproval(id: string, optionId: string): Promise<boolean>;
+  /** Live detail updates for running coding_agent calls (the in-thread row). */
+  onHarnessProgress(listener: (update: HarnessProgress) => void): () => void;
   /**
    * What the machine that RUNS commands is: its OS, and (on Windows) the Git
    * Bash it found. Answered by the server, which may be another computer —

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { HarnessApprovalArmed, HarnessApprovalRequest } from '../../shared/types';
+import type { HarnessApprovalArmed, HarnessApprovalRequest, HarnessProgress } from '../../shared/types';
 import type { HarnessBridge, HarnessBridgeResult, HarnessRequest } from '../backend/types';
 import { degrade } from '../degrade';
 import { log } from '../log';
@@ -32,12 +32,7 @@ const APPROVAL_TIMEOUT_MS = 600_000;
 /** Throttle for live-row updates; the final state rides the turn result. */
 const PROGRESS_THROTTLE_MS = 500;
 
-export interface HarnessProgressUpdate {
-  threadId: string;
-  runId: string;
-  agent: string;
-  detail: string;
-}
+export type HarnessProgressUpdate = HarnessProgress;
 
 export interface HarnessServiceDeps {
   /** The harness section of settings, read fresh per request. */
@@ -186,13 +181,15 @@ export class HarnessService implements HarnessBridge {
     const summary = newTurnSummary();
     let lastProgressAt = 0;
     let progressTimer: NodeJS.Timeout | null = null;
-    const pushProgress = (): void => {
+    const pushProgress = (settled = false): void => {
       lastProgressAt = Date.now();
       this.deps.onProgress?.({
         threadId: req.threadId,
         runId,
         agent,
-        detail: activityDetail(agent, summary)
+        detail: activityDetail(agent, summary),
+        ...(req.itemId ? { itemId: req.itemId } : {}),
+        ...(settled ? { settled } : {})
       });
     };
     const noteProgress = (): void => {
@@ -248,7 +245,7 @@ export class HarnessService implements HarnessBridge {
       this.running.delete(runId);
       if (progressTimer) clearTimeout(progressTimer);
       // One final row update so the last state isn't a stale mid-turn detail.
-      if (this.deps.onProgress) pushProgress();
+      if (this.deps.onProgress) pushProgress(true);
     }
   }
 

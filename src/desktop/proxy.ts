@@ -667,6 +667,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       case 'exec:approvalResolved':
       case 'harness:approvalArmed':
       case 'harness:approvalResolved':
+      case 'harness:progress':
       case 'mcp:adminApprovalResolved':
       case 'instructions:approvalResolved':
       case 'skills:approvalResolved':

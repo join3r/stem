@@ -22,7 +22,12 @@ export const WEB_ACCESS_TOOL_NAMES = new Set([
 function labelForTool(name: string, detail?: string): string | undefined {
   const n = name.toLowerCase();
   const on = detail ? ` ${detail}` : '';
-  if (n === 'coding_agent') return detail ? `Coding agent: ${detail}…` : 'Running a coding agent…';
+  if (n === 'coding_agent') {
+    if (!detail) return 'Running a coding agent…';
+    // The harness's live detail is already a full phrase ("claude: editing
+    // src/foo.ts · 3 tool calls · $0.40"); the initial detail is the bare agent name.
+    return detail.includes(':') ? `${detail}…` : `Running the ${detail} coding agent…`;
+  }
   if (n === 'read') return detail ? `Reading ${detail}…` : 'Reading a file…';
   if (n === 'bash' || n === 'cmd') return detail ? `Running ${detail}…` : 'Running a command…';
   if (n === 'grep') return detail ? `Searching for ${detail}…` : 'Searching files…';
