@@ -290,6 +290,38 @@ export function tasksStorePath(): string {
 }
 
 /**
+ * State dir for the embedded acpx runtime's FileSessionStore: the harness
+ * session records (one JSON per external coding-agent session) that let a
+ * later coding_agent call resume the same conversation. Server-side runs only;
+ * a device hosting its own harness keeps an equivalent dir under its own
+ * state root.
+ */
+export function harnessSessionsDir(): string {
+  // STEM_HARNESS_SESSIONS_DIR lets unit tests point at a throwaway directory
+  // (and avoids touching Electron's `app` when run outside the app).
+  return process.env.STEM_HARNESS_SESSIONS_DIR ?? join(userDataRoot(), 'harness-sessions');
+}
+
+/**
+ * Stem-owned mapping of (thread, host, agent, cwd) -> harness sessionId, so a
+ * repeated coding_agent call continues one conversation. A cache of each
+ * host's own session store, not the truth: when a host lost its session, the
+ * fresh id from the next ensure simply overwrites the record here.
+ */
+export function harnessSessionsStorePath(): string {
+  return process.env.STEM_HARNESS_SESSIONS_STORE ?? join(userDataRoot(), 'harness-sessions.json');
+}
+
+/**
+ * Run log for coding_agent turns: one record per harness turn (agent, cwd,
+ * status, usage, cost). Bookkeeping for the user's benefit, not state any
+ * code path depends on.
+ */
+export function harnessRunsPath(): string {
+  return process.env.STEM_HARNESS_RUNS ?? join(userDataRoot(), 'harness-runs.json');
+}
+
+/**
  * Cache dir for the bundled local embedding models (transformers.js `env.cacheDir`).
  * Weights download here once per model on first use; safe to delete — they just
  * re-download on next need.
