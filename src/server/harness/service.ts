@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { HarnessApprovalArmed, HarnessApprovalRequest } from '../../shared/types';
+import type { HarnessBridge, HarnessBridgeResult, HarnessRequest } from '../backend/types';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { ensureThreadScratch } from '../exec/scratch';
@@ -30,19 +31,6 @@ const APPROVAL_TIMEOUT_MS = 600_000;
 
 /** Throttle for live-row updates; the final state rides the turn result. */
 const PROGRESS_THROTTLE_MS = 500;
-
-export interface HarnessRequest {
-  agent: string;
-  prompt: string;
-  cwd?: string;
-  device?: string;
-  freshSession?: boolean;
-  /** Injected by PiRuntime from the live turn, never trusted from the payload. */
-  threadId: string;
-  isScheduled?: boolean;
-}
-
-export type HarnessBridgeResult = { ok: true; text: string } | { ok: false; error: string };
 
 export interface HarnessProgressUpdate {
   threadId: string;
@@ -83,7 +71,7 @@ interface RunningTurn {
   handle: HarnessTurnHandle;
 }
 
-export class HarnessService {
+export class HarnessService implements HarnessBridge {
   private readonly deps: HarnessServiceDeps;
   private readonly pending = new Map<string, PendingApproval>();
   private readonly running = new Map<string, RunningTurn>();

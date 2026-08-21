@@ -57,7 +57,7 @@ import { buildConnectedFoldersContext } from '../connected-folders/inject';
 import { getPrivateRoots } from '../workspace/connected-folders';
 import { resolveAttachments, type PiImageContent } from './attachments';
 import { captureUserMessage } from '../recall/capture';
-import type { ApprovalId, ChatBackend, ExecBridge, TaskBridge } from '../backend/types';
+import type { ApprovalId, ChatBackend, ExecBridge, HarnessBridge, TaskBridge } from '../backend/types';
 import type { SkillBridge } from '../skills/bridge';
 import {
   buildMcpCatalogContext,
@@ -123,6 +123,7 @@ import {
   ENV_SECRET_KEY,
   ENV_SKILLS_DIR,
   EXEC_BRIDGE_TITLE,
+  HARNESS_BRIDGE_TITLE,
   INSTRUCTIONS_APPROVAL_TITLE,
   SKILL_BRIDGE_TITLE,
   SKILLS_REV_FILE,
@@ -564,6 +565,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private taskBridge: TaskBridge | null = null;
   /** Wired by main to route the assistant's run_command tool. */
   private execBridge: ExecBridge | null = null;
+  /** Wired by main to route the assistant's coding_agent tool. */
+  private harnessBridge: HarnessBridge | null = null;
   /** Wired by main to route the assistant's manage_skill tool through the validator + policy. */
   private skillBridge: SkillBridge | null = null;
   /** Set when an admin add/remove was approved; reloads MCP servers at turn end. */
@@ -1012,6 +1015,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private abortLiveTurn(turn: TurnContext): void {
     turn.aborted = true;
     this.execBridge?.abortThread(turn.threadId);
+    this.harnessBridge?.abortThread(turn.threadId);
     this.proc?.send({ type: 'abort' });
   }
 
@@ -1840,6 +1844,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Exec: deny pending approval cards and kill running commands — the pi child
     // that asked is gone, so their results could never be delivered anyway.
     this.execBridge?.settleAll();
+    // Harness: same argument — cancel live coding-agent turns and dismiss their
+    // cards; the sessions themselves survive on disk for the next call.
+    this.harnessBridge?.settleAll();
   }
 
   private async configMcpServerReload(): Promise<void> {
@@ -1868,6 +1875,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   setExecBridge(bridge: ExecBridge | null): void {
     this.execBridge = bridge;
+  }
+
+  setHarnessBridge(bridge: HarnessBridge | null): void {
+    this.harnessBridge = bridge;
   }
 
   setSkillBridge(bridge: SkillBridge | null): void {
@@ -1939,6 +1950,50 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           isScheduled: turn?.isScheduled === true,
           userText: turn?.userText,
           currentModel
+        });
+        respond(result);
+      } catch (e) {
+        respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+  }
+
+  /**
+   * Handle the coding_agent tool's ctx.ui.input round-trip (sentinel
+   * HARNESS_BRIDGE_TITLE). The placeholder is a JSON { agent, prompt, cwd?,
+   * device?, fresh_session? } payload; we run it through the wired
+   * HarnessBridge with the CURRENT turn's threadId + scheduled flag (only main
+   * knows both) and answer with a JSON result string the tool returns. The
+   * response can be HOURS away — one whole external coding-agent turn — so it
+   * answers the process that ASKED, exactly like the exec bridge: a restart in
+   * that window leaves an elicitation table that knows nothing about this id.
+   */
+  private handleHarnessBridgeRequest(id: string, payload: string | undefined): void {
+    const requestProcess = this.proc;
+    const respond = (value: unknown): void => {
+      if (this.proc !== requestProcess) return;
+      requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    };
+    const turn = this.currentTurn;
+    void (async () => {
+      try {
+        const bridge = this.harnessBridge;
+        if (!bridge) return respond({ ok: false, error: 'Coding agents are unavailable.' });
+        const req = JSON.parse(payload ?? '{}') as {
+          agent?: string;
+          prompt?: string;
+          cwd?: string;
+          device?: string;
+          fresh_session?: boolean;
+        };
+        const result = await bridge.handleHarnessRequest({
+          agent: req.agent ?? '',
+          prompt: req.prompt ?? '',
+          cwd: typeof req.cwd === 'string' && req.cwd.trim() ? req.cwd : undefined,
+          device: typeof req.device === 'string' && req.device.trim() ? req.device : undefined,
+          freshSession: req.fresh_session === true,
+          threadId: turn?.threadId ?? '',
+          isScheduled: turn?.isScheduled === true
         });
         respond(result);
       } catch (e) {
@@ -2342,6 +2397,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // the held elicitation is answered when the command settles.
       if (ev.method === 'input' && ev.title === EXEC_BRIDGE_TITLE) {
         this.handleExecBridgeRequest(id, ev.placeholder as string | undefined);
+        return;
+      }
+      // The coding_agent tool round-trip: the whole harness turn runs in main
+      // (HarnessService); the held elicitation is answered when it ends.
+      if (ev.method === 'input' && ev.title === HARNESS_BRIDGE_TITLE) {
+        this.handleHarnessBridgeRequest(id, ev.placeholder as string | undefined);
         return;
       }
       // An MCP server that runs on one of the user's own devices: the call

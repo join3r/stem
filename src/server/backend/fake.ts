@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { ApprovalId, ChatBackend, ExecBridge, TaskBridge } from './types';
+import type { ApprovalId, ChatBackend, ExecBridge, HarnessBridge, TaskBridge } from './types';
 import type {
   ChatMessage,
   ChatSummary,
@@ -381,6 +381,9 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
   setExecBridge(bridge: ExecBridge | null): void {
     this.execBridge = bridge;
   }
+
+  /** Accepted and ignored: no scripted turn calls coding_agent (yet). */
+  setHarnessBridge(_bridge: HarnessBridge | null): void {}
 
   // ---- scripted turn execution ----
 

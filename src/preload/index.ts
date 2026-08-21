@@ -17,6 +17,7 @@ import type {
   ExecApprovalRequest,
   ExecDecision,
   ExecSettings,
+  HarnessSettings,
   InstructionsProposal,
   LiveTurn,
   LocalEmbedStatus,
@@ -216,6 +217,7 @@ const api: StemApi = {
   respondSkillApproval: (id: number | string, accept: boolean, skill: { name: string; description: string; body: string }) =>
     ipcRenderer.invoke('skills:resolveApproval', id, accept, skill),
   updateExecSettings: (patch: Partial<ExecSettings>) => ipcRenderer.invoke('settings:updateExec', patch),
+  updateHarnessSettings: (patch: Partial<HarnessSettings>) => ipcRenderer.invoke('settings:updateHarness', patch),
   onExecApproval: (listener: (request: ExecApprovalRequest) => void) => {
     const handler = (_e: unknown, request: ExecApprovalRequest) => listener(request);
     ipcRenderer.on('exec:approvalRequest', handler);

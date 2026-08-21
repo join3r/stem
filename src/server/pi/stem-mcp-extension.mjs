@@ -1546,6 +1546,12 @@ export default async function stemMcpBridge(pi) {
   // (allowlist → LLM judge → approval card) and spawns the command itself.
   registerExecTool(pi);
 
+  // Coding agents: delegate coding work to an external harness (Claude Code,
+  // OpenCode, ...). The tool only forwards the request — the main process owns
+  // the settings gate, session continuity, approval cards and the acpx runtime,
+  // and holds this round-trip open for the whole harness turn.
+  registerHarnessTools(pi);
+
   // Stem self-authored skills: let the assistant save its own SKILL.md procedures.
   // The write itself happens in main (see SKILL_BRIDGE_TITLE) — it owns the
   // contract validator and the Off/Ask/Auto policy, neither of which a subprocess
@@ -2088,6 +2094,96 @@ function registerExecTool(pi) {
       });
       if (!res.ok) return taskErr(res.error || 'The command could not be run.');
       return taskOk(res.text || '(no output)');
+    }
+  });
+}
+
+// ---- Coding agents: delegate coding work to an external harness ----
+
+// Sentinel title for the ctx.ui.input round-trip PiRuntime intercepts (it never
+// shows UI for this title — main runs the whole harness turn and answers with a
+// JSON result string). The response can be HOURS away: one external
+// coding-agent turn, prompt in to end-turn out.
+const HARNESS_BRIDGE_TITLE = 'stem-harness-bridge';
+
+/** Round-trip one coding_agent request through PiRuntime; returns the parsed result. */
+async function harnessBridge(ctx, payload) {
+  if (!ctx || !ctx.ui || typeof ctx.ui.input !== 'function') {
+    return { ok: false, error: 'Coding agents are unavailable in this context.' };
+  }
+  const raw = await ctx.ui.input(HARNESS_BRIDGE_TITLE, JSON.stringify(payload));
+  if (typeof raw !== 'string') return { ok: false, error: 'No response from Stem.' };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { ok: false, error: 'Malformed response from Stem.' };
+  }
+}
+
+function registerHarnessTools(pi) {
+  pi.registerTool({
+    name: 'coding_agent',
+    label: 'Coding agent',
+    description:
+      'Delegate coding work to an external coding agent (a full coding harness with its own tools) running ' +
+      'on the machine Stem runs on — or, with `device`, on one of the user\'s own paired computers. ' +
+      'Tested agents: "claude" (Claude Code) and "opencode"; other ACP agent names are accepted if the ' +
+      'user has them installed. ' +
+      'BLOCKING: one call is ONE exchange with the agent — your prompt goes in, the call returns when the ' +
+      'agent ends its turn, which can take many minutes for real coding work. Do not poll; there is nothing ' +
+      'to poll. The session persists per chat + agent + working folder, so calling again continues the SAME ' +
+      'conversation: use follow-up calls to steer it, answer its questions, or ask for the next step ' +
+      '(`fresh_session: true` starts over). ' +
+      'The agent\'s reply comes back as this tool\'s result. When it asks a question, answer it yourself in a ' +
+      'follow-up call if the conversation already gives you the answer; otherwise relay the question to the ' +
+      'user and call again with their answer. ' +
+      'Risky actions (commands, publishes) may pause on an approval card for the user — that time counts ' +
+      'against nobody; just let the call run. ' +
+      'By default the agent works in this chat\'s scratch folder; pass `cwd` for a real project. Do not use ' +
+      'this in scheduled tasks — it is refused there.',
+    parameters: {
+      type: 'object',
+      properties: {
+        agent: {
+          type: 'string',
+          description: 'Which coding agent to run: "claude", "opencode", or another installed ACP agent name.'
+        },
+        prompt: {
+          type: 'string',
+          description:
+            'What to tell the agent this exchange. Give it real context: the goal, constraints, and what "done" looks like — it cannot see this conversation.'
+        },
+        cwd: {
+          type: 'string',
+          description:
+            'Directory to work in. Optional; defaults to this chat\'s scratch folder. Relative paths resolve inside scratch; pass an absolute path for a real project (absolute is required with `device`).'
+        },
+        device: {
+          type: 'string',
+          description:
+            'Run on one of the user\'s own paired computers instead, named by its device label. Requires that computer to be awake with Stem running and its "Run coding agents on this computer" switch on.'
+        },
+        fresh_session: {
+          type: 'boolean',
+          description: 'Start a brand-new conversation with the agent instead of continuing the remembered one.'
+        }
+      },
+      required: ['agent', 'prompt']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const agent = String((params && params.agent) || '').trim();
+      const prompt = String((params && params.prompt) || '').trim();
+      if (!agent) return taskErr('Name the coding agent to run (e.g. "claude").');
+      if (!prompt) return taskErr('Provide a prompt for the coding agent.');
+      const res = await harnessBridge(ctx, {
+        agent,
+        prompt,
+        cwd: params && typeof params.cwd === 'string' && params.cwd.trim() ? params.cwd : undefined,
+        device: params && typeof params.device === 'string' && params.device.trim() ? params.device : undefined,
+        fresh_session: params && params.fresh_session === true ? true : undefined
+      });
+      if (!res.ok) return taskErr(res.error || 'The coding agent could not run.');
+      return taskOk(res.text || '(the agent ended its turn without a reply)');
     }
   });
 }

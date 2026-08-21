@@ -64,6 +64,16 @@ export const EXEC_BRIDGE_TITLE = 'stem-exec-bridge';
 export const DEVICE_MCP_BRIDGE_TITLE = 'stem-device-mcp-bridge';
 
 /**
+ * coding_agent tool round-trip (`input`): the harness payload (agent/prompt/
+ * cwd/device/fresh_session) rides in `placeholder`; PiRuntime routes it to the
+ * main-process HarnessService (settings gate, session continuity, the blocking
+ * harness turn) and answers with a JSON result string. The response can be
+ * HOURS away — one external coding-agent turn — and pi holds the elicitation
+ * open the whole time (tests/unit/pi-elicitation-hold.test.ts).
+ */
+export const HARNESS_BRIDGE_TITLE = 'stem-harness-bridge';
+
+/**
  * manage_skill tool round-trip (`input`): the write payload rides in
  * `placeholder`; PiRuntime routes it to the main-process SkillBridge, which owns
  * the contract validator, the Off/Ask/Auto policy, and the approval card. The

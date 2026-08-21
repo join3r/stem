@@ -6,6 +6,7 @@ import type {
   DeviceInfo,
   ExecHostShellInfo,
   ExecSettings,
+  HarnessSettings,
   ScratchUsageRow,
   WebSearchSettings,
   WindowsShell
@@ -61,6 +62,7 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
   const [ci, setCi] = useState<CustomInstructionsSettings>({ main: '', quickChat: '' });
   const [chats, setChats] = useState<ChatsSettings | null>(null);
   const [exec, setExec] = useState<ExecSettings | null>(null);
+  const [harness, setHarness] = useState<HarnessSettings | null>(null);
   const [allowInput, setAllowInput] = useState('');
   // The OS of the machine that RUNS commands, plus the Git Bash it found there.
   // Asked of the server, not of this window: with Stem on a box somewhere,
@@ -90,6 +92,7 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
       setCi(s.customInstructions);
       setChats(s.chats);
       setExec(s.exec);
+      setHarness(s.harness);
       setBashPathDraft(s.exec.gitBashPath ?? '');
     });
     // Its own request: a disk walk should not hold up the settings the rest of
@@ -136,6 +139,11 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
         setBashPathDraft(s.exec.gitBashPath ?? '');
       }
     });
+  }
+
+  function updateHarness(patch: Partial<HarnessSettings>) {
+    setHarness((cur) => (cur ? { ...cur, ...patch } : cur)); // optimistic; reconcile below
+    window.stem.updateHarnessSettings(patch).then((s) => setHarness(s.harness));
   }
 
   async function chooseWindowsShell(next: WindowsShell) {
@@ -604,6 +612,31 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
             />
           </div>
         )}
+      </div>
+
+      <div className="grp-head">Coding agents</div>
+      <div className="formgroup">
+        <div className="set-row">
+          <span className="set-label">
+            <strong>Delegate coding work</strong>
+            <em>
+              Let Stem drive an external coding agent (Claude Code, OpenCode){' '}
+              <InfoTip label="What coding agents do">
+                With this on, Stem can hand real coding work to a coding agent installed on this
+                machine, watch it, and relay its questions to you. The agent works with your own
+                logins and files; risky commands pause on an approval card, and folders you marked
+                read-only stay protected. Off by default so switching it on is your decision.
+              </InfoTip>
+            </em>
+          </span>
+          <button
+            className={`switch${harness?.enabled ? ' on' : ''}`}
+            role="switch"
+            aria-checked={harness?.enabled ?? false}
+            aria-label="Delegate coding work"
+            onClick={() => harness && updateHarness({ enabled: !harness.enabled })}
+          />
+        </div>
       </div>
     </div>
   );

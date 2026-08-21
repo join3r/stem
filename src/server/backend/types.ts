@@ -74,6 +74,38 @@ export interface ExecBridge {
   settleAll(): void;
 }
 
+/** What the assistant's coding_agent tool sends over its round-trip. */
+export interface HarnessRequest {
+  agent: string;
+  prompt: string;
+  cwd?: string;
+  device?: string;
+  freshSession?: boolean;
+  /** Injected by PiRuntime from the live turn, never trusted from the payload. */
+  threadId: string;
+  isScheduled?: boolean;
+}
+
+/** What the HarnessService answers a coding_agent round-trip with. */
+export type HarnessBridgeResult = { ok: true; text: string } | { ok: false; error: string };
+
+/**
+ * The seam the backend uses to reach the coding-harness service (which lives
+ * in main, not the backend). The assistant's `coding_agent` tool runs inside
+ * the pi process; PiRuntime intercepts its round-trip and routes here,
+ * supplying the authoritative threadId + scheduled flag. The call BLOCKS for
+ * the whole harness turn — minutes to hours — and pi holds the elicitation
+ * open the entire time (tests/unit/pi-elicitation-hold.test.ts is the proof).
+ */
+export interface HarnessBridge {
+  /** Run one full harness turn (gate → session → turn → result text). */
+  handleHarnessRequest(req: HarnessRequest): Promise<HarnessBridgeResult>;
+  /** Cancel live harness turns + pending cards for one thread (turn interrupted). */
+  abortThread(threadId: string): void;
+  /** Cancel everything (the backend process died/restarted). */
+  settleAll(): void;
+}
+
 export interface TaskBridge {
   /** Create a task bound to `threadId` from the assistant's schedule_task tool. */
   schedule(
@@ -221,4 +253,8 @@ export interface ChatBackend extends EventEmitter {
   // Command execution: wire the bridge the assistant's run_command tool routes
   // through. Pass null to detach. No-op on a backend without exec.
   setExecBridge(bridge: ExecBridge | null): void;
+
+  // Coding agents: wire the bridge the assistant's coding_agent tool routes
+  // through. Pass null to detach. No-op on a backend without harness support.
+  setHarnessBridge(bridge: HarnessBridge | null): void;
 }

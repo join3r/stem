@@ -366,6 +366,7 @@ export function isWebSearchTool(toolName: string | undefined): boolean {
 /** Map a pi tool name onto the item-type vocabulary `activityLabel` knows. */
 function toolItemType(toolName: string | undefined): string {
   const n = (toolName ?? '').toLowerCase();
+  if (n === 'coding_agent') return 'codingAgent';
   if (n === 'bash' || n === 'run_command' || n === 'read' || n === 'ls' || n === 'glob' || n === 'grep')
     return 'commandExecution';
   if (n === 'edit' || n === 'write' || n === 'multiedit' || n === 'apply_patch') return 'fileChange';
@@ -429,6 +430,11 @@ export function toolCallActivity(
 ): ActivityItem {
   let name = rawName;
   let detail = detailFromArgs(args) ?? fallbackDetail;
+  // The row should say WHICH agent is working; the generic keys would surface
+  // the prompt text instead.
+  if (name === 'coding_agent' && typeof args?.agent === 'string' && args.agent.trim()) {
+    detail = args.agent.trim();
+  }
   if (name === 'invoke_tool') {
     const real = typeof args?.tool === 'string' ? args.tool : undefined;
     if (real) {

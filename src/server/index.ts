@@ -23,6 +23,8 @@ import type { ExecService } from './exec/service';
 import { detectGitBash } from './exec/git-bash';
 import { startScratchSweeper, stopScratchSweeper } from './exec/scratch';
 import { initExecService } from './startup/exec';
+import { initHarness } from './startup/harness';
+import type { HarnessService } from './harness/service';
 import { initSkills } from './startup/skills';
 import {
   closeTransport,
@@ -64,6 +66,7 @@ import {
   updateDefaults,
   updateEscapeAction,
   updateExecSettings,
+  updateHarnessSettings,
   updateMemorySettings,
   updateWebSearch,
   updateQuickChat,
@@ -80,6 +83,7 @@ import type {
   ExecDecision,
   ExecHostShellInfo,
   ExecSettings,
+  HarnessSettings,
   MemoryModelSettings,
   ModelSummary,
   WebSearchSettings,
@@ -152,6 +156,8 @@ const E2E = !!process.env.STEM_E2E;
 
 let runtime: ChatBackend | null = null;
 let execService: ExecService | null = null;
+/** Coding agents (coding_agent tool): service + the embedded acpx host's teardown. */
+let harness: { service: HarnessService; close: () => Promise<void> } | null = null;
 /** Scheduled-tasks engine (cron/once → autonomous turns). Created in startServer. */
 let scheduler: TaskScheduler | null = null;
 // In-app provider sign-in (OAuth / API key) for the onboarding wizard; created in
@@ -494,6 +500,11 @@ function registerIpc(): void {
     // run_command request, so the change applies to the next command.
     return updateExecSettings(patch);
   });
+  registerServer('settings:updateHarness', async (_e, patch: Partial<HarnessSettings>) => {
+    // Just persist — the HarnessService reads the switch fresh from settings on
+    // each coding_agent request, so the change applies to the next call.
+    return updateHarnessSettings(patch);
+  });
   registerServer('exec:resolveApproval', async (_e, id: string, decision: ExecDecision) => {
     // The boolean matters: false means the card had already expired (or was
     // answered on another surface) and the tool call went on without this
@@ -701,6 +712,22 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   });
   // Answer a client's first question on connecting: what is waiting on you?
   setPendingApprovalsSource(() => execService?.pendingApprovals() ?? []);
+
+  // Coding agents (the coding_agent tool): the HarnessService owns the settings
+  // gate, session continuity and the blocking harness turn; its approval cards
+  // ride the same rails as exec's.
+  harness = initHarness({
+    runtime,
+    emitApprovalRequest: (request) => {
+      emit('harness:approvalRequest', request);
+    },
+    emitApprovalResolved: (id) => {
+      emit('harness:approvalResolved', { id });
+    },
+    emitApprovalArmed: (armed) => {
+      emit('harness:approvalArmed', armed);
+    }
+  });
 
   // Scratch housekeeping: each chat's run_command folder is removed when the chat
   // is deleted, and idle ones age out on the TTL (Settings → Chat → Command
@@ -958,6 +985,9 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
       closeDeviceMcpRouter();
       // And every held device command, for the same reason.
       closeExecDeviceRouter();
+      // Cancel live coding-agent turns gracefully and close the acpx adapters;
+      // their sessions persist on disk for the next boot.
+      void harness?.close();
       // Destroys any open SSE stream before closing the listener — without that,
       // close() waits for a connection that by design never ends.
       void closeTransport();

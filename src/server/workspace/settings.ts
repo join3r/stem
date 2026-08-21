@@ -12,6 +12,7 @@ import type {
   EmbeddingsSettings,
   EscapeAction,
   ExecSettings,
+  HarnessSettings,
   OnboardingSettings,
   LocalEmbedModelId,
   LocalModelDtype,
@@ -108,6 +109,14 @@ const DEFAULTS: ServerSettings = {
     // Prefer Git Bash on Windows (auto-detect bash.exe; cmd.exe if Git is missing).
     windowsShell: 'git-bash',
     gitBashPath: null
+  },
+  // Coding agents (coding_agent): OFF by default — an external coding agent
+  // runs with the user's own logins and disk, and switching that on is the
+  // user's decision, not an install default. agents holds acpx registry
+  // overrides (name -> command); empty means the built-in registry.
+  harness: {
+    enabled: false,
+    agents: {}
   },
   // Embeddings + reranker for relevance-ranking facts at inject time. Embeddings
   // default to the bundled local model (multilingual, in-process, nothing leaves
@@ -496,6 +505,24 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
           ? 'git-bash'
           : DEFAULTS.exec.windowsShell
   };
+  const rawHarness = (parsed?.harness ?? {}) as Partial<HarnessSettings>;
+  const harness: HarnessSettings = {
+    enabled: typeof rawHarness.enabled === 'boolean' ? rawHarness.enabled : DEFAULTS.harness.enabled,
+    // Same laundering stance as the exec allowlists: only {name -> {command}}
+    // pairs that are really strings survive, trimmed and capped.
+    agents: (() => {
+      const raw = rawHarness.agents && typeof rawHarness.agents === 'object' ? rawHarness.agents : {};
+      const agents: Record<string, { command: string }> = {};
+      for (const [rawName, value] of Object.entries(raw)) {
+        if (Object.keys(agents).length >= 25) break;
+        const name = rawName.trim();
+        const command = value && typeof value === 'object' ? (value as { command?: unknown }).command : undefined;
+        if (!name || name.length > 64 || typeof command !== 'string' || !command.trim()) continue;
+        agents[name] = { command: command.trim().slice(0, 500) };
+      }
+      return agents;
+    })()
+  };
   const rawRet = (parsed?.retrieval ?? {}) as Partial<RetrievalSettings>;
   // Imported models first: they are half of what a stage's model id is allowed
   // to be, so an entry that doesn't survive coercion must not leave the stage
@@ -591,6 +618,7 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
     chats,
     tasks,
     exec,
+    harness,
     retrieval,
     escapeAction,
     customInstructions,
@@ -753,6 +781,16 @@ export function updateExecSettings(patch: Partial<ExecSettings>): Promise<Server
   return enqueue(async () => {
     const cur = await readForUpdate();
     const next = coerce({ ...cur, exec: { ...cur.exec, ...patch } });
+    await writeSettings(next);
+    return next;
+  });
+}
+
+/** Patch the coding-agents settings and persist; returns full settings. */
+export function updateHarnessSettings(patch: Partial<HarnessSettings>): Promise<ServerSettings> {
+  return enqueue(async () => {
+    const cur = await readForUpdate();
+    const next = coerce({ ...cur, harness: { ...cur.harness, ...patch } });
     await writeSettings(next);
     return next;
   });

@@ -6,6 +6,7 @@ import {
   DEVICE_MCP_BRIDGE_TITLE,
   ENV_SECRET_KEY,
   EXEC_BRIDGE_TITLE,
+  HARNESS_BRIDGE_TITLE,
   INSTRUCTIONS_APPROVAL_TITLE,
   MCP_DEVICE_CATALOG_FILE,
   MCP_OAUTH_FILE,
@@ -47,6 +48,9 @@ describe('sentinel titles match the bridge extension', () => {
   });
   it('exec bridge', () => {
     expect(extensionConst('EXEC_BRIDGE_TITLE')).toBe(EXEC_BRIDGE_TITLE);
+  });
+  it('harness bridge', () => {
+    expect(extensionConst('HARNESS_BRIDGE_TITLE')).toBe(HARNESS_BRIDGE_TITLE);
   });
   it('skill bridge', () => {
     expect(extensionConst('SKILL_BRIDGE_TITLE')).toBe(SKILL_BRIDGE_TITLE);

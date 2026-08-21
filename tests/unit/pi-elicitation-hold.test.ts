@@ -165,7 +165,7 @@ describe('pi elicitation hold', () => {
         child.stdout.setEncoding('utf8');
         child.stdout.on('data', (chunk: string) => {
           buf += chunk;
-          let nl;
+          let nl: number;
           while ((nl = buf.indexOf('\n')) !== -1) {
             const line = buf.slice(0, nl);
             buf = buf.slice(nl + 1);

@@ -22,6 +22,7 @@ export const WEB_ACCESS_TOOL_NAMES = new Set([
 function labelForTool(name: string, detail?: string): string | undefined {
   const n = name.toLowerCase();
   const on = detail ? ` ${detail}` : '';
+  if (n === 'coding_agent') return detail ? `Coding agent: ${detail}…` : 'Running a coding agent…';
   if (n === 'read') return detail ? `Reading ${detail}…` : 'Reading a file…';
   if (n === 'bash' || n === 'cmd') return detail ? `Running ${detail}…` : 'Running a command…';
   if (n === 'grep') return detail ? `Searching for ${detail}…` : 'Searching files…';
@@ -45,6 +46,7 @@ export function settledActivityLabel(type: string, name?: string, detail?: strin
   // reply may still have gone its own way, which the skills block explicitly
   // allows for — as a file's contents may go unused.
   if (type === 'skill') return name ? `Used the skill ${name}` : 'Used a saved skill';
+  if (n === 'coding_agent' || type === 'codingAgent') return 'Ran a coding agent';
   if (n === 'read') return detail ? `Read ${detail}` : 'Read a file';
   if (n === 'bash' || n === 'cmd') return detail ? `Ran ${detail}` : 'Ran a command';
   if (n === 'grep') return detail ? `Searched for ${detail}` : 'Searched files';

@@ -186,6 +186,7 @@ const SETTINGS_CHANNELS = [
   'settings:updateTasks',
   'settings:updateDefaults',
   'settings:updateExec',
+  'settings:updateHarness',
   'settings:updateCustomInstructions',
   'settings:updateRetrieval'
 ];

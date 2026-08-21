@@ -2102,6 +2102,22 @@ export interface ExecSettings {
   gitBashPath: string | null;
 }
 
+/**
+ * Coding agents (the coding_agent tool): Stem driving an external harness —
+ * Claude Code, OpenCode, anything acpx's ACP registry can spawn — as a blocking
+ * tool call. Off by default: a coding agent is an agent with the user's login
+ * and their disk, and turning that on is the user's call, not an install's.
+ */
+export interface HarnessSettings {
+  /** Master switch for the coding_agent tool. */
+  enabled: boolean;
+  /**
+   * Registry overrides: agent name -> the command acpx should spawn for it.
+   * Unset names resolve through acpx's built-in registry (claude, opencode, …).
+   */
+  agents: Record<string, { command: string }>;
+}
+
 /** One chat's scratch folder in Settings → Chat → Command execution → Scratch files. */
 export interface ScratchUsageRow {
   /** The thread id, or "unfiled" for the aggregate of everything not owned by a chat. */
@@ -2507,6 +2523,8 @@ export interface AppSettings {
   tasks: TasksSettings;
   /** Command execution (run_command) policy: enable switch, judge model, learned allowlist. */
   exec: ExecSettings;
+  /** Coding agents (coding_agent): enable switch + acpx registry overrides. */
+  harness: HarnessSettings;
   retrieval: RetrievalSettings;
   /** Escape-to-retract behavior in the main composer. */
   escapeAction: EscapeAction;
@@ -3188,6 +3206,7 @@ export interface StemApi {
   ): Promise<void>;
   /** Patch the command-execution policy (enable switch, judge model, allowlist). */
   updateExecSettings(patch: Partial<ExecSettings>): Promise<AppSettings>;
+  updateHarnessSettings(patch: Partial<HarnessSettings>): Promise<AppSettings>;
   /** A command needs the user's decision; fired so the UI can show the exec approval card. */
   onExecApproval(listener: (request: ExecApprovalRequest) => void): () => void;
   /** Fired when an exec approval is answered or expires. */
