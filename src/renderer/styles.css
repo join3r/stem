@@ -3036,3 +3036,158 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   user-select: all;
   word-break: break-all;
 }
+
+/* ---- Settings redesign: rows, collapsible groups, provider tiles ----
+   (rows.tsx / ProviderChip.tsx). One row per setting — label left, current
+   value or control right — so a tab reads as an answer sheet; heavy editors
+   live behind a DisclosureRow; Models' role groups fold to a one-line summary. */
+
+/* One setting as a row inside a .group card. */
+.set-vrow { display: flex; align-items: center; gap: var(--sp-4); padding: 8px 12px; width: 100%; }
+.group .set-vrow + .set-vrow,
+.group .set-vrow + .set-vbody,
+.group .set-vbody + .set-vrow,
+.group .set-vbody + .set-vbody { border-top: 0.5px solid var(--hair); }
+button.set-vrow { border: none; background: none; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+button.set-vrow:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.set-vrow .vlab { flex: 1; min-width: 0; font-size: var(--fs-13); }
+.set-vrow .vlab em { display: block; font-style: normal; font-size: var(--fs-11); color: var(--muted); overflow-wrap: anywhere; }
+.set-vrow .vval {
+  font-size: var(--fs-12);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+.vchev { flex: none; color: var(--muted); transition: transform var(--motion-fast); }
+.vchev.open { transform: rotate(90deg); }
+
+/* The row's control: a borderless right-aligned select showing its value. */
+select.vfield {
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: var(--fs-12);
+  color: var(--ink);
+  text-align: right;
+  max-width: 50%;
+  padding: 2px 0;
+  cursor: pointer;
+}
+select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow: var(--shadow-focus); }
+.set-vrow input.vcheck { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; flex: none; }
+
+/* A compact ModelPicker when it sits in a row, plus its resolved note below. */
+.set-vrow .mp-trigger { width: auto; max-width: 60%; padding: 3px 8px; font-size: var(--fs-12); }
+.set-vrow { flex-wrap: wrap; }
+.set-vrow .mp-resolved { flex-basis: 100%; text-align: right; margin: 0; }
+
+/* A DisclosureRow's opened body. */
+.set-vbody { padding: 4px 12px 11px; display: flex; flex-direction: column; gap: var(--sp-3); font-size: var(--fs-12); }
+
+/* Collapsible settings group (Models): header answers "what runs on what". */
+.role-group { background: var(--surface); border: 0.5px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.role-group + .role-group { margin-top: var(--sp-4); }
+.role-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.role-group-head:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.role-group-head strong { font-size: var(--fs-13); font-weight: 600; flex: none; }
+.role-group-head em {
+  font-style: normal;
+  font-size: var(--fs-11);
+  color: var(--muted);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+.role-group-body { border-top: 0.5px solid var(--hair); padding: 11px; display: flex; flex-direction: column; gap: var(--sp-4); }
+
+/* Provider tiles (Settings → Models). */
+.prov-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.prov-tile {
+  background: var(--surface);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-3);
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.prov-tile:hover { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); }
+.prov-tile.selected { background: var(--sel); border-color: var(--accent); }
+.prov-tile-head { display: flex; align-items: center; justify-content: space-between; }
+.prov-tile b { font-size: var(--fs-13); font-weight: 600; display: block; }
+.prov-tile i {
+  font-style: normal;
+  font-size: var(--fs-11);
+  color: var(--muted);
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prov-tile.add {
+  border-style: dashed;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  color: var(--accent);
+  min-height: 74px;
+  font-size: var(--fs-12);
+}
+.prov-chip {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.prov-chip.tint { background: var(--sel); box-shadow: none; color: var(--accent); }
+.prov-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); flex: none; }
+.prov-dot.ok { background: var(--success); }
+.prov-dot.bad { background: var(--danger); }
+.prov-actions { display: flex; gap: var(--sp-5); margin-top: var(--sp-4); padding: 0 2px; }
+
+/* The lead-the-tab banner (a dead provider sign-in). */
+.set-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  border-radius: var(--radius-md);
+  border: 0.5px solid;
+  padding: 8px 10px;
+  font-size: var(--fs-12);
+  margin-bottom: var(--sp-5);
+}
+.set-banner svg { flex: none; margin-top: 2px; }
+.set-banner.danger {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+  color: var(--ink);
+}
+.set-banner.danger svg { color: var(--danger); }
+.set-banner-fix { margin-left: auto; white-space: nowrap; }

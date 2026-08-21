@@ -16,6 +16,8 @@ import { ModelPicker } from '../../../ui/ModelPicker';
 import { broadcastWebSearch, useWebSearchSync } from '../../../webSearch';
 import { useRemoteServer } from '../../../hooks/useRemoteServer';
 import type { ModelTabProps } from '../shared';
+import { DisclosureRow, RowSelect, ValueRow } from './rows';
+import { QuickChatSection } from './QuickChatSettings';
 
 /** How long a chat's scratch folder survives being ignored. null = never sweep. */
 const SCRATCH_TTLS: { label: string; days: number | null }[] = [
@@ -24,6 +26,13 @@ const SCRATCH_TTLS: { label: string; days: number | null }[] = [
   { label: '90 days', days: 90 },
   { label: 'Never', days: null }
 ];
+
+/** One-line meaning of each approval mode, shown under the row so the pick is legible. */
+const APPROVAL_HINTS: Record<string, string> = {
+  manual: 'Only allowlisted commands run on their own; everything else pauses for you',
+  assisted: 'A safety check clears commands that serve your request; only flagged ones pause',
+  yolo: 'Every command runs immediately, no questions asked'
+};
 
 /** "1.2 MB" / "834 KB" / "512 B" — one significant decimal above KB. */
 function formatSize(bytes: number): string {
@@ -48,9 +57,16 @@ function scratchLabel(row: ScratchUsageRow): string {
 }
 
 /**
- * Settings → Chat: everything that shapes an ordinary conversation — which model
- * answers, how chats get named, the instructions carried into every turn, and
- * what the assistant is allowed to run while it works.
+ * Settings → Chat: everywhere you talk to Stem — the main conversation, the
+ * Quick Chat overlay, and what the assistant is allowed to do while it works.
+ * Grouped by what the user is deciding, not by which window implements it:
+ * Conversation (which model answers, naming, instructions), Quick Chat (the
+ * same decisions for the overlay), then autonomy (commands, coding agents).
+ * Cosmetic and risky settings no longer share one undifferentiated list.
+ *
+ * Layout is the settings-row idiom (rows.tsx): the tab reads as an answer
+ * sheet, and the bulky editors (allowlist pills, the scratch table) live one
+ * level down behind their row.
  */
 export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) {
   const [ws, setWs] = useState<WebSearchSettings>({
@@ -169,9 +185,9 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
   function saveGitBashPath(value: string) {
     setBashPathDraft(value);
     if (bashPathTimer.current) clearTimeout(bashPathTimer.current);
-    // Path only. Which shell is selected is the segmented control's business —
-    // sending it from here would write back whatever `exec` said when the
-    // keystroke happened, undoing a click made while the timer was pending.
+    // Path only. Which shell is selected is the select's business — sending it
+    // from here would write back whatever `exec` said when the keystroke
+    // happened, undoing a pick made while the timer was pending.
     bashPathTimer.current = setTimeout(() => {
       const trimmed = value.trim();
       // Empty path keeps Git Bash selected; spawn auto-detects or falls back to cmd.
@@ -211,109 +227,110 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
     ciMainTimer.current = setTimeout(() => void window.stem.updateCustomInstructions({ main: value }), 400);
   }
 
+  // The closed rows carry their answer, so compute the summaries once here.
+  const deviceAllowCount = exec
+    ? Object.values(exec.deviceAllowlists).reduce((sum, prefixes) => sum + prefixes.length, 0)
+    : 0;
+  const allowCount = (exec?.allowlist.length ?? 0) + deviceAllowCount;
+  const scratchSummary =
+    scratch === null
+      ? 'Measuring…'
+      : scratch.length === 0
+        ? 'empty'
+        : `${formatSize(scratch.reduce((sum, r) => sum + r.bytes, 0))} · ${
+            SCRATCH_TTLS.find((t) => t.days === exec?.scratchTtlDays)?.label ?? '30 days'
+          }`;
+
   return (
     <div>
-      <div className="grp-head">Model</div>
-      <div className="formgroup">
+      <div className="grp-head">Conversation</div>
+      <div className="group">
         {models.length === 0 ? (
-          <p className="muted">Loading models…</p>
+          <div className="set-vrow">
+            <span className="vlab">
+              <em>Loading models…</em>
+            </span>
+          </div>
         ) : (
-          <>
+          <ValueRow label="Model">
             <ModelPicker
               models={models}
               value={modelId}
               onChange={(id) => onSelectModel(id ?? '')}
               ariaLabel="Model"
             />
-            <label className="set-check" title="Search the live web for current info, with citations">
-              <input type="checkbox" checked={ws.main} onChange={(e) => updateWebSearch({ main: e.target.checked })} />
-              Web search
-            </label>
-          </>
+          </ValueRow>
         )}
-      </div>
-
-      <div className="grp-head">Chats</div>
-      <div className="formgroup">
-        <div className="set-block">
-          <span className="set-sub">
-            Subjects{' '}
-            <InfoTip label="About chat subjects">
-              Stem writes each chat a short subject the way an email names a thread — once its
-              first reply has landed, then now and then as the chat grows, so one that wanders onto
-              another topic stops carrying the name it opened with. <strong>Everywhere</strong>
-              uses it as the chat's name, so the list, search and the window title all agree.{' '}
-              <strong>Inbox only</strong> shows it in the Inbox and leaves names alone.{' '}
-              <strong>Off</strong> never calls a model — a chat is named after the first line you
-              typed. A name you type yourself is never overwritten. The model that writes them
-              lives under Models.
-            </InfoTip>
-          </span>
-          <div className="seg-ctl">
-            <button
-              className={chats?.subjects === 'off' ? 'active' : ''}
-              onClick={() => updateChats({ subjects: 'off' })}
-              title="Never write subjects"
-            >
-              Off
-            </button>
-            <button
-              className={chats?.subjects === 'inbox' ? 'active' : ''}
-              onClick={() => updateChats({ subjects: 'inbox' })}
-              title="Write subjects, but don't rename chats"
-            >
-              Inbox only
-            </button>
-            <button
-              className={chats?.subjects === 'everywhere' ? 'active' : ''}
-              onClick={() => updateChats({ subjects: 'everywhere' })}
-              title="Use the subject as the chat's name"
-            >
-              Everywhere
-            </button>
-          </div>
-        </div>
-        <div className="set-block">
-          <span className="set-sub">
-            Preview lines in the Inbox{' '}
-            <InfoTip label="About preview lines">
-              How much of the newest message each Inbox row shows underneath its subject. The Chats
-              tree is unaffected — it stays one line per chat.
-            </InfoTip>
-          </span>
-          <div className="seg-ctl">
-            <button
-              className={chats?.previewLines === 0 ? 'active' : ''}
-              onClick={() => updateChats({ previewLines: 0 })}
-            >
-              None
-            </button>
-            <button
-              className={chats?.previewLines === 1 ? 'active' : ''}
-              onClick={() => updateChats({ previewLines: 1 })}
-            >
-              1 line
-            </button>
-            <button
-              className={chats?.previewLines === 2 ? 'active' : ''}
-              onClick={() => updateChats({ previewLines: 2 })}
-            >
-              2 lines
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="grp-head">Custom instructions</div>
-      <div className="formgroup">
-        <div className="set-block">
-          <span className="set-sub">
-            Standing instructions{' '}
-            <InfoTip label="About standing instructions">
-              High-priority directives Stem follows in every reply — in the main app and in Quick
-              Chat. Stem can also update these itself when you ask it to.
-            </InfoTip>
-          </span>
+        <ValueRow label="Web search" hint="Live results with citations">
+          <input
+            type="checkbox"
+            className="vcheck"
+            aria-label="Web search"
+            checked={ws.main}
+            onChange={(e) => updateWebSearch({ main: e.target.checked })}
+          />
+        </ValueRow>
+        <ValueRow
+          label={
+            <>
+              Subjects{' '}
+              <InfoTip label="About chat subjects">
+                Stem writes each chat a short subject the way an email names a thread — once its
+                first reply has landed, then now and then as the chat grows.{' '}
+                <strong>Everywhere</strong> uses it as the chat's name, so the list, search and the
+                window title all agree. <strong>Inbox only</strong> shows it in the Inbox and leaves
+                names alone. <strong>Off</strong> never calls a model — a chat is named after the
+                first line you typed. A name you type yourself is never overwritten. The model that
+                writes them lives under Models.
+              </InfoTip>
+            </>
+          }
+        >
+          <RowSelect
+            ariaLabel="Subjects"
+            value={chats?.subjects ?? 'everywhere'}
+            options={[
+              { value: 'off', label: 'Off', title: 'Never write subjects' },
+              { value: 'inbox', label: 'Inbox only', title: "Write subjects, but don't rename chats" },
+              { value: 'everywhere', label: 'Everywhere', title: "Use the subject as the chat's name" }
+            ]}
+            onChange={(v) => updateChats({ subjects: v as ChatsSettings['subjects'] })}
+          />
+        </ValueRow>
+        <ValueRow
+          label={
+            <>
+              Preview lines in the Inbox{' '}
+              <InfoTip label="About preview lines">
+                How much of the newest message each Inbox row shows underneath its subject. The Chats
+                tree is unaffected — it stays one line per chat.
+              </InfoTip>
+            </>
+          }
+        >
+          <RowSelect
+            ariaLabel="Preview lines in the Inbox"
+            value={String(chats?.previewLines ?? 1)}
+            options={[
+              { value: '0', label: 'None' },
+              { value: '1', label: '1 line' },
+              { value: '2', label: '2 lines' }
+            ]}
+            onChange={(v) => updateChats({ previewLines: Number(v) as ChatsSettings['previewLines'] })}
+          />
+        </ValueRow>
+        <DisclosureRow
+          label={
+            <>
+              Standing instructions{' '}
+              <InfoTip label="About standing instructions">
+                High-priority directives Stem follows in every reply — in the main app and in Quick
+                Chat. Stem can also update these itself when you ask it to.
+              </InfoTip>
+            </>
+          }
+          value={ci.main.trim() ? ci.main.trim() : 'not set'}
+        >
           <textarea
             className="ci-textarea"
             value={ci.main}
@@ -321,23 +338,26 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
             rows={5}
             placeholder="e.g. Reply briefly and to the point. Use plain Markdown unless I ask for components."
           />
-        </div>
+        </DisclosureRow>
       </div>
 
-      <div className="grp-head">Command execution</div>
-      <div className="formgroup">
-        <div className="set-row">
-          <span className="set-label">
-            <strong>Run commands</strong>
-            <em>
+      <QuickChatSection models={models} />
+
+      <div className="grp-head">Commands</div>
+      <div className="group">
+        <ValueRow
+          label={<strong>Run commands</strong>}
+          hint={
+            <>
               Let Stem run shell commands (CLIs, git, agent-browser){' '}
               <InfoTip label="How command approval works">
                 What runs on its own is governed by the approval mode below — from manual (you
                 approve everything unlisted) to yolo (everything runs). Folders you marked
                 read-only are always protected.
               </InfoTip>
-            </em>
-          </span>
+            </>
+          }
+        >
           <button
             className={`switch${exec?.enabled ? ' on' : ''}`}
             role="switch"
@@ -345,39 +365,39 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
             aria-label="Run commands"
             onClick={() => exec && updateExec({ enabled: !exec.enabled })}
           />
-        </div>
+        </ValueRow>
 
         {exec?.enabled && (
           <>
             {hostShell?.platform === 'win32' && (
-              <div className="set-block">
-                <span className="set-sub">
-                  Windows shell{' '}
-                  <InfoTip label="About the Windows shell">
-                    Commands run in Git Bash when Git for Windows is installed, and fall back to
-                    Command Prompt (cmd.exe) if it is not. Stem looks in the usual places (no
-                    PowerShell); if Git is somewhere unusual, paste the path to its bash.exe.
-                    Only Git for Windows counts — WSL's bash runs in a Linux VM, where the
-                    read-only folder guard cannot see the paths it uses. Switching shells
-                    changes which commands auto-run (dir vs ls) and how quotes work.
-                  </InfoTip>
-                </span>
-                <div className="seg-ctl">
-                  <button
-                    className={exec.windowsShell !== 'git-bash' ? 'active' : ''}
-                    onClick={() => void chooseWindowsShell('cmd')}
-                  >
-                    Command Prompt
-                  </button>
-                  <button
-                    className={exec.windowsShell === 'git-bash' ? 'active' : ''}
-                    onClick={() => void chooseWindowsShell('git-bash')}
-                  >
-                    Git Bash
-                  </button>
-                </div>
+              <>
+                <ValueRow
+                  label={
+                    <>
+                      Windows shell{' '}
+                      <InfoTip label="About the Windows shell">
+                        Commands run in Git Bash when Git for Windows is installed, and fall back to
+                        Command Prompt (cmd.exe) if it is not. Stem looks in the usual places (no
+                        PowerShell); if Git is somewhere unusual, paste the path to its bash.exe.
+                        Only Git for Windows counts — WSL's bash runs in a Linux VM, where the
+                        read-only folder guard cannot see the paths it uses. Switching shells
+                        changes which commands auto-run (dir vs ls) and how quotes work.
+                      </InfoTip>
+                    </>
+                  }
+                >
+                  <RowSelect
+                    ariaLabel="Windows shell"
+                    value={exec.windowsShell === 'git-bash' ? 'git-bash' : 'cmd'}
+                    options={[
+                      { value: 'cmd', label: 'Command Prompt' },
+                      { value: 'git-bash', label: 'Git Bash' }
+                    ]}
+                    onChange={(v) => void chooseWindowsShell(v as WindowsShell)}
+                  />
+                </ValueRow>
                 {(exec.windowsShell === 'git-bash' || bashPathError) && (
-                  <>
+                  <div className="set-vbody">
                     <div className="exec-bash-path">
                       <input
                         className="ifield"
@@ -392,57 +412,54 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
                       </button>
                     </div>
                     {bashPathError && <em className="scratch-empty">{bashPathError}</em>}
-                  </>
+                  </div>
                 )}
-              </div>
+              </>
             )}
-            <div className="set-block">
-              <span className="set-sub">
-                Approval mode{' '}
-                <InfoTip label="About approval modes">
-                  <strong>Manual</strong> — only allowlisted commands run on their own; everything
-                  else pauses for your approval. <strong>Assisted</strong> — an AI safety check
-                  clears commands that serve your request; only flagged ones pause.{' '}
-                  <strong>Yolo</strong> — every command runs immediately, no questions asked (folders
-                  you marked read-only stay protected). The safety check is a heuristic, not a
-                  security boundary; the model it runs on lives under Models. A card that pauses
-                  waits ten minutes for you — after that the command is dropped and the assistant
-                  is told nobody answered, not that you refused.
-                </InfoTip>
-              </span>
-              <div className="seg-ctl">
-                <button
-                  className={exec.approvalMode === 'manual' ? 'active' : ''}
-                  onClick={() => updateExec({ approvalMode: 'manual' })}
-                >
-                  Manual
-                </button>
-                <button
-                  className={exec.approvalMode === 'assisted' ? 'active' : ''}
-                  onClick={() => updateExec({ approvalMode: 'assisted' })}
-                >
-                  Assisted
-                </button>
-                <button
-                  className={exec.approvalMode === 'yolo' ? 'active' : ''}
-                  onClick={() => updateExec({ approvalMode: 'yolo' })}
-                  title="Every command runs immediately — use with care"
-                >
-                  Yolo
-                </button>
-              </div>
-            </div>
 
+            <ValueRow
+              label={
+                <>
+                  Approval mode{' '}
+                  <InfoTip label="About approval modes">
+                    <strong>Manual</strong> — only allowlisted commands run on their own; everything
+                    else pauses for your approval. <strong>Assisted</strong> — an AI safety check
+                    clears commands that serve your request; only flagged ones pause.{' '}
+                    <strong>Yolo</strong> — every command runs immediately, no questions asked (folders
+                    you marked read-only stay protected). The safety check is a heuristic, not a
+                    security boundary; the model it runs on lives under Models. A card that pauses
+                    waits ten minutes for you — after that the command is dropped and the assistant
+                    is told nobody answered, not that you refused.
+                  </InfoTip>
+                </>
+              }
+              hint={APPROVAL_HINTS[exec.approvalMode]}
+            >
+              <RowSelect
+                ariaLabel="Approval mode"
+                value={exec.approvalMode}
+                options={[
+                  { value: 'manual', label: 'Manual' },
+                  { value: 'assisted', label: 'Assisted' },
+                  { value: 'yolo', label: 'Yolo', title: 'Every command runs immediately — use with care' }
+                ]}
+                onChange={(v) => updateExec({ approvalMode: v as ExecSettings['approvalMode'] })}
+              />
+            </ValueRow>
 
             {exec.approvalMode !== 'yolo' && (
-              <div className="set-block">
-                <span className="set-sub">
-                  Always-allowed commands{' '}
-                  <InfoTip label="About the allowlist">
-                    Command prefixes that run without the safety check — grown by the approval card's
-                    "Always allow" button or added here (e.g. <code>git push</code> or <code>npm</code>).
-                  </InfoTip>
-                </span>
+              <DisclosureRow
+                label={
+                  <>
+                    Always-allowed commands{' '}
+                    <InfoTip label="About the allowlist">
+                      Command prefixes that run without the safety check — grown by the approval card's
+                      "Always allow" button or added here (e.g. <code>git push</code> or <code>npm</code>).
+                    </InfoTip>
+                  </>
+                }
+                value={allowCount === 0 ? 'none' : `${allowCount} ${allowCount === 1 ? 'prefix' : 'prefixes'}`}
+              >
                 {exec.allowlist.length > 0 && (
                   <div className="exec-allowlist">
                     {exec.allowlist.map((prefix) => (
@@ -511,30 +528,40 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
                     onChange={(e) => setAllowInput(e.target.value)}
                   />
                 </form>
-              </div>
+              </DisclosureRow>
             )}
 
-            <div className="set-block">
-              <span className="set-sub">
-                Scratch files{' '}
-                <InfoTip label="About scratch files">
-                  Commands run in a folder of their own per chat, so downloads, scripts and build
-                  output stay with the conversation that made them. Deleting a chat deletes its
-                  folder. A folder is cleared once nothing in it — and nothing in the chat — has
-                  been touched for the chosen time; anything you want kept belongs in your Files.
-                </InfoTip>
-              </span>
-              <div className="seg-ctl">
-                {SCRATCH_TTLS.map((opt) => (
-                  <button
-                    key={opt.label}
-                    className={exec.scratchTtlDays === opt.days ? 'active' : ''}
-                    onClick={() => updateExec({ scratchTtlDays: opt.days })}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
+            <DisclosureRow
+              label={
+                <>
+                  Scratch files{' '}
+                  <InfoTip label="About scratch files">
+                    Commands run in a folder of their own per chat, so downloads, scripts and build
+                    output stay with the conversation that made them. Deleting a chat deletes its
+                    folder. A folder is cleared once nothing in it — and nothing in the chat — has
+                    been touched for the chosen time; anything you want kept belongs in your Files.
+                  </InfoTip>
+                </>
+              }
+              value={scratchSummary}
+            >
+              <label className="set-block">
+                <span className="set-sub">Clear after</span>
+                <select
+                  className="ifield"
+                  aria-label="Clear scratch files after"
+                  value={exec.scratchTtlDays === null ? 'never' : String(exec.scratchTtlDays)}
+                  onChange={(e) =>
+                    updateExec({ scratchTtlDays: e.target.value === 'never' ? null : Number(e.target.value) })
+                  }
+                >
+                  {SCRATCH_TTLS.map((opt) => (
+                    <option key={opt.label} value={opt.days === null ? 'never' : String(opt.days)}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="scratch-usage">
                 {scratch === null ? (
                   <em className="scratch-empty">Measuring…</em>
@@ -577,7 +604,7 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
                   </>
                 )}
               </div>
-            </div>
+            </DisclosureRow>
           </>
         )}
 
@@ -587,10 +614,10 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
             client-local (see desktop/exec-host/store.ts) and never on the
             wire, which is why this block does not read `exec`. */}
         {remote && execHostEnabled !== null && (
-          <div className="set-row">
-            <span className="set-label">
-              <strong>Run commands on this computer</strong>
-              <em>
+          <ValueRow
+            label={<strong>Run commands on this computer</strong>}
+            hint={
+              <>
                 Let your Stem server run commands here — for the things only this machine has{' '}
                 <InfoTip label="What switching this on means">
                   With this on, the assistant can target this computer by name and commands run
@@ -599,8 +626,9 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
                   choose "Always allow" for it. Switching this off stops new commands
                   immediately. Leave it off if this Stem server isn't yours alone.
                 </InfoTip>
-              </em>
-            </span>
+              </>
+            }
+          >
             <button
               className={`switch${execHostEnabled ? ' on' : ''}`}
               role="switch"
@@ -612,16 +640,16 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
                   .then((s) => setExecHostEnabled(s.enabled))
               }
             />
-          </div>
+          </ValueRow>
         )}
       </div>
 
       <div className="grp-head">Coding agents</div>
-      <div className="formgroup">
-        <div className="set-row">
-          <span className="set-label">
-            <strong>Delegate coding work</strong>
-            <em>
+      <div className="group">
+        <ValueRow
+          label={<strong>Delegate coding work</strong>}
+          hint={
+            <>
               Let Stem drive an external coding agent (Claude Code, OpenCode){' '}
               <InfoTip label="What coding agents do">
                 With this on, Stem can hand real coding work to a coding agent installed on this
@@ -629,8 +657,9 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
                 logins and files; risky commands pause on an approval card, and folders you marked
                 read-only stay protected. Off by default so switching it on is your decision.
               </InfoTip>
-            </em>
-          </span>
+            </>
+          }
+        >
           <button
             className={`switch${harness?.enabled ? ' on' : ''}`}
             role="switch"
@@ -638,17 +667,17 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
             aria-label="Delegate coding work"
             onClick={() => harness && updateHarness({ enabled: !harness.enabled })}
           />
-        </div>
+        </ValueRow>
 
         {/* THIS computer's consent to run coding agents the server sends it.
             Only offered when the server is elsewhere, for the exec-host reason:
             on a local install the switch above already governs the only machine
             there is. Client-local state, never on the wire. */}
         {remote && harnessHostEnabled !== null && (
-          <div className="set-row">
-            <span className="set-label">
-              <strong>Run coding agents on this computer</strong>
-              <em>
+          <ValueRow
+            label={<strong>Run coding agents on this computer</strong>}
+            hint={
+              <>
                 Let your Stem server drive a coding agent installed here{' '}
                 <InfoTip label="What switching this on means">
                   With this on, the assistant can target this computer by name and a coding agent
@@ -656,8 +685,9 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
                   Risky commands still pause on an approval card. Switching this off stops new
                   runs immediately. Leave it off if this Stem server isn't yours alone.
                 </InfoTip>
-              </em>
-            </span>
+              </>
+            }
+          >
             <button
               className={`switch${harnessHostEnabled ? ' on' : ''}`}
               role="switch"
@@ -669,7 +699,7 @@ export function ChatSettings({ models, modelId, onSelectModel }: ModelTabProps) 
                   .then((s) => setHarnessHostEnabled(s.enabled))
               }
             />
-          </div>
+          </ValueRow>
         )}
       </div>
     </div>

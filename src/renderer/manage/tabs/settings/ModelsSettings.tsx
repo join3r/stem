@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Plug, Globe, HardDrive, Plus, Minus, X, Check, RefreshCw, ChevronRight } from 'lucide-react';
+import { Plug, Plus, X, Check, ChevronRight, TriangleAlert } from 'lucide-react';
 import type {
   AuthProviderId,
   ApiKeyProviderId,
@@ -20,6 +20,8 @@ import { RequestGate } from '../../../requestGate';
 import { InfoTip } from '../../../ui/InfoTip';
 import { ModelPicker } from '../../../ui/ModelPicker';
 import type { ModelTabProps } from '../shared';
+import { SettingSection } from './rows';
+import { ProviderChip } from './ProviderChip';
 import {
   backendOptionLabel,
   backendSections,
@@ -154,6 +156,10 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
   const memoryResolved = resolveMemoryModel(memoryModel, modelId);
   const skillsResolved = resolveSkillsModel(skillsModel, modelId);
 
+  /** A role's answer for a closed group header: its display name, or the id while the list loads. */
+  const nameOf = (id: string | null): string | null =>
+    id ? models.find((m) => m.id === id)?.displayName ?? id : null;
+
   return (
     <>
       <div className="grp-head grp-head-row">
@@ -166,10 +172,11 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
           The split is by what a job needs, not where it runs: quick tasks are extraction a small
           fast model does well, while memory and skills are judgment work that quietly degrades on
           one. Stem never picks a cheaper model for you: the catalog it gets carries no prices, so
-          it would be guessing from names.
+          it would be guessing from names. Each group's header says what it currently runs on, so
+          opening one is only ever about changing it.
         </InfoTip>
       </div>
-      <div className="formgroup">
+      <SettingSection title="You chat with these" summary={nameOf(modelId) ?? '—'} defaultOpen>
         <div className="set-block">
           <span className="set-sub">
             Chatting with you{' '}
@@ -187,7 +194,7 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
           />
         </div>
 
-        <div className="set-block fg-divider">
+        <div className="set-block">
           <span className="set-sub">
             Quick Chat{' '}
             <InfoTip label="About the Quick Chat model">
@@ -210,7 +217,16 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
             resolvedDefault={modelId}
           />
         </div>
+      </SettingSection>
 
+      <SettingSection
+        title="Judgment work"
+        summary={
+          memoryModel || skillsModel
+            ? `Memory: ${nameOf(memoryModel) ?? 'main'} · Skills: ${nameOf(skillsModel) ?? 'main'}`
+            : 'Memory, Skills · follow the main model'
+        }
+      >
         <div className="set-block">
           <span className="set-sub">
             Memory{' '}
@@ -299,7 +315,13 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
           />
         </div>
 
-        <div className="set-block fg-divider">
+      </SettingSection>
+
+      <SettingSection
+        title="Quick tasks"
+        summary={`${nameOf(backgroundResolved) ?? 'same as main'} · subjects, safety check`}
+      >
+        <div className="set-block">
           <span className="set-sub">
             Quick tasks{' '}
             <InfoTip label="About the quick-tasks model">
@@ -438,7 +460,7 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
           />
           {judgeIdle && <em className="mp-resolved">{judgeIdle}</em>}
         </div>
-      </div>
+      </SettingSection>
     </>
   );
 }
@@ -486,10 +508,21 @@ function WebSearchSection({ providers }: { providers: string[] }) {
   const activeBackend = SEARCH_BACKENDS.find((b) => b.id === ws.provider) ?? null;
   const activeState = activeBackend ? backendState(activeBackend, ws.credentials, providers) : null;
 
+  // The closed group's answer: who answers a search, and whether that works today.
+  const backendName =
+    ws.provider === 'auto' ? 'Automatic' : ws.provider === 'all' ? 'All at once' : activeBackend?.label ?? ws.provider;
+  const backendVerdict = activeState
+    ? !activeState.ready
+      ? '! needs a key'
+      : activeState.capped
+        ? '⚠ free limit'
+        : '✓ ready'
+    : '✓ ready';
+
   return (
     <>
       <div className="grp-head">Web search</div>
-      <div className="formgroup">
+      <SettingSection title="Backend" summary={`${backendName} · ${backendVerdict}`}>
         <div className="set-block">
           <span className="set-sub">
             Search backend{' '}
@@ -651,7 +684,7 @@ function WebSearchSection({ providers }: { providers: string[] }) {
             </>
           )}
         </div>
-      </div>
+      </SettingSection>
     </>
   );
 }
@@ -781,77 +814,76 @@ function ProvidersSection({ deadProvider }: { deadProvider?: string | null }) {
   const cloudProviders = providers.filter((p) => !isLocalProviderId(p));
   const enabledLocals = local ? (Object.keys(local) as LocalProviderId[]).filter((id) => local[id].enabled) : [];
   const rows = [
-    ...cloudProviders.map((id) => ({ id, local: false, detail: providerKind(id) })),
-    // A custom endpoint is registered the same way but needn't be on this box, so
-    // it keeps the remote icon.
-    ...enabledLocals.map((id) => ({ id, local: id !== 'custom', detail: local![id].baseUrl }))
+    ...cloudProviders.map((id) => ({ id, detail: providerKind(id) })),
+    ...enabledLocals.map((id) => ({ id, detail: local![id].baseUrl }))
   ];
 
   return (
     <>
-      <div className="grp-head">AI Providers</div>
-      {rows.length === 0 ? (
-        <div className="group">
-          <div className="group-row">
-            <span className="row-main">
-              <em>No providers yet. Add one with the + button.</em>
-            </span>
-          </div>
-        </div>
-      ) : (
-        <div className="group">
-          {rows.map((row) => (
-            <div
-              key={row.id}
-              className={`group-row${selected === row.id ? ' selected' : ''}`}
-              onClick={() => setSelected(row.id)}
+      {/* The one reason Settings opens without being asked, so it leads the tab:
+          a dead sign-in is a banner, not a pill buried in a row. */}
+      {deadProvider && (
+        <div className="set-banner danger">
+          <TriangleAlert size={14} />
+          <span>
+            <strong>{providerName(deadProvider)} session expired.</strong> Chats on it will fail
+            until you reconnect.
+          </span>
+          {(AUTH_PROVIDER_IDS as string[]).includes(deadProvider) && (
+            <button
+              className="link-btn set-banner-fix"
+              onClick={() => void startOAuth(deadProvider as AuthProviderId)}
             >
-              <span className={`row-icon ${row.local ? 'local' : 'remote'}`}>
-                {row.local ? <HardDrive size={14} /> : <Globe size={14} />}
-              </span>
-              <span className="row-main">
-                <strong>{providerName(row.id)}</strong>
-                <em>{row.detail}</em>
-              </span>
-              {row.id === deadProvider && (
-                <button
-                  className="pill danger row-reconnect"
-                  title="Session expired — reconnect"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if ((AUTH_PROVIDER_IDS as string[]).includes(row.id)) void startOAuth(row.id as AuthProviderId);
-                  }}
-                >
-                  Session expired · Reconnect
-                </button>
-              )}
-            </div>
-          ))}
+              Reconnect
+            </button>
+          )}
         </div>
       )}
-      <div className="gutter">
-        <button title="Add provider" onClick={() => setAdding(true)}>
-          <Plus size={15} />
-        </button>
-        <button
-          title="Reconnect selected"
-          onClick={() => {
-            if (selected && (AUTH_PROVIDER_IDS as string[]).includes(selected)) {
-              void startOAuth(selected as AuthProviderId);
-            }
-          }}
-          disabled={!selected || busy || !(AUTH_PROVIDER_IDS as string[]).includes(selected ?? '')}
-        >
-          <RefreshCw size={15} />
-        </button>
-        <button
-          title="Disconnect selected"
-          onClick={() => selected && void disconnect(selected)}
-          disabled={!selected || busy}
-        >
-          <Minus size={15} />
+
+      <div className="grp-head">AI Providers</div>
+      <div className="prov-grid">
+        {rows.map((row) => (
+          <button
+            key={row.id}
+            type="button"
+            className={`prov-tile${selected === row.id ? ' selected' : ''}`}
+            aria-pressed={selected === row.id}
+            onClick={() => setSelected((cur) => (cur === row.id ? null : row.id))}
+          >
+            <span className="prov-tile-head">
+              <ProviderChip id={row.id} />
+              <span className={`prov-dot ${row.id === deadProvider ? 'bad' : 'ok'}`} />
+            </span>
+            <span>
+              <b>{providerName(row.id)}</b>
+              <i>{row.id === deadProvider ? 'Session expired' : row.detail}</i>
+            </span>
+          </button>
+        ))}
+        <button type="button" className="prov-tile add" onClick={() => setAdding(true)}>
+          <Plus size={14} />
+          Add provider
         </button>
       </div>
+      {/* Everything there is to DO to one provider, revealed by selecting its
+          tile — the +/− gutter asked people to select first and then find the
+          actions somewhere else. */}
+      {selected && !adding && (
+        <div className="prov-actions">
+          {(AUTH_PROVIDER_IDS as string[]).includes(selected) && (
+            <button
+              className="link-btn"
+              disabled={busy}
+              onClick={() => void startOAuth(selected as AuthProviderId)}
+            >
+              Reconnect
+            </button>
+          )}
+          <button className="link-btn danger" disabled={busy} onClick={() => void disconnect(selected)}>
+            Disconnect
+          </button>
+        </div>
+      )}
 
       {adding && (
         <>

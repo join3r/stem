@@ -54,7 +54,7 @@ export function SettingsTab({
         ))}
       </div>
       {sub === 'chat' && <ChatSettings models={models} modelId={modelId} onSelectModel={onSelectModel} />}
-      {sub === 'app' && <AppSettings models={models} />}
+      {sub === 'app' && <AppSettings />}
       {sub === 'server' && <ServerSettings />}
       {sub === 'models' && (
         <ModelsSettings

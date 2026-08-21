@@ -12,6 +12,18 @@ import { test, expect, openSettings } from './electron';
 
 type Defaults = { model: string | null; backgroundModel: string | null; backgroundEffort: string | null };
 
+/**
+ * Settings → Models with every role group expanded. The groups fold to a
+ * one-line summary ("what runs on what") and only "You chat with these" opens
+ * by default, so the pickers these tests drive must be unfolded first.
+ */
+const openModelRoles = async (win: Parameters<typeof openSettings>[0]): Promise<void> => {
+  await openSettings(win, 'Models');
+  await win.getByRole('button', { name: /^Judgment work/ }).click();
+  // The lookahead keeps this off the "Quick tasks model" picker button.
+  await win.getByRole('button', { name: /^Quick tasks(?! model)/ }).click();
+};
+
 const readDefaults = (win: Parameters<typeof openSettings>[0]): Promise<Defaults> =>
   win.evaluate(() =>
     (
@@ -22,7 +34,7 @@ const readDefaults = (win: Parameters<typeof openSettings>[0]): Promise<Defaults
 test('the model you chat with reaches the server, where background jobs can see it', async ({
   mainWindow
 }) => {
-  await openSettings(mainWindow, 'Models');
+  await openModelRoles(mainWindow);
 
   // The picker shows it; the store has to agree, or "same as main" is a guess.
   await expect(mainWindow.getByLabel('Model', { exact: true })).toContainText('Stem E2E model');
@@ -30,7 +42,7 @@ test('the model you chat with reaches the server, where background jobs can see 
 });
 
 test('the background model is its own setting, and starts unset', async ({ mainWindow }) => {
-  await openSettings(mainWindow, 'Models');
+  await openModelRoles(mainWindow);
 
   // Unset = the quick-tasks roles follow the model you chat with, which is
   // what their pickers say. Nothing is guessed on your behalf.
@@ -50,7 +62,7 @@ test('the background model is its own setting, and starts unset', async ({ mainW
 test('each role falls back to its own group, and the judgment roles are not in the cheap one', async ({
   mainWindow
 }) => {
-  await openSettings(mainWindow, 'Models');
+  await openModelRoles(mainWindow);
 
   // The cheap group holds exactly the two extraction jobs. Skills used to be
   // the third member, which meant "point Background work at something small"
@@ -71,7 +83,7 @@ test('each role falls back to its own group, and the judgment roles are not in t
 test('effort is a setting on the two roles that chose a model, and it persists', async ({
   mainWindow
 }) => {
-  await openSettings(mainWindow, 'Models');
+  await openModelRoles(mainWindow);
 
   // Unset everywhere = what every background job did before this existed: the
   // model's own default, chosen by pi rather than by anyone.
@@ -108,7 +120,7 @@ test('each background job can be told how hard to think, without leaving the gro
   // this guards is the half-wired version — a select that saves into
   // settings.json and is then read by nobody, or one that quietly writes over
   // the group's own level on its way past.
-  await openSettings(mainWindow, 'Models');
+  await openModelRoles(mainWindow);
 
   const roleEfforts = async (): Promise<Record<string, string | null>> =>
     mainWindow.evaluate(() =>
