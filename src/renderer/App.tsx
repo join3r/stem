@@ -27,6 +27,7 @@ import { InstructionsApprovalCard } from './manage/InstructionsApprovalCard';
 import { SkillApprovalCard } from './manage/SkillApprovalCard';
 import { SkillsResetDialog } from './manage/SkillsResetDialog';
 import { ExecApprovalCard } from './manage/ExecApprovalCard';
+import { HarnessApprovalCard } from './manage/HarnessApprovalCard';
 import { DeleteThreadDialog } from './DeleteThreadDialog';
 import { SnoozeMenu } from './chats/SnoozeMenu';
 import type { InboxSelectionApi } from './chats/ChatList';
@@ -1515,6 +1516,7 @@ export default function App() {
           and dismissed. It waits here until the main window is opened. */}
       <SkillsResetDialog />
       <ExecApprovalCard />
+      <HarnessApprovalCard />
       {pendingDelete && (
         <DeleteThreadDialog
           title={pendingDelete.title}

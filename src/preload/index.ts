@@ -17,6 +17,8 @@ import type {
   ExecApprovalRequest,
   ExecDecision,
   ExecSettings,
+  HarnessApprovalArmed,
+  HarnessApprovalRequest,
   HarnessSettings,
   InstructionsProposal,
   LiveTurn,
@@ -235,6 +237,23 @@ const api: StemApi = {
   },
   respondExecApproval: (id: string, decision: ExecDecision) =>
     ipcRenderer.invoke('exec:resolveApproval', id, decision),
+  onHarnessApproval: (listener: (request: HarnessApprovalRequest) => void) => {
+    const handler = (_e: unknown, request: HarnessApprovalRequest) => listener(request);
+    ipcRenderer.on('harness:approvalRequest', handler);
+    return () => ipcRenderer.removeListener('harness:approvalRequest', handler);
+  },
+  onHarnessApprovalResolved: (listener: (payload: ApprovalResolvedPayload) => void) => {
+    const handler = (_e: unknown, payload: ApprovalResolvedPayload) => listener(payload);
+    ipcRenderer.on('harness:approvalResolved', handler);
+    return () => ipcRenderer.removeListener('harness:approvalResolved', handler);
+  },
+  onHarnessApprovalArmed: (listener: (payload: HarnessApprovalArmed) => void) => {
+    const handler = (_e: unknown, payload: HarnessApprovalArmed) => listener(payload);
+    ipcRenderer.on('harness:approvalArmed', handler);
+    return () => ipcRenderer.removeListener('harness:approvalArmed', handler);
+  },
+  respondHarnessApproval: (id: string, optionId: string) =>
+    ipcRenderer.invoke('harness:resolveApproval', id, optionId),
   execHostShellInfo: () => ipcRenderer.invoke('exec:hostShellInfo'),
   importModels: (dir: string) => ipcRenderer.invoke('models:import', dir),
   importCustomModel: (dir: string, stage: 'embed' | 'rerank', model: CustomEmbedModel | CustomRerankModel) =>

@@ -10,6 +10,7 @@ import {
   type DeviceExecRequest,
   type DeviceMcpRequest,
   type ExecApprovalRequest,
+  type HarnessApprovalRequest,
   type QuickChatSettings,
   type StartTurnInput,
   type TurnAttachment
@@ -491,7 +492,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
    * neither can ever be mistaken for the other, however odd the payload.
    */
   function control(name: string, raw: string): void {
-    let data: { head?: unknown; liveTurns?: unknown; execApprovals?: unknown } = {};
+    let data: { head?: unknown; liveTurns?: unknown; execApprovals?: unknown; harnessApprovals?: unknown } = {};
     try {
       data = JSON.parse(raw) as typeof data;
     } catch {
@@ -544,6 +545,15 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
           if (!request || typeof request.id !== 'string') continue;
           deps.sendToMain('exec:approvalRequest', request);
           deps.sendToOverlay('exec:approvalRequest', request);
+        }
+      }
+      // Harness cards replay the same way, deduped by id in the card queues.
+      const harnessApprovals = data.harnessApprovals;
+      if (Array.isArray(harnessApprovals)) {
+        for (const request of harnessApprovals as HarnessApprovalRequest[]) {
+          if (!request || typeof request.id !== 'string') continue;
+          deps.sendToMain('harness:approvalRequest', request);
+          deps.sendToOverlay('harness:approvalRequest', request);
         }
       }
       return;
@@ -643,6 +653,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       // while a turn runs — bring it back when the request belongs to its thread,
       // or mounting the card would not actually make the confirmation visible.
       case 'exec:approvalRequest':
+      case 'harness:approvalRequest':
       case 'mcp:adminApproval':
       case 'instructions:approvalRequest':
       case 'skills:approvalRequest':
@@ -654,6 +665,8 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       // harmlessly ignored by whichever one has no listener mounted.
       case 'exec:approvalArmed':
       case 'exec:approvalResolved':
+      case 'harness:approvalArmed':
+      case 'harness:approvalResolved':
       case 'mcp:adminApprovalResolved':
       case 'instructions:approvalResolved':
       case 'skills:approvalResolved':

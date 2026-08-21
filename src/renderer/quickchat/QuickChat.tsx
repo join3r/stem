@@ -7,6 +7,7 @@ import { McpApprovalCard } from '../manage/McpApprovalCard';
 import { InstructionsApprovalCard } from '../manage/InstructionsApprovalCard';
 import { SkillApprovalCard } from '../manage/SkillApprovalCard';
 import { ExecApprovalCard } from '../manage/ExecApprovalCard';
+import { HarnessApprovalCard } from '../manage/HarnessApprovalCard';
 import { NOTE_CONFIRM_MS, detectNoteTrigger, useNoteMode } from '../noteMode';
 import { EMPTY_STATE, appendSystemMessage, type ThreadState } from '../chatState';
 import {
@@ -514,6 +515,7 @@ export function QuickChat() {
         <InstructionsApprovalCard />
         <SkillApprovalCard />
         <ExecApprovalCard />
+        <HarnessApprovalCard />
       </div>
     );
   }
@@ -609,6 +611,7 @@ export function QuickChat() {
       <InstructionsApprovalCard />
       <SkillApprovalCard />
       <ExecApprovalCard />
+      <HarnessApprovalCard />
     </div>
   );
 }

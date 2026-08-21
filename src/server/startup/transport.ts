@@ -13,7 +13,7 @@ import {
   type DownloadTarget,
   type TransportServer
 } from '../transport/server';
-import type { ExecApprovalRequest } from '../../shared/types';
+import type { ExecApprovalRequest, HarnessApprovalRequest } from '../../shared/types';
 import { serverEndpointPath } from '../workspace/paths';
 
 /**
@@ -68,6 +68,13 @@ let pendingExecApprovals: () => ExecApprovalRequest[] = () => [];
 /** Wired once, at boot, right after the ExecService exists. */
 export function setPendingApprovalsSource(source: () => ExecApprovalRequest[]): void {
   pendingExecApprovals = source;
+}
+
+/** Same seam for the HarnessService's cards — a card raised into an empty room must replay. */
+let pendingHarnessApprovals: () => HarnessApprovalRequest[] = () => [];
+
+export function setPendingHarnessApprovalsSource(source: () => HarnessApprovalRequest[]): void {
+  pendingHarnessApprovals = source;
 }
 
 /** Who is calling: the device registry's answer, and nothing else on top of it. */
@@ -203,7 +210,11 @@ export async function startTransport(cfg: TransportConfig): Promise<TransportEnd
     // only as pushes, so one raised while nobody was attached (or across a
     // stream gap) was previously unrecoverable — the assistant sat blocked on a
     // question no surface was showing, until it expired.
-    connectSnapshot: () => ({ liveTurns: liveTurnSnapshot(), execApprovals: pendingExecApprovals() }),
+    connectSnapshot: () => ({
+      liveTurns: liveTurnSnapshot(),
+      execApprovals: pendingExecApprovals(),
+      harnessApprovals: pendingHarnessApprovals()
+    }),
     extraHosts
   });
   // Uploads outlive the request that made them, so somebody has to notice the

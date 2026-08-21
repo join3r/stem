@@ -2923,6 +2923,16 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   overflow-y: auto;
 }
 
+/* coding_agent approval card: old/new file text when the ask carries a diff. */
+.harness-approval-diff .harness-diff-old {
+  border-left: 3px solid var(--danger, #c0392b);
+  max-height: 100px;
+}
+.harness-approval-diff .harness-diff-new {
+  border-left: 3px solid var(--ok, #27ae60);
+  max-height: 100px;
+}
+
 /* Settings → Chat → Command execution: the learned-prefix allowlist editor. */
 .exec-allowlist {
   display: flex;

@@ -34,7 +34,7 @@ import { isAnyDesktopPresent, PRESENCE_WINDOW_MS } from './presence';
 // notification that could not be sent must never become that thing's failure.
 
 /** Which approval is waiting. Enough to phrase the alert and to route the tap. */
-export type ApprovalPushKind = 'exec' | 'mcp' | 'instructions' | 'skill';
+export type ApprovalPushKind = 'exec' | 'mcp' | 'instructions' | 'skill' | 'harness';
 
 /**
  * The one shape that goes out. `kind` picks the wording and the deep link; the
@@ -89,6 +89,8 @@ function phrasing(wake: WakeUp): { title: string; fallback: string } {
         return { title: 'Approval needed', fallback: 'An MCP change is waiting for your decision.' };
       case 'instructions':
         return { title: 'Approval needed', fallback: 'A change to your instructions is waiting.' };
+      case 'harness':
+        return { title: 'Approval needed', fallback: 'A coding agent is waiting for your decision.' };
       default:
         return { title: 'Approval needed', fallback: 'A skill is waiting for your review.' };
     }

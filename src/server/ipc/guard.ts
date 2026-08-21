@@ -180,6 +180,9 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'settings:updateExec': [a.object],
   'settings:updateHarness': [a.object],
   'exec:resolveApproval': [a.string, a.oneOf(['allowOnce', 'alwaysAllow', 'deny'])],
+  // The second string is the harness's own optionId; the service checks it
+  // against the card's options rather than any fixed vocabulary.
+  'harness:resolveApproval': [a.string, a.string],
   // A thread id or the literal 'unfiled'. The handler validates the id shape
   // itself before it reaches a path (see workspace/paths.ts isScratchId).
   'exec:clearScratch': [a.string],

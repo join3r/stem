@@ -3220,6 +3220,18 @@ export interface StemApi {
    * left to assume their click landed.
    */
   respondExecApproval(id: string, decision: ExecDecision): Promise<boolean>;
+  /** A coding agent escalated a tool call; fired so the UI can show the harness card. */
+  onHarnessApproval(listener: (request: HarnessApprovalRequest) => void): () => void;
+  /** Fired when a harness approval is answered or expires. */
+  onHarnessApprovalResolved(listener: (payload: ApprovalResolvedPayload) => void): () => void;
+  /** Fired when a queued harness approval reaches the head and its deadline is set. */
+  onHarnessApprovalArmed(listener: (payload: HarnessApprovalArmed) => void): () => void;
+  /**
+   * Answer a pending harness card with one of ITS options. Same lateness
+   * contract as {@link respondExecApproval}: false means the card was already
+   * gone and the harness turn moved on without this answer.
+   */
+  respondHarnessApproval(id: string, optionId: string): Promise<boolean>;
   /**
    * What the machine that RUNS commands is: its OS, and (on Windows) the Git
    * Bash it found. Answered by the server, which may be another computer —

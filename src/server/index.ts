@@ -30,6 +30,7 @@ import {
   closeTransport,
   pushToClients,
   setPendingApprovalsSource,
+  setPendingHarnessApprovalsSource,
   startTransport,
   type TransportEndpoint
 } from './startup/transport';
@@ -512,6 +513,11 @@ function registerIpc(): void {
     // card vanished exactly as if it had worked — the client says so instead.
     return execService?.resolveApproval(id, decision) ?? false;
   });
+  registerServer('harness:resolveApproval', async (_e, id: string, optionId: string) => {
+    // Same contract as exec's: false means the card was already gone (expired,
+    // or answered on another surface), and the client says so.
+    return harness?.service.resolveApproval(id, optionId) ?? false;
+  });
   registerServer(
     'exec:hostShellInfo',
     async (): Promise<ExecHostShellInfo> => ({
@@ -712,6 +718,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   });
   // Answer a client's first question on connecting: what is waiting on you?
   setPendingApprovalsSource(() => execService?.pendingApprovals() ?? []);
+  setPendingHarnessApprovalsSource(() => harness?.service.pendingApprovals() ?? []);
 
   // Coding agents (the coding_agent tool): the HarnessService owns the settings
   // gate, session continuity and the blocking harness turn; its approval cards
@@ -720,6 +727,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     runtime,
     emitApprovalRequest: (request) => {
       emit('harness:approvalRequest', request);
+      // The coding agent is blocked on this one until somebody answers it.
+      pushApproval('harness', request);
     },
     emitApprovalResolved: (id) => {
       emit('harness:approvalResolved', { id });
