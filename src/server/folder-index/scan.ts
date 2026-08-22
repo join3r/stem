@@ -3,6 +3,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, extname, join, relative, sep } from 'node:path';
 import { degrade } from '../degrade';
 import { extractPdfText } from './pdf';
+import { extractWordText } from './word';
 import { DOC_EMBED_MIN_CHARS, type FolderIndexStore } from './store';
 
 // One incremental scan of an indexed connected folder into its index store.
@@ -12,14 +13,19 @@ import { DOC_EMBED_MIN_CHARS, type FolderIndexStore } from './store';
 // changed files re-read, and an equal content hash still skips the reindex so
 // editor touch-saves don't churn vectors.
 //
-// Indexes plain text (.txt/.md) and the text layer of PDFs (pdf.js — no OCR,
-// so image-only scans are skipped). Everything else is counted per extension so
-// the Folders tab can show what was skipped (and hint at what to parse next).
-// PDFs that fail extraction are remembered by (mtime, size) in meta so a
-// folder of scanned PDFs isn't re-parsed on every rescan.
+// Indexes plain text (.txt/.md), the text layer of PDFs (pdf.js — no OCR, so
+// image-only scans are skipped), and Word documents (.doc/.docx via
+// word-extractor). Everything else is counted per extension so the Folders tab
+// can show what was skipped (and hint at what to parse next). Extracted
+// formats that fail extraction or yield no text are remembered by
+// (mtime, size) in meta so a folder of scanned PDFs isn't re-parsed on every
+// rescan.
 
 /** Extensions indexed as plain text (lowercase, with dot). */
 export const INDEXED_EXTENSIONS = new Set(['.md', '.markdown', '.txt', '.text']);
+
+/** Extensions extracted via word-extractor (legacy OLE .doc and OOXML .docx). */
+export const WORD_EXTENSIONS = new Set(['.doc', '.docx']);
 
 /** Never index a text file larger than this — a giant log would flood the index. */
 export const MAX_DOC_BYTES = 2 * 1024 * 1024;
@@ -30,6 +36,14 @@ export const MAX_DOC_BYTES = 2 * 1024 * 1024;
  */
 export const MAX_PDF_BYTES = 25 * 1024 * 1024;
 
+/**
+ * Raw-size cap for Word documents. Looser than plain text for the same reason
+ * as PDFs (size is embedded media, not prose) but tighter than them:
+ * word-extractor parses the whole file up front with no per-page early stop,
+ * so this cap is what bounds the work on a bloated file.
+ */
+export const MAX_WORD_BYTES = 15 * 1024 * 1024;
+
 /** Directories skipped silently (not "unsupported" — just not content). */
 const IGNORED_DIRS = new Set(['node_modules', '__pycache__']);
 
@@ -38,11 +52,19 @@ export const SKIP_TOO_LARGE = 'too-large';
 export const SKIP_BINARY = 'binary';
 export const SKIP_PDF_NO_TEXT = 'pdf-no-text';
 export const SKIP_PDF_UNREADABLE = 'pdf-unreadable';
+export const SKIP_WORD_NO_TEXT = 'word-no-text';
+export const SKIP_WORD_UNREADABLE = 'word-unreadable';
 
-/** Meta key remembering PDFs that yielded no text, keyed by rel path. */
-const PDF_SKIP_CACHE_KEY = 'pdf_skip_cache';
+/**
+ * Meta key remembering extracted-format files (PDF/Word) that failed
+ * extraction or yielded no text, keyed by rel path.
+ */
+const EXTRACT_SKIP_CACHE_KEY = 'extract_skip_cache';
 
-type PdfSkipCache = Record<string, { mtime: number; size: number; reason: string }>;
+/** The cache's pre-Word name — read once as a seed, only the new key is written. */
+const LEGACY_PDF_SKIP_CACHE_KEY = 'pdf_skip_cache';
+
+type ExtractSkipCache = Record<string, { mtime: number; size: number; reason: string }>;
 
 export interface ScanResult {
   indexed: number;
@@ -71,14 +93,19 @@ function looksBinary(buf: Buffer): boolean {
 interface Candidate {
   abs: string;
   rel: string;
-  kind: 'text' | 'pdf';
+  kind: 'text' | 'pdf' | 'word';
   mtime: number;
   size: number;
 }
 
+/** Raw-file size cap per candidate kind (extracted text is capped separately). */
+function maxBytes(kind: Candidate['kind']): number {
+  return kind === 'pdf' ? MAX_PDF_BYTES : kind === 'word' ? MAX_WORD_BYTES : MAX_DOC_BYTES;
+}
+
 /**
  * Scan `root` into `store`. Walks the tree, classifies every file, indexes
- * changed .txt/.md/.pdf content and prunes vanished docs — all writes in one
+ * changed .txt/.md/.pdf/.doc/.docx content and prunes vanished docs — all writes in one
  * transaction so a reader never sees a half-scanned folder. Throws on a
  * vanished/unreadable root (the caller decides what a missing folder means).
  */
@@ -113,7 +140,7 @@ export async function scanFolder(store: FolderIndexStore, root: string): Promise
       }
       if (!e.isFile()) continue;
       const ext = extname(e.name).toLowerCase();
-      const kind = INDEXED_EXTENSIONS.has(ext) ? 'text' : ext === '.pdf' ? 'pdf' : null;
+      const kind = INDEXED_EXTENSIONS.has(ext) ? 'text' : ext === '.pdf' ? 'pdf' : WORD_EXTENSIONS.has(ext) ? 'word' : null;
       if (!kind) {
         skip(ext || '(no extension)');
         continue;
@@ -126,7 +153,7 @@ export async function scanFolder(store: FolderIndexStore, root: string): Promise
         // next scan indexes it if it comes back.
         continue;
       }
-      if (s.size > (kind === 'pdf' ? MAX_PDF_BYTES : MAX_DOC_BYTES)) {
+      if (s.size > maxBytes(kind)) {
         skip(SKIP_TOO_LARGE);
         continue;
       }
@@ -142,15 +169,18 @@ export async function scanFolder(store: FolderIndexStore, root: string): Promise
   await walk(root);
 
   // Pass 2 (I/O): read only files whose (mtime, size) changed since last scan.
-  // PDFs that previously yielded no text are also change-detected (via the meta
-  // skip cache) so they aren't re-parsed every rescan.
-  let priorPdfSkips: PdfSkipCache = {};
+  // Extracted formats (PDF/Word) that previously failed or yielded no text are
+  // also change-detected (via the meta skip cache) so they aren't re-parsed
+  // every rescan.
+  let priorExtractSkips: ExtractSkipCache = {};
   try {
-    priorPdfSkips = JSON.parse(store.readMeta(PDF_SKIP_CACHE_KEY) ?? '{}') as PdfSkipCache;
+    priorExtractSkips = JSON.parse(
+      store.readMeta(EXTRACT_SKIP_CACHE_KEY) ?? store.readMeta(LEGACY_PDF_SKIP_CACHE_KEY) ?? '{}'
+    ) as ExtractSkipCache;
   } catch {
     // quiet: corrupt cache — re-extract everything once and rewrite it.
   }
-  const nextPdfSkips: PdfSkipCache = {};
+  const nextExtractSkips: ExtractSkipCache = {};
   const known = store.knownDocs();
   const unchanged: Array<{ id: number; mtime: number; size: number }> = [];
   const changed: Array<Candidate & { text: string; title: string; hash: string }> = [];
@@ -160,11 +190,11 @@ export async function scanFolder(store: FolderIndexStore, root: string): Promise
       unchanged.push({ id: prior.id, mtime: c.mtime, size: c.size });
       continue;
     }
-    if (c.kind === 'pdf') {
-      const cached = priorPdfSkips[c.rel];
+    if (c.kind !== 'text') {
+      const cached = priorExtractSkips[c.rel];
       if (cached && cached.mtime === c.mtime && cached.size === c.size) {
         skip(cached.reason);
-        nextPdfSkips[c.rel] = cached;
+        nextExtractSkips[c.rel] = cached;
         continue;
       }
     }
@@ -176,18 +206,26 @@ export async function scanFolder(store: FolderIndexStore, root: string): Promise
       // scan, pruned if it stays gone, indexed again when it comes back.
       continue;
     }
-    if (c.kind === 'pdf') {
-      const pdf = await extractPdfText(buf, MAX_DOC_BYTES);
-      if (pdf === null || !pdf.text) {
-        const reason = pdf === null ? SKIP_PDF_UNREADABLE : SKIP_PDF_NO_TEXT;
+    if (c.kind !== 'text') {
+      const extracted =
+        c.kind === 'pdf' ? await extractPdfText(buf, MAX_DOC_BYTES) : await extractWordText(buf, MAX_DOC_BYTES);
+      if (extracted === null || !extracted.text) {
+        const reason =
+          extracted === null
+            ? c.kind === 'pdf'
+              ? SKIP_PDF_UNREADABLE
+              : SKIP_WORD_UNREADABLE
+            : c.kind === 'pdf'
+              ? SKIP_PDF_NO_TEXT
+              : SKIP_WORD_NO_TEXT;
         skip(reason);
-        nextPdfSkips[c.rel] = { mtime: c.mtime, size: c.size, reason };
+        nextExtractSkips[c.rel] = { mtime: c.mtime, size: c.size, reason };
         continue;
       }
       changed.push({
         ...c,
-        text: pdf.text,
-        title: pdf.title ?? docTitle(c.rel, ''),
+        text: extracted.text,
+        title: extracted.title ?? docTitle(c.rel, ''),
         hash: createHash('sha1').update(buf).digest('hex')
       });
       continue;
@@ -212,7 +250,7 @@ export async function scanFolder(store: FolderIndexStore, root: string): Promise
     }
     const pruned = store.pruneNotSeen(scanGen);
     store.writeScanStats({ skippedByExt, lastScanTs: Math.floor(Date.now() / 1000) });
-    store.writeMeta(PDF_SKIP_CACHE_KEY, JSON.stringify(nextPdfSkips));
+    store.writeMeta(EXTRACT_SKIP_CACHE_KEY, JSON.stringify(nextExtractSkips));
     return pruned;
   });
 

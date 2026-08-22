@@ -58,12 +58,22 @@ export default defineConfig({
         // package-relative resolution). Loaded lazily via dynamic import.
         // pdfjs-dist stays external as well: its legacy build probes optional
         // canvas packages via dynamic import, which rollup would try to resolve.
+        // word-extractor stays external too: pure-JS CJS resolved from the
+        // shipped node_modules (asar is off) and loaded lazily on the first
+        // .doc/.docx (folder-index/word.ts) — bundling its CJS tree buys
+        // nothing but interop risk.
         // electron-updater stays external for the plain reason: it ships in the
         // pruned node_modules anyway (asar is off), it is only loaded on the one
         // platform that uses it (desktop/updates.ts imports it lazily, AppImage
         // only), and bundling a CJS tree that reads its own package metadata
         // buys nothing but risk.
-        external: ['@huggingface/transformers', '@earendil-works/pi-coding-agent', /^pdfjs-dist/, 'electron-updater'],
+        external: [
+          '@huggingface/transformers',
+          '@earendil-works/pi-coding-agent',
+          /^pdfjs-dist/,
+          'word-extractor',
+          'electron-updater'
+        ],
         // Multi-input builds default to hashed names; package.json main expects
         // dist/main/index.js, so pin entry names.
         //

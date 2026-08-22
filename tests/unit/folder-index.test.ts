@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -10,13 +10,16 @@ import {
   SKIP_BINARY,
   SKIP_PDF_NO_TEXT,
   SKIP_PDF_UNREADABLE,
-  SKIP_TOO_LARGE
+  SKIP_TOO_LARGE,
+  SKIP_WORD_NO_TEXT,
+  SKIP_WORD_UNREADABLE
 } from '../../src/server/folder-index/scan';
 import { embedMissingDocVectors } from '../../src/server/folder-index/embed';
 import { ftsSearchDocs, hybridSearchDocs, semanticSearchDocsCore } from '../../src/server/recall/search-core';
 import type { EmbeddingsClient } from '../../src/server/recall/embeddings';
 import * as activity from '../../src/server/activity';
 import { makePdf } from './make-pdf';
+import { makeDocx } from './make-docx';
 
 // The indexed-connected-folders pipeline: store schema, incremental scan with
 // mirror semantics (upsert changed, prune vanished), skip classification, the
@@ -230,7 +233,7 @@ describe('scanFolder', () => {
       const res1 = await scanFolder(store, root);
       expect(res1.indexed).toBe(0);
       expect(res1.skippedByExt[SKIP_PDF_NO_TEXT]).toBe(1);
-      const cached = JSON.parse(store.readMeta('pdf_skip_cache') ?? '{}') as Record<string, { reason: string }>;
+      const cached = JSON.parse(store.readMeta('extract_skip_cache') ?? '{}') as Record<string, { reason: string }>;
       expect(cached['scan.pdf']?.reason).toBe(SKIP_PDF_NO_TEXT);
 
       // Unchanged (mtime, size) → still counted as skipped, served from cache.
@@ -242,7 +245,107 @@ describe('scanFolder', () => {
       const res3 = await scanFolder(store, root);
       expect(res3.indexed).toBe(1);
       expect(res3.skippedByExt[SKIP_PDF_NO_TEXT]).toBeUndefined();
-      expect(JSON.parse(store.readMeta('pdf_skip_cache') ?? '{}')).toEqual({});
+      expect(JSON.parse(store.readMeta('extract_skip_cache') ?? '{}')).toEqual({});
+    } finally {
+      store.close();
+    }
+  });
+
+  it('indexes Word documents — .docx and legacy .doc — with filename titles', async () => {
+    const root = freshFolder();
+    writeFileSync(
+      join(root, 'minutes.docx'),
+      makeDocx(['Meeting minutes for the cottage purchase.', 'Deposit agreed: 400 euro, due in August.'])
+    );
+    // Legacy OLE .doc is not practical to synthesize; a real Word 97 file
+    // (generated once with macOS textutil) lives in fixtures.
+    copyFileSync(new URL('../fixtures/legacy-word.doc', import.meta.url), join(root, 'contract.doc'));
+
+    const store = freshStore();
+    try {
+      const res = await scanFolder(store, root);
+      expect(res.indexed).toBe(2);
+      expect(Object.keys(res.skippedByExt)).toHaveLength(0);
+
+      const docxHits = ftsSearchDocs(store.handle(), 'deposit august');
+      expect(docxHits).toHaveLength(1);
+      expect(docxHits[0].relPath).toBe('minutes.docx');
+      // word-extractor exposes no metadata title → filename.
+      expect(docxHits[0].title).toBe('minutes');
+
+      const docHits = ftsSearchDocs(store.handle(), 'boiler contract renewal');
+      expect(docHits).toHaveLength(1);
+      expect(docHits[0].relPath).toBe('contract.doc');
+      expect(docHits[0].title).toBe('contract');
+
+      // An edited document is re-extracted and re-indexed.
+      writeFileSync(join(root, 'minutes.docx'), makeDocx(['Corrected deposit: 500 euro.']));
+      await scanFolder(store, root);
+      expect(ftsSearchDocs(store.handle(), 'corrected deposit')).toHaveLength(1);
+      // FTS terms are OR-ed, so probe with words that only the old text had.
+      expect(ftsSearchDocs(store.handle(), 'august meeting')).toHaveLength(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  it('skips unreadable and empty Word files once and remembers them across rescans', async () => {
+    const root = freshFolder();
+    const fake = join(root, 'fake.doc');
+    const empty = join(root, 'empty.docx');
+    writeFileSync(fake, 'not really a word document');
+    writeFileSync(empty, makeDocx([]));
+    backdate(fake);
+    backdate(empty);
+
+    const store = freshStore();
+    try {
+      const res1 = await scanFolder(store, root);
+      expect(res1.indexed).toBe(0);
+      expect(res1.skippedByExt[SKIP_WORD_UNREADABLE]).toBe(1);
+      expect(res1.skippedByExt[SKIP_WORD_NO_TEXT]).toBe(1);
+      const cached = JSON.parse(store.readMeta('extract_skip_cache') ?? '{}') as Record<string, { reason: string }>;
+      expect(cached['fake.doc']?.reason).toBe(SKIP_WORD_UNREADABLE);
+      expect(cached['empty.docx']?.reason).toBe(SKIP_WORD_NO_TEXT);
+
+      // Unchanged (mtime, size) → still counted as skipped, served from cache.
+      const res2 = await scanFolder(store, root);
+      expect(res2.skippedByExt[SKIP_WORD_UNREADABLE]).toBe(1);
+      expect(res2.skippedByExt[SKIP_WORD_NO_TEXT]).toBe(1);
+
+      // Rewritten with real text → cache entries invalidated, docs indexed.
+      writeFileSync(empty, makeDocx(['Now it says something worth indexing.']));
+      const res3 = await scanFolder(store, root);
+      expect(res3.indexed).toBe(1);
+      expect(res3.skippedByExt[SKIP_WORD_NO_TEXT]).toBeUndefined();
+      expect(ftsSearchDocs(store.handle(), 'worth indexing')).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  it('seeds the skip cache from the legacy pdf_skip_cache meta key', async () => {
+    const root = freshFolder();
+    const scanOnly = join(root, 'scan.pdf');
+    // Garbage bytes: extraction would report pdf-unreadable. The planted legacy
+    // cache says pdf-no-text — seeing that reason proves the entry was served
+    // from the migrated cache, not re-extracted.
+    writeFileSync(scanOnly, 'not really a pdf');
+    backdate(scanOnly);
+    const s = statSync(scanOnly);
+
+    const store = freshStore();
+    try {
+      store.writeMeta(
+        'pdf_skip_cache',
+        JSON.stringify({ 'scan.pdf': { mtime: Math.floor(s.mtimeMs), size: s.size, reason: SKIP_PDF_NO_TEXT } })
+      );
+      const res = await scanFolder(store, root);
+      expect(res.skippedByExt[SKIP_PDF_NO_TEXT]).toBe(1);
+      expect(res.skippedByExt[SKIP_PDF_UNREADABLE]).toBeUndefined();
+      // The entry now lives under the new key.
+      const cached = JSON.parse(store.readMeta('extract_skip_cache') ?? '{}') as Record<string, { reason: string }>;
+      expect(cached['scan.pdf']?.reason).toBe(SKIP_PDF_NO_TEXT);
     } finally {
       store.close();
     }

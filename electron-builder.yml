@@ -50,6 +50,9 @@ files:
   # pdfjs-dist's optional native canvas polyfill (skia) — rendering only; text
   # extraction runs on the DOMMatrix/Path2D stubs in server/folder-index/pdf.ts.
   - '!node_modules/@napi-rs/**'
+  # word-extractor (folder-index .doc/.docx extraction, server/folder-index/word.ts)
+  # ships whole with its deps (saxes, yauzl, …) — pure JS, a few hundred KB, kept
+  # external to the main bundle and resolved from node_modules at runtime.
   # pi-web-access ships a 6MB demo video and a banner in its npm tarball (they are
   # in its `files` list for the npm/GitHub page). pi loads its *.ts sources; the
   # marketing assets are pure weight in every artifact.

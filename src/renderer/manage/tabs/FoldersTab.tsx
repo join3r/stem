@@ -124,8 +124,8 @@ function IndexStatusLine({ status }: { status: FolderIndexStatus }) {
           {' · '}
           {status.skippedCount.toLocaleString()} skipped
           <InfoTip label="Which files were skipped">
-            Text files (.md, .txt) and PDFs with a text layer are indexed; scanned image-only
-            PDFs are skipped (no OCR). Skipped here:{' '}
+            Text files (.md, .txt), PDFs with a text layer, and Word documents (.doc, .docx) are
+            indexed; scanned image-only PDFs are skipped (no OCR). Skipped here:{' '}
             {skipped.map(([ext, n]) => `${ext} ×${n}`).join(', ')}.
           </InfoTip>
         </>
