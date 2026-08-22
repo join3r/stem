@@ -194,8 +194,9 @@ export default function ChatsScreen(): ReactElement {
       />
       {/* New thread, as a glass button floating clear of the tab bar — the
           header that used to hold + is gone. */}
+      {/* One flat style object: Link's asChild slot refuses style arrays. */}
       <Link href="/new" asChild>
-        <Pressable style={[styles.fabWrap, { bottom: insets.bottom + 62 }]} hitSlop={8}>
+        <Pressable style={{ ...styles.fabWrap, bottom: insets.bottom + 62 }} hitSlop={8}>
           <GlassView style={styles.fab} isInteractive>
             <Text style={[styles.fabGlyph, { color: theme.accent }]}>+</Text>
           </GlassView>
