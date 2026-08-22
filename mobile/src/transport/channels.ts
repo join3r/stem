@@ -56,12 +56,20 @@ export interface ChannelSignatures {
   'instructions:resolveApproval': StemApi['respondInstructionsApproval'];
   'skills:resolveApproval': StemApi['respondSkillApproval'];
 
-  /**
-   * Read-only, and here for exactly one reason: an `append` instructions
-   * proposal resolves against the current text, so the card cannot compute what
-   * it would write without it. The phone never writes settings.
-   */
+  // Settings. `settings:get` came first, for the approvals card (an `append`
+  // instructions proposal resolves against the current text). The write
+  // channels arrived with the Settings tab: the same registry-backed rows the
+  // desktop offers, edited from the phone. Each returns the full saved
+  // settings, so the screen replaces its state with the server's answer.
   'settings:get': StemApi['getSettings'];
+  'settings:updateWebSearch': StemApi['updateWebSearch'];
+  'settings:updateChats': StemApi['updateChatsSettings'];
+  'settings:updateTasks': StemApi['updateTasksSettings'];
+  'settings:updateExec': StemApi['updateExecSettings'];
+  'settings:updateHarness': StemApi['updateHarnessSettings'];
+  'settings:updateSkills': StemApi['updateSkillsSettings'];
+  'settings:updateQuickChat': StemApi['updateQuickChat'];
+  'settings:updateEscapeAction': StemApi['updateEscapeAction'];
 
   /**
    * "Wake THIS device at this APNs token." The one channel in this table with a
