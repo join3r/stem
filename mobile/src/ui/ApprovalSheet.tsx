@@ -18,6 +18,7 @@
 
 import type { ReactElement, ReactNode } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { approvalTitle, type PendingApproval } from '../approvals/queue';
 import { useApprovals } from '../hooks/useApprovals';
 import { useTheme, type Theme } from './theme';
@@ -25,6 +26,10 @@ import { useTheme, type Theme } from './theme';
 export function ApprovalSheet(): ReactElement | null {
   const approvals = useApprovals();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  // The sheet sits on the screen's bottom edge, where the home indicator's
+  // corners clip anything that ignores the inset — the action buttons, here.
+  const sheetInset = { paddingBottom: Math.max(insets.bottom + 8, 28) };
   const item = approvals.current;
 
   // An answer that landed after its card had gone. The sheet stays up for it:
@@ -34,7 +39,7 @@ export function ApprovalSheet(): ReactElement | null {
     return (
       <Modal visible transparent animationType="slide" onRequestClose={approvals.dismissMissed}>
         <View style={styles.scrim}>
-          <View style={[styles.sheet, { backgroundColor: theme.bg, borderColor: theme.line }]}>
+          <View style={[styles.sheet, sheetInset, { backgroundColor: theme.bg, borderColor: theme.line }]}>
             <View style={styles.header}>
               <Text style={[styles.title, { color: theme.text }]}>That answer came too late</Text>
             </View>
@@ -59,7 +64,7 @@ export function ApprovalSheet(): ReactElement | null {
   return (
     <Modal visible transparent animationType="slide" onRequestClose={() => approvals.respond(item, false)}>
       <View style={styles.scrim}>
-        <View style={[styles.sheet, { backgroundColor: theme.bg, borderColor: theme.line }]}>
+        <View style={[styles.sheet, sheetInset, { backgroundColor: theme.bg, borderColor: theme.line }]}>
           <View style={styles.header}>
             <Text style={[styles.title, { color: theme.text }]}>{approvalTitle(item)}</Text>
             {approvals.queue.length > 1 ? (
@@ -216,7 +221,6 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 18,
     paddingTop: 16,
-    paddingBottom: 28,
     maxHeight: '82%',
     gap: 12
   },

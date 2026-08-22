@@ -1,7 +1,7 @@
 # Stem for iOS
 
-The phone half of Stem: read your chats, answer approval cards while the agent waits,
-triage the Inbox, watch a turn stream in live. It is a **companion**, not a second Stem
+The phone half of Stem: read and start chats, answer approval cards while the agent
+waits, triage the Inbox, watch a turn stream in live. It is a **companion**, not a second Stem
 — no Manage panel, no provider onboarding, no API key ever on the device. It talks to
 the same server the desktop app talks to, over the same six HTTP routes.
 

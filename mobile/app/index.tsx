@@ -134,7 +134,21 @@ export default function ChatsScreen(): ReactElement {
 
   return (
     <View style={[styles.screen, { backgroundColor: theme.bg }]}>
-      <Stack.Screen options={{ title: 'Chats', headerRight: () => <ConnectionBadge /> }} />
+      <Stack.Screen
+        options={{
+          title: 'Chats',
+          headerRight: () => (
+            <View style={styles.headerRight}>
+              <ConnectionBadge />
+              <Link href="/new" asChild>
+                <Pressable hitSlop={8}>
+                  <Text style={[styles.compose, { color: theme.accent }]}>+</Text>
+                </Pressable>
+              </Link>
+            </View>
+          )
+        }}
+      />
       {error ? (
         <View style={[styles.banner, { backgroundColor: theme.card, borderColor: theme.line }]}>
           <Text style={[styles.bannerText, { color: theme.bad }]}>{error}</Text>
@@ -165,7 +179,7 @@ export default function ChatsScreen(): ReactElement {
           loading ? null : (
             <Text style={[styles.empty, { color: theme.dim }]}>
               {filter === 'inbox'
-                ? 'Nothing waiting. Start a chat at the desk and it will appear here.'
+                ? 'Nothing waiting. Start a chat with the + above, or at the desk.'
                 : `Nothing ${filter}.`}
             </Text>
           )
@@ -241,6 +255,9 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   banner: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   bannerText: { fontSize: 13 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  // A glyph, not an icon set: this is the app's only header action.
+  compose: { fontSize: 28, fontWeight: '400', lineHeight: 30 },
   filters: { flexDirection: 'row', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth },
   filter: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: 'transparent' },
   filterText: { fontSize: 13, fontWeight: '600' },

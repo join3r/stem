@@ -19,8 +19,9 @@
 //      The `snapshot` frame is the only thing that knows, so the running flag
 //      and the id Stop interrupts both fall back to it.
 //
-// WHAT IS SIMPLER THAN THE DESKTOP'S, deliberately: there are no drafts (the
-// phone opens threads that exist, it does not start them), so there is no
+// WHAT IS SIMPLER THAN THE DESKTOP'S, deliberately: there are no drafts (this
+// hook only ever opens threads that exist — a chat started on the phone becomes
+// a real thread before navigation reaches here, see app/new.tsx), so there is no
 // draft→real migration and no generation counter. The pending-send rule that
 // survives is the one that matters — Stop must interrupt a turn whose startTurn
 // has not returned yet, rather than pretending locally that it stopped while the

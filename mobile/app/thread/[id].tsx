@@ -34,13 +34,15 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { activityLabel } from '@shared/activity';
 import type { ActivityItem, ChatMessage } from '@shared/types';
 import { useThread } from '../../src/hooks/useThread';
 import { MdxActionContext } from '../../src/mdx/actions';
 import { AgentMarkdown } from '../../src/ui/AgentMarkdown';
 import { ConnectionBadge } from '../../src/ui/ConnectionBadge';
-import { isPinnedToBottom } from '../../src/ui/scroll';
+import { useKeyboardVisible } from '../../src/ui/keyboard';
+import { isPinnedToBottom, type ScrollMetrics } from '../../src/ui/scroll';
 import { useTheme, type Theme } from '../../src/ui/theme';
 
 export default function ThreadScreen(): ReactElement {
@@ -51,19 +53,50 @@ export default function ThreadScreen(): ReactElement {
   const [draft, setDraft] = useState('');
 
   const list = useRef<FlatList<ChatMessage>>(null);
-  // A ref, not state: this is read inside a scroll handler that fires many times
-  // a second and re-rendering the transcript to record it would be absurd.
+  // Refs, not state: these are read inside scroll handlers that fire many times
+  // a second and re-rendering the transcript to record them would be absurd.
   const pinned = useRef(true);
+  // Whether the scroll events arriving right now were caused by a finger — a
+  // drag, or the momentum one left behind. Only those may change the pinning
+  // decision: scrollToEnd below reports through onScroll too, and when it lands
+  // short (FlatList estimates the height of rows it has not measured yet, which
+  // is most of them right after the transcript hydrates) that programmatic
+  // landing must not unpin the view it was trying to pin. Left unpinned, nothing
+  // retries and a freshly opened thread sits stuck mid-transcript.
+  const dragging = useRef(false);
+
+  const metricsOf = (e: NativeSyntheticEvent<NativeScrollEvent>): ScrollMetrics => ({
+    offsetY: e.nativeEvent.contentOffset.y,
+    layoutHeight: e.nativeEvent.layoutMeasurement.height,
+    contentHeight: e.nativeEvent.contentSize.height
+  });
 
   const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
-    pinned.current = isPinnedToBottom({
-      offsetY: contentOffset.y,
-      layoutHeight: layoutMeasurement.height,
-      contentHeight: contentSize.height
-    });
+    if (dragging.current) pinned.current = isPinnedToBottom(metricsOf(e));
+  }, []);
+  const onDragBegin = useCallback(() => {
+    dragging.current = true;
+  }, []);
+  // End-of-drag and end-of-momentum both settle the decision; momentum-begin
+  // re-opens it for the flick that follows a released drag. scrollToEnd with
+  // animated: false fires none of these three.
+  const onDragEnd = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    pinned.current = isPinnedToBottom(metricsOf(e));
+    dragging.current = false;
+  }, []);
+  const onMomentumBegin = useCallback(() => {
+    dragging.current = true;
+  }, []);
+  const onMomentumEnd = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    pinned.current = isPinnedToBottom(metricsOf(e));
+    dragging.current = false;
   }, []);
 
+  // Fires for content growing (a token, a hydration, a later row getting its
+  // real height) and for the viewport resizing (the keyboard). Both re-assert
+  // the pin, and the repeated calls are the convergence: each landing mounts
+  // more rows, whose measured heights fire this again, until short stops being
+  // short.
   const onGrew = useCallback(() => {
     if (pinned.current) list.current?.scrollToEnd({ animated: false });
   }, []);
@@ -115,8 +148,13 @@ export default function ThreadScreen(): ReactElement {
           keyExtractor={(message) => message.id}
           contentContainerStyle={styles.transcript}
           onScroll={onScroll}
+          onScrollBeginDrag={onDragBegin}
+          onScrollEndDrag={onDragEnd}
+          onMomentumScrollBegin={onMomentumBegin}
+          onMomentumScrollEnd={onMomentumEnd}
           scrollEventThrottle={64}
           onContentSizeChange={onGrew}
+          onLayout={onGrew}
           keyboardDismissMode="interactive"
           ListEmptyComponent={
             thread.loading ? (
@@ -259,8 +297,20 @@ function Composer({
   running: boolean;
   blocked: string | null;
 }): ReactElement {
+  // The home indicator's corner radii eat into the last dozen points of the
+  // screen, so the composer stands on the safe-area inset while the keyboard is
+  // down — and steps off it while the keyboard is up, when the inset would be a
+  // gap floating above the keys (see ../../src/ui/keyboard.ts).
+  const insets = useSafeAreaInsets();
+  const keyboardUp = useKeyboardVisible();
   return (
-    <View style={[styles.composer, { borderColor: theme.line, backgroundColor: theme.bg }]}>
+    <View
+      style={[
+        styles.composer,
+        { borderColor: theme.line, backgroundColor: theme.bg },
+        { paddingBottom: keyboardUp ? 10 : Math.max(insets.bottom, 12) }
+      ]}
+    >
       {blocked ? <Text style={[styles.blocked, { color: theme.warn }]}>{blocked}</Text> : null}
       <View style={styles.composerRow}>
         <TextInput
@@ -325,7 +375,7 @@ const styles = StyleSheet.create({
   activityText: { fontSize: 12, flex: 1 },
   live: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   liveText: { fontSize: 13, flex: 1 },
-  composer: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 12, gap: 6 },
+  composer: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingTop: 8, gap: 6 },
   blocked: { fontSize: 12, paddingHorizontal: 2 },
   composerRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   input: {
