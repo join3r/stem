@@ -197,7 +197,11 @@
         "share vocabulary or a domain with a real skill but do not call for its procedure — those",
         "are the discriminations that matter, and a cut that only clears the easy ones is not",
         "doing any work. n9 and n10 are verbatim from the Aug 8 session where a bare 'Áno'",
-        "out-scored a genuine YouTube question in absolute cosine (0.638 vs 0.543)."
+        "out-scored a genuine YouTube question in absolute cosine (0.638 vs 0.543).",
+        "n13 is verbatim from the Aug 22 session where the calibrated cross-encoder scored a",
+        "bare 'Try now' above its floor and inlined an insurance-claim skill into a coding",
+        "thread; n13 and n14 (with n9) are the low-signal gate's cases — near-empty messages",
+        "must never reach the cut at all (MIN_QUERY_WORDS in gate.ts)."
       ]
     },
     {
@@ -271,6 +275,18 @@
       "text": "koľko stojí ročná diaľničná známka na Slovensku?",
       "langPair": "sk->en",
       "hard": true
+    },
+    {
+      "id": "n13",
+      "text": "Try now",
+      "langPair": "en->en",
+      "hard": false
+    },
+    {
+      "id": "n14",
+      "text": "skús teraz",
+      "langPair": "sk->en",
+      "hard": false
     }
   ],
   "floors": {

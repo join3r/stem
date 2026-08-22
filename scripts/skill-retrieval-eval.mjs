@@ -100,7 +100,7 @@ if (!skipBuild) {
 
 const require = createRequire(import.meta.url);
 const catalog = require(join(BUILD_DIR, 'server', 'recall', 'embed-catalog.js'));
-const { selectCut, DEFAULT_MIN_Z, DEFAULT_MIN_GAP_SIGMA, DEFAULT_SHORTLIST_SIZE, LEGACY_MIN_COSINE } = require(
+const { selectCut, queryHasSignal, DEFAULT_MIN_Z, DEFAULT_MIN_GAP_SIGMA, DEFAULT_SHORTLIST_SIZE, LEGACY_MIN_COSINE } = require(
   join(BUILD_DIR, 'server', 'skills', 'gate.js')
 );
 // The cross-encoder floor comes from the catalog entry it was measured against,
@@ -317,15 +317,20 @@ function scoreCut(opts) {
   let hardFalse = 0;
   let hardCount = 0;
   const detail = [];
+  // The low-signal gate runs before any strategy in production (inject.ts), so
+  // it runs before every strategy here — a near-empty message never reaches the
+  // cut, whatever the cut is.
+  const gatedCut = (text, ranked) =>
+    queryHasSignal(text) ? selectCut(ranked, opts) : { inlined: [], reason: 'low-signal' };
   for (const { q, ranked } of positiveRankings) {
-    const cut = selectCut(ranked, opts);
+    const cut = gatedCut(q.text, ranked);
     const hit = cut.inlined.includes(q.expectSlug);
     if (hit) loaded++;
     if (cut.inlined.some((s) => s !== q.expectSlug)) noise++;
     detail.push({ id: q.id, kind: 'pos', ok: hit, cut });
   }
   for (const { n, ranked } of negativeRankings) {
-    const cut = selectCut(ranked, opts);
+    const cut = gatedCut(n.text, ranked);
     const fired = cut.inlined.length > 0;
     if (fired) falseLoad++;
     if (n.hard) {

@@ -4,7 +4,7 @@ import type { EmbeddingsClient } from '../recall/embeddings';
 import type { RerankClient } from '../recall/rerank';
 import { dot, magnitude } from '../recall/vector';
 import { ensureSkillVectors, skillVectorText, type SkillEmbedder } from './vectors';
-import { DEFAULT_SHORTLIST_SIZE, selectCut, type CutReason, type CutResult } from './gate';
+import { DEFAULT_SHORTLIST_SIZE, queryHasSignal, selectCut, type CutReason, type CutResult } from './gate';
 
 // Per-turn skill selection: which saved procedures the model gets, and in what
 // depth. This is the half of the skills rebuild that takes retrieval away from
@@ -66,7 +66,7 @@ export interface IndexedSkill {
 
 /** Why this turn inlined what it did — for the log, never for the prompt. */
 export interface SkillDecision {
-  reason: CutReason | 'no-embeddings';
+  reason: CutReason | 'no-embeddings' | 'low-signal';
   /** Candidates that could be ranked (had a usable vector). */
   candidates: number;
   topCosine?: number;
@@ -224,11 +224,14 @@ function toInlined(record: SkillRecordish): InlinedSkill {
  * `reason` is carried so the log can distinguish "no embedder" from "embedder
  * ran and found nothing", which look identical in the rendered block.
  */
-function indexAll(records: SkillRecordish[]): SkillSelection {
+function indexAll(
+  records: SkillRecordish[],
+  reason: SkillDecision['reason'] = 'no-embeddings'
+): SkillSelection {
   return {
     inlined: [],
     indexed: records.map(toIndexed),
-    decision: { reason: 'no-embeddings', candidates: 0, inlined: [] }
+    decision: { reason, candidates: 0, inlined: [] }
   };
 }
 
@@ -251,7 +254,12 @@ export async function selectSkills(
 
   const client = opts.embeddings !== undefined ? opts.embeddings : getEmbeddingsClient();
   const query = message.trim();
-  if (!client || query.length === 0 || maxInlined <= 0) return indexAll(candidates);
+  if (!client || maxInlined <= 0) return indexAll(candidates);
+  // A near-empty message ("Try now", "Áno") gives both encoder families nothing
+  // to score, so what comes back is noise — and noise occasionally clears any
+  // calibrated floor. Refuse to rank rather than trust a ranking of nothing;
+  // see MIN_QUERY_WORDS in gate.ts for the observed failure this closes.
+  if (!queryHasSignal(query)) return indexAll(candidates, 'low-signal');
 
   let qVec: Float32Array;
   let vectors: Map<string, Float32Array>;

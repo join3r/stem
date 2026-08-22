@@ -11,6 +11,7 @@ import {
   DEFAULT_MAX_INLINED,
   DEFAULT_SHORTLIST_SIZE,
   LEGACY_MIN_COSINE,
+  queryHasSignal,
   selectCut,
   type ScoredSkill
 } from '../../src/server/skills/gate';
@@ -212,5 +213,30 @@ describe('selectCut — fixed (legacy) and topk', () => {
     const out = selectCut(pack(10, 0.4), { strategy: 'topk' });
     expect(out.inlined).toHaveLength(DEFAULT_MAX_INLINED);
     expect(out.reason).toBe('topk');
+  });
+});
+
+describe('queryHasSignal — the low-signal gate', () => {
+  it('refuses one- and two-word acknowledgements in either language', () => {
+    // "Try now" is verbatim from the 2026-08-22 session where it cleared the
+    // calibrated cross-encoder floor; the rest are the observed shapes around it.
+    for (const q of ['Try now', 'Áno', 'ok', 'skús teraz', '', '   ', '?!', 'try ... now']) {
+      expect(queryHasSignal(q), q).toBe(false);
+    }
+  });
+
+  it('passes anything that names an actual task', () => {
+    for (const q of [
+      'implement docx indexing',
+      'nahlás poistnú udalosť na aute',
+      'summarise this youtube video for me'
+    ]) {
+      expect(queryHasSignal(q), q).toBe(true);
+    }
+  });
+
+  it('counts words, not characters or punctuation', () => {
+    expect(queryHasSignal('a b c')).toBe(true);
+    expect(queryHasSignal('supercalifragilisticexpialidocious')).toBe(false);
   });
 });

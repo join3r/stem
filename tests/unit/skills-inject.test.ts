@@ -114,6 +114,20 @@ describe('selectSkills — ranking and gating', () => {
     expect(sel.indexed[0]).not.toHaveProperty('body');
   });
 
+  it('never inlines against a near-empty message, whatever the scores say', async () => {
+    // Verbatim from the 2026-08-22 session: "Try now" cleared the calibrated
+    // cross-encoder floor and inlined an insurance-claim skill into a coding
+    // thread. Scores against two words are noise; the ranking must not run.
+    const { client } = fakeEmbeddings({ deploy: 0.95, gardening: 0.9 });
+    const sel = await selectSkills('Try now', [skill('deploy'), skill('gardening')], {
+      embeddings: client,
+      rerank: fakeRerank({ deploy: -2, gardening: -3 })
+    });
+    expect(sel.inlined).toEqual([]);
+    expect(sel.indexed.map((s) => s.slug)).toEqual(['deploy', 'gardening']);
+    expect(sel.decision?.reason).toBe('low-signal');
+  });
+
   it('keeps a cross-encoder reject out of inlined but still lists it', async () => {
     const { client } = fakeEmbeddings({ deploy: 0.95, gardening: 0.94 });
     const sel = await selectSkills(QUERY, [skill('deploy'), skill('gardening')], {

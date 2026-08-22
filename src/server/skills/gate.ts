@@ -177,6 +177,38 @@ export const DEFAULT_MIN_BACKGROUND = 4;
 export const LEGACY_MIN_COSINE = 0.72;
 
 /**
+ * Words below which a message cannot justify inlining anything.
+ *
+ * Every test in this module grades the CANDIDATE side: is the top skill's score
+ * separated from the pack, is it above the model's floor. A near-empty message
+ * degenerates the QUERY side instead, and no candidate-side test can see that —
+ * against two words, every score is noise, and noise occasionally clears any
+ * floor. Observed live (2026-08-22): "Try now", a bare nudge in a coding thread,
+ * cleared the calibrated cross-encoder floor and inlined an insurance-claim
+ * procedure. The same turn under `relative` would have been just as exposed:
+ * z and gap measure the profile's shape, not whether the question made sense.
+ *
+ * So the gate refuses the question rather than re-grading the answers. A word
+ * count, not a stopword list, because the user writes Slovak and English and a
+ * list is per-language; three, because the observed failures are one- and
+ * two-word acknowledgements ("Áno", "ok", "Try now", "skús teraz") while real
+ * requests that name a task run longer. What a gated turn loses is bounded: the
+ * library is still listed by name, so the model can ask for a skill it wants.
+ */
+export const MIN_QUERY_WORDS = 3;
+
+/** Whether the message is substantial enough to rank the library against. */
+export function queryHasSignal(query: string): boolean {
+  let words = 0;
+  for (const token of query.split(/\s+/)) {
+    // Bare punctuation ("?", "...") is not a word in any language involved.
+    if (/[\p{L}\p{N}]/u.test(token)) words += 1;
+    if (words >= MIN_QUERY_WORDS) return true;
+  }
+  return false;
+}
+
+/**
  * Cosine-ranked candidates handed to the cross-encoder.
  *
  * Note there is deliberately NO default for `minRerankScore` to sit beside this.
