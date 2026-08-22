@@ -1,0 +1,12 @@
+<!-- Android adaptive-icon foreground: the sprout alone on transparency, at the
+     macOS-tile proportion. Android's safe zone is the centre 66% and the sprout
+     spans well under half the canvas, so nothing is ever clipped by a launcher
+     mask. Background is adaptive-icon-bg.svg. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <g fill="none" stroke="#f2efe6" stroke-width="48" stroke-linecap="round">
+    <path d="M512 792 C 504 686 504 596 512 470"/>
+  </g>
+  <path d="M512 604 C 428 600 366 550 354 450 C 448 450 506 512 512 598 Z" fill="#f2efe6"/>
+  <path d="M512 604 C 596 600 658 550 670 450 C 576 450 518 512 512 598 Z" fill="#f2efe6"/>
+  <circle cx="512" cy="416" r="40" fill="#f0e0cb"/>
+</svg>

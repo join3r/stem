@@ -3,6 +3,7 @@
     "name": "Stem",
     "slug": "stem",
     "version": "0.4.0",
+    "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -14,7 +15,11 @@
     },
     "android": {
       "package": "sk.awantech.stem",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon-fg.png",
+        "backgroundImage": "./assets/adaptive-icon-bg.png"
+      }
     },
     "plugins": [
       "expo-router",
