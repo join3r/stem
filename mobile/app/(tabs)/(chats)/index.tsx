@@ -13,6 +13,11 @@
 //
 // One timer, not a poll: a snoozed thread reappears the instant its wake time
 // passes, and `msUntilNextWake` says when the earliest of those is.
+//
+// The FlatList is the screen's first child and the error banner and filter
+// pills ride inside it as the list header. That is what lets the native large
+// title collapse and the navigation bar go to glass as rows pass under it —
+// the scroll view has to be the thing the screen is made of, not a sibling.
 
 import { Link, Redirect, Stack } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
@@ -28,13 +33,13 @@ import {
 } from 'react-native';
 import { SNOOZE_PRESETS, emptyInboxState } from '@shared/inbox';
 import type { ChatSummary } from '@shared/types';
-import { useChatList } from '../src/hooks/useChatList';
-import { useLiveTurns } from '../src/hooks/useLiveTurns';
-import { inboxRows, inboxUnreadCount, msUntilNextWake, type InboxFilter } from '../src/inbox/list';
-import { useTransport } from '../src/transport/provider';
-import { ConnectionBadge } from '../src/ui/ConnectionBadge';
-import { useTheme, type Theme } from '../src/ui/theme';
-import { relativeTime } from '../src/ui/time';
+import { useChatList } from '../../../src/hooks/useChatList';
+import { useLiveTurns } from '../../../src/hooks/useLiveTurns';
+import { inboxRows, inboxUnreadCount, msUntilNextWake, type InboxFilter } from '../../../src/inbox/list';
+import { useTransport } from '../../../src/transport/provider';
+import { ConnectionBadge } from '../../../src/ui/ConnectionBadge';
+import { useTheme, type Theme } from '../../../src/ui/theme';
+import { relativeTime } from '../../../src/ui/time';
 
 const FILTERS: { id: InboxFilter; label: string }[] = [
   { id: 'inbox', label: 'Inbox' },
@@ -43,7 +48,7 @@ const FILTERS: { id: InboxFilter; label: string }[] = [
 ];
 
 export default function ChatsScreen(): ReactElement {
-  const { connection, pairing, unpair } = useTransport();
+  const { connection, pairing } = useTransport();
   const theme = useTheme();
   const { list, loading, error, refresh, replace } = useChatList();
   const live = useLiveTurns();
@@ -117,21 +122,6 @@ export default function ChatsScreen(): ReactElement {
   }
   if (pairing === null) return <Redirect href="/pair" />;
 
-  const askToUnpair = (): void => {
-    Alert.alert(
-      'Unpair this phone?',
-      // Truthful about an attempt, not a promise: the revoke is sent but not
-      // waited for (src/transport/unpair.ts), so a server that is offline — or
-      // gone for good, the usual reason to be here — keeps its record and the
-      // desk is the only place left to remove it.
-      'The token is deleted from this device, and the server is asked to forget this phone. If it can’t be reached, remove this device in Settings → Devices on the desktop.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Unpair', style: 'destructive', onPress: () => void unpair() }
-      ]
-    );
-  };
-
   return (
     <View style={[styles.screen, { backgroundColor: theme.bg }]}>
       <Stack.Screen
@@ -149,32 +139,37 @@ export default function ChatsScreen(): ReactElement {
           )
         }}
       />
-      {error ? (
-        <View style={[styles.banner, { backgroundColor: theme.card, borderColor: theme.line }]}>
-          <Text style={[styles.bannerText, { color: theme.bad }]}>{error}</Text>
-        </View>
-      ) : null}
-      <View style={[styles.filters, { borderColor: theme.line }]}>
-        {FILTERS.map((f) => (
-          <Pressable
-            key={f.id}
-            onPress={() => setFilter(f.id)}
-            style={[styles.filter, filter === f.id && { backgroundColor: theme.card, borderColor: theme.line }]}
-          >
-            <Text style={[styles.filterText, { color: filter === f.id ? theme.text : theme.dim }]}>
-              {f.label}
-              {f.id === 'inbox' && unread ? ` · ${unread}` : ''}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
       <FlatList
         data={rows}
         keyExtractor={(row) => row.chat.threadId}
+        contentInsetAdjustmentBehavior="automatic"
         refreshControl={
           <RefreshControl refreshing={loading && list !== null} onRefresh={refresh} tintColor={theme.dim} />
         }
         ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: theme.line }]} />}
+        ListHeaderComponent={
+          <View>
+            {error ? (
+              <View style={[styles.banner, { backgroundColor: theme.card, borderColor: theme.line }]}>
+                <Text style={[styles.bannerText, { color: theme.bad }]}>{error}</Text>
+              </View>
+            ) : null}
+            <View style={[styles.filters, { borderColor: theme.line }]}>
+              {FILTERS.map((f) => (
+                <Pressable
+                  key={f.id}
+                  onPress={() => setFilter(f.id)}
+                  style={[styles.filter, filter === f.id && { backgroundColor: theme.card, borderColor: theme.line }]}
+                >
+                  <Text style={[styles.filterText, { color: filter === f.id ? theme.text : theme.dim }]}>
+                    {f.label}
+                    {f.id === 'inbox' && unread ? ` · ${unread}` : ''}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        }
         ListEmptyComponent={
           loading ? null : (
             <Text style={[styles.empty, { color: theme.dim }]}>
@@ -185,17 +180,13 @@ export default function ChatsScreen(): ReactElement {
           )
         }
         ListFooterComponent={
-          <View style={styles.footer}>
-            {filter === 'inbox' && unread ? (
+          filter === 'inbox' && unread ? (
+            <View style={styles.footer}>
               <Pressable onPress={() => void act(() => connection.rpc('inbox:markAllRead'))} hitSlop={8}>
                 <Text style={[styles.footerAction, { color: theme.accent }]}>Mark all read</Text>
               </Pressable>
-            ) : null}
-            <Text style={[styles.footerUrl, { color: theme.dim }]}>{pairing.serverUrl}</Text>
-            <Pressable onPress={askToUnpair} hitSlop={8}>
-              <Text style={[styles.footerAction, { color: theme.bad }]}>Unpair this phone</Text>
-            </Pressable>
-          </View>
+            </View>
+          ) : null
         }
         renderItem={({ item }) => (
           <ChatRow
@@ -272,7 +263,6 @@ const styles = StyleSheet.create({
   time: { fontSize: 12, minWidth: 34, textAlign: 'right' },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: 33 },
   empty: { fontSize: 14, textAlign: 'center', paddingHorizontal: 32, paddingVertical: 48, lineHeight: 20 },
-  footer: { alignItems: 'center', gap: 8, paddingVertical: 28 },
-  footerUrl: { fontSize: 12 },
+  footer: { alignItems: 'center', paddingVertical: 24 },
   footerAction: { fontSize: 14 }
 });
