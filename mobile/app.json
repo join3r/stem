@@ -9,7 +9,8 @@
     "scheme": "stem",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "sk.awantech.stem"
+      "bundleIdentifier": "sk.awantech.stem",
+      "appleTeamId": "AX23G9CAL9"
     },
     "android": {
       "package": "sk.awantech.stem",
