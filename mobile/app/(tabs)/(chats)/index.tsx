@@ -20,7 +20,7 @@
 // to be), and the one action — a new thread — floats bottom-right as a glass
 // button, clear of the tab bar.
 
-import { Link, Redirect } from 'expo-router';
+import { Link, Redirect, useFocusEffect } from 'expo-router';
 import { GlassView } from 'expo-glass-effect';
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
@@ -60,6 +60,19 @@ export default function ChatsScreen(): ReactElement {
   // Re-derives placement when a snooze expires. Bumped by the timer below and by
   // nothing else — every other change to the list arrives as a new `list`.
   const [now, setNow] = useState(() => Date.now());
+  // Settings → Chat → "Preview lines in the Inbox", honored here like the
+  // desktop Inbox honors it. Re-read on focus — the Settings tab (or the desk)
+  // may have changed it — and left at 1 until the first read lands, so the
+  // list doesn't reflow when the answer is the common one.
+  const [previewLines, setPreviewLines] = useState<0 | 1 | 2>(1);
+  useFocusEffect(
+    useCallback(() => {
+      void connection
+        .rpc('settings:get')
+        .then((s) => setPreviewLines(s.chats.previewLines))
+        .catch(() => undefined);
+    }, [connection])
+  );
 
   const chats = useMemo(() => list?.chats ?? [], [list]);
   const inbox = list?.inbox ?? emptyInboxState();
@@ -188,6 +201,7 @@ export default function ChatsScreen(): ReactElement {
             unread={item.unread}
             wakeAt={item.wakeAt}
             working={live.has(item.chat.threadId)}
+            previewLines={previewLines}
             onLongPress={() => menu(item.chat, filter === 'archived', item.unread)}
           />
         )}
@@ -212,6 +226,7 @@ function ChatRow({
   unread,
   wakeAt,
   working,
+  previewLines,
   onLongPress
 }: {
   chat: ChatSummary;
@@ -219,6 +234,7 @@ function ChatRow({
   unread: boolean;
   wakeAt: number | null;
   working: boolean;
+  previewLines: 0 | 1 | 2;
   onLongPress: () => void;
 }): ReactElement {
   return (
@@ -229,8 +245,8 @@ function ChatRow({
           <Text numberOfLines={1} style={[styles.title, { color: theme.text }, unread && styles.titleUnread]}>
             {chat.subject ?? chat.title}
           </Text>
-          {chat.preview ? (
-            <Text numberOfLines={1} style={[styles.preview, { color: theme.dim }]}>
+          {chat.preview && previewLines > 0 ? (
+            <Text numberOfLines={previewLines} style={[styles.preview, { color: theme.dim }]}>
               {chat.preview}
             </Text>
           ) : null}
