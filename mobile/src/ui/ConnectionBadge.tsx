@@ -3,9 +3,15 @@
 // It exists because everything else in this app is a lie when the stream is
 // down: a chat list from four hours ago looks exactly like a chat list from four
 // seconds ago. The dot is the only thing on screen that can tell them apart.
+//
+// A dot and nothing else. It used to carry its label ("Live", "Offline"), but
+// iOS 26 gathers a header item's children into one glass capsule, so the words
+// fused with whatever button sat beside them and read as part of it. The colour
+// alone carries the state in the chrome; the words live on the Settings screen,
+// where there is room to be told what the colour means.
 
 import type { ReactElement } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useTransport } from '../transport/provider';
 import { describeConnection, type ConnectionTone } from './connection';
 import { useTheme, type Theme } from './theme';
@@ -22,15 +28,14 @@ export function ConnectionBadge(): ReactElement {
   const theme = useTheme();
   const { label, tone } = describeConnection(status);
   return (
-    <View style={styles.row}>
-      <View style={[styles.dot, { backgroundColor: toneColor(theme, tone) }]} />
-      <Text style={[styles.label, { color: theme.dim }]}>{label}</Text>
-    </View>
+    <View
+      accessibilityRole="image"
+      accessibilityLabel={label}
+      style={[styles.dot, { backgroundColor: toneColor(theme, tone) }]}
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dot: { width: 8, height: 8, borderRadius: 4 },
-  label: { fontSize: 13 }
+  dot: { width: 9, height: 9, borderRadius: 4.5 }
 });

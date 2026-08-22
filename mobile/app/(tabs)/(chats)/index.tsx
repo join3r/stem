@@ -127,15 +127,16 @@ export default function ChatsScreen(): ReactElement {
       <Stack.Screen
         options={{
           title: 'Chats',
+          // Separate slots on purpose: iOS 26 renders each header item as its
+          // own glass capsule, so the dot beside the + would look — and tap —
+          // like one button.
+          headerLeft: () => <ConnectionBadge />,
           headerRight: () => (
-            <View style={styles.headerRight}>
-              <ConnectionBadge />
-              <Link href="/new" asChild>
-                <Pressable hitSlop={8}>
-                  <Text style={[styles.compose, { color: theme.accent }]}>+</Text>
-                </Pressable>
-              </Link>
-            </View>
+            <Link href="/new" asChild>
+              <Pressable hitSlop={8}>
+                <Text style={[styles.compose, { color: theme.accent }]}>+</Text>
+              </Pressable>
+            </Link>
           )
         }}
       />
@@ -246,7 +247,6 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   banner: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   bannerText: { fontSize: 13 },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   // A glyph, not an icon set: this is the app's only header action.
   compose: { fontSize: 28, fontWeight: '400', lineHeight: 30 },
   filters: { flexDirection: 'row', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth },
