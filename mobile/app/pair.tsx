@@ -15,8 +15,8 @@
 // actions, and only the server knows which happened.
 
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Redirect, Stack } from 'expo-router';
-import { useCallback, useRef, useState, type ReactElement } from 'react';
+import { Redirect, Stack, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -28,7 +28,14 @@ import {
   TextInput,
   View
 } from 'react-native';
-import { parsePairPayload, PAIRING_CODE_LENGTH, normalizePairingCode } from '../src/transport/pairing';
+import {
+  parsePairPayload,
+  PAIRING_CODE_LENGTH,
+  normalizePairingCode,
+  normalizeServerUrl,
+  pairingCodeProblem,
+  serverUrlProblem
+} from '../src/transport/pairing';
 import { useTransport } from '../src/transport/provider';
 import { createScanLatch } from '../src/ui/scan-latch';
 import { useTheme } from '../src/ui/theme';
@@ -45,6 +52,15 @@ export default function PairScreen(): ReactElement {
   // The camera calls back per frame; this is what makes one code one submission.
   // See ../src/ui/scan-latch.ts for why it cannot be state.
   const latch = useRef(createScanLatch()).current;
+
+  // The third way in: the app was OPENED with `stem://pair?url=…&code=…` — the
+  // iOS camera app read the desktop's QR before Stem was ever in front. Same
+  // payload, same names (see parsePairPayload), same one-shot behavior as the
+  // in-app scan: fill both fields so what is being spent is visible, then spend
+  // it. The ref makes one launch one attempt — a failure leaves the filled form
+  // and the server's refusal, not a retry loop against a spent code.
+  const params = useLocalSearchParams<{ url?: string; serverUrl?: string; code?: string }>();
+  const linkSpent = useRef(false);
 
   const submit = useCallback(
     async (url: string, pairingCode: string) => {
@@ -63,6 +79,17 @@ export default function PairScreen(): ReactElement {
     },
     [pair]
   );
+
+  useEffect(() => {
+    const url = normalizeServerUrl(params.url ?? params.serverUrl ?? '');
+    const linkCode = normalizePairingCode(params.code ?? '');
+    if (!url && !linkCode) return;
+    if (linkSpent.current) return;
+    linkSpent.current = true;
+    setServerUrl(url);
+    setCode(linkCode);
+    if (!serverUrlProblem(url) && !pairingCodeProblem(linkCode)) void submit(url, linkCode);
+  }, [params.url, params.serverUrl, params.code, submit]);
 
   const openScanner = useCallback(async () => {
     setError(null);
