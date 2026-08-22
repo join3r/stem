@@ -94,8 +94,10 @@ const DEFAULTS: ServerSettings = {
   // the run's chat bold in the Inbox, they just stop it grabbing focus.
   tasks: { notify: 'alert' },
   // Command execution: on by default with the tiered policy as the guard rail.
-  // approvalMode 'assisted' = allowlist → LLM judge → approval card ('manual'
-  // skips the judge, 'yolo' skips everything but the protected-roots guard);
+  // approvalMode is Stem-wide — it governs run_command AND the commands a
+  // coding agent asks to run (harness/service.ts), even when exec.enabled is
+  // off. 'assisted' = allowlist → LLM judge → approval card ('manual' skips
+  // the judge, 'yolo' skips everything but the protected-roots guard);
   // judgeModel null = the shared background model, else the chat's own model;
   // the allowlist grows via the approval card's "Always allow" button.
   exec: {

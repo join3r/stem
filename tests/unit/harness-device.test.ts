@@ -194,6 +194,7 @@ describe('permissions', () => {
     turnId: 'turn-1',
     permissionId: 'perm-1',
     title: 'npm publish',
+    command: 'npm publish --tag beta',
     options: [{ optionId: 'allow', kind: 'allow_once' }]
   };
 
@@ -206,6 +207,8 @@ describe('permissions', () => {
       onPermission: (ask: HarnessPermissionAsk) => {
         asked += 1;
         expect(ask.permissionId).toBe('perm-1');
+        // The wire's command survives ingress — the server's tiers key off it.
+        expect(ask.command).toBe('npm publish --tag beta');
         return new Promise((resolve) => {
           release = resolve;
         });

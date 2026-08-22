@@ -20,10 +20,11 @@ function orderedOptions(request: HarnessApprovalRequest): HarnessApprovalRequest
 }
 
 // Modal confirm card shown when an external coding agent escalated a tool call
-// (a non-preapproved command, a publish, ...). Unlike the exec card there is no
-// Stem policy behind the buttons: the options are the harness's own, and the
-// answer goes straight back to it — "always allow" here is the AGENT learning
-// (into its own settings for that project), not Stem's allowlist.
+// AND the approval tiers didn't clear it (allowlisted or judge-safe commands
+// are auto-answered server-side and never get here). The buttons are still the
+// harness's own options and the answer goes straight back to it — "always
+// allow" here is the AGENT learning (into its own settings for that project),
+// not Stem's allowlist. A judged card says why it escalated.
 export function HarnessApprovalCard() {
   const [queue, setQueue] = useState<HarnessApprovalRequest[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -122,6 +123,25 @@ export function HarnessApprovalCard() {
           Running on <strong>{request.hostLabel}</strong>
           {request.description ? ` — ${request.description}` : '.'}
         </p>
+
+        {/* Why the tiers escalated: the guard beats the judge; absent on
+            non-command asks, which carry neither field. */}
+        {request.guardReason ? (
+          <p className="muted">
+            {request.guardReason} Allowing it here lets the agent run it anyway.
+          </p>
+        ) : request.judgeVerdict !== undefined ? (
+          <p className="muted">
+            {request.judgeVerdict === 'unsafe'
+              ? 'The safety check flagged this command as potentially unsafe'
+              : request.judgeVerdict === 'failed'
+                ? 'The automatic safety check could not run'
+                : request.judgeVerdict === 'unsure'
+                  ? 'The safety check could not tell whether this command is safe'
+                  : 'Manual approval is on — commands only run when you allow them'}
+            {request.judgeReason ? `: ${request.judgeReason}` : '.'}
+          </p>
+        ) : null}
 
         <pre className="exec-approval-command">{request.title}</pre>
 

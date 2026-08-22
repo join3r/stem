@@ -1277,6 +1277,8 @@ export interface DeviceHarnessPermissionAsk {
   permissionId: string;
   title: string;
   toolName?: string;
+  /** Exact shell input for a kind-'execute' ask; the server's approval tiers key off it. */
+  command?: string;
   description?: string;
   options: HarnessApprovalOption[];
   content?: HarnessApprovalContent[];
@@ -1564,9 +1566,11 @@ export interface HarnessApprovalOption {
 
 /**
  * `harness:approvalRequest` — an external coding agent escalated a tool call
- * and Stem raises a card. Unlike an exec card there is no command/allowlist
- * pair to learn: the options are the harness's own, passed through verbatim,
- * and the answer goes back to the harness rather than into any Stem policy.
+ * and Stem raises a card. The options are still the harness's own and the
+ * chosen one goes back to it verbatim — but since the approval tiers moved in
+ * front of the card, only escalations get here: Stem auto-answers command asks
+ * the approval mode clears (allowlist / LLM judge / yolo), and a card carries
+ * the verdict that put it on screen.
  */
 export interface HarnessApprovalRequest {
   id: string;
@@ -1579,6 +1583,18 @@ export interface HarnessApprovalRequest {
   description?: string;
   options: HarnessApprovalOption[];
   content?: HarnessApprovalContent[];
+  /**
+   * Why the tiers escalated a command ask: the judge's verdict, or null when
+   * manual mode skipped the judge. Absent on non-command asks.
+   */
+  judgeVerdict?: 'unsafe' | 'unsure' | 'failed' | null;
+  judgeReason?: string;
+  /**
+   * Set when the command references a read-only folder: never auto-approved,
+   * whatever the mode. Unlike exec this is advisory — the agent, not Stem,
+   * runs the command, so the user may still allow it.
+   */
+  guardReason?: string;
   /** Same visible-clock contract as {@link ExecApprovalRequest.expiresAt}. */
   expiresAt?: number;
 }

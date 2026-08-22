@@ -1,6 +1,7 @@
 import * as activity from '../activity';
 import type { ActivityHandle } from '../activity';
 import { HarnessService } from '../harness/service';
+import { SafetyJudge } from '../exec/judge';
 import { DeviceHarnessHost, harnessDeviceRouter } from '../harness/device-host';
 import { LocalHarnessHost } from '../harness/local-host';
 import type { HarnessHost } from '../harness/host';
@@ -72,8 +73,10 @@ export function initHarness(deps: {
     deviceHost: async (deviceId, label): Promise<HarnessHost | null> => {
       const entry = await harnessDeviceRouter().hostFor(deviceId);
       if (!entry?.enabled) return null;
-      return new DeviceHarnessHost(harnessDeviceRouter(), deviceId, label);
+      return new DeviceHarnessHost(harnessDeviceRouter(), deviceId, label, entry.platform);
     },
+    readSettings,
+    judge: new SafetyJudge({ runtime: () => deps.runtime }).judge,
     emitApprovalRequest: deps.emitApprovalRequest,
     emitApprovalResolved: deps.emitApprovalResolved,
     emitApprovalArmed: deps.emitApprovalArmed,

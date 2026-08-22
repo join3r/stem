@@ -265,9 +265,14 @@ function askFromRequest(req: AcpPermissionRequest): HarnessPermissionAsk {
       title?: string;
       kind?: string;
       content?: Array<Record<string, unknown>>;
+      rawInput?: { command?: unknown };
     };
     options?: Array<{ optionId?: string; kind?: string; name?: string }>;
   };
+  // The exact shell input for a Bash ask. The title usually carries the same
+  // string, but it is a display field with a "Terminal" fallback — rawInput is
+  // the one the approval policy may key off.
+  const command = raw.toolCall?.rawInput?.command;
   const content: HarnessPermissionAsk['content'] = [];
   for (const piece of raw.toolCall?.content ?? []) {
     if (piece.type === 'diff' && typeof piece.path === 'string') {
@@ -288,6 +293,7 @@ function askFromRequest(req: AcpPermissionRequest): HarnessPermissionAsk {
     permissionId: randomUUID(),
     title: raw.toolCall?.title || 'The coding agent asked for permission',
     ...(raw.toolCall?.kind ? { toolName: raw.toolCall.kind } : {}),
+    ...(typeof command === 'string' && command.trim() ? { command } : {}),
     options: (raw.options ?? [])
       .filter((o): o is { optionId: string; kind?: string; name?: string } => typeof o.optionId === 'string')
       .map((o) => ({ optionId: o.optionId, ...(o.kind ? { kind: o.kind } : {}), ...(o.name ? { name: o.name } : {}) })),

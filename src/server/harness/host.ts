@@ -33,6 +33,8 @@ export interface HarnessPermissionAsk {
   permissionId: string;
   title: string;
   toolName?: string;
+  /** Exact shell input for a kind-'execute' ask (ACP rawInput.command); the approval tiers key off it. */
+  command?: string;
   description?: string;
   options: HarnessApprovalOption[];
   content?: HarnessApprovalContent[];
@@ -71,6 +73,11 @@ export interface HarnessRunTurnInput {
 export interface HarnessHost {
   /** "this server", or the hosting device's label. */
   label(): string;
+  /**
+   * Platform the agent's commands run on, when known — the approval judge and
+   * classifier reason against that shell. Absent/undefined = generic label.
+   */
+  platform?(): NodeJS.Platform | undefined;
   available(): boolean;
   ensureSession(spec: HarnessSessionSpec): Promise<HarnessEnsureResult>;
   runTurn(input: HarnessRunTurnInput, sink: HarnessTurnSink): HarnessTurnHandle;

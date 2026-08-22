@@ -137,7 +137,7 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
       setSubjectsOff(s.chats.subjects === 'off');
       setJudgeModel(s.exec.judgeModel);
       setJudgeEffort(s.exec.judgeEffort);
-      setJudgeIdle(judgeIdleReason(s.exec));
+      setJudgeIdle(judgeIdleReason(s));
       setMemoryModel(s.memory.model);
       setMemoryEffort(s.memory.effort);
       setSkillsModel(s.skills.model);
@@ -440,7 +440,7 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
               window.stem.updateExecSettings({ judgeModel: id, judgeEffort: effort }).then((s) => {
                 setJudgeModel(s.exec.judgeModel);
                 setJudgeEffort(s.exec.judgeEffort);
-                setJudgeIdle(judgeIdleReason(s.exec));
+                setJudgeIdle(judgeIdleReason(s));
               });
             }}
             emptyLabel="Quick tasks"
@@ -466,10 +466,13 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
 }
 
 /** Why the safety check isn't running, or null when it is. */
-function judgeIdleReason(exec: ExecSettings): string | null {
-  if (!exec.enabled) return 'not running — command execution is off under Chat';
-  if (exec.approvalMode === 'manual') return 'not running — approval mode is Manual';
-  if (exec.approvalMode === 'yolo') return 'not running — approval mode is Yolo';
+function judgeIdleReason(s: { exec: ExecSettings; harness: { enabled: boolean } }): string | null {
+  // The judge serves both command execution and coding agents; it is idle only
+  // when neither can bring it a command.
+  if (!s.exec.enabled && !s.harness.enabled)
+    return 'not running — command execution and coding agents are off under Chat';
+  if (s.exec.approvalMode === 'manual') return 'not running — approval mode is Manual';
+  if (s.exec.approvalMode === 'yolo') return 'not running — approval mode is Yolo';
   return null;
 }
 

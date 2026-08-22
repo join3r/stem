@@ -1,13 +1,23 @@
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { HarnessApprovalArmed, HarnessApprovalRequest, HarnessProgress } from '../../shared/types';
+import type {
+  HarnessApprovalArmed,
+  HarnessApprovalRequest,
+  HarnessProgress,
+  HostShell,
+  ServerSettings
+} from '../../shared/types';
 import type { HarnessBridge, HarnessBridgeResult, HarnessRequest } from '../backend/types';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { ensureThreadScratch } from '../exec/scratch';
-import { scanProtected } from '../exec/protected';
+import type { JudgeFn } from '../exec/judge';
+import { hostShellFromPlatform } from '../exec/host-shell';
+import { classify, deviceShellLabel } from '../exec/policy';
+import { scanCommandAgainstRoots, scanProtected } from '../exec/protected';
 import { resolveHarnessTarget } from '../exec-device/router';
+import { clientFoldersForDevice } from '../workspace/connected-folders';
 import { previewFacts } from '../recall/inject';
 import { activityDetail, formatRunResult, newTurnSummary, noteEvent } from './format';
 import type {
@@ -37,6 +47,14 @@ export type HarnessProgressUpdate = HarnessProgress;
 export interface HarnessServiceDeps {
   /** The harness section of settings, read fresh per request. */
   settings: () => Promise<{ enabled: boolean; agents?: Record<string, { command?: string; model?: string }> }>;
+  /**
+   * Full settings, read fresh per permission ask: the Stem-wide approval mode
+   * (exec.approvalMode — exec.enabled gates only the run_command tool), the
+   * shared allowlists, and the judge's model/effort config.
+   */
+  readSettings: () => Promise<ServerSettings>;
+  /** The shared LLM safety judge (exec/judge.ts); a plain stub in tests. */
+  judge: JudgeFn;
   localHost: () => HarnessHost;
   /** The device path: null when that machine never announced (or switched off). */
   deviceHost?: (deviceId: string, label: string) => Promise<HarnessHost | null>;
@@ -49,6 +67,29 @@ export interface HarnessServiceDeps {
   resolveDevice?: typeof resolveHarnessTarget;
   facts?: (text: string) => Promise<{ facts: Array<{ text: string }> }>;
   scratchDir?: (threadId: string) => Promise<string>;
+  /** Test seam for the per-device read-only client-folder roots. */
+  clientFolders?: typeof clientFoldersForDevice;
+}
+
+/** What a permission ask needs to know about the run that raised it. */
+interface RunContext {
+  threadId: string;
+  agent: string;
+  hostLabel: string;
+  cwd: string;
+  /** The brief the agent was given — the judge checks commands against it. */
+  intent: string;
+  /** Set for device-hosted runs: allowlist bucket and shell come from the device. */
+  deviceId?: string;
+  platform?: NodeJS.Platform;
+}
+
+/** What the auto-decision pass hands the card when it escalates instead. */
+interface CardAnnotations {
+  /** Null = manual mode reached the card without a judge; absent = not a judged ask. */
+  judgeVerdict?: 'unsafe' | 'unsure' | 'failed' | null;
+  judgeReason?: string;
+  guardReason?: string;
 }
 
 type ApprovalOutcome = { optionId: string } | 'timeout' | 'dismissed';
@@ -228,7 +269,21 @@ export class HarnessService implements HarnessBridge {
           for (const event of events) noteEvent(summary, event);
           noteProgress();
         },
-        onPermission: (ask) => this.askPermission(req.threadId, agent, host.label(), ask)
+        onPermission: (ask) =>
+          this.askPermission(
+            {
+              threadId: req.threadId,
+              agent,
+              hostLabel: host.label(),
+              cwd,
+              // The pre-facts brief: what the agent was asked to do, which is
+              // what its commands should serve.
+              intent: prompt,
+              ...(hostKey !== 'server' ? { deviceId: hostKey } : {}),
+              ...(host.platform?.() ? { platform: host.platform() } : {})
+            },
+            ask
+          )
       }
     );
     this.running.set(runId, { threadId: req.threadId, handle });
@@ -311,25 +366,150 @@ export class HarnessService implements HarnessBridge {
     );
   }
 
-  private askPermission(
-    threadId: string,
-    agent: string,
-    hostLabel: string,
+  /**
+   * Answer one escalated ask: the approval-mode tiers first (yolo / allowlist /
+   * LLM judge, exec/service.ts precedent), the card only when none of them
+   * clears it. Any policy failure falls through to the card, never to an allow.
+   */
+  private async askPermission(ctx: RunContext, ask: HarnessPermissionAsk): Promise<HarnessPermissionDecision> {
+    let annotations: CardAnnotations = {};
+    try {
+      const auto = await this.decideAsk(ctx, ask);
+      if (auto.decision) return auto.decision;
+      annotations = auto.annotations ?? {};
+    } catch (e) {
+      log('harness', 'approval policy failed — escalating to the card', {
+        error: e instanceof Error ? e.message : String(e)
+      });
+    }
+    return this.raiseCard(ctx, ask, annotations);
+  }
+
+  private async decideAsk(
+    ctx: RunContext,
     ask: HarnessPermissionAsk
+  ): Promise<{ decision?: HarnessPermissionDecision; annotations?: CardAnnotations }> {
+    // The adapter's allow-once option. allow_always is deliberately never
+    // auto-answered: it would teach the AGENT a permanent rule nobody saw.
+    const allow =
+      ask.options.find((o) => o.kind === 'allow_once') ?? ask.options.find((o) => o.optionId === 'allow');
+    const allowVia = (via: 'yolo' | 'allowlist' | 'judge', command?: string): { decision?: HarnessPermissionDecision } => {
+      if (!allow) return {};
+      log('harness', 'auto-approved a coding-agent ask', {
+        agent: ctx.agent,
+        host: ctx.hostLabel,
+        title: ask.title,
+        ...(command ? { command } : {}),
+        via,
+        optionId: allow.optionId
+      });
+      return { decision: { optionId: allow.optionId } };
+    };
+
+    const all = await this.deps.readSettings();
+    const mode = all.exec.approvalMode;
+    // The title usually repeats the command, but it is a display field with a
+    // "Terminal" fallback — ask.command (ACP rawInput) is the trusted spelling.
+    const command =
+      ask.toolName === 'execute' ? (ask.command ?? (ask.title !== 'Terminal' ? ask.title : undefined)) : undefined;
+
+    if (command) {
+      // Read-only folder guard, ahead of yolo (exec precedent): a command that
+      // references a protected root is never auto-approved — the card carries
+      // the reason and the user decides.
+      const guardReason = await this.protectedGuardReason(ctx, command);
+      if (guardReason) return { annotations: { guardReason } };
+
+      if (mode === 'yolo') return allowVia('yolo', command);
+
+      // Tier 1: the shared allowlist — the device's own zero-trust bucket for
+      // device-hosted runs (exec/service.ts device posture).
+      const cls = ctx.deviceId
+        ? classify(
+            command,
+            { allowlist: (all.exec.deviceAllowlists ?? {})[ctx.deviceId] ?? [] },
+            ctx.platform ?? hostShellFromPlatform(),
+            { includeBuiltins: false }
+          )
+        : classify(command, { allowlist: all.exec.allowlist }, hostShellFromPlatform());
+      if (cls.tier === 'run') return allowVia('allowlist', command);
+
+      // Tier 2: the LLM judge, before any card exists — the card never flashes.
+      if (mode === 'assisted') {
+        const verdict = await this.deps.judge(
+          command,
+          ctx.cwd,
+          all.exec,
+          all.defaults,
+          ctx.intent,
+          null,
+          ctx.deviceId ? (ctx.platform ?? hostShellFromPlatform()) : hostShellFromPlatform(),
+          ctx.deviceId
+            ? deviceShellLabel(
+                ctx.platform === 'darwin' || ctx.platform === 'win32' ? ctx.platform : 'linux',
+                ctx.hostLabel
+              )
+            : undefined
+        );
+        if (verdict.verdict === 'safe') return allowVia('judge', command);
+        return { annotations: { judgeVerdict: verdict.verdict, judgeReason: verdict.reason } };
+      }
+      // Manual mode: the card, saying so.
+      return { annotations: { judgeVerdict: null } };
+    }
+
+    // Non-execute asks (fetches, MCP tools, …) and command-less execute asks:
+    // yolo means no cards anywhere; everything else stays a card as before.
+    if (mode === 'yolo') return allowVia('yolo');
+    return {};
+  }
+
+  /** The guard reason when the command references a read-only folder, else undefined. */
+  private async protectedGuardReason(ctx: RunContext, command: string): Promise<string | undefined> {
+    if (!ctx.deviceId) {
+      const scan = scanProtected(command, ctx.cwd);
+      return scan.blocked ? (scan.reason ?? 'The command references a folder connected read-only.') : undefined;
+    }
+    const folders = await (this.deps.clientFolders ?? clientFoldersForDevice)(ctx.deviceId);
+    const readOnly = folders.filter((f) => f.mode === 'read' && f.origin);
+    if (!readOnly.length) return undefined;
+    // Windows scans both native and MSYS path shapes; everything else POSIX.
+    const shell: HostShell = ctx.platform === 'win32' ? 'git-bash' : 'zsh';
+    const scan = scanCommandAgainstRoots(
+      command,
+      ctx.cwd,
+      readOnly.map((f) => f.origin!.clientPath),
+      shell
+    );
+    if (!scan.blocked) return undefined;
+    const folder = readOnly.find((f) => f.origin!.clientPath === scan.root);
+    return (
+      `The command touches "${scan.root}" on ${ctx.hostLabel} — the folder “${folder?.label ?? scan.root}” ` +
+      'is connected to Stem read-only.'
+    );
+  }
+
+  private raiseCard(
+    ctx: RunContext,
+    ask: HarnessPermissionAsk,
+    annotations: CardAnnotations
   ): Promise<HarnessPermissionDecision> {
     const request: HarnessApprovalRequest = {
       id: randomUUID(),
-      threadId,
-      agent,
-      hostLabel,
+      threadId: ctx.threadId,
+      agent: ctx.agent,
+      hostLabel: ctx.hostLabel,
       title: ask.title,
       ...(ask.description ? { description: ask.description } : {}),
       options: ask.options,
-      ...(ask.content?.length ? { content: ask.content } : {})
+      ...(ask.content?.length ? { content: ask.content } : {}),
+      ...(annotations.judgeVerdict !== undefined ? { judgeVerdict: annotations.judgeVerdict } : {}),
+      ...(annotations.judgeReason ? { judgeReason: annotations.judgeReason } : {}),
+      ...(annotations.guardReason ? { guardReason: annotations.guardReason } : {})
     };
     return new Promise<HarnessPermissionDecision>((resolveDecision) => {
       const entry: PendingApproval = {
-        threadId,
+        threadId: ctx.threadId,
         resolve: (outcome) => {
           if (outcome === 'timeout' || outcome === 'dismissed') resolveDecision({ expired: true });
           else resolveDecision(outcome);

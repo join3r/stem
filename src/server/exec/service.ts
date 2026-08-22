@@ -2,24 +2,21 @@ import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type {
-  DefaultsSettings,
   ExecApprovalArmed,
   ExecApprovalRequest,
   ExecDecision,
   ExecSettings,
   HostShell,
-  ModelSummary,
   ServerSettings
 } from '../../shared/types';
 import type { ChatBackend, ExecBridge, ExecBridgeResult, ExecRequest } from '../backend/types';
-import { resolveRoleEffort } from '../../shared/modelRoles';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { ensureThreadScratch } from './scratch';
 import { clampTimeout, execEnv, resolveLoginPath, runCommand } from './executor';
 import { gitBashPathEnv, resolveHostShellTarget, type HostShellTarget } from './git-bash';
-import { hostShellFromPlatform } from './host-shell';
-import { buildJudgePrompt, classify, deviceShellLabel, parseJudgeVerdict, resolveJudgeModel } from './policy';
+import { SafetyJudge } from './judge';
+import { classify, deviceShellLabel } from './policy';
 import { scanCommandAgainstRoots, scanProtected } from './protected';
 import { execDeviceRouter, resolveExecTarget } from '../exec-device/router';
 import { clientFoldersForDevice } from '../workspace/connected-folders';
@@ -39,27 +36,9 @@ import { clientFoldersForDevice } from '../workspace/connected-folders';
 // have meant all along; the clock only starts once the card is actually the one
 // on screen (see armHead).
 const APPROVAL_TIMEOUT_MS = 600_000;
-// complete() spawns a throwaway pi process per call and may queue behind Recall
-// distillation completes, so cold-start alone can eat >10s — 15s timed out in
-// practice and dumped perfectly fine commands onto approval cards. Windows
-// Electron-as-Node cold start needs more headroom than 30s (Windows especially).
-export const JUDGE_TIMEOUT_MS = 60_000;
-/**
- * Why the safety check couldn't answer, in words the approval card can use.
- * The exception text itself goes to the log — `pi exited (code 1, signal null)`
- * is a cause for us, not for someone deciding whether to run a command. Returns
- * undefined when there is nothing to add beyond "it could not run", which the
- * card already says.
- */
-function judgeFailureReason(detail: string): string | undefined {
-  // Lowercase fragments: the card renders these after "…could not run: ".
-  const lower = detail.toLowerCase();
-  if (lower.includes('timed out')) return 'it did not answer in time';
-  if (lower.includes('no api key') || lower.includes('unknown provider') || lower.includes('not found'))
-    return 'no model was available to run it';
-  if (lower.includes('could not be located')) return 'the pi backend could not start';
-  return undefined;
-}
+// The judge lives in judge.ts (shared with HarnessService); re-exported so the
+// timeout stays importable from here.
+export { JUDGE_TIMEOUT_MS } from './judge';
 /**
  * What the assistant is told when the card expired. It says who did not answer
  * (nobody) rather than who refused (no one did), because the assistant repeats
@@ -71,8 +50,6 @@ const APPROVAL_TIMEOUT_ERROR =
   'minutes, so it did not run. This is not a refusal — the user may simply have been away. Ask whether ' +
   'they still want it before running anything else.';
 
-/** listModels() is an RPC to the backend; cache it — the judge runs per command. */
-const MODELS_CACHE_TTL_MS = 5 * 60_000;
 /** Concurrent command cap; further tool calls queue rather than forking shells. */
 const MAX_CONCURRENT = 2;
 
@@ -126,10 +103,11 @@ export class ExecService implements ExecBridge {
   private readonly running = new Set<RunningExec>();
   private active = 0;
   private readonly waiters: Array<() => void> = [];
-  private modelsCache: { at: number; models: ModelSummary[] } | null = null;
+  private readonly safetyJudge: SafetyJudge;
 
   constructor(deps: ExecServiceDeps) {
     this.deps = deps;
+    this.safetyJudge = new SafetyJudge({ runtime: () => this.deps.runtime() });
   }
 
   async handleExecRequest(req: ExecRequest): Promise<ExecBridgeResult> {
@@ -428,56 +406,8 @@ export class ExecService implements ExecBridge {
     return result.ok ? { ok: true, text: result.text } : { ok: false, error: result.error };
   }
 
-  private async listModelsCached(): Promise<ModelSummary[]> {
-    if (this.modelsCache && Date.now() - this.modelsCache.at < MODELS_CACHE_TTL_MS) {
-      return this.modelsCache.models;
-    }
-    // quiet: an empty list is not an empty answer here. resolveJudgeModel returns
-    // null for it and complete() then picks its own default, which is the same
-    // model it would have chosen; the cache is left unset so the next judge
-    // asks again. A backend that is properly down fails at complete(), where the
-    // judge's own catch escalates to an approval card.
-    const models = await this.deps.runtime().listModels().catch(() => []);
-    if (models.length) this.modelsCache = { at: Date.now(), models };
-    return models;
-  }
-
-  private async judge(
-    command: string,
-    cwd: string,
-    settings: ExecSettings,
-    defaults: DefaultsSettings,
-    userText?: string,
-    currentModel?: string | null,
-    shell: HostShell | NodeJS.Platform = hostShellFromPlatform(),
-    // Set for a device-targeted command: the judge must reason about the shell
-    // that will actually run it, on the machine it will actually run on.
-    shellLabel?: string
-  ): Promise<{ verdict: 'safe' | 'unsafe' | 'unsure' | 'failed'; reason?: string }> {
-    try {
-      const runtime = this.deps.runtime();
-      const models = await this.listModelsCached();
-      // The shared background model if one is set, else the live chat's own —
-      // resolveJudgeModel only answers null when it was handed no models at all,
-      // and complete() then uses its own default, which is the best available
-      // answer anyway.
-      const model = resolveJudgeModel(settings, defaults, models, currentModel ?? null);
-      const reply = await runtime.complete(buildJudgePrompt(command, cwd, userText, shell, shellLabel), {
-        model,
-        // The judge sits between you and every command you run, so it feels the
-        // effort setting more than any other role does — its own if it has been
-        // given one, else the shared Quick tasks level, else Low.
-        effort: resolveRoleEffort('judge', settings.judgeEffort, defaults.backgroundEffort),
-        timeoutMs: JUDGE_TIMEOUT_MS,
-        priority: true
-      });
-      return parseJudgeVerdict(reply);
-    } catch (e) {
-      const detail = (e instanceof Error ? e.message : String(e)).trim() || 'unknown error';
-      log('exec', 'judge failed — escalating to approval', { error: detail });
-      const reason = judgeFailureReason(detail);
-      return reason ? { verdict: 'failed', reason } : { verdict: 'failed' };
-    }
+  private judge(...args: Parameters<SafetyJudge['judge']>): ReturnType<SafetyJudge['judge']> {
+    return this.safetyJudge.judge(...args);
   }
 
   private requestApproval(request: Omit<ExecApprovalRequest, 'id'>): Promise<ApprovalOutcome> {

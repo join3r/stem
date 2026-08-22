@@ -360,6 +360,7 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
           permissionId: value.permissionId,
           title: value.title,
           ...(typeof value.toolName === 'string' ? { toolName: value.toolName } : {}),
+          ...(typeof value.command === 'string' && value.command.trim() ? { command: value.command } : {}),
           ...(typeof value.description === 'string' ? { description: value.description } : {}),
           options: value.options.filter(
             (o): o is { optionId: string; kind?: string; name?: string } =>
@@ -420,11 +421,18 @@ export class DeviceHarnessHost implements HarnessHost {
   constructor(
     private readonly router: HarnessDeviceRouter,
     private readonly deviceId: string,
-    private readonly deviceLabel: string
+    private readonly deviceLabel: string,
+    private readonly devicePlatform?: NodeJS.Platform
   ) {}
 
   label(): string {
     return this.deviceLabel;
+  }
+
+  platform(): NodeJS.Platform | undefined {
+    // The announcement's platform; undefined for an entry recorded before it
+    // was stored — the judge then reasons with a generic shell label.
+    return this.devicePlatform;
   }
 
   available(): boolean {

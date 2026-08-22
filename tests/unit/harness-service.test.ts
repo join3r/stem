@@ -1,13 +1,14 @@
 // HarnessService against a scripted HarnessHost: the settings gate, the
 // scheduled refusal, cwd resolution and the protected-roots guard, session
 // continuity (cache semantics, fresh_session, stale-session retry), the recall
-// preamble, the approval card queue (visible clock, timeout, dismissal), and
+// preamble, the approval tiers (yolo / allowlist / judge) in front of the card,
+// the approval card queue (visible clock, timeout, dismissal), and
 // cancellation. No acpx and no processes — policy only.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { HarnessApprovalRequest } from '../../src/shared/types';
+import type { HarnessApprovalRequest, ServerSettings } from '../../src/shared/types';
 import type {
   HarnessEnsureResult,
   HarnessHost,
@@ -79,6 +80,24 @@ function scriptedHost(script: {
   return host;
 }
 
+/** Full-settings fixture for the approval tiers (exec-service.test.ts pattern). */
+function serverSettings(
+  exec: Partial<ServerSettings['exec']> = {}
+): ServerSettings {
+  return {
+    exec: {
+      enabled: true,
+      approvalMode: 'manual',
+      judgeModel: null,
+      judgeEffort: null,
+      allowlist: [],
+      deviceAllowlists: {},
+      ...exec
+    },
+    defaults: { model: null, backgroundModel: null, backgroundEffort: 'low' }
+  } as unknown as ServerSettings;
+}
+
 function makeService(
   host: HarnessHost,
   overrides: Partial<HarnessServiceDeps> = {}
@@ -87,6 +106,10 @@ function makeService(
   const resolved: string[] = [];
   const service = new HarnessService({
     settings: async () => ({ enabled: true }),
+    // Manual mode by default (backend/fake.ts precedent): approval-queue tests
+    // get their cards without an LLM judge in the way.
+    readSettings: async () => serverSettings(),
+    judge: async () => ({ verdict: 'unsure' }),
     localHost: () => host,
     emitApprovalRequest: (request) => approvals.push(request),
     emitApprovalResolved: (id) => resolved.push(id),
@@ -365,6 +388,219 @@ describe('approvals', () => {
     expect(host.cancelled).toBe(1);
     expect(res.ok && res.text).toContain('cancelled by the user');
     expect((await readHarnessRuns())[0].status).toBe('cancelled');
+  });
+});
+
+describe('approval tiers', () => {
+  const OPTIONS = [
+    { optionId: 'allow_always', kind: 'allow_always', name: 'Always Allow' },
+    { optionId: 'allow', kind: 'allow_once', name: 'Allow' },
+    { optionId: 'reject', kind: 'reject_once', name: 'Reject' }
+  ];
+
+  /** A host whose turn raises one execute ask and reports the decision. */
+  function execAskingHost(command: string, onDecision: (d: unknown) => void, title = command): ScriptedHost {
+    return scriptedHost({
+      turn: async (_input, sink) => {
+        const decision = await sink.onPermission({
+          permissionId: 'perm-1',
+          title,
+          toolName: 'execute',
+          command,
+          options: OPTIONS
+        });
+        onDecision(decision);
+        return { ok: true, stopReason: 'end_turn', text: 'after ask' };
+      }
+    });
+  }
+
+  it('yolo auto-allows an execute ask via allow_once, raising no card', async () => {
+    let decision: unknown;
+    const host = execAskingHost('npm publish', (d) => (decision = d));
+    const { service, approvals } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'yolo' })
+    });
+    const res = await service.handleHarnessRequest(REQ);
+    expect(res.ok).toBe(true);
+    // The allow_once option, never allow_always — that would teach the agent
+    // a permanent rule nobody saw.
+    expect(decision).toEqual({ optionId: 'allow' });
+    expect(approvals).toHaveLength(0);
+  });
+
+  it('yolo auto-allows non-execute asks too', async () => {
+    let decision: unknown;
+    const host = scriptedHost({
+      turn: async (_input, sink) => {
+        decision = await sink.onPermission({
+          permissionId: 'perm-1',
+          title: 'Fetch https://example.com',
+          toolName: 'fetch',
+          options: OPTIONS
+        });
+        return { ok: true, stopReason: 'end_turn', text: 'done' };
+      }
+    });
+    const { service, approvals } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'yolo' })
+    });
+    await service.handleHarnessRequest(REQ);
+    expect(decision).toEqual({ optionId: 'allow' });
+    expect(approvals).toHaveLength(0);
+  });
+
+  it('an allowlisted command clears tier 1 without calling the judge', async () => {
+    let decision: unknown;
+    const judge = vi.fn();
+    const host = execAskingHost('git status', (d) => (decision = d));
+    const { service, approvals } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'assisted', allowlist: ['git status'] }),
+      judge
+    });
+    await service.handleHarnessRequest(REQ);
+    expect(decision).toEqual({ optionId: 'allow' });
+    expect(approvals).toHaveLength(0);
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it('a judge-safe command auto-allows, judged against the harness brief', async () => {
+    let decision: unknown;
+    const judge = vi.fn<HarnessServiceDeps['judge']>(async () => ({ verdict: 'safe' }));
+    const host = execAskingHost('npm test', (d) => (decision = d));
+    const { service, approvals } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'assisted' }),
+      judge
+    });
+    await service.handleHarnessRequest(REQ);
+    expect(decision).toEqual({ optionId: 'allow' });
+    expect(approvals).toHaveLength(0);
+    // command, cwd, exec settings, defaults, then the intent: the agent's brief.
+    expect(judge.mock.calls[0][0]).toBe('npm test');
+    expect(judge.mock.calls[0][4]).toBe('add a --version flag');
+  });
+
+  it('a judge-flagged command cards, carrying the verdict and reason', async () => {
+    const judge = vi.fn(async () => ({ verdict: 'unsafe' as const, reason: 'publishes a package' }));
+    const host = execAskingHost('npm publish', () => undefined);
+    const { service, approvals } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'assisted' }),
+      judge
+    });
+    const pending = service.handleHarnessRequest(REQ);
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0]).toMatchObject({ judgeVerdict: 'unsafe', judgeReason: 'publishes a package' });
+    service.resolveApproval(approvals[0].id, 'reject');
+    await pending;
+  });
+
+  it('manual mode cards an execute ask with judgeVerdict null, never calling the judge', async () => {
+    const judge = vi.fn();
+    const host = execAskingHost('npm test', () => undefined);
+    const { service, approvals } = makeService(host, { judge });
+    const pending = service.handleHarnessRequest(REQ);
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0].judgeVerdict).toBeNull();
+    expect(judge).not.toHaveBeenCalled();
+    service.resolveApproval(approvals[0].id, 'allow');
+    await pending;
+  });
+
+  it('a command referencing a read-only root cards even in yolo, with the guard reason', async () => {
+    const protectedDir = mkdtempSync(join(tmpdir(), 'stem-harness-ro-'));
+    mkdirSync(dirname(protectedRootsPath()), { recursive: true });
+    writeFileSync(protectedRootsPath(), JSON.stringify({ roots: [protectedDir] }), 'utf8');
+    try {
+      // The dir itself, not a file inside it: only an existing path realpaths on
+      // macOS (/var vs /private/var), and the guard matches canonical shapes.
+      const host = execAskingHost(`ls ${protectedDir}`, () => undefined);
+      const { service, approvals } = makeService(host, {
+        readSettings: async () => serverSettings({ approvalMode: 'yolo' })
+      });
+      const pending = service.handleHarnessRequest(REQ);
+      await vi.waitFor(() => expect(approvals).toHaveLength(1));
+      expect(approvals[0].guardReason).toContain('read-only');
+      service.resolveApproval(approvals[0].id, 'reject');
+      await pending;
+    } finally {
+      rmSync(protectedDir, { recursive: true, force: true });
+    }
+  });
+
+  it('cards despite a safe verdict when the ask offers no allow_once option', async () => {
+    const judge = vi.fn<HarnessServiceDeps['judge']>(async () => ({ verdict: 'safe' }));
+    const host = scriptedHost({
+      turn: async (_input, sink) => {
+        await sink.onPermission({
+          permissionId: 'perm-1',
+          title: 'npm test',
+          toolName: 'execute',
+          command: 'npm test',
+          options: [{ optionId: 'reject', kind: 'reject_once', name: 'Reject' }]
+        });
+        return { ok: true, stopReason: 'end_turn', text: 'done' };
+      }
+    });
+    const { service, approvals } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'assisted' }),
+      judge
+    });
+    const pending = service.handleHarnessRequest(REQ);
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    service.resolveApproval(approvals[0].id, 'reject');
+    await pending;
+  });
+
+  it('device-hosted asks classify against that device\'s bucket, not the shared list', async () => {
+    const decisions: unknown[] = [];
+    const judge = vi.fn<HarnessServiceDeps['judge']>(async () => ({ verdict: 'unsure' }));
+    const deviceHost = scriptedHost({
+      label: 'Mac',
+      turn: async (_input, sink) => {
+        decisions.push(
+          await sink.onPermission({
+            permissionId: 'perm-1',
+            title: 'npm test',
+            toolName: 'execute',
+            command: 'npm test',
+            options: OPTIONS
+          })
+        );
+        decisions.push(
+          await sink.onPermission({
+            permissionId: 'perm-2',
+            title: 'git status',
+            toolName: 'execute',
+            command: 'git status',
+            options: OPTIONS
+          })
+        );
+        return { ok: true, stopReason: 'end_turn', text: 'done' };
+      }
+    });
+    deviceHost.platform = () => 'darwin';
+    const { service, approvals } = makeService(scriptedHost({}), {
+      resolveDevice: async () => ({ ok: true, deviceId: 'dev-1', label: 'Mac' }),
+      deviceHost: async () => deviceHost,
+      readSettings: async () =>
+        serverSettings({
+          approvalMode: 'assisted',
+          // 'git status' is trusted only on the SERVER: the device bucket is
+          // zero-trust, so on the Mac it must fall through to the judge.
+          allowlist: ['git status'],
+          deviceAllowlists: { 'dev-1': ['npm test'] }
+        }),
+      judge,
+      clientFolders: async () => []
+    });
+    const pending = service.handleHarnessRequest({ ...REQ, device: 'Mac', cwd: '/tmp/proj' });
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0].title).toBe('git status');
+    service.resolveApproval(approvals[0].id, 'allow');
+    await pending;
+    expect(decisions[0]).toEqual({ optionId: 'allow' });
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(judge.mock.calls[0][0]).toBe('git status');
   });
 });
 

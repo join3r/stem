@@ -206,6 +206,7 @@ describe('permission routing', () => {
         toolCall: {
           title: 'npm publish',
           kind: 'execute',
+          rawInput: { command: 'npm publish --tag beta' },
           content: [
             { type: 'diff', path: 'src/a.ts', oldText: 'old', newText: 'new' },
             { type: 'content', content: { type: 'text', text: 'a note' } }
@@ -250,11 +251,31 @@ describe('permission routing', () => {
     expect(asked[0]).toMatchObject({
       title: 'npm publish',
       toolName: 'execute',
+      // rawInput.command, verbatim — the field the approval tiers key off.
+      command: 'npm publish --tag beta',
       content: [
         { type: 'diff', path: 'src/a.ts', oldText: 'old', newText: 'new' },
         { type: 'text', text: 'a note' }
       ]
     });
+  });
+
+  it('an ask without rawInput carries no command', async () => {
+    const { factory, permission, release } = fakeRuntime({ hold: true });
+    const host = new LocalHarnessHost({ runtimeFactory: factory });
+    const ensured = await host.ensureSession({ agent: 'opencode', cwd: '/tmp/p' });
+    const sessionId = ensured.ok ? ensured.sessionId : '';
+    const asked: HarnessPermissionAsk[] = [];
+    const handle = host.runTurn(
+      { turnId: 'turn-1', agent: 'opencode', cwd: '/tmp/p', sessionId, prompt: 'go' },
+      { onEvent: () => {}, onPermission: async (a) => (asked.push(a), { optionId: 'allow' }) }
+    );
+    const bare = ask(`acp-${sessionId}`);
+    delete (bare.raw as { toolCall?: { rawInput?: unknown } }).toolCall?.rawInput;
+    await permission()(bare);
+    release();
+    await handle.result;
+    expect(asked[0].command).toBeUndefined();
   });
 
   it('a timeout answers cancel, not a rejection somebody made', async () => {

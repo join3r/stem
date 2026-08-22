@@ -29,6 +29,21 @@ GATED('a real claude turn through the local host', () => {
       const updates: string[] = [];
       const service = new HarnessService({
         settings: async () => ({ enabled: true }),
+        // Manual mode + an always-unsure judge: any real escalation still cards
+        // (and fails this unattended test loudly) instead of auto-running.
+        readSettings: async () =>
+          ({
+            exec: {
+              enabled: true,
+              approvalMode: 'manual',
+              judgeModel: null,
+              judgeEffort: null,
+              allowlist: [],
+              deviceAllowlists: {}
+            },
+            defaults: { model: null, backgroundModel: null, backgroundEffort: 'low' }
+          }) as unknown as import('../../src/shared/types').ServerSettings,
+        judge: async () => ({ verdict: 'unsure' }),
         localHost: () => host,
         emitApprovalRequest: () => {},
         emitApprovalResolved: () => {},

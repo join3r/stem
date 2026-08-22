@@ -218,6 +218,7 @@ export function createDesktopHarnessHost(deps: HarnessHostDeps): DesktopHarnessH
               permissionId: ask.permissionId,
               title: ask.title,
               ...(ask.toolName ? { toolName: ask.toolName } : {}),
+              ...(ask.command ? { command: ask.command } : {}),
               ...(ask.description ? { description: ask.description } : {}),
               options: ask.options,
               ...(ask.content ? { content: ask.content } : {})

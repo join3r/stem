@@ -264,15 +264,23 @@ export function AutonomySections() {
                 )}
               </>
             )}
+          </>
+        )}
 
+        {/* The approval mode and allowlist govern commands wherever they run —
+            Stem's own run_command tool AND commands a coding agent asks to
+            run — so they stay visible when only coding agents are on. */}
+        {exec && (exec.enabled || harness?.enabled) && (
+          <>
             <ValueRow
               label={
                 <>
                   Approval mode{' '}
                   <InfoTip label="About approval modes">
-                    <strong>Manual</strong> — only allowlisted commands run on their own; everything
-                    else pauses for your approval. <strong>Assisted</strong> — an AI safety check
-                    clears commands that serve your request; only flagged ones pause.{' '}
+                    Governs every command — ones Stem runs itself and ones a coding agent asks to
+                    run. <strong>Manual</strong> — only allowlisted commands run on their own;
+                    everything else pauses for your approval. <strong>Assisted</strong> — an AI
+                    safety check clears commands that serve your request; only flagged ones pause.{' '}
                     <strong>Yolo</strong> — every command runs immediately, no questions asked (folders
                     you marked read-only stay protected). The safety check is a heuristic, not a
                     security boundary; the model it runs on lives under Models. A card that pauses
@@ -301,8 +309,9 @@ export function AutonomySections() {
                   <>
                     Always-allowed commands{' '}
                     <InfoTip label="About the allowlist">
-                      Command prefixes that run without the safety check — grown by the approval card's
-                      "Always allow" button or added here (e.g. <code>git push</code> or <code>npm</code>).
+                      Command prefixes that run without the safety check — for Stem's own commands
+                      and a coding agent's alike — grown by the approval card's "Always allow"
+                      button or added here (e.g. <code>git push</code> or <code>npm</code>).
                     </InfoTip>
                   </>
                 }
@@ -378,7 +387,11 @@ export function AutonomySections() {
                 </form>
               </DisclosureRow>
             )}
+          </>
+        )}
 
+        {exec?.enabled && (
+          <>
             <DisclosureRow
               label={
                 <>
@@ -502,8 +515,9 @@ export function AutonomySections() {
               <InfoTip label="What coding agents do">
                 With this on, Stem can hand real coding work to a coding agent installed on this
                 machine, watch it, and relay its questions to you. The agent works with your own
-                logins and files; risky commands pause on an approval card, and folders you marked
-                read-only stay protected. Off by default so switching it on is your decision.
+                logins and files; its commands follow the approval mode above — safe ones run,
+                flagged ones pause on a card — and folders you marked read-only stay protected.
+                Off by default so switching it on is your decision.
               </InfoTip>
             </>
           }
@@ -529,9 +543,10 @@ export function AutonomySections() {
                 Let your Stem server drive a coding agent installed here{' '}
                 <InfoTip label="What switching this on means">
                   With this on, the assistant can target this computer by name and a coding agent
-                  (Claude Code, OpenCode) runs here with this machine's own logins and files.
-                  Risky commands still pause on an approval card. Switching this off stops new
-                  runs immediately. Leave it off if this Stem server isn't yours alone.
+                  (Claude Code, OpenCode) runs here with this machine's own logins and files. Its
+                  commands follow the server's approval mode — safe ones run, flagged ones pause on
+                  a card. Switching this off stops new runs immediately. Leave it off if this Stem
+                  server isn't yours alone.
                 </InfoTip>
               </>
             }
