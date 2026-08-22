@@ -192,11 +192,11 @@ export default function ChatsScreen(): ReactElement {
           />
         )}
       />
-      {/* New thread, as a glass button floating clear of the tab bar — the
-          header that used to hold + is gone. */}
+      {/* New thread, as a glass button in the bottom-right corner — the
+          header that used to hold + is gone, and so is the bottom tab bar. */}
       {/* One flat style object: Link's asChild slot refuses style arrays. */}
       <Link href="/new" asChild>
-        <Pressable style={{ ...styles.fabWrap, bottom: insets.bottom + 62 }} hitSlop={8}>
+        <Pressable style={{ ...styles.fabWrap, bottom: insets.bottom + 16 }} hitSlop={8}>
           <GlassView style={styles.fab} isInteractive>
             <Text style={[styles.fabGlyph, { color: theme.accent }]}>+</Text>
           </GlassView>
