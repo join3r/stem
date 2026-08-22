@@ -616,7 +616,8 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         op: 'ensure',
         agent: frame.agent,
         cwd: frame.cwd,
-        ...(typeof frame.sessionId === 'string' && frame.sessionId ? { sessionId: frame.sessionId } : {})
+        ...(typeof frame.sessionId === 'string' && frame.sessionId ? { sessionId: frame.sessionId } : {}),
+        ...(typeof frame.model === 'string' && frame.model ? { model: frame.model } : {})
       };
     }
     if (frame.op === 'run') {
@@ -630,6 +631,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         cwd: frame.cwd,
         sessionId: run.sessionId,
         prompt: run.prompt,
+        ...(typeof run.model === 'string' && run.model ? { model: run.model } : {}),
         ...(typeof run.maxTurnMs === 'number' && Number.isFinite(run.maxTurnMs) ? { maxTurnMs: run.maxTurnMs } : {})
       };
     }
