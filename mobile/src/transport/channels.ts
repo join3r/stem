@@ -39,6 +39,8 @@ export interface ChannelSignatures {
   // being live rather than merely paired.
   'backend:startTurn': StemApi['startTurn'];
   'backend:interruptTurn': StemApi['interruptTurn'];
+  /** What models exist — the Settings model rows are pickers over this list. */
+  'backend:listModels': StemApi['listModels'];
 
   // Inbox triage. Every mutator returns the fresh ChatListResult, so the list
   // screen replaces its state with the answer instead of re-fetching.
@@ -70,6 +72,8 @@ export interface ChannelSignatures {
   'settings:updateSkills': StemApi['updateSkillsSettings'];
   'settings:updateQuickChat': StemApi['updateQuickChat'];
   'settings:updateEscapeAction': StemApi['updateEscapeAction'];
+  'settings:updateDefaults': StemApi['updateDefaults'];
+  'settings:updateMemory': StemApi['updateMemorySettings'];
 
   /**
    * "Wake THIS device at this APNs token." The one channel in this table with a

@@ -54,7 +54,20 @@ export interface ChoiceSetting extends BaseSetting {
   save: (c: Connection, value: string) => Promise<Settings>;
 }
 
-export type SettingDef = ToggleSetting | ChoiceSetting;
+/**
+ * A model pick. Its options are not written here — they are whatever
+ * `backend:listModels` answers, which the screen fetches — so all an entry
+ * carries is the role: where its pick lives and what null means there.
+ */
+export interface ModelSetting extends BaseSetting {
+  kind: 'model';
+  /** What no pick falls through to ("Stem default", "Same as chat"). */
+  nullLabel: string;
+  read: (s: Settings) => string | null;
+  save: (c: Connection, value: string | null) => Promise<Settings>;
+}
+
+export type SettingDef = ToggleSetting | ChoiceSetting | ModelSetting;
 
 export interface SettingsGroup {
   title: string;
@@ -100,6 +113,49 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         ],
         read: (s) => String(s.chats.previewLines),
         save: (c, v) => c.rpc('settings:updateChats', { previewLines: Number(v) as 0 | 1 | 2 })
+      }
+    ]
+  },
+  {
+    // The desktop's Models tab, as rows: which model answers, and what the
+    // background roles run on when they aren't left on their fall-through.
+    title: 'Models',
+    settings: [
+      {
+        kind: 'model',
+        key: 'model-chat',
+        label: 'Chat model',
+        hint: 'The model you talk to',
+        nullLabel: 'Stem default',
+        read: (s) => s.defaults.model,
+        save: (c, model) => c.rpc('settings:updateDefaults', { model })
+      },
+      {
+        kind: 'model',
+        key: 'model-background',
+        label: 'Background work',
+        hint: 'Quick tasks: chat subjects, the command safety check',
+        nullLabel: 'Same as chat',
+        read: (s) => s.defaults.backgroundModel,
+        save: (c, backgroundModel) => c.rpc('settings:updateDefaults', { backgroundModel })
+      },
+      {
+        kind: 'model',
+        key: 'model-memory',
+        label: 'Memory',
+        hint: 'Distills what Stem remembers about you',
+        nullLabel: 'Same as chat',
+        read: (s) => s.memory.model,
+        save: (c, model) => c.rpc('settings:updateMemory', { model })
+      },
+      {
+        kind: 'model',
+        key: 'model-skills',
+        label: 'Skills',
+        hint: 'Writes and curates skills',
+        nullLabel: 'Same as chat',
+        read: (s) => s.skills.model,
+        save: (c, model) => c.rpc('settings:updateSkills', { model })
       }
     ]
   },

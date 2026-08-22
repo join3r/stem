@@ -20,26 +20,31 @@ export interface Theme {
   bad: string;
 }
 
+// The desktop's palette (renderer/styles.css), not a phone-invented one: the
+// same warm paper neutrals and the sienna accent, so the two clients read as
+// one product. live/warn/bad are the desktop's success/warn/danger, with the
+// dark variants lifted a step — they render as small text and dots on a dark
+// ground here, where the desktop's values fall short of legible.
 const light: Theme = {
-  bg: '#f6f5f2',
-  card: '#ffffff',
-  text: '#161513',
-  dim: '#6f6b63',
-  line: '#e3e0d9',
-  accent: '#2f6f4f',
-  live: '#2f8f5b',
-  warn: '#a3701c',
-  bad: '#9a3b32'
+  bg: '#f6f4ef',
+  card: '#fffdf9',
+  text: '#23211d',
+  dim: '#6d675d',
+  line: '#e0dccf',
+  accent: '#9a6230',
+  live: '#3a7d4f',
+  warn: '#b7791f',
+  bad: '#c53030'
 };
 
 const dark: Theme = {
-  bg: '#131311',
-  card: '#1c1c19',
-  text: '#f1efe9',
-  dim: '#9a958b',
-  line: '#2b2b27',
-  accent: '#7fc79d',
-  live: '#5fbf85',
+  bg: '#1c1a17',
+  card: '#2e2a23',
+  text: '#f0ece4',
+  dim: '#9b948a',
+  line: '#3d382f',
+  accent: '#c79257',
+  live: '#5fae74',
   warn: '#d5a445',
   bad: '#e0796d'
 };

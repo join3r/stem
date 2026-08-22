@@ -14,12 +14,14 @@
 // One timer, not a poll: a snoozed thread reappears the instant its wake time
 // passes, and `msUntilNextWake` says when the earliest of those is.
 //
-// The FlatList is the screen's first child and the error banner and filter
-// pills ride inside it as the list header. That is what lets the native large
-// title collapse and the navigation bar go to glass as rows pass under it —
-// the scroll view has to be the thing the screen is made of, not a sibling.
+// No navigation bar: the tab bar already names the screen, so the list starts
+// at the top. The error banner and filter pills ride inside the FlatList as
+// its header (the connection dot on the filter row, where the nav bar's used
+// to be), and the one action — a new thread — floats bottom-right as a glass
+// button, clear of the tab bar.
 
-import { Link, Redirect, Stack } from 'expo-router';
+import { Link, Redirect } from 'expo-router';
+import { GlassView } from 'expo-glass-effect';
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
@@ -31,6 +33,7 @@ import {
   Text,
   View
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SNOOZE_PRESETS, emptyInboxState } from '@shared/inbox';
 import type { ChatSummary } from '@shared/types';
 import { useChatList } from '../../../src/hooks/useChatList';
@@ -50,6 +53,7 @@ const FILTERS: { id: InboxFilter; label: string }[] = [
 export default function ChatsScreen(): ReactElement {
   const { connection, pairing } = useTransport();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { list, loading, error, refresh, replace } = useChatList();
   const live = useLiveTurns();
   const [filter, setFilter] = useState<InboxFilter>('inbox');
@@ -124,27 +128,6 @@ export default function ChatsScreen(): ReactElement {
 
   return (
     <View style={[styles.screen, { backgroundColor: theme.bg }]}>
-      <Stack.Screen
-        options={{
-          title: 'Chats',
-          // The dot lives inside the title, not in a header slot: a slot of its
-          // own read as a stray button, and sharing the + button's slot made
-          // iOS 26 fuse them into one glass capsule.
-          headerTitle: () => (
-            <View style={styles.headerTitle}>
-              <Text style={[styles.headerTitleText, { color: theme.text }]}>Chats</Text>
-              <ConnectionBadge />
-            </View>
-          ),
-          headerRight: () => (
-            <Link href="/new" asChild>
-              <Pressable hitSlop={8}>
-                <Text style={[styles.compose, { color: theme.accent }]}>+</Text>
-              </Pressable>
-            </Link>
-          )
-        }}
-      />
       <FlatList
         data={rows}
         keyExtractor={(row) => row.chat.threadId}
@@ -173,6 +156,10 @@ export default function ChatsScreen(): ReactElement {
                   </Text>
                 </Pressable>
               ))}
+              {/* The navigation bar that used to hold the dot is gone, so the
+                  filter row — the screen's one fixed-ish row — carries it. */}
+              <View style={styles.filterSpacer} />
+              <ConnectionBadge />
             </View>
           </View>
         }
@@ -205,6 +192,15 @@ export default function ChatsScreen(): ReactElement {
           />
         )}
       />
+      {/* New thread, as a glass button floating clear of the tab bar — the
+          header that used to hold + is gone. */}
+      <Link href="/new" asChild>
+        <Pressable style={[styles.fabWrap, { bottom: insets.bottom + 62 }]} hitSlop={8}>
+          <GlassView style={styles.fab} isInteractive>
+            <Text style={[styles.fabGlyph, { color: theme.accent }]}>+</Text>
+          </GlassView>
+        </Pressable>
+      </Link>
     </View>
   );
 }
@@ -252,11 +248,15 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   banner: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   bannerText: { fontSize: 13 },
-  headerTitle: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  headerTitleText: { fontSize: 17, fontWeight: '600' },
-  // A glyph, not an icon set: this is the app's only header action.
-  compose: { fontSize: 28, fontWeight: '400', lineHeight: 30 },
-  filters: { flexDirection: 'row', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth },
+  filters: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth
+  },
+  filterSpacer: { flex: 1 },
   filter: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: 'transparent' },
   filterText: { fontSize: 13, fontWeight: '600' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 14 },
@@ -271,5 +271,9 @@ const styles = StyleSheet.create({
   separator: { height: StyleSheet.hairlineWidth, marginLeft: 33 },
   empty: { fontSize: 14, textAlign: 'center', paddingHorizontal: 32, paddingVertical: 48, lineHeight: 20 },
   footer: { alignItems: 'center', paddingVertical: 24 },
-  footerAction: { fontSize: 14 }
+  footerAction: { fontSize: 14 },
+  fabWrap: { position: 'absolute', right: 20 },
+  fab: { width: 54, height: 54, borderRadius: 27, alignItems: 'center', justifyContent: 'center' },
+  // A glyph, not an icon set: this is the app's only floating action.
+  fabGlyph: { fontSize: 30, fontWeight: '400', lineHeight: 34 }
 });

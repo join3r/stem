@@ -7,10 +7,10 @@
 // replaces its state with the server's version instead of guessing.
 //
 // Styled like the chat list, not like grouped iOS cards: edge-to-edge rows on
-// the background, hairline separators, the section list as the screen's first
-// child so the navigation bar goes to glass as rows pass under it.
+// the background, hairline separators, no navigation bar — the tab bar names
+// the screen, so the rows just start at the top.
 
-import { Redirect, Stack, useFocusEffect } from 'expo-router';
+import { Redirect, useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
@@ -23,9 +23,11 @@ import {
   Text,
   View
 } from 'react-native';
+import type { ModelSummary } from '@shared/types';
 import {
   mobileGroups,
   type ChoiceSetting,
+  type ModelSetting,
   type SettingDef,
   type Settings,
   type ToggleSetting
@@ -45,11 +47,18 @@ export default function SettingsScreen(): ReactElement {
   const { connection, status, pairing, unpair } = useTransport();
   const theme = useTheme();
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [models, setModels] = useState<ModelSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
+    // Its own request with its own failure: the model rows degrade to showing
+    // the stored id, they don't take the rest of the settings down with them.
+    void connection
+      .rpc('backend:listModels')
+      .then(setModels)
+      .catch(() => undefined);
     try {
       setSettings(await connection.rpc('settings:get'));
       setError(null);
@@ -132,7 +141,6 @@ export default function SettingsScreen(): ReactElement {
 
   return (
     <View style={[styles.screen, { backgroundColor: theme.bg }]}>
-      <Stack.Screen options={{ title: 'Settings' }} />
       <SectionList
         sections={sections}
         keyExtractor={(row) => row.key}
@@ -178,11 +186,22 @@ export default function SettingsScreen(): ReactElement {
             );
           }
           // settings is non-null whenever a setting row made it into sections.
-          return item.def.kind === 'toggle' ? (
-            <ToggleRow def={item.def} settings={settings!} theme={theme} onSave={save} connection={connection} />
-          ) : (
-            <ChoiceRow def={item.def} settings={settings!} theme={theme} onSave={save} connection={connection} />
-          );
+          if (item.def.kind === 'toggle') {
+            return <ToggleRow def={item.def} settings={settings!} theme={theme} onSave={save} connection={connection} />;
+          }
+          if (item.def.kind === 'model') {
+            return (
+              <ModelRow
+                def={item.def}
+                settings={settings!}
+                models={models}
+                theme={theme}
+                onSave={save}
+                connection={connection}
+              />
+            );
+          }
+          return <ChoiceRow def={item.def} settings={settings!} theme={theme} onSave={save} connection={connection} />;
         }}
       />
     </View>
@@ -222,6 +241,58 @@ function ToggleRow({
         }}
       />
     </View>
+  );
+}
+
+function ModelRow({
+  def,
+  settings,
+  models,
+  theme,
+  onSave,
+  connection
+}: {
+  def: ModelSetting;
+  settings: Settings;
+  models: ModelSummary[] | null;
+  theme: Theme;
+  onSave: (run: () => Promise<Settings>) => Promise<void>;
+  connection: ReturnType<typeof useTransport>['connection'];
+}): ReactElement {
+  const current = def.read(settings);
+  // A model that fell out of the list (provider signed out, list not loaded)
+  // still shows what is stored — the tail of the id beats pretending null.
+  const currentLabel =
+    current === null
+      ? def.nullLabel
+      : (models?.find((m) => m.id === current)?.displayName ?? current.split('/').pop() ?? current);
+  const pick = (): void => {
+    if (!models || models.length === 0) {
+      Alert.alert(def.label, 'The model list hasn’t loaded — pull down to refresh, then try again.');
+      return;
+    }
+    Alert.alert(def.label, def.hint, [
+      {
+        text: current === null ? `${def.nullLabel} ✓` : def.nullLabel,
+        onPress: () => void onSave(() => def.save(connection, null))
+      },
+      ...models.map((m) => ({
+        text: m.id === current ? `${m.displayName} ✓` : m.displayName,
+        onPress: () => void onSave(() => def.save(connection, m.id))
+      })),
+      { text: 'Cancel', style: 'cancel' as const }
+    ]);
+  };
+  return (
+    <Pressable onPress={pick} style={styles.row}>
+      <View style={styles.labelSide}>
+        <Text style={[styles.label, { color: theme.text }]}>{def.label}</Text>
+        {def.hint ? <Text style={[styles.hint, { color: theme.dim }]}>{def.hint}</Text> : null}
+      </View>
+      <Text numberOfLines={1} style={[styles.value, { color: theme.dim }]}>
+        {currentLabel}
+      </Text>
+    </Pressable>
   );
 }
 
