@@ -144,6 +144,8 @@ export async function imagePreviewFromBytes(
     if (!resolved) return null;
     return `data:${resolved};base64,${dataBase64}`;
   } catch {
+    // quiet: this is the thumbnail in the live bubble, not the attachment — the
+    // send path reads the same bytes again, and that read is the one that reports.
     return null;
   }
 }

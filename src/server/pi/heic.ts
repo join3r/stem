@@ -111,6 +111,9 @@ export async function convertHeicAttachment(att: TurnAttachment): Promise<TurnAt
     try {
       bytes = await readFile(att.path);
     } catch {
+      // quiet: leave the attachment as-is so resolveAttachments can skip it by
+      // name. Failing the send here would drop the whole turn for a photo the
+      // later stage already knows how to refuse.
       return att;
     }
   }
@@ -131,6 +134,8 @@ function runTool(command: string, args: readonly string[]): Promise<boolean> {
         resolve(!error);
       });
     } catch {
+      // quiet: a missing PATH tool (heif-convert/magick) is the Linux/Windows
+      // default, not a defect. The caller tries the next decoder, then null.
       resolve(false);
     }
   });
@@ -169,6 +174,8 @@ async function readJpeg(path: string): Promise<Buffer | null> {
     const bytes = await readFile(path);
     return looksLikeJpeg(bytes) ? bytes : null;
   } catch {
+    // quiet: sips/heif-convert can exit 0 and still leave no readable JPEG.
+    // null is the same answer as a decoder that is not installed.
     return null;
   }
 }
