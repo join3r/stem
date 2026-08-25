@@ -32,6 +32,7 @@ import { log } from '../server/log';
  */
 const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   'files:preview': [a.string],
+  'files:previewData': [a.string, a.optional(a.nullish(a.string)), a.optional(a.nullish(a.string))],
   'files:download': [a.string],
   'cfolders:reveal': [a.string],
   'client:pair': [a.string, a.string],

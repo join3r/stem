@@ -3,9 +3,25 @@
 // tests — a PDF used to be silently dropped as "unsupported", and the regression
 // mode (extraction quietly failing and falling back to the skip note) produces
 // a turn that reads as though the feature never existed.
-import { describe, expect, it } from 'vitest';
-import { resolveAttachments } from '../../src/server/pi/attachments';
+import { afterEach, describe, expect, it } from 'vitest';
+import { imagePreviewFromBytes, resolveAttachments } from '../../src/server/pi/attachments';
+import { setHeicDecoderForTests } from '../../src/server/pi/heic';
 import { makePdf } from './make-pdf';
+
+const MINI_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+
+function fakeHeic(): Buffer {
+  const buf = Buffer.alloc(16);
+  buf.writeUInt32BE(16, 0);
+  buf.write('ftyp', 4);
+  buf.write('heic', 8);
+  buf.write('mif1', 12);
+  return buf;
+}
+
+afterEach(() => {
+  setHeicDecoderForTests(null);
+});
 
 describe('resolveAttachments and PDFs', () => {
   it('inlines a PDF text layer as a fenced block', async () => {
@@ -51,5 +67,48 @@ describe('resolveAttachments and PDFs', () => {
     ]);
     expect(resolved.rejected).toEqual(['scan.pdf']);
     expect(resolved.textBlocks).toHaveLength(0);
+  });
+});
+
+describe('resolveAttachments and HEIC', () => {
+  it('converts a HEIC attachment to a JPEG image block', async () => {
+    setHeicDecoderForTests(async () => MINI_JPEG);
+    const resolved = await resolveAttachments([
+      { name: 'IMG_1.HEIC', dataBase64: fakeHeic().toString('base64') }
+    ]);
+    expect(resolved.rejected).toHaveLength(0);
+    expect(resolved.images).toEqual([
+      { type: 'image', data: MINI_JPEG.toString('base64'), mimeType: 'image/jpeg' }
+    ]);
+  });
+
+  it('rejects a HEIC this machine cannot decode, naming the file', async () => {
+    setHeicDecoderForTests(async () => null);
+    const resolved = await resolveAttachments([
+      { name: 'broken.heic', dataBase64: Buffer.from('not really heic\0').toString('base64') }
+    ]);
+    expect(resolved.rejected).toEqual(['broken.heic (could not decode HEIC)']);
+    expect(resolved.images).toHaveLength(0);
+  });
+
+  it('does not re-decode a HEIC that is already JPEG (client conversion)', async () => {
+    let called = 0;
+    setHeicDecoderForTests(async () => {
+      called += 1;
+      return MINI_JPEG;
+    });
+    const resolved = await resolveAttachments([
+      { name: 'IMG_1.HEIC', mime: 'image/jpeg', dataBase64: MINI_JPEG.toString('base64') }
+    ]);
+    expect(called).toBe(0);
+    expect(resolved.images).toEqual([
+      { type: 'image', data: MINI_JPEG.toString('base64'), mimeType: 'image/jpeg' }
+    ]);
+  });
+
+  it('builds a JPEG data URL for a pasted HEIC thumbnail', async () => {
+    setHeicDecoderForTests(async () => MINI_JPEG);
+    const url = await imagePreviewFromBytes(fakeHeic().toString('base64'), 'image/heic', 'paste.heic');
+    expect(url).toBe(`data:image/jpeg;base64,${MINI_JPEG.toString('base64')}`);
   });
 });

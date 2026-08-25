@@ -1,8 +1,8 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage, QuickChatHandoff, TurnAttachment } from '../../src/shared/types';
-import { optimisticMessageAttachments, resendAttachments } from '../../src/renderer/attachments';
+import { optimisticMessageAttachments, resendAttachments, toMessageAttachments } from '../../src/renderer/attachments';
 import {
   EMPTY_STATE,
   mergeDraftIntoReal,
@@ -156,6 +156,30 @@ describe('renderer async race regressions', () => {
       { kind: 'file', name: 'slow.png' },
       { kind: 'image', name: 'paste.png', mime: 'image/png', dataUrl: 'data:image/png;base64,YWJj' }
     ]);
+  });
+
+  it('keeps pasted HEIC as a chip until the main process decodes it to JPEG', () => {
+    // Chromium cannot paint data:image/heic, so a JPEG data URL here would be a lie
+    // and a HEIC data URL would show a broken thumbnail.
+    expect(
+      optimisticMessageAttachments([{ name: 'IMG_1.HEIC', mime: 'image/heic', dataBase64: 'YWJj' }])
+    ).toEqual([{ kind: 'file', name: 'IMG_1.HEIC' }]);
+  });
+
+  it('upgrades pasted HEIC through previewImageData', async () => {
+    const previewImageData = vi.fn(async () => 'data:image/jpeg;base64,eA==');
+    vi.stubGlobal('window', { stem: { previewImageData, previewImage: vi.fn() } });
+    try {
+      const next = await toMessageAttachments([
+        { name: 'IMG_1.HEIC', mime: 'image/heic', dataBase64: 'YWJj' }
+      ]);
+      expect(previewImageData).toHaveBeenCalledWith('YWJj', 'image/heic', 'IMG_1.HEIC');
+      expect(next).toEqual([
+        { kind: 'image', name: 'IMG_1.HEIC', mime: 'image/jpeg', dataUrl: 'data:image/jpeg;base64,eA==' }
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

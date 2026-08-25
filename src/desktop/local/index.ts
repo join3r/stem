@@ -2,7 +2,7 @@ import { app, dialog, shell, type BrowserWindow } from 'electron';
 import { join } from 'node:path';
 import { handleLocal } from '../ipc-bridge';
 import { ensureFilesRoot } from '../../server/files/store';
-import { imagePreviewDataUrl } from '../../server/pi/attachments';
+import { imagePreviewDataUrl, imagePreviewFromBytes } from '../../server/pi/attachments';
 import { connectedFolderPath } from '../../server/workspace/connected-folders';
 import { workspaceRoot } from '../../server/workspace/paths';
 import { exportState } from '../../server/workspace/state-transfer';
@@ -262,10 +262,16 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     revealable('Your Files folder');
     await shell.openPath(await ensureFilesRoot());
   });
-  // Read-only, and reached only from the `att.path` branch of
-  // renderer/attachments.ts — i.e. for an image the user picked or dropped, which
-  // by construction is on the client's own disk.
+  // Read-only, and reached from renderer/attachments.ts: a path for images the
+  // user picked or dropped (on this disk), or pasted bytes for HEIC that
+  // Chromium cannot paint until the OS decoder turns them into JPEG.
   handleLocal('files:preview', (_e, path: string) => imagePreviewDataUrl(path));
+  // Pasted HEIC has no on-disk path; the renderer sends the bytes so Chromium
+  // can show a JPEG thumbnail (it cannot paint image/heic).
+  handleLocal(
+    'files:previewData',
+    (_e, dataBase64: string, mime?: string, name?: string) => imagePreviewFromBytes(dataBase64, mime, name)
+  );
 
   /**
    * Fetch one file out of the server's Files folder and put it where downloads

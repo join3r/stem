@@ -19,6 +19,7 @@ import {
   type StartTurnInput,
   type TurnAttachment
 } from '../shared/types';
+import { convertHeicAttachments } from '../server/pi/heic';
 import { uploadFile } from './file-transfer';
 import { createOfflineCache } from './offline-cache';
 import type { OAuthCourier } from './oauth-courier';
@@ -59,10 +60,12 @@ import { updateClientQuickChat, withClientSettings } from './settings';
 //                                                about the build installed HERE
 //                                                (see desktop/updates.ts)
 //   dialog:openFiles, dialog:openDirectory       native pickers
-//   files:reveal, files:preview                  shell.showItemInFolder; preview
-//                                                reads an image path that, by
-//                                                construction, is on the client's
-//                                                own disk (the `att.path` branch
+//   files:reveal, files:preview, files:previewData
+//                                                shell.showItemInFolder; preview
+//                                                reads an image path (or pasted
+//                                                bytes) that, by construction, is
+//                                                on the client's own disk (the
+//                                                `att.path` / dataBase64 branches
 //                                                of renderer/attachments.ts)
 //   files:download                               GET /files/<rel>, saved into this
 //                                                machine's Downloads folder and
@@ -112,16 +115,18 @@ import { updateClientQuickChat, withClientSettings } from './settings';
 //                              push stream is one this machine asked for — the
 //                              stream is a broadcast, and every other device
 //                              paired to the same server sees it too.
-//   backend:startTurn,         both carry paths to files on THIS disk, which is
-//   files:add                  only a thing the server can read when it is on
+//   backend:startTurn,         HEIC is decoded to JPEG here first (macOS sips /
+//   files:add                  a PATH tool) so a remote Linux server never has
+//                              to. Remaining paths to files on THIS disk are
+//                              only a thing the server can read when it is on
 //                              this disk too. When it isn't, the bytes are
 //                              streamed up first and the paths are replaced with
-//                              handles to them — see attachmentsForServer(). The
-//                              REMOTE case only: a local install keeps handing
-//                              over paths, because copying every pasted
-//                              screenshot through loopback to prove a point
-//                              would be a cost with nothing on the other side
-//                              of it.
+//                              handles to them — see attachmentsForTurn(). The
+//                              REMOTE case only for the upload half: a local
+//                              install keeps handing over paths, because copying
+//                              every pasted screenshot through loopback to prove
+//                              a point would be a cost with nothing on the other
+//                              side of it.
 //
 // SERVER-OWNED — everything else (~110 channels). The server's registry IS the
 // surface; this client asks for it at connect time (GET /channels) rather than
@@ -346,34 +351,33 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
   const signInStarted: WrappedChannel = { before: () => deps.oauthCourier.expectSignIn() };
 
   /**
-   * Replace every on-disk path in a set of attachments with a handle to bytes the
-   * server now has. Pasted images (`dataBase64`) already travel in the envelope
-   * and are left exactly as they are — they are small, they are already on the
-   * wire, and uploading them separately would be strictly more work.
+   * Decode HEIC to JPEG on THIS machine (sips / PATH tool) so a Mac client
+   * talking to a Linux server still works — the server never has to ship HEVC.
+   * Then, when remote, replace remaining on-disk paths with upload handles.
    *
-   * A failure here is deliberately fatal to the call. The alternative is sending
-   * the message with the attachment quietly missing, which reads to the user as
-   * the assistant ignoring the thing they attached; throwing instead leaves the
-   * message in the composer, with the reason on screen, ready to send again.
+   * Pasted images (`dataBase64`) already travel in the envelope. After a HEIC
+   * conversion they are JPEG `dataBase64` and are left exactly as they are.
+   *
+   * A failure to *upload* is deliberately fatal to the call. The alternative is
+   * sending the message with the attachment quietly missing, which reads to the
+   * user as the assistant ignoring the thing they attached; throwing instead
+   * leaves the message in the composer, with the reason on screen, ready to send
+   * again. A HEIC that will not decode is left unchanged so the server can skip
+   * it with a named note rather than failing the whole send.
    */
-  async function attachmentsForServer(atts: TurnAttachment[]): Promise<TurnAttachment[]> {
+  async function attachmentsForTurn(atts: TurnAttachment[]): Promise<TurnAttachment[]> {
+    const converted = await convertHeicAttachments(atts);
+    if (!deps.remote) return converted;
     return Promise.all(
-      atts.map(async (att) => {
+      converted.map(async (att) => {
         if (!att.path) return att;
         return { ...att, path: await uploadFile({ url: base, token: deps.token }, att.path) };
       })
     );
   }
 
-  /** The remote half of `backend:startTurn` and `files:add`; absent when local. */
+  /** Path rewrite for Files-panel drops; turn attachments go through attachmentsForTurn. */
   const uploadPaths: Record<string, WrappedChannel> = {
-    'backend:startTurn': {
-      before: async ([input]) => {
-        const turn = input as StartTurnInput;
-        if (!turn?.attachments?.length) return;
-        return [{ ...turn, attachments: await attachmentsForServer(turn.attachments) }];
-      }
-    },
     'files:add': {
       before: async ([paths, subdir]) => {
         const list = paths as string[];
@@ -384,12 +388,21 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     }
   };
 
+  const startTurnWrap: WrappedChannel = {
+    before: async ([input]) => {
+      const turn = input as StartTurnInput;
+      if (!turn?.attachments?.length) return;
+      return [{ ...turn, attachments: await attachmentsForTurn(turn.attachments) }];
+    }
+  };
+
   const wrapped: Readonly<Record<string, WrappedChannel>> = {
     'chats:open': {
       before: ([threadId]) => deps.threadOpened(threadId as string)
     },
     'auth:providerLogin': signInStarted,
     'mcp:login': signInStarted,
+    'backend:startTurn': startTurnWrap,
     ...(deps.remote ? uploadPaths : {}),
     ...Object.fromEntries(SETTINGS_CHANNELS.map((c) => [c, mergeSettingsAnswer])),
     'settings:updateQuickChat': {
