@@ -38,6 +38,9 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   'stem:exportState': [a.object],
   'settings:updateReleaseNotes': [a.object],
   'settings:updateUpdates': [a.object],
+  // The theme choice ('theme:state', 'themes:list' and 'themes:reveal' take no
+  // arguments, so they are absent — see the contract above.)
+  'settings:updateTheme': [a.object],
   // The MCP host's own channels (see desktop/local/index.ts). `approve` takes
   // the fingerprint the window drew its card from as well as the name: the whole
   // point of ④ is that a yes is given to a spec and not to a label, and the host

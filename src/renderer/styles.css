@@ -84,8 +84,13 @@
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
 }
 
+/* Three theme states (renderer/theme.ts): no data-theme attribute follows the
+   OS; data-theme="light"/"dark" forces a built-in palette; a custom theme lays
+   inline token overrides over whichever palette its appearance names. The two
+   dark blocks below MUST stay identical — one answers the OS, the other the
+   forced choice, and CSS has no way to write the block once. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     /* Dark layers get a full luminance step between chrome (--panel), the
        transcript (--content), and raised cards (--surface) so the regions
        separate at a glance instead of reading as one slab. */
@@ -106,6 +111,25 @@
     --code-bg: #161310;
     color-scheme: dark;
   }
+}
+
+:root[data-theme='dark'] {
+  --paper: #1c1a17;
+  --content: #242119;
+  --panel: #161411;
+  --ink: #f0ece4;
+  --muted: #9b948a;
+  --line: #3d382f;
+  --hair: rgba(240, 236, 228, 0.16);
+  --accent: #c79257;
+  --accent-ink: #22150a;
+  --surface: #2e2a23;
+  --field: #2e2a23;
+  --sel: rgba(199, 146, 87, 0.22);
+  --inline-bg: #2f2b25;
+  --success: #5fae74;
+  --code-bg: #161310;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -2204,8 +2228,8 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
 }
 .memory-note .chip.active-draft {
-  color: var(--warning, #d28e00);
-  border-color: color-mix(in srgb, var(--warning, #d28e00) 50%, var(--line));
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
 }
 .active-facts-summary { margin: 8px 0 0; font-size: var(--fs-11); }
 .link-btn.on { color: var(--accent); font-weight: 600; }
@@ -2451,9 +2475,11 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   --drop-chat: var(--accent);   /* "this chat" zone (warm sienna) */
   --drop-files: #2f8f7d;        /* "Files" zone (complementary teal) */
 }
+/* Same two-block dark pattern as the main palette above. */
 @media (prefers-color-scheme: dark) {
-  :root { --drop-files: #4cc0a8; }
+  :root:not([data-theme='light']) { --drop-files: #4cc0a8; }
 }
+:root[data-theme='dark'] { --drop-files: #4cc0a8; }
 
 .drop-overlay {
   position: fixed;
@@ -3005,11 +3031,11 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 
 /* coding_agent approval card: old/new file text when the ask carries a diff. */
 .harness-approval-diff .harness-diff-old {
-  border-left: 3px solid var(--danger, #c0392b);
+  border-left: 3px solid var(--danger);
   max-height: 100px;
 }
 .harness-approval-diff .harness-diff-new {
-  border-left: 3px solid var(--ok, #27ae60);
+  border-left: 3px solid var(--success);
   max-height: 100px;
 }
 

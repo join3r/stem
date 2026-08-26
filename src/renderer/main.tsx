@@ -4,6 +4,7 @@ import App from './App';
 import { QuickChat } from './quickchat/QuickChat';
 import { StatusHud } from './quickchat/StatusHud';
 import { ShortcutsProvider } from './shortcuts';
+import { startTheme } from './theme';
 import './styles.css';
 
 // The same renderer bundle serves all three windows; the URL flag selects which:
@@ -17,6 +18,11 @@ if (isHud) document.body.classList.add('hud-body');
 // the Linux main window has a native frame so the toolbar drops its
 // traffic-light inset). macOS styles stay the classless defaults.
 document.body.classList.add(`platform-${window.stem.platform}`);
+// The chosen theme (forced light/dark or a custom palette), for every window.
+// Async and non-blocking: until it lands the window shows the system-driven
+// default, on a chrome color the main process already matched (see
+// desktop/themes.ts and createWindow's backgroundColor).
+startTheme();
 
 const root = isHud ? (
   <StatusHud />

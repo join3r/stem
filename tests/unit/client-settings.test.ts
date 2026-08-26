@@ -17,6 +17,7 @@ import {
   seedReleaseNotesMarker,
   updateClientQuickChat,
   updateClientReleaseNotes,
+  updateClientTheme,
   updateClientUpdates,
   withClientSettings
 } from '../../src/desktop/settings';
@@ -62,9 +63,10 @@ describe('carrying an existing install across the split', () => {
     expect(await readClientSettings()).toEqual({
       quickChat: { shortcut: 'Alt+Space', showOnAllDisplays: false, followAcrossSpaces: false },
       releaseNotes: { showOnUpdate: false, lastSeenVersion: '0.2.0' },
-      // Not in PRE_SPLIT: the updates block postdates the split, so it always
-      // starts from its default rather than migrating from anywhere.
-      updates: { checkAutomatically: true }
+      // Not in PRE_SPLIT: the updates and theme blocks postdate the split, so
+      // they always start from their defaults rather than migrating from anywhere.
+      updates: { checkAutomatically: true },
+      theme: { selected: 'system' }
     });
     // And the whole document the renderer sees is unchanged by the move.
     const merged = mergeSettings(await readSettings(), await readClientSettings());
@@ -91,7 +93,8 @@ describe('carrying an existing install across the split', () => {
     expect(await readClientSettings()).toEqual({
       quickChat: { shortcut: null, showOnAllDisplays: true, followAcrossSpaces: true },
       releaseNotes: { showOnUpdate: true, lastSeenVersion: null },
-      updates: { checkAutomatically: true }
+      updates: { checkAutomatically: true },
+      theme: { selected: 'system' }
     });
   });
 
@@ -101,13 +104,15 @@ describe('carrying an existing install across the split', () => {
       JSON.stringify({
         quickChat: { shortcut: '   ', showOnAllDisplays: 'yes' },
         releaseNotes: { showOnUpdate: 'yes', lastSeenVersion: 'v-next' },
-        updates: { checkAutomatically: 'yes' }
+        updates: { checkAutomatically: 'yes' },
+        theme: { selected: 'neon' }
       })
     );
     expect(await readClientSettings()).toEqual({
       quickChat: { shortcut: null, showOnAllDisplays: true, followAcrossSpaces: true },
       releaseNotes: { showOnUpdate: true, lastSeenVersion: null },
-      updates: { checkAutomatically: true }
+      updates: { checkAutomatically: true },
+      theme: { selected: 'system' }
     });
   });
 });
@@ -174,6 +179,32 @@ describe('the automatic-update toggle', () => {
     const settings = await readClientSettings();
     expect(settings.updates).toEqual({ checkAutomatically: false });
     expect(settings.quickChat.shortcut).toBe('Alt+Space');
+  });
+});
+
+describe('the theme choice', () => {
+  it('round-trips built-in modes and custom ids, and a patch does not disturb the other blocks', async () => {
+    await updateClientQuickChat({ shortcut: 'Alt+Space' });
+    await updateClientTheme({ selected: 'dark' });
+    expect((await readClientSettings()).theme).toEqual({ selected: 'dark' });
+
+    await updateClientTheme({ selected: 'custom:nord' });
+    const settings = await readClientSettings();
+    expect(settings.theme).toEqual({ selected: 'custom:nord' });
+    expect(settings.quickChat.shortcut).toBe('Alt+Space');
+  });
+
+  it('refuses a custom id that could walk out of the themes folder', async () => {
+    await updateClientTheme({ selected: 'custom:../../etc/passwd' });
+    expect((await readClientSettings()).theme).toEqual({ selected: 'system' });
+    await updateClientTheme({ selected: 'custom:a/b' });
+    expect((await readClientSettings()).theme).toEqual({ selected: 'system' });
+  });
+
+  it('reaches the merged document the renderer sees', async () => {
+    await updateClientTheme({ selected: 'light' });
+    const merged = await withClientSettings(await readSettings());
+    expect(merged.theme).toEqual({ selected: 'light' });
   });
 });
 

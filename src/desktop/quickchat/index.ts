@@ -88,6 +88,8 @@ export interface QuickChatSurface {
   shortcutStatus(): QuickChatShortcutStatus;
   /** Push on a channel the overlay window renders. No-op when it is gone. */
   sendToOverlay(channel: string, payload: unknown): void;
+  /** Push on a channel the HUD pill renders (theme changes). No-op when it is gone. */
+  sendToHud(channel: string, payload: unknown): void;
   /** Bring the overlay back when it owns `threadId` (approval cards). */
   revealIfOwns(threadId: string | null | undefined): void;
   /**
@@ -701,6 +703,10 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     shortcutStatus: quickChatShortcutStatus,
 
     sendToOverlay,
+
+    sendToHud(channel, payload) {
+      if (hudWindow && !hudWindow.isDestroyed()) hudWindow.webContents.send(channel, payload);
+    },
 
     revealIfOwns(threadId) {
       // Quick Chat hides itself while a turn runs. Bring the originating surface

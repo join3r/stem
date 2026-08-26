@@ -2606,6 +2606,76 @@ export interface UpdatesSettings {
 }
 
 /**
+ * Which look THIS machine renders with. `selected` is `'system'` (follow the OS
+ * appearance — the default), `'light'` / `'dark'` (force a built-in palette), or
+ * `'custom:<id>'` for a theme file in this machine's themes folder.
+ */
+export interface ThemeSettings {
+  selected: string;
+}
+
+/**
+ * The color tokens a custom theme may override — the palette block at the top of
+ * renderer/styles.css, by name (without the `--`). Everything the app draws
+ * flows from these (docs/ui-conventions.md), which is what makes a theme a small
+ * file of colors rather than a stylesheet. Geometry tokens are deliberately not
+ * themeable: spacing and type scale are the app's, not a look's.
+ */
+export const THEME_COLOR_TOKENS = [
+  'paper',
+  'content',
+  'panel',
+  'ink',
+  'muted',
+  'line',
+  'hair',
+  'accent',
+  'accent-ink',
+  'surface',
+  'field',
+  'sel',
+  'inline-bg',
+  'info',
+  'warn',
+  'success',
+  'danger',
+  'code-bg',
+  'code-ink',
+  'drop-chat',
+  'drop-files'
+] as const;
+
+/**
+ * A user-authored theme, read from `<state root>/themes/<id>.json`. `appearance`
+ * names the built-in palette that fills every token the file does not set (and
+ * decides `color-scheme`, so native controls match). A file that cannot be used
+ * still appears in the list with `problem` set, so the picker can say why
+ * instead of silently dropping it.
+ */
+export interface CustomTheme {
+  /** The file's base name — what ThemeSettings.selected points at. */
+  id: string;
+  /** Display name from the file, falling back to the id. */
+  name: string;
+  appearance: 'light' | 'dark';
+  /** Validated token → CSS color value. Unknown tokens and unsafe values are dropped. */
+  colors: Record<string, string>;
+  /** Why the file could not be used, in words the picker can show. */
+  problem?: string;
+}
+
+/**
+ * Everything a window needs to paint itself: the stored choice plus the custom
+ * theme it names, already read from disk. Asked on boot (`getThemeState`) and
+ * pushed on every change (`client:themeChanged`).
+ */
+export interface ThemeState {
+  selected: string;
+  /** The resolved custom theme, or null when `selected` is a built-in mode or the file is gone. */
+  custom: CustomTheme | null;
+}
+
+/**
  * How a new release reaches this install.
  *
  * `auto` — the AppImage: Stem downloads the new build itself and swaps it in on
@@ -2690,6 +2760,8 @@ export interface AppSettings {
   releaseNotes: ReleaseNotesSettings;
   /** Whether this machine checks for new releases on its own. */
   updates: UpdatesSettings;
+  /** Which look this machine renders with (system/light/dark or a custom theme). */
+  theme: ThemeSettings;
   /** App-level backend defaults (default model). */
   defaults: DefaultsSettings;
   /** Local model servers (Ollama, LM Studio) registered with the chat backend. */
@@ -2705,7 +2777,7 @@ export interface AppSettings {
  * document reaches a window, so `window.stem.getSettings()` still resolves to a
  * whole {@link AppSettings} and no call site knows the split happened.
  */
-export interface ServerSettings extends Omit<AppSettings, 'quickChat' | 'releaseNotes' | 'updates'> {
+export interface ServerSettings extends Omit<AppSettings, 'quickChat' | 'releaseNotes' | 'updates' | 'theme'> {
   quickChat: Omit<QuickChatSettings, keyof ClientQuickChatSettings>;
 }
 
@@ -2728,6 +2800,11 @@ export interface ClientSettings {
    * differ on whether they want to hear about it.
    */
   updates: UpdatesSettings;
+  /**
+   * And so is the theme: it names files in THIS machine's themes folder, and a
+   * look chosen for a big desk monitor is not a fact about the account.
+   */
+  theme: ThemeSettings;
 }
 
 /**
@@ -3297,6 +3374,19 @@ export interface StemApi {
   updateUpdatesSettings(patch: Partial<UpdatesSettings>): Promise<AppSettings>;
   /** The updater moved — checking, found something, finished a download, failed. */
   onUpdateStatus(listener: (status: UpdateStatus) => void): () => void;
+
+  // Theme: which look this machine renders with. All client-owned — the choice
+  // and the theme files both live on this machine (see desktop/themes.ts).
+  /** The stored choice plus the custom theme it names — asked once on boot. */
+  getThemeState(): Promise<ThemeState>;
+  /** The custom themes in this machine's themes folder, re-read from disk. */
+  listThemes(): Promise<CustomTheme[]>;
+  /** Pick a theme. An empty patch re-reads the selected theme's file and re-pushes. */
+  updateThemeSettings(patch: Partial<ThemeSettings>): Promise<AppSettings>;
+  /** Open the themes folder in the file manager, creating it (and an example) first. */
+  revealThemesFolder(): Promise<void>;
+  /** The theme changed — pushed to every window so all three repaint together. */
+  onThemeChanged(listener: (state: ThemeState) => void): () => void;
   // Devices: which clients may reach the server, and how a new one is admitted.
   /** Every registered device plus any pairing code still outstanding. */
   listDevices(): Promise<DevicesSnapshot>;

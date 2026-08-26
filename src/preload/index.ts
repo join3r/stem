@@ -58,6 +58,8 @@ import type {
   TaskModelPatch,
   TaskSchedulePatch,
   TasksSettings,
+  ThemeSettings,
+  ThemeState,
   UpdateStatus,
   UpdatesSettings
 } from '../shared/types';
@@ -389,6 +391,15 @@ const api: StemApi = {
     const handler = (_e: unknown, status: UpdateStatus) => listener(status);
     ipcRenderer.on('updates:status', handler);
     return () => ipcRenderer.removeListener('updates:status', handler);
+  },
+  getThemeState: () => ipcRenderer.invoke('theme:state'),
+  listThemes: () => ipcRenderer.invoke('themes:list'),
+  updateThemeSettings: (patch: Partial<ThemeSettings>) => ipcRenderer.invoke('settings:updateTheme', patch),
+  revealThemesFolder: () => ipcRenderer.invoke('themes:reveal'),
+  onThemeChanged: (listener: (state: ThemeState) => void) => {
+    const handler = (_e: unknown, state: ThemeState) => listener(state);
+    ipcRenderer.on('client:themeChanged', handler);
+    return () => ipcRenderer.removeListener('client:themeChanged', handler);
   },
   updateMemorySettings: (patch: Partial<MemoryModelSettings>) =>
     ipcRenderer.invoke('settings:updateMemory', patch),

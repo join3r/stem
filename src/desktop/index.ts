@@ -29,12 +29,13 @@ import { createPresenceHeartbeat, type PresenceHeartbeat } from './presence';
 import { createServerProxy, type ServerProxy } from './proxy';
 import { clientCredentials, resolveServerUrl } from './server-endpoint';
 import { readClientSettings, seedReleaseNotesMarker } from './settings';
+import { currentThemeState, resolveWindowBackground } from './themes';
 import { createUpdates } from './updates';
 import { createQuickChat } from './quickchat';
 import { loadRenderer, PRELOAD_SCRIPT } from './renderer-assets';
 import { initTray } from './tray';
 import { RendererPushQueue } from './ui-lifecycle';
-import type { AppSettings } from '../shared/types';
+import type { AppSettings, ThemeState } from '../shared/types';
 
 // The Electron main process: windows, tray, the global shortcut, and app
 // lifecycle. It owns nothing about chats, memory, skills or settings — it starts
@@ -179,6 +180,12 @@ function installNavigationGuards(win: BrowserWindow): void {
 
 let mainWindow: BrowserWindow | null = null;
 const mainPushQueue = new RendererPushQueue();
+/**
+ * The theme as last read/pushed, so a window created later paints the right
+ * chrome color from its first frame. Seeded before the first window exists and
+ * kept current by the settings:updateTheme handler's themeChanged callback.
+ */
+let themeState: ThemeState = { selected: 'system', custom: null };
 /** True once the persistent windows exist — see the second-instance handler. */
 let windowsReady = false;
 
@@ -206,9 +213,10 @@ function createWindow(hidden = false): void {
     // Inset traffic lights on macOS; the native frame elsewhere.
     ...mainWindowChromeOptions(),
     icon: appIcon,
-    // Match the toolbar/chrome color so first paint doesn't flash; follows
-    // the system appearance (the renderer adapts via prefers-color-scheme).
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1916' : '#efece5',
+    // Match the toolbar/chrome color so first paint doesn't flash: the theme's
+    // own chrome color when one is chosen, the system appearance otherwise
+    // (the renderer adapts via prefers-color-scheme / renderer/theme.ts).
+    backgroundColor: resolveWindowBackground(themeState, nativeTheme.shouldUseDarkColors),
     webPreferences: {
       preload: PRELOAD_SCRIPT,
       contextIsolation: true,
@@ -364,6 +372,9 @@ app.whenReady().then(async () => {
   // the moment it has to happen by: the server sheds those keys on its next
   // write, and its next write can be triggered by anything from here on.
   await readClientSettings();
+  // The stored theme, before any window is created — it decides the chrome color
+  // every window is born with.
+  themeState = await currentThemeState();
 
   // Embedded by default: the server runs in this process, on its own loopback
   // socket, and we are its first client. An address from STEM_SERVER_URL or from
@@ -502,7 +513,16 @@ app.whenReady().then(async () => {
     mcpHost,
     execHost,
     harnessHost,
-    mirrorHost
+    mirrorHost,
+    // All three windows show the palette, so all three are told at once. The
+    // overlay and HUD are off the main push queue (created up front, only ever
+    // hidden), so they are sent to directly.
+    themeChanged: (state) => {
+      themeState = state;
+      sendToMain('client:themeChanged', state);
+      quickChat.sendToOverlay('client:themeChanged', state);
+      quickChat.sendToHud('client:themeChanged', state);
+    }
   });
   quickChat.registerIpc();
   ipcMain.on('renderer:ready', (event) => {

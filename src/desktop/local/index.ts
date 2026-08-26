@@ -10,7 +10,8 @@ import { readClientIdentity, storedServerUrl } from '../client-store';
 import { downloadFile } from '../file-transfer';
 import { markReleaseNotesRead, releaseNotesSnapshot } from '../release-notes';
 import { pairWithServer, useBuiltInServer, type ServerCredentials } from '../server-endpoint';
-import { updateClientReleaseNotes, updateClientUpdates, withClientSettings } from '../settings';
+import { updateClientReleaseNotes, updateClientTheme, updateClientUpdates, withClientSettings } from '../settings';
+import { currentThemeState, ensureThemesDir, listThemes } from '../themes';
 import type { McpHost } from '../mcp-host';
 import type { ExecHost, ExecHostLocalState } from '../exec-host';
 import type { DesktopHarnessHost } from '../harness-host';
@@ -23,6 +24,8 @@ import type {
   McpHostLocalState,
   ReleaseNotesSettings,
   StateExportReport,
+  ThemeSettings,
+  ThemeState,
   UpdatesSettings
 } from '../../shared/types';
 
@@ -90,6 +93,8 @@ export interface LocalIpcDeps {
    * directly then, and mirroring it to itself would be a copy with no purpose.
    */
   mirrorHost: MirrorHost | null;
+  /** The theme changed: push the new state to all three windows at once. */
+  themeChanged(state: ThemeState): void;
 }
 
 /**
@@ -172,6 +177,28 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     'settings:updateUpdates',
     async (_e, patch: Partial<UpdatesSettings>): Promise<AppSettings> => {
       await updateClientUpdates(patch);
+      return withClientSettings(await deps.settings());
+    }
+  );
+
+  // The theme: client-owned end to end. The choice is in client.json and the
+  // theme files are in this machine's themes folder — a look chosen for this
+  // monitor is not a fact about the account (see desktop/themes.ts).
+  handleLocal('theme:state', (): Promise<ThemeState> => currentThemeState());
+  handleLocal('themes:list', () => listThemes());
+  handleLocal('themes:reveal', async () => {
+    const dir = await ensureThemesDir();
+    // Opening a file manager is the one part a test run must not do — same flag
+    // and reason as files:download above.
+    if (!process.env.STEM_BACKGROUND) await shell.openPath(dir);
+  });
+  handleLocal(
+    'settings:updateTheme',
+    async (_e, patch: Partial<ThemeSettings>): Promise<AppSettings> => {
+      await updateClientTheme(patch);
+      // Re-read from disk even for an empty patch: "reload" after editing the
+      // selected theme's file is this same channel with nothing in it.
+      deps.themeChanged(await currentThemeState());
       return withClientSettings(await deps.settings());
     }
   );

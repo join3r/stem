@@ -35,6 +35,13 @@ The one surface that does not follow the theme is the QR plate in the "Pair a ph
 expect dark modules on a light field, and an inverted symbol is a coin flip across iOS and Android.
 Nothing else may hard-code a color.
 
+The color tokens are also the theming surface: Settings → App → Appearance can force light/dark or
+load a user-authored theme — a JSON file of token overrides in this machine's themes folder,
+applied as inline custom properties over the built-in palette (see `docs/themes.md`). This is one
+more reason a new color must be a token: a hard-coded color is invisible to every custom theme.
+The dark palette exists twice in `styles.css` (a `prefers-color-scheme` block and a
+`data-theme="dark"` block) — **keep the two identical** when touching either.
+
 ## Manage panel & settings building blocks
 
 Stem's settings surfaces (the Brain / Memory tab, MCP & Skills, Settings) share one visual

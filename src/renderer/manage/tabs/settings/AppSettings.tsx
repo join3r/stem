@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import type { EscapeAction, ReleaseNotesSnapshot, TaskNotifyMode, UpdateStatus } from '../../../../shared/types';
+import type {
+  CustomTheme,
+  EscapeAction,
+  ReleaseNotesSnapshot,
+  TaskNotifyMode,
+  UpdateStatus
+} from '../../../../shared/types';
 import { ReleaseNotesModal } from '../../../ReleaseNotesModal';
 import { InfoTip } from '../../../ui/InfoTip';
 import { RowSelect, ValueRow } from './rows';
@@ -19,11 +25,91 @@ import { AutonomySections } from './AutonomySettings';
 export function AppSettings() {
   return (
     <div>
+      <AppearanceSection />
       <KeyboardSection />
       <NotificationsSection />
       <AutonomySections />
       <AboutSection />
     </div>
+  );
+}
+
+/**
+ * Which look this machine renders with: follow the OS, force light/dark, or a
+ * custom theme — a JSON file of color-token overrides in this machine's themes
+ * folder (see desktop/themes.ts). Selecting applies everywhere at once; the
+ * windows repaint off the `client:themeChanged` push.
+ */
+function AppearanceSection() {
+  const [selected, setSelected] = useState('system');
+  const [themes, setThemes] = useState<CustomTheme[]>([]);
+
+  useEffect(() => {
+    void window.stem.getSettings().then((s) => setSelected(s.theme.selected));
+    void window.stem.listThemes().then(setThemes);
+  }, []);
+
+  function select(value: string) {
+    setSelected(value); // optimistic; persist + reconcile from the saved settings
+    window.stem.updateThemeSettings({ selected: value }).then((s) => setSelected(s.theme.selected));
+  }
+
+  /** Pick up new files, and re-apply the selected theme after an edit to it. */
+  function reload() {
+    void window.stem.listThemes().then(setThemes);
+    // An empty patch re-reads the selected theme's file and re-pushes it.
+    void window.stem.updateThemeSettings({}).then((s) => setSelected(s.theme.selected));
+  }
+
+  const options = [
+    { value: 'system', label: 'System', title: 'Follow the OS appearance' },
+    { value: 'light', label: 'Light', title: 'The built-in light palette, whatever the OS says' },
+    { value: 'dark', label: 'Dark', title: 'The built-in dark palette, whatever the OS says' },
+    ...themes.map((t) => ({
+      value: `custom:${t.id}`,
+      label: t.problem ? `${t.name} — broken` : t.name,
+      title: t.problem ?? `Custom theme (${t.id}.json)`
+    }))
+  ];
+  // A choice whose file is gone still has to show as chosen, or the select goes
+  // blank; it reads as what it is until the user picks something else.
+  if (!options.some((o) => o.value === selected)) {
+    options.push({ value: selected, label: `${selected.replace(/^custom:/, '')} — missing`, title: 'This theme file is gone from the themes folder' });
+  }
+
+  return (
+    <>
+      <div className="grp-head">Appearance</div>
+      <div className="group">
+        <ValueRow
+          label={
+            <>
+              Theme{' '}
+              <InfoTip label="About themes">
+                <strong>System</strong> follows the OS appearance. A custom theme is a small JSON
+                file of colors in the themes folder — open it below and copy{' '}
+                <strong>_example.json</strong> to start one. After editing a theme file, press{' '}
+                <strong>Reload</strong> to see the change.
+              </InfoTip>
+            </>
+          }
+        >
+          <RowSelect ariaLabel="Theme" value={selected} options={options} onChange={select} />
+        </ValueRow>
+        <ValueRow label={<span />}>
+          <button
+            className="link-btn"
+            onClick={() => void window.stem.revealThemesFolder()}
+            title="Open the themes folder in the file manager"
+          >
+            Open themes folder
+          </button>
+          <button className="link-btn" onClick={reload} title="Re-read the themes folder and re-apply the selected theme">
+            Reload
+          </button>
+        </ValueRow>
+      </div>
+    </>
   );
 }
 

@@ -9,6 +9,7 @@ import type {
   QuickChatSettings,
   ReleaseNotesSettings,
   ServerSettings,
+  ThemeSettings,
   UpdatesSettings
 } from '../shared/types';
 
@@ -46,8 +47,19 @@ const DEFAULTS: ClientSettings = {
   releaseNotes: { showOnUpdate: true, lastSeenVersion: null },
   // Looking for new releases: on. The check is a version comparison, not an
   // install — nothing changes on disk without the user acting on it.
-  updates: { checkAutomatically: true }
+  updates: { checkAutomatically: true },
+  // Follow the OS appearance until the user picks otherwise (see desktop/themes.ts).
+  theme: { selected: 'system' }
 };
+
+/** A stored theme choice, or the default for anything unrecognizable. */
+function coerceThemeSelected(value: unknown): string {
+  if (value === 'system' || value === 'light' || value === 'dark') return value;
+  // A custom theme is named by its file's base name; refuse anything that could
+  // walk out of the themes folder.
+  if (typeof value === 'string' && /^custom:[^/\\]+$/.test(value) && !value.includes('..')) return value;
+  return DEFAULTS.theme.selected;
+}
 
 /** Same contract as the server's `coerce`: anything unreadable takes the default. */
 function coerceClientSettings(raw: Partial<ClientSettings> | undefined): ClientSettings {
@@ -76,7 +88,8 @@ function coerceClientSettings(raw: Partial<ClientSettings> | undefined): ClientS
     updates: {
       checkAutomatically:
         typeof up.checkAutomatically === 'boolean' ? up.checkAutomatically : d.updates.checkAutomatically
-    }
+    },
+    theme: { selected: coerceThemeSelected((raw?.theme as Partial<ThemeSettings> | undefined)?.selected) }
   };
 }
 
@@ -143,6 +156,15 @@ export function updateClientReleaseNotes(patch: Partial<ReleaseNotesSettings>): 
   });
 }
 
+/** Change which theme this machine renders with; returns the new state. */
+export function updateClientTheme(patch: Partial<ThemeSettings>): Promise<ClientSettings> {
+  return updateClientDocument(async (doc) => {
+    const cur = await migrated(doc);
+    doc.settings = coerceClientSettings({ ...cur, theme: { ...cur.theme, ...patch } });
+    return doc.settings;
+  });
+}
+
 /** Turn the automatic release check on or off; returns the new state. */
 export function updateClientUpdates(patch: Partial<UpdatesSettings>): Promise<ClientSettings> {
   return updateClientDocument(async (doc) => {
@@ -180,7 +202,8 @@ export function mergeSettings(server: ServerSettings, client: ClientSettings): A
     ...server,
     quickChat: { ...server.quickChat, ...client.quickChat },
     releaseNotes: client.releaseNotes,
-    updates: client.updates
+    updates: client.updates,
+    theme: client.theme
   };
 }
 
