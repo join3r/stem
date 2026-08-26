@@ -1464,6 +1464,7 @@ export default function App() {
           draftFolderName={draftFolderName}
           threadId={activeThreadId}
           onChangeEffort={setEffort}
+          onSelectModel={onSelectModel}
           onChangeSpeed={setServiceTier}
           onChangeFormat={setFormat}
           webSearch={webSearch}

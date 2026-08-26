@@ -19,6 +19,15 @@ interface ModelPickerProps {
    * new provider or switch the model you chat with.
    */
   resolvedDefault?: string | null;
+  /**
+   * Replace the field-styled trigger with custom content (the composer's
+   * effort-pill label). The button shell — ref, aria, open/close — stays; only
+   * its class and children swap, and the resolved-default note is skipped
+   * because a compact trigger has nowhere to hang it.
+   */
+  triggerClassName?: string;
+  triggerContent?: React.ReactNode;
+  triggerTitle?: string;
 }
 
 // A filterable model picker: a field-styled trigger that opens a searchable popup
@@ -32,7 +41,10 @@ export function ModelPicker({
   emptyLabel,
   ariaLabel,
   disabled,
-  resolvedDefault
+  resolvedDefault,
+  triggerClassName,
+  triggerContent,
+  triggerTitle
 }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -91,7 +103,10 @@ export function ModelPicker({
     if (!open || !triggerRef.current) return;
     const btn = triggerRef.current.getBoundingClientRect();
     const pad = 8;
-    const width = btn.width;
+    // Floor, not btn.width verbatim: the composer's compact trigger is far
+    // narrower than a readable list. Settings triggers are wider than this
+    // anyway, so they keep matching their field exactly.
+    const width = Math.max(btn.width, 220);
     const popH = popRef.current?.getBoundingClientRect().height ?? 240;
     let top = btn.bottom + 4;
     if (top + popH + pad > window.innerHeight) top = Math.max(pad, btn.top - 4 - popH);
@@ -144,20 +159,25 @@ export function ModelPicker({
       <button
         ref={triggerRef}
         type="button"
-        className="mp-trigger"
+        className={triggerClassName ?? 'mp-trigger'}
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
+        title={triggerTitle}
         onClick={() => (open ? setOpen(false) : openMenu())}
       >
-        <span className="mp-trigger-label" title={triggerProvider ? `${triggerLabel} · ${triggerProvider}` : triggerLabel}>
-          {triggerLabel}
-          {triggerProvider && <span className="mp-trigger-provider"> · {triggerProvider}</span>}
-        </span>
-        <ChevronDown size={14} className="mp-trigger-chevron" />
+        {triggerContent ?? (
+          <>
+            <span className="mp-trigger-label" title={triggerProvider ? `${triggerLabel} · ${triggerProvider}` : triggerLabel}>
+              {triggerLabel}
+              {triggerProvider && <span className="mp-trigger-provider"> · {triggerProvider}</span>}
+            </span>
+            <ChevronDown size={14} className="mp-trigger-chevron" />
+          </>
+        )}
       </button>
-      {resolved && (
+      {!triggerContent && resolved && (
         <em className="mp-resolved">
           uses {resolved.displayName} · {resolved.providerName}
         </em>

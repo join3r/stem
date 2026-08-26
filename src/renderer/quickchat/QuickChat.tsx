@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Sparkles, SquarePen, PanelRight, Globe, NotebookPen, Check } from 'lucide-react';
+import { Sparkles, SquarePen, PanelRight, Globe, NotebookPen, Check, Zap } from 'lucide-react';
 import type { ModelSummary, QuickChatSettings, TurnAttachment } from '../../shared/types';
 import { ChatView } from '../chat/ChatView';
-import { EFFORT_LABELS } from '../modelLabels';
+import { EffortModelControl } from '../ui/EffortModelControl';
 import { McpApprovalCard } from '../manage/McpApprovalCard';
 import { InstructionsApprovalCard } from '../manage/InstructionsApprovalCard';
 import { SkillApprovalCard } from '../manage/SkillApprovalCard';
@@ -88,6 +88,20 @@ export function QuickChat() {
 
   const selectedModel = models.find((m) => m.id === modelId) ?? null;
   const { messages, running, streamingId, activity } = chatState;
+
+  // Switching models mid-overlay: clamp effort to what the new model supports and
+  // drop a Fast selection its provider doesn't offer — the same rule as main.
+  const onSelectModel = useCallback(
+    (id: string) => {
+      const m = models.find((x) => x.id === id);
+      setModelId(id);
+      if (m) {
+        setEffort((e) => (e && m.supportedEfforts.includes(e) ? e : m.defaultEffort));
+        if (!m.serviceTiers.some((t) => t.id === 'priority')) setServiceTier(null);
+      }
+    },
+    [models]
+  );
 
   useEffect(() => {
     return window.stem.onQuickChatHandoffRequest(({ id, threadId: requestedThreadId }) => {
@@ -432,8 +446,6 @@ export function QuickChat() {
     onSend(text, []);
   }
 
-  const efforts =
-    selectedModel && selectedModel.supportedEfforts.length ? selectedModel.supportedEfforts : ['low', 'medium', 'high'];
   const fastTier = selectedModel?.serviceTiers.find((t) => t.id === 'priority');
   const hasFast = selectedModel ? !!fastTier : true;
 
@@ -504,6 +516,7 @@ export function QuickChat() {
           draftFolderName={null}
           showContextMeter={false}
             onChangeEffort={setEffort}
+            onSelectModel={onSelectModel}
             onChangeSpeed={setServiceTier}
             onChangeFormat={setFormat}
             webSearch={searchOn}
@@ -559,25 +572,22 @@ export function QuickChat() {
           <span className="qc-esc">esc</span>
         </div>
         <div className="qc-foot">
-          <div className="seg-ctl compact" role="group" aria-label="Reasoning effort">
-            {efforts.map((e) => (
-              <button key={e} type="button" className={effort === e ? 'active' : ''} onClick={() => setEffort(e)}>
-                {EFFORT_LABELS[e] ?? e}
-              </button>
-            ))}
-          </div>
+          <EffortModelControl
+            models={models}
+            model={selectedModel}
+            effort={effort}
+            onChangeEffort={setEffort}
+            onSelectModel={onSelectModel}
+          />
           {hasFast && (
             <div className="seg-ctl compact" role="group" aria-label="Speed">
-              <button type="button" className={serviceTier === 'priority' ? '' : 'active'} onClick={() => setServiceTier(null)}>
-                Standard
-              </button>
               <button
                 type="button"
                 className={serviceTier === 'priority' ? 'active' : ''}
-                onClick={() => setServiceTier('priority')}
-                title={fastTier?.description ?? '1.5× speed, increased usage'}
+                onClick={() => setServiceTier(serviceTier === 'priority' ? null : 'priority')}
+                title={`${fastTier?.description ?? '1.5× speed, increased usage'} — off means standard speed`}
               >
-                Fast
+                <Zap size={13} /> Fast
               </button>
             </div>
           )}

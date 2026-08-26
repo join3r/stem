@@ -6,7 +6,7 @@ import {
   useRef,
   useState
 } from 'react';
-import { Square, ArrowUp, Paperclip, File, X, Check, NotebookPen, Globe } from 'lucide-react';
+import { Square, ArrowUp, Paperclip, File, X, Check, NotebookPen, Globe, Zap } from 'lucide-react';
 import type {
   ChatMessage,
   EscapeAction,
@@ -17,7 +17,7 @@ import type {
 import { ContextMeter } from './ContextMeter';
 import { useOffline } from '../hooks/useServerReachable';
 import { ShortcutHint, glyphsFor, useShortcut, useShortcutsBound, type ShortcutId } from '../shortcuts';
-import { EFFORT_LABELS } from '../modelLabels';
+import { EffortModelControl } from '../ui/EffortModelControl';
 import { NOTE_CONFIRM_MS, detectNoteTrigger, noteBodyValid, useNoteMode } from '../noteMode';
 
 const MAX_COMPOSER_HEIGHT = 180;
@@ -71,12 +71,15 @@ interface ComposerProps {
   onRetractActiveTurn: () => void | Promise<void>;
   pendingRestore: { text: string; attachments: TurnAttachment[]; nonce: number } | null;
   onRestoreConsumed: () => void;
+  models: ModelSummary[];
   model: ModelSummary | null;
   effort: string | null;
   serviceTier: string | null;
   format: 'md' | 'mdx';
   showContextMeter: boolean;
   onChangeEffort: (effort: string) => void;
+  /** Switch the model the next turn runs on — the effort control's label opens the picker. */
+  onSelectModel: (id: string) => void;
   onChangeSpeed: (serviceTier: string | null) => void;
   onChangeFormat: (format: 'md' | 'mdx') => void;
   /** Web search for this surface — its saved position, which the next turn uses. */
@@ -105,12 +108,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   onRetractActiveTurn,
   pendingRestore,
   onRestoreConsumed,
+  models,
   model,
   effort,
   serviceTier,
   format,
   showContextMeter,
   onChangeEffort,
+  onSelectModel,
   onChangeSpeed,
   onChangeFormat,
   webSearch,
@@ -340,74 +345,58 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   return (
     <div className="composer">
       <div className="composer-controls">
-        {/* The keycap sits on the group, not the buttons: ⌘E cycles the whole
-            control rather than selecting any one level, and none of the level
-            buttons carries a title of its own to override this one. */}
-        {model && model.supportedEfforts.length > 0 && (
-          <div
-            className="seg-ctl compact"
-            role="group"
-            aria-label="Reasoning effort"
-            title={keyTitle('Cycle reasoning effort', 'cycle-effort')}
-          >
-            <ShortcutHint id="cycle-effort" />
-            {model.supportedEfforts.map((e) => (
-              <button
-                key={e}
-                type="button"
-                className={effort === e ? 'active' : ''}
-                onClick={() => onChangeEffort(e)}
-                disabled={running}
-              >
-                {EFFORT_LABELS[e] ?? e}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* The ⌘E keycap sits on the slider, not the stops: it cycles the whole
+            control rather than selecting any one level, and the stops carry only
+            their level name. The label beside it opens the model picker. */}
+        <EffortModelControl
+          models={models}
+          model={model}
+          effort={effort}
+          disabled={running}
+          onChangeEffort={onChangeEffort}
+          onSelectModel={onSelectModel}
+          sliderTitle={keyTitle('Cycle reasoning effort', 'cycle-effort')}
+        >
+          <ShortcutHint id="cycle-effort" />
+        </EffortModelControl>
+        {/* One toggle, not Standard|Fast: unpressed IS standard speed. */}
         {hasFast && (
           <div className="seg-ctl compact" role="group" aria-label="Speed">
             <ShortcutHint id="toggle-speed" />
             <button
               type="button"
-              className={serviceTier === 'priority' ? '' : 'active'}
-              onClick={() => onChangeSpeed(null)}
-              disabled={running}
-              title={keyTitle('Standard speed', 'toggle-speed')}
-            >
-              Standard
-            </button>
-            <button
-              type="button"
               className={serviceTier === 'priority' ? 'active' : ''}
-              onClick={() => onChangeSpeed('priority')}
+              onClick={() => onChangeSpeed(serviceTier === 'priority' ? null : 'priority')}
               disabled={running}
-              title={withKey(fastTier?.description ?? '1.5× speed, increased usage', 'toggle-speed')}
+              title={withKey(
+                serviceTier === 'priority'
+                  ? fastTier?.description ?? '1.5× speed, increased usage'
+                  : `${fastTier?.description ?? '1.5× speed, increased usage'} — off means standard speed`,
+                'toggle-speed'
+              )}
             >
-              Fast
+              <Zap size={13} /> Fast
             </button>
           </div>
         )}
+        {/* Same shape for format: pressed = rich MDX, unpressed = plain Markdown. */}
         <div className="seg-ctl compact" role="group" aria-label="Output format">
           <ShortcutHint id="toggle-format" />
           <button
             type="button"
             className={format === 'mdx' ? 'active' : ''}
-            onClick={() => onChangeFormat('mdx')}
+            onClick={() => onChangeFormat(format === 'mdx' ? 'md' : 'mdx')}
             disabled={running}
             // Em dash rather than the usual parenthetical, so the keycap keeps
             // the trailing (…) slot the other labels put it in.
-            title={withKey('Rich components — callouts, steps, collapsibles', 'toggle-format')}
+            title={withKey(
+              format === 'mdx'
+                ? 'Rich components — callouts, steps, collapsibles'
+                : 'Plain Markdown — press for rich components',
+              'toggle-format'
+            )}
           >
             MDX
-          </button>
-          <button
-            type="button"
-            className={format === 'md' ? 'active' : ''}
-            onClick={() => onChangeFormat('md')}
-            disabled={running}
-            title={withKey('Plain Markdown only', 'toggle-format')}
-          >
-            MD
           </button>
         </div>
         {/* Not disabled while a turn runs, unlike effort/speed/format: those three

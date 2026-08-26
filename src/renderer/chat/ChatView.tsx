@@ -127,6 +127,8 @@ interface ChatViewProps {
    *  window; null while the chat is still an unsent draft. */
   threadId?: string | null;
   onChangeEffort: (effort: string) => void;
+  /** Switch the model the next turn runs on (the composer's effort control opens the picker). */
+  onSelectModel: (id: string) => void;
   onChangeSpeed: (serviceTier: string | null) => void;
   onChangeFormat: (format: 'md' | 'mdx') => void;
   /** Web search for this surface (main or Quick Chat), and its switch. */
@@ -314,6 +316,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   showContextMeter = true,
   threadId,
   onChangeEffort,
+  onSelectModel,
   onChangeSpeed,
   onChangeFormat,
   webSearch,
@@ -692,7 +695,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         format={format}
         showContextMeter={showContextMeter}
         threadId={threadId}
+        models={models}
         onChangeEffort={onChangeEffort}
+        onSelectModel={onSelectModel}
         onChangeSpeed={onChangeSpeed}
         onChangeFormat={onChangeFormat}
         webSearch={webSearch}
