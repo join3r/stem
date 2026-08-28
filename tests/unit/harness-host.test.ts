@@ -214,10 +214,14 @@ describe('requests', () => {
   });
 
   it('the cancel frame is honored even with the switch off', async () => {
-    const { host, acpx } = makeHost({ hold: true });
+    const { host, invoked, acpx } = makeHost({ hold: true, events: [{ type: 'text_delta', text: 'working' }] });
     host.onRequest(RUN);
+    // The request reads consent from disk asynchronously; flipping the switch
+    // before that read lands would refuse the run outright and there would be no
+    // turn to cancel. An event batch is proof the turn went live under the
+    // switch-on read — only then is turning it off the scenario under test.
+    await waitFor(() => invoked.some((c) => c.channel === 'harnessHost:event'));
     await writeHarnessHostEnabled(false);
-    // The turn goes live a few microtasks after the frame; keep asking.
     await waitFor(() => {
       host.onCancel({ turnId: 'turn-1' });
       return acpx.calls.cancels > 0;

@@ -2,9 +2,9 @@
 // user hasn't seen, it doesn't come back after being dismissed, and it stays
 // away when the preference is off. Each case is its own launch — the whole
 // feature is a startup decision, so there is nothing to assert mid-session.
-import { readFileSync, rmSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { test } from '@playwright/test';
-import { expect, launchApp, mainWindowOf, openSettings, type LaunchedApp } from './electron';
+import { expect, launchApp, mainWindowOf, openSettings, type LaunchedApp, removeUserData } from './electron';
 
 const APP_VERSION = (JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }).version;
 
@@ -17,7 +17,7 @@ async function withApp(seedSettings: Record<string, unknown>, fn: (app: Launched
     await fn(launched);
   } finally {
     await launched.app.close().catch(() => {});
-    rmSync(launched.userDataDir, { recursive: true, force: true });
+    removeUserData(launched.userDataDir);
   }
 }
 

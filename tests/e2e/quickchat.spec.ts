@@ -4,11 +4,10 @@
 // so this exercises the real per-platform overlay path — the NSPanel on macOS
 // and the transparent CSS-card window on Linux (under xvfb in CI).
 import { spawn } from 'node:child_process';
-import { rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import electronPath from 'electron';
 import type { ElectronApplication } from '@playwright/test';
-import { test, expect, launchApp, mainWindowOf } from './electron';
+import { test, expect, launchApp, mainWindowOf, removeUserData } from './electron';
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -68,7 +67,7 @@ test('a cold `--quick-chat` launch opens the overlay, not the main window', asyn
     expect(mainVisible).toBe(false);
   } finally {
     await app.close().catch(() => {});
-    rmSync(userDataDir, { recursive: true, force: true });
+    removeUserData(userDataDir);
   }
 });
 
@@ -94,6 +93,6 @@ test('a second `--quick-chat` launch toggles the running instance (Linux CLI sum
     expect(await exited).toBe(0);
   } finally {
     await app.close().catch(() => {});
-    rmSync(userDataDir, { recursive: true, force: true });
+    removeUserData(userDataDir);
   }
 });

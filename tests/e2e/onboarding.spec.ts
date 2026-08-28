@@ -3,8 +3,7 @@
 // auth:setApiKey handlers emit a scripted auth-url → done sequence and flip the
 // status to authenticated (see src/server/index.ts). Exercises the wizard's full
 // state machine without a browser, network, or real pi.
-import { rmSync } from 'node:fs';
-import { expect, launchApp, mainWindowOf } from './electron';
+import { expect, launchApp, mainWindowOf, removeUserData } from './electron';
 import { test as base } from '@playwright/test';
 
 const test = base.extend<{ onboardingApp: Awaited<ReturnType<typeof launchApp>> }>({
@@ -12,7 +11,7 @@ const test = base.extend<{ onboardingApp: Awaited<ReturnType<typeof launchApp>> 
     const launched = await launchApp({ env: { STEM_E2E: '1', STEM_E2E_ONBOARDING: '1' } });
     await use(launched);
     await launched.app.close().catch(() => {});
-    rmSync(launched.userDataDir, { recursive: true, force: true });
+    removeUserData(launched.userDataDir);
   }
 });
 
@@ -91,7 +90,7 @@ test('first run on Wayland: wizard explains the Quick Chat summon command', asyn
     await expect(win.locator('.conversation')).toBeVisible({ timeout: 15_000 });
   } finally {
     await launched.app.close().catch(() => {});
-    rmSync(launched.userDataDir, { recursive: true, force: true });
+    removeUserData(launched.userDataDir);
   }
 });
 
@@ -104,6 +103,6 @@ test('plain STEM_E2E (authenticated) skips the wizard entirely', async () => {
     await expect(win.getByText('Welcome to Stem')).toHaveCount(0);
   } finally {
     await launched.app.close().catch(() => {});
-    rmSync(launched.userDataDir, { recursive: true, force: true });
+    removeUserData(launched.userDataDir);
   }
 });

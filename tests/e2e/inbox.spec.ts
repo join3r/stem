@@ -14,6 +14,11 @@ async function send(win: Page, text: string): Promise<void> {
   await expect(win.locator('.message-assistant:not(.activity-row) .message-body').last()).toContainText(
     `Echo: ${text}`
   );
+  // Wait for the turn to SETTLE, not just for the reply text: the triage tests
+  // below act on the thread the instant send() returns, and a shortcut landing
+  // between the last delta and the settled event races the settle-time read
+  // stamp. The idle-only action row is the settled state made visible.
+  await expect(win.locator('.message-user').last().locator('.message-actions')).toBeAttached();
 }
 
 /** A fresh thread whose first user message is `text`. */

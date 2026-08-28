@@ -254,6 +254,19 @@ export function attachBackendEvents(
 export function applyLiveTurns(core: SessionCore, turns: LiveTurn[]): void {
   const liveByThread = new Map(turns.map((t) => [t.threadId, t.turnId]));
   const liveTurnIds = new Set(turns.map((t) => t.turnId).filter((id): id is string => !!id));
+  // Same authority, applied to the send bookkeeping: a send the backend already
+  // acknowledged (threadId is set on resolution) whose turn is not in the live
+  // list is over — settled while the stream was away, or killed with the server.
+  // Its pending record must not outlive it, because a pending send blocks every
+  // later send under the same key (the double-send guard), which after a server
+  // crash turns into a composer that silently eats messages forever. A send
+  // whose start RPC is still in flight has no threadId yet and is left alone —
+  // it is early, not stale.
+  for (const [key, pending] of core.pendingSends) {
+    if (pending.threadId && pending.turnId && !liveTurnIds.has(pending.turnId)) {
+      core.pendingSends.delete(key);
+    }
+  }
   core.store.update((prev) => {
     let changed = false;
     const next: ThreadStates = { ...prev };

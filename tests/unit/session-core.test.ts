@@ -221,6 +221,52 @@ describe('applyLiveTurns', () => {
     // object each time would re-render every chat for nothing.
     expect(core.store.snapshot()).toBe(before);
   });
+
+  it('drops an acknowledged pending send whose turn the server no longer runs', () => {
+    // The turn died with the server (or settled while the stream was away), so
+    // its terminal event is never coming. Left in place, the pending record
+    // blocks every later send under the same key — after a crash the composer
+    // would silently eat messages forever.
+    const core = createSessionCore();
+    core.pendingSends.set('a', {
+      promise: Promise.resolve({} as StartTurnResult),
+      turnId: 'dead-turn',
+      threadId: 'a', // set on start resolution — the backend acknowledged it
+      isNewChat: false,
+      text: 'x',
+      attachments: []
+    });
+    applyLiveTurns(core, []);
+    expect(core.pendingSends.size).toBe(0);
+  });
+
+  it('keeps a pending send whose start RPC has not resolved — it is early, not stale', () => {
+    const core = createSessionCore();
+    core.pendingSends.set('a', {
+      promise: new Promise<StartTurnResult>(() => {}),
+      turnId: 'minted-client-side',
+      threadId: null, // no ack yet: the server could not possibly report it
+      isNewChat: false,
+      text: 'x',
+      attachments: []
+    });
+    applyLiveTurns(core, []);
+    expect(core.pendingSends.size).toBe(1);
+  });
+
+  it('keeps an acknowledged pending send whose turn is still live', () => {
+    const core = createSessionCore();
+    core.pendingSends.set('a', {
+      promise: Promise.resolve({} as StartTurnResult),
+      turnId: 'turn5',
+      threadId: 'a',
+      isNewChat: false,
+      text: 'x',
+      attachments: []
+    });
+    applyLiveTurns(core, [{ threadId: 'a', turnId: 'turn5' }]);
+    expect(core.pendingSends.size).toBe(1);
+  });
 });
 
 describe('sendTurn', () => {

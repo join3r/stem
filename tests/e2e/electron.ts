@@ -215,10 +215,19 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
  * "unreachable" the app would log on its way out), then the state dir. Errors
  * are swallowed: a cleanup that throws replaces a real failure with its own.
  */
+/**
+ * Delete a test's throwaway userData dir. The app's close() can resolve while
+ * the main process is still flushing its stores, so a bare rmSync races those
+ * writes and dies with ENOTEMPTY; the retries absorb the last flush.
+ */
+export function removeUserData(userDataDir: string): void {
+  rmSync(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
 export async function closeApp(launched: LaunchedApp): Promise<void> {
   await launched.app.close().catch(() => {});
   await launched.server?.stop().catch(() => {});
-  rmSync(launched.userDataDir, { recursive: true, force: true });
+  removeUserData(launched.userDataDir);
 }
 
 export const test = base.extend<Fixtures>({
@@ -226,7 +235,7 @@ export const test = base.extend<Fixtures>({
     const { app, userDataDir } = await launchApp();
     await use(app);
     await app.close().catch(() => {});
-    rmSync(userDataDir, { recursive: true, force: true });
+    removeUserData(userDataDir);
   },
   mainWindow: async ({ electronApp }, use) => {
     const win = await mainWindowOf(electronApp);

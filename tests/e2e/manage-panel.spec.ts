@@ -2,10 +2,10 @@
 // (tests/e2e/electron.ts) reports a healthy backend, so the renderer mounts past
 // the sign-in gate. These drive actual DOM, not the bridge: tab navigation, the
 // empty-memory state, and a tidy-up preset that writes through to the store.
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test, expect, launchApp, mainWindowOf } from './electron';
+import { test, expect, launchApp, mainWindowOf, removeUserData } from './electron';
 
 test('opens the Memory tab and shows the empty state on a fresh workspace', async ({ mainWindow }) => {
   // The inspector is open by default; switch to the Memory tab (a toolbar button,
@@ -95,7 +95,7 @@ test('the Files sub-tab lists a seeded Files folder and deletes through to disk'
     expect(readdirSync(filesDir).sort()).toEqual(['Recipes']);
   } finally {
     await app.close().catch(() => {});
-    rmSync(userDataDir, { recursive: true, force: true });
-    rmSync(filesDir, { recursive: true, force: true });
+    removeUserData(userDataDir);
+    removeUserData(filesDir);
   }
 });

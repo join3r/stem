@@ -21,9 +21,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { rmSync } from 'node:fs';
 import type { Page } from '@playwright/test';
-import { test, expect, launchApp, mainWindowOf } from './electron';
+import { test, expect, launchApp, mainWindowOf, removeUserData } from './electron';
 
 const PERF = !!process.env.STEM_PERF;
 const UPDATE = !!process.env.STEM_PERF_UPDATE;
@@ -150,7 +149,7 @@ test.describe('turn latency budgets', () => {
         }
       } finally {
         await launched.app.close().catch(() => {});
-        rmSync(launched.userDataDir, { recursive: true, force: true });
+        removeUserData(launched.userDataDir);
       }
 
       const medians: Record<string, number> = {

@@ -82,7 +82,7 @@ export function EffortModelControl({
         models={models}
         value={model?.id ?? null}
         onChange={(id) => id && onSelectModel(id)}
-        ariaLabel="Model"
+        ariaLabel="Model for this chat"
         disabled={disabled}
         triggerClassName="eff-model"
         triggerTitle="Model for this chat — click to change"

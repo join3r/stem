@@ -230,6 +230,10 @@ export default function App() {
     const extras = Object.values(pendingChats).filter((c) => !known.has(c.threadId));
     return extras.length ? { ...chatList, chats: [...extras, ...chatList.chats] } : chatList;
   }, [chatList, pendingChats]);
+  // The current inbox state for handlers that live outside the render cycle
+  // (the settled-turn read stamp below reads it from an event callback).
+  const inboxRef = useRef(displayList.inbox);
+  inboxRef.current = displayList.inbox;
 
   // Unread threads sitting in the Inbox — the count badge on the Chats tab. Only
   // the Inbox counts: an archived or snoozed thread is one you've decided about,
@@ -385,6 +389,9 @@ export default function App() {
       const seq = ++inboxPatchSeq.current;
       pendingInboxPatches.current.set(seq, patch);
       setChatList((prev) => ({ ...prev, inbox: patch(prev.inbox) }));
+      // Mirror into the ref synchronously: an event callback (the settled-turn
+      // read stamp) may consult it before React commits the state above.
+      inboxRef.current = patch(inboxRef.current);
       call()
         .then((list) => {
           pendingInboxPatches.current.delete(seq);
@@ -554,7 +561,14 @@ export default function App() {
         // the unread when focus returns). Either way refresh the list so the Inbox
         // and the tab badge stay honest.
         if (id) {
-          if (id === activeThreadIdRef.current && document.hasFocus())
+          // Same rule as the reading-marks-read effect: forcedUnread is a
+          // decision, and this automatic stamp must not overrule it — a user who
+          // marked the thread unread while the turn was settling keeps that.
+          if (
+            id === activeThreadIdRef.current &&
+            document.hasFocus() &&
+            !inboxRef.current.entries[id]?.forcedUnread
+          )
             void window.stem
               .setInboxRead([id], true)
               .then(applyServerList)

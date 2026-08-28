@@ -4,9 +4,8 @@
 // touched: the tasks load, the Tasks tab renders them, and pause/delete persist
 // through real IPC. The flood's exact timing is guarded deterministically by the
 // unit test (tests/unit/scheduler.test.ts); this proves the surrounding plumbing.
-import { expect, launchApp, mainWindowOf, type LaunchedApp } from './electron';
+import { expect, launchApp, mainWindowOf, removeUserData, type LaunchedApp } from './electron';
 import { test } from '@playwright/test';
-import { rmSync } from 'node:fs';
 import type { ScheduledTask } from '../../src/shared/types';
 
 // A far-future daily cron never becomes due during the test, so the scheduler
@@ -44,7 +43,7 @@ async function boot(seedTasks: ScheduledTask[]) {
 
 test.afterEach(() => {
   if (launched) {
-    rmSync(launched.userDataDir, { recursive: true, force: true });
+    removeUserData(launched.userDataDir);
     launched = null;
   }
 });
