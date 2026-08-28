@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { registerServer } from '../../src/server/ipc';
 import { isUploadHandle, resolveUploadHandle } from '../../src/server/files/staging';
+import { setHeicDecoderForTests } from '../../src/server/pi/heic';
 import { forgetCachedDevices, readDevices, resolveDevice } from '../../src/server/transport/auth';
 import { createPairingCode } from '../../src/server/transport/pairing';
 import { readClientIdentity, writeClientIdentity } from '../../src/desktop/client-store';
@@ -264,6 +265,36 @@ describe('when the server is somewhere else', () => {
     expect(basename(staged!)).toBe(basename(localFile));
   });
 
+  it('uploads a decoded HEIC as JPEG bytes and sends the handle, not the photo', async () => {
+    // The decoded photo is multi-megabyte JPEG; the RPC envelope is a JSON body
+    // capped at MAX_BODY_BYTES. The bytes must go up on POST /upload like any
+    // other file, with only the handle in the envelope.
+    const MINI_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    setHeicDecoderForTests(async () => MINI_JPEG);
+    const heicFile = join(tmpdir(), `stem-attach-${process.pid}.heic`);
+    const ftyp = Buffer.alloc(16);
+    ftyp.writeUInt32BE(16, 0);
+    ftyp.write('ftyp', 4);
+    ftyp.write('heic', 8);
+    writeFileSync(heicFile, ftyp);
+    try {
+      const result = (await far.invoke('backend:startTurn', [
+        { input: 'look', attachments: [{ name: 'IMG_1.HEIC', path: heicFile }] }
+      ])) as { attachments: { name: string; mime?: string; path?: string; dataBase64?: string }[] };
+
+      const [att] = result.attachments;
+      expect(att).toEqual({ name: 'IMG_1.HEIC', mime: 'image/jpeg', path: att.path });
+      expect(isUploadHandle(att.path!)).toBe(true);
+      const staged = await resolveUploadHandle(att.path!);
+      expect(readFileSync(staged!)).toEqual(MINI_JPEG);
+      // The staged file holds JPEG bytes, so it is named as one.
+      expect(basename(staged!)).toBe('IMG_1.jpg');
+    } finally {
+      setHeicDecoderForTests(null);
+      rmSync(heicFile, { force: true });
+    }
+  });
+
   it('leaves a pasted image in the envelope, where it already is', async () => {
     // Only a PATH is meaningless remotely. Base64 is already on the wire, and
     // uploading it separately would be strictly more work for the same bytes.
@@ -299,6 +330,26 @@ describe('when the server is somewhere else', () => {
       { input: 'local', attachments: [{ name: 'note.txt', path: localFile }] }
     ])) as { attachments: { path: string }[] };
     expect(result.attachments[0].path).toBe(localFile);
+  });
+
+  it('does not decode HEIC for the client that started its own server either', async () => {
+    // Same argument as paths: the embedded server decodes HEIC itself in
+    // resolveAttachments, from the path, on the same machine. Converting in the
+    // proxy would push megabytes of base64 through loopback for nothing.
+    let decoded = 0;
+    setHeicDecoderForTests(async () => {
+      decoded += 1;
+      return Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    });
+    try {
+      const result = (await proxy.invoke('backend:startTurn', [
+        { input: 'local', attachments: [{ name: 'IMG_1.HEIC', path: '/nowhere/IMG_1.HEIC' }] }
+      ])) as { attachments: { path?: string; dataBase64?: string }[] };
+      expect(decoded).toBe(0);
+      expect(result.attachments[0]).toEqual({ name: 'IMG_1.HEIC', path: '/nowhere/IMG_1.HEIC' });
+    } finally {
+      setHeicDecoderForTests(null);
+    }
   });
 });
 

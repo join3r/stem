@@ -79,6 +79,29 @@ export async function uploadFile(creds: ServerCredentials, path: string): Promis
   } catch {
     throw new Error(`“${name}” could not be read from this computer.`);
   }
+  return upload(creds, name, size, (req) => {
+    // A read error on this side must not leave the request hanging open forever.
+    const body = createReadStream(path);
+    body.on('error', (e) => req.destroy(e));
+    body.pipe(req);
+  });
+}
+
+/**
+ * Same contract for bytes already in memory. The caller is a HEIC the client
+ * just decoded to JPEG: there is no on-disk file to stream, and the decoded
+ * photo is too big to ride inside the RPC envelope (see the note at the top).
+ */
+export async function uploadBytes(creds: ServerCredentials, name: string, bytes: Buffer): Promise<string> {
+  return upload(creds, name, bytes.length, (req) => req.end(bytes));
+}
+
+async function upload(
+  creds: ServerCredentials,
+  name: string,
+  size: number,
+  send: (req: ClientRequest) => void
+): Promise<string> {
   // Checked here as well as at the server so the common case of one file that is
   // simply too big says so immediately, without spending the upload first.
   if (size > MAX_UPLOAD_BYTES) {
@@ -98,10 +121,7 @@ export async function uploadFile(creds: ServerCredentials, path: string): Promis
     }
   });
   const answered = response(req);
-  // A read error on this side must not leave the request hanging open forever.
-  const body = createReadStream(path);
-  body.on('error', (e) => req.destroy(e));
-  body.pipe(req);
+  send(req);
 
   let res: IncomingMessage;
   try {

@@ -20,7 +20,7 @@ import {
   type TurnAttachment
 } from '../shared/types';
 import { convertHeicAttachments } from '../server/pi/heic';
-import { uploadFile } from './file-transfer';
+import { uploadBytes, uploadFile } from './file-transfer';
 import { createOfflineCache } from './offline-cache';
 import type { OAuthCourier } from './oauth-courier';
 import { updateClientQuickChat, withClientSettings } from './settings';
@@ -115,18 +115,19 @@ import { updateClientQuickChat, withClientSettings } from './settings';
 //                              push stream is one this machine asked for — the
 //                              stream is a broadcast, and every other device
 //                              paired to the same server sees it too.
-//   backend:startTurn,         HEIC is decoded to JPEG here first (macOS sips /
-//   files:add                  a PATH tool) so a remote Linux server never has
-//                              to. Remaining paths to files on THIS disk are
-//                              only a thing the server can read when it is on
+//   backend:startTurn,         both carry paths to files on THIS disk, which is
+//   files:add                  only a thing the server can read when it is on
 //                              this disk too. When it isn't, the bytes are
 //                              streamed up first and the paths are replaced with
-//                              handles to them — see attachmentsForTurn(). The
-//                              REMOTE case only for the upload half: a local
-//                              install keeps handing over paths, because copying
-//                              every pasted screenshot through loopback to prove
-//                              a point would be a cost with nothing on the other
-//                              side of it.
+//                              handles to them — and HEIC is decoded to JPEG on
+//                              this machine (macOS sips / a PATH tool) before it
+//                              goes up, so a remote Linux server never has to.
+//                              See attachmentsForServer(). The REMOTE case only:
+//                              a local install keeps handing over paths (its
+//                              embedded server decodes HEIC itself), because
+//                              copying every pasted screenshot through loopback
+//                              to prove a point would be a cost with nothing on
+//                              the other side of it.
 //
 // SERVER-OWNED — everything else (~110 channels). The server's registry IS the
 // surface; this client asks for it at connect time (GET /channels) rather than
@@ -330,6 +331,11 @@ export interface ServerProxy {
  * reader below has to care: everything else here goes through `fetch`. Same
  * dispatch as file-transfer.ts, for the same reason.
  */
+/** Upload name for a decoded HEIC: the staged file holds JPEG bytes, so say so. */
+function jpegName(name: string): string {
+  return name.replace(/\.(heic|heif|hif)$/i, '') + '.jpg';
+}
+
 function openStream(url: string, options: Parameters<typeof httpRequest>[1], onRes: Parameters<typeof httpRequest>[2]) {
   return (url.startsWith('https:') ? httpsRequest : httpRequest)(url, options, onRes);
 }
@@ -367,10 +373,17 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
   /**
    * Decode HEIC to JPEG on THIS machine (sips / PATH tool) so a Mac client
    * talking to a Linux server still works — the server never has to ship HEVC.
-   * Then, when remote, replace remaining on-disk paths with upload handles.
+   * Then replace on-disk paths with upload handles. Remote only, like the rest
+   * of the upload rewrite: an embedded server reads `att.path` itself and does
+   * its own HEIC decode in resolveAttachments, so converting here would only
+   * copy megabytes through loopback (the argument in file-transfer.ts).
    *
-   * Pasted images (`dataBase64`) already travel in the envelope. After a HEIC
-   * conversion they are JPEG `dataBase64` and are left exactly as they are.
+   * A decoded photo is multi-megabyte JPEG bytes, and the RPC envelope is a
+   * JSON body capped at MAX_BODY_BYTES and held whole in memory on both sides —
+   * two 48-megapixel photos as base64 would fail the send. So converted HEIC
+   * goes up on POST /upload like any other file, and only the handle rides in
+   * the envelope. Small pasted images (screenshot PNGs) stay in the envelope,
+   * where they already are.
    *
    * A failure to *upload* is deliberately fatal to the call. The alternative is
    * sending the message with the attachment quietly missing, which reads to the
@@ -379,19 +392,32 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
    * again. A HEIC that will not decode is left unchanged so the server can skip
    * it with a named note rather than failing the whole send.
    */
-  async function attachmentsForTurn(atts: TurnAttachment[]): Promise<TurnAttachment[]> {
+  async function attachmentsForServer(atts: TurnAttachment[]): Promise<TurnAttachment[]> {
     const converted = await convertHeicAttachments(atts);
-    if (!deps.remote) return converted;
     return Promise.all(
-      converted.map(async (att) => {
+      converted.map(async (att, i) => {
+        // convertHeicAttachments returns a new object only for a decoded HEIC;
+        // everything else comes back as the same reference.
+        if (att !== atts[i] && att.dataBase64) {
+          const bytes = Buffer.from(att.dataBase64, 'base64');
+          const handle = await uploadBytes({ url: base, token: deps.token }, jpegName(att.name), bytes);
+          return { name: att.name, mime: att.mime, path: handle };
+        }
         if (!att.path) return att;
         return { ...att, path: await uploadFile({ url: base, token: deps.token }, att.path) };
       })
     );
   }
 
-  /** Path rewrite for Files-panel drops; turn attachments go through attachmentsForTurn. */
+  /** The remote half of `backend:startTurn` and `files:add`; absent when local. */
   const uploadPaths: Record<string, WrappedChannel> = {
+    'backend:startTurn': {
+      before: async ([input]) => {
+        const turn = input as StartTurnInput;
+        if (!turn?.attachments?.length) return;
+        return [{ ...turn, attachments: await attachmentsForServer(turn.attachments) }];
+      }
+    },
     'files:add': {
       before: async ([paths, subdir]) => {
         const list = paths as string[];
@@ -402,21 +428,12 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     }
   };
 
-  const startTurnWrap: WrappedChannel = {
-    before: async ([input]) => {
-      const turn = input as StartTurnInput;
-      if (!turn?.attachments?.length) return;
-      return [{ ...turn, attachments: await attachmentsForTurn(turn.attachments) }];
-    }
-  };
-
   const wrapped: Readonly<Record<string, WrappedChannel>> = {
     'chats:open': {
       before: ([threadId]) => deps.threadOpened(threadId as string)
     },
     'auth:providerLogin': signInStarted,
     'mcp:login': signInStarted,
-    'backend:startTurn': startTurnWrap,
     ...(deps.remote ? uploadPaths : {}),
     ...Object.fromEntries(SETTINGS_CHANNELS.map((c) => [c, mergeSettingsAnswer])),
     'settings:updateQuickChat': {
