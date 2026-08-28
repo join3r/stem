@@ -73,6 +73,13 @@ export default function ChatsScreen(): ReactElement {
         .catch(() => undefined);
     }, [connection])
   );
+  // Coming back from a thread: opening it marked it read on the server, and no
+  // push announces an inbox stamp — refetch so the dot is gone when the row is.
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, [refresh])
+  );
 
   const chats = useMemo(() => list?.chats ?? [], [list]);
   const inbox = list?.inbox ?? emptyInboxState();

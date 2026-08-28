@@ -20,12 +20,11 @@
 // change shape to gain a picker, so none was faked.
 
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   FlatList,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -38,10 +37,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { activityLabel } from '@shared/activity';
 import type { ActivityItem, ChatMessage } from '@shared/types';
 import { useThread } from '../../src/hooks/useThread';
+import { useTransport } from '../../src/transport/provider';
 import { MdxActionContext } from '../../src/mdx/actions';
 import { AgentMarkdown } from '../../src/ui/AgentMarkdown';
 import { ConnectionBadge } from '../../src/ui/ConnectionBadge';
-import { useKeyboardVisible } from '../../src/ui/keyboard';
+import { useKeyboardInset, useKeyboardVisible } from '../../src/ui/keyboard';
 import { isPinnedToBottom, type ScrollMetrics } from '../../src/ui/scroll';
 import { useTheme, type Theme } from '../../src/ui/theme';
 
@@ -51,6 +51,19 @@ export default function ThreadScreen(): ReactElement {
   const theme = useTheme();
   const thread = useThread(threadId);
   const [draft, setDraft] = useState('');
+
+  // Opening is what marks a thread read — the desktop's rule (see openChat in
+  // src/renderer/App.tsx), applied here on mount and again each time a turn
+  // settles while the screen is up, so a reply you watched arrive can't leave
+  // the thread bold behind you. Skipped while backgrounded: a turn that settles
+  // under a locked screen was not read, and the row should say so. Best-effort —
+  // a stamp that doesn't land just leaves the dot for the next open.
+  const { connection, status } = useTransport();
+  useEffect(() => {
+    if (!threadId || !status.paired || thread.running) return;
+    if (AppState.currentState !== 'active') return;
+    connection.rpc('inbox:setRead', [threadId], true).catch(() => undefined);
+  }, [connection, status.paired, thread.running, threadId]);
 
   const list = useRef<FlatList<ChatMessage>>(null);
   // Refs, not state: these are read inside scroll handlers that fire many times
@@ -125,12 +138,12 @@ export default function ThreadScreen(): ReactElement {
     [thread.blocked, thread.running, thread.send, thread.sending]
   );
 
+  // The keyboard's measured cover of the window, as bottom padding — see
+  // src/ui/keyboard.ts for why this replaced KeyboardAvoidingView here.
+  const keyboardInset = useKeyboardInset();
+
   return (
-    <KeyboardAvoidingView
-      style={[styles.screen, { backgroundColor: theme.bg }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 96 : 0}
-    >
+    <View style={[styles.screen, { backgroundColor: theme.bg, paddingBottom: keyboardInset }]}>
       <Stack.Screen
         options={{ title: thread.title || 'Chat', headerRight: () => <ConnectionBadge /> }}
       />
@@ -140,7 +153,7 @@ export default function ThreadScreen(): ReactElement {
         </Pressable>
       ) : null}
       {/* A context provider is transparent to the native layout tree, so the
-          FlatList is still the KeyboardAvoidingView's own child. */}
+          FlatList is still the padded screen view's own child. */}
       <MdxActionContext.Provider value={mdxActions}>
         <FlatList
           ref={list}
@@ -187,7 +200,7 @@ export default function ThreadScreen(): ReactElement {
         running={thread.running}
         blocked={thread.blocked}
       />
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

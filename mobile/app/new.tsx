@@ -16,8 +16,6 @@ import { Stack, useRouter } from 'expo-router';
 import { useCallback, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -27,7 +25,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { StartTurnResult } from '@shared/types';
 import { useTransport } from '../src/transport/provider';
-import { useKeyboardVisible } from '../src/ui/keyboard';
+import { useKeyboardInset, useKeyboardVisible } from '../src/ui/keyboard';
 import { useTheme } from '../src/ui/theme';
 
 export default function NewChatScreen(): ReactElement {
@@ -75,12 +73,13 @@ export default function NewChatScreen(): ReactElement {
 
   const canSend = draft.trim().length > 0 && !sending && !blocked;
 
+  // Measured, not offset-guessed — a sheet's distance from the top of the
+  // screen is exactly what KeyboardAvoidingView's constant can't know. See
+  // src/ui/keyboard.ts.
+  const keyboardInset = useKeyboardInset();
+
   return (
-    <KeyboardAvoidingView
-      style={[styles.screen, { backgroundColor: theme.bg }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 96 : 0}
-    >
+    <View style={[styles.screen, { backgroundColor: theme.bg, paddingBottom: keyboardInset }]}>
       <Stack.Screen options={{ title: 'New chat' }} />
       <View style={styles.body}>
         <TextInput
@@ -116,7 +115,7 @@ export default function NewChatScreen(): ReactElement {
           )}
         </Pressable>
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
