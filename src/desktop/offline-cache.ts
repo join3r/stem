@@ -30,6 +30,13 @@ import type { ChatHistory, ChatListResult, ChatSummary } from '../shared/types';
 //      only way it stays impossible is that reachable and unreachable are
 //      decided by the transport, never by the contents of an answer.
 //
+//      peek() bends this without breaking it: proxy.ts serves the cached copy
+//      of the two whole-document reads (settings:get, chats:list) immediately
+//      on a slow-but-working link — but only while a revalidating fetch is on
+//      the wire behind it, whose answer is pushed to the renderer the moment it
+//      lands. The cache buys the first paint; the server still has the last
+//      word, every time.
+//
 //   2. IT IS AN OPTIMIZATION, SO IT MAY NEVER BREAK A CALL. Every operation
 //      here swallows its own errors. A corrupt database, a full disk or a
 //      schema from a future build all degrade to "no cache", which is exactly
@@ -89,6 +96,27 @@ const MAX_CACHED_THREADS = 100;
 const PREFETCH_DEBOUNCE_MS = 2_000;
 
 /**
+ * Every channel whose answer is the whole chat list. `chats:list` is the read;
+ * the rest are the mutators, which return the fresh list as their answer (the
+ * contract server/ipc/chats.ts sets). Recording all of them keeps the cached
+ * copy current through a triage session, so peek() never serves a list from
+ * before an archive the server has long since confirmed.
+ */
+const CHAT_LIST_CHANNELS = new Set([
+  'chats:list',
+  'chats:setFolder',
+  'chats:writeSubject',
+  'inbox:setArchived',
+  'inbox:snooze',
+  'inbox:setRead',
+  'inbox:markAllRead',
+  'folders:create',
+  'folders:rename',
+  'folders:delete',
+  'folders:move'
+]);
+
+/**
  * Which whole-answer channels are kept, and under what name. Everything here is
  * boot-critical or is the chat list itself:
  *
@@ -106,15 +134,16 @@ const PREFETCH_DEBOUNCE_MS = 2_000;
  * memories", which is a lie, and a cached one would be a different lie.
  *
  * Note the two functions are not each other's inverse, and that asymmetry is
- * load-bearing. EVERY settings channel answers with the whole document, so any
- * of them refreshes the copy a cold start boots from — but only settings:get may
- * be ANSWERED from that copy. Replaying settings:updateMemory would hand the
- * renderer a settings document in reply to a write that never happened, and the
- * pane would show the toggle it just moved as moved.
+ * load-bearing. EVERY settings channel and EVERY chat-list mutator answers with
+ * the whole document, so any of them refreshes the copy a cold start boots from
+ * — but only the plain reads (settings:get, chats:list) may be ANSWERED from
+ * that copy. Replaying settings:updateMemory would hand the renderer a settings
+ * document in reply to a write that never happened, and the pane would show the
+ * toggle it just moved as moved.
  */
 function documentToKeep(channel: string): string | null {
   if (channel === 'runtime:status') return 'runtime-status';
-  if (channel === 'chats:list') return 'chats';
+  if (CHAT_LIST_CHANNELS.has(channel)) return 'chats';
   if (channel === 'settings:get' || channel === 'auth:completeOnboarding') return 'settings';
   return channel.startsWith('settings:update') ? 'settings' : null;
 }
@@ -143,6 +172,13 @@ export interface OfflineCache {
    * there is nothing, which leaves the caller to fail as it always did.
    */
   replay(channel: string, args: unknown[]): unknown;
+  /**
+   * The cached answer WITHOUT the offline flag, for serving stale-while-
+   * revalidate while the server is up (see the SWR block in proxy.ts). The
+   * caller owes the renderer the wire's answer afterwards; this is only what
+   * lets it paint something true-as-of-recently in the meantime.
+   */
+  peek(channel: string, args: unknown[]): unknown;
   /** The channel list from the last connect, so a cold boot offline still binds. */
   rememberChannels(list: readonly string[]): void;
   cachedChannels(): string[] | null;
@@ -163,6 +199,7 @@ export function chatCachePath(): string {
 const DISABLED: OfflineCache = {
   record: () => undefined,
   replay: () => undefined,
+  peek: () => undefined,
   rememberChannels: () => undefined,
   cachedChannels: () => null,
   schedulePrefetch: () => undefined,
@@ -374,7 +411,9 @@ export function createOfflineCache({ enabled }: { enabled: boolean }): OfflineCa
       if (result === undefined || result === null) return;
       const document = documentToKeep(channel);
       if (document) {
-        if (channel === 'chats:list') {
+        // Any answer that IS the chat list carries the watermarks, whichever
+        // channel it arrived on.
+        if (document === 'chats') {
           const list = result as ChatListResult;
           updatedAt.clear();
           for (const chat of list.chats ?? []) updatedAt.set(chat.threadId, chat.updatedAt);
@@ -404,6 +443,15 @@ export function createOfflineCache({ enabled }: { enabled: boolean }): OfflineCa
       if (THREAD_CHANNELS.has(channel) && typeof args[0] === 'string') {
         const history = readThread(args[0]);
         return history ? { ...history, offline: true } : undefined;
+      }
+      return undefined;
+    },
+
+    peek(channel, args) {
+      const document = documentToServe(channel);
+      if (document) return readDocument<Record<string, unknown>>(document) ?? undefined;
+      if (THREAD_CHANNELS.has(channel) && typeof args[0] === 'string') {
+        return readThread(args[0]) ?? undefined;
       }
       return undefined;
     },

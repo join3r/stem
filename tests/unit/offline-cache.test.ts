@@ -90,6 +90,32 @@ describe('what the cache will and will not answer', () => {
     expect(cache.replay('settings:updateMemory', [{}])).toBeUndefined();
   });
 
+  it('peeks the cached documents without the offline flag, for stale-while-revalidate', () => {
+    cache.record('chats:list', [], list(summary('t1', 100)));
+    cache.record('settings:get', [], { memory: { model: 'remembered' } });
+    // Served while the server is UP (a revalidating fetch is on the wire behind
+    // it), so the flag that raises the offline banner must not be on it.
+    expect(cache.peek('chats:list', [])).toEqual(list(summary('t1', 100)));
+    expect(cache.peek('settings:get', [])).toEqual({ memory: { model: 'remembered' } });
+    // Cold cache: nothing to serve, the caller goes to the wire as always.
+    expect(cache.peek('runtime:status', [])).toBeUndefined();
+    // A write is never answered from a cache, peeked or replayed.
+    expect(cache.peek('inbox:setRead', [['t1'], true])).toBeUndefined();
+  });
+
+  it('keeps the chat list current through a triage session', () => {
+    // Every inbox/folder mutator answers with the whole fresh list, so each one
+    // refreshes the cached copy — without this, a peek right after an archive
+    // would serve a list from before it, and the row would visibly come back.
+    cache.record('chats:list', [], list(summary('t1', 100)));
+    const triaged: ChatListResult = {
+      ...list(summary('t1', 100)),
+      inbox: { baseline: 0, entries: { t1: { readAt: 200 } } }
+    };
+    cache.record('inbox:setRead', [['t1'], true], triaged);
+    expect(cache.peek('chats:list', [])).toEqual(triaged);
+  });
+
   it('says nothing at all about memory, skills or search', () => {
     // The plan's "unavailable rather than empty": these have no cached form on
     // purpose, so the call fails and the panel says it needs the server. A
@@ -108,6 +134,7 @@ describe('what the cache will and will not answer', () => {
     const inert = createOfflineCache({ enabled: false });
     inert.record('chats:list', [], list(summary('t1', 100)));
     expect(inert.replay('chats:list', [])).toBeUndefined();
+    expect(inert.peek('chats:list', [])).toBeUndefined();
     expect(inert.cachedChannels()).toBeNull();
   });
 });

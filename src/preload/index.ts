@@ -347,6 +347,11 @@ const api: StemApi = {
     ipcRenderer.on('chats:changed', handler);
     return () => ipcRenderer.removeListener('chats:changed', handler);
   },
+  onCacheFresh: (listener: (payload: { channel: string; result: unknown }) => void) => {
+    const handler = (_e: unknown, payload: { channel: string; result: unknown }): void => listener(payload);
+    ipcRenderer.on('cache:fresh', handler);
+    return () => ipcRenderer.removeListener('cache:fresh', handler);
+  },
   onResync: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on('client:resync', handler);

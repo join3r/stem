@@ -176,6 +176,20 @@ export interface WrappedChannel {
 const mergeSettingsAnswer: WrappedChannel = { after: (_args, result) => withClientSettings(result) };
 
 /**
+ * Channels served stale-while-revalidate on a remote install: the cached copy
+ * from the last answer is returned immediately, a fresh fetch runs behind it,
+ * and the fresh answer — when it differs — reaches the main window as a
+ * `cache:fresh` push (App.tsx applies it). What this buys on a slow link:
+ * settings panes stop flashing their hardcoded defaults before the document
+ * lands, and the sidebar paints without waiting a round trip.
+ *
+ * Only whole-document, argument-free reads belong here — a served answer must
+ * mean the same thing regardless of caller, and a write must never be answered
+ * from a cache (see offline-cache.ts).
+ */
+const SWR_CHANNELS = new Set(['settings:get', 'chats:list']);
+
+/**
  * Channels whose answer is the entire settings document, and which therefore all
  * need this machine's half merged back into it. `settings:updateQuickChat` is
  * absent because it has more to do than merge, and gets its own entry below.
@@ -455,6 +469,37 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
   const serverCall = (channel: string, args: unknown[], signal: AbortSignal): Promise<unknown> =>
     post(channel, args, signal);
 
+  /** Run a channel's `after` hook over an answer (cached or fresh). */
+  async function applyAfter(hooks: WrappedChannel | undefined, args: unknown[], result: unknown): Promise<unknown> {
+    if (!hooks?.after) return result;
+    const replacement = await hooks.after(args, result);
+    return replacement === undefined ? result : replacement;
+  }
+
+  /**
+   * Channels with a revalidating fetch already on the wire. Serving stale is
+   * what makes four settings panes mounting at once cheap; this is what makes
+   * them one request instead of four.
+   */
+  const revalidating = new Set<string>();
+
+  /** The background half of stale-while-revalidate: fetch, push if different. */
+  function revalidate(channel: string, args: unknown[], hooks: WrappedChannel | undefined, served: unknown): void {
+    if (revalidating.has(channel)) return;
+    revalidating.add(channel);
+    void post(channel, args)
+      .then(async (fresh) => {
+        // post() fell back to replay() because the server went away mid-flight:
+        // that answer IS the served copy (the flag marks it), and pushing it
+        // would launder a cache read as news from the wire.
+        if ((fresh as { offline?: boolean } | null)?.offline) return;
+        if (JSON.stringify(fresh) === JSON.stringify(served)) return;
+        deps.sendToMain('cache:fresh', { channel, result: await applyAfter(hooks, args, fresh) });
+      })
+      .catch(() => undefined) // post() already flipped the connection state
+      .finally(() => revalidating.delete(channel));
+  }
+
   async function invoke(channel: string, args: unknown[]): Promise<unknown> {
     const hooks = wrapped[channel];
     // A throw from `before` never reaches the wire — that is what lets a refused
@@ -465,10 +510,20 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       const replaced = await hooks.before(args);
       if (Array.isArray(replaced)) outgoing = replaced;
     }
+    // Stale-while-revalidate: on a remote install with a warm cache, answer the
+    // two whole-document reads immediately and let the wire's answer catch up
+    // as a `cache:fresh` push. Only while the server is believed up — once the
+    // transport has said otherwise, the offline replay path in post() owns the
+    // job, with the flag that tells the renderer where the answer came from.
+    if (reachable && SWR_CHANNELS.has(channel)) {
+      const stale = cache.peek(channel, outgoing);
+      if (stale !== undefined) {
+        revalidate(channel, outgoing, hooks, stale);
+        return applyAfter(hooks, args, stale);
+      }
+    }
     const result = await post(channel, outgoing);
-    if (!hooks?.after) return result;
-    const replacement = await hooks.after(args, result);
-    return replacement === undefined ? result : replacement;
+    return applyAfter(hooks, args, result);
   }
 
   // ---- GET /events ----

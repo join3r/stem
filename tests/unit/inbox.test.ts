@@ -10,6 +10,10 @@ import {
   placement,
   snoozedUntil,
   toMs,
+  withAllRead,
+  withArchived,
+  withRead,
+  withSnooze,
   SNOOZE_PRESETS,
   type InboxState
 } from '../../src/shared/inbox';
@@ -154,6 +158,61 @@ describe('nextWakeAt', () => {
   it('skips a thread whose snooze has already been broken by new activity', () => {
     const s = state({ a: { snoozedAt: now - HOUR, snoozedUntil: now + HOUR } });
     expect(nextWakeAt([chat('a', now)], s, now)).toBeNull();
+  });
+});
+
+// The optimistic mirrors the renderer applies the instant the user triages a
+// row, reconciled later against the list the server's mutator returns. What
+// these pin is lockstep: the same fields the server's inbox.ts stamps, the same
+// way — a mirror that stamped differently would make rows jump when the
+// authoritative answer lands.
+describe('optimistic mirrors of the server mutators', () => {
+  const NOW = 1_700_000_000_000;
+
+  it('withRead stamps past a future mtime and clears an explicit unread', () => {
+    const s = state({ a: { forcedUnread: true } });
+    // The thread's mtime (backend seconds) sits an hour ahead of this clock —
+    // the skew guard stamps past it, or the row would stay stubbornly bold.
+    const next = withRead(s, ['a'], true, new Map([['a', (NOW + HOUR) / 1000]]), NOW);
+    expect(next.entries.a).toEqual({ readAt: NOW + HOUR });
+    expect(isUnread(chat('a', NOW + HOUR), next)).toBe(false);
+    // Pure: the state the patch was built against is untouched, so a pending
+    // patch can be re-applied to a fresher list and mean the same thing.
+    expect(s.entries.a).toEqual({ forcedUnread: true });
+  });
+
+  it('withRead(false) is mark-as-unread, a decision that outlives read stamps', () => {
+    const next = withRead(state({ a: { readAt: NOW } }), ['a'], false, new Map(), NOW);
+    expect(next.entries.a).toEqual({ readAt: NOW, forcedUnread: true });
+    expect(isUnread(chat('a', 0), next)).toBe(true);
+  });
+
+  it('withArchived stamps now and clears any snooze; un-archiving prunes the entry', () => {
+    const s = state({ a: { snoozedAt: NOW - HOUR, snoozedUntil: NOW + DAY } });
+    const archived = withArchived(s, ['a'], true, NOW);
+    expect(archived.entries.a).toEqual({ archivedAt: NOW });
+    expect(placement(chat('a', NOW - HOUR), archived, NOW)).toBe('archived');
+    // An entry with nothing left to say is dropped, exactly as the store prunes.
+    expect(withArchived(archived, ['a'], false, NOW).entries.a).toBeUndefined();
+  });
+
+  it('withSnooze snoozes ahead, clears an archive, and wakes on null or a past time', () => {
+    const s = state({ a: { archivedAt: NOW } });
+    const snoozed = withSnooze(s, ['a'], NOW + DAY, NOW);
+    expect(snoozed.entries.a).toEqual({ snoozedAt: NOW, snoozedUntil: NOW + DAY });
+    expect(placement(chat('a', NOW - HOUR), snoozed, NOW)).toBe('snoozed');
+    expect(withSnooze(snoozed, ['a'], null, NOW).entries.a).toBeUndefined();
+    // A wake time that is not in the future is a wake, as the server treats it.
+    expect(withSnooze(snoozed, ['a'], NOW - 1, NOW).entries.a).toBeUndefined();
+  });
+
+  it('withAllRead stamps every listed thread and leaves unlisted ones alone', () => {
+    const s = state({ a: { forcedUnread: true }, b: { archivedAt: 5 }, c: { forcedUnread: true } });
+    const next = withAllRead(s, [chat('a', NOW + HOUR), chat('b', 0)], NOW);
+    expect(next.entries.a).toEqual({ readAt: NOW + HOUR });
+    expect(next.entries.b).toEqual({ archivedAt: 5, readAt: NOW });
+    // A chat mid-creation the backend hasn't listed is not silently marked read.
+    expect(next.entries.c).toEqual({ forcedUnread: true });
   });
 });
 

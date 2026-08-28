@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { SquarePen, PanelRight } from 'lucide-react';
 import type {
+  AppSettings,
   AuthProviderId,
   ChatListResult,
   ChatSummary,
@@ -16,7 +17,16 @@ import type {
   UpdateStatus
 } from '../shared/types';
 import { AUTH_PROVIDER_IDS, providerName } from '../shared/providers';
-import { emptyInboxState, isUnread, placement } from '../shared/inbox';
+import {
+  emptyInboxState,
+  isUnread,
+  placement,
+  withAllRead,
+  withArchived,
+  withRead,
+  withSnooze,
+  type InboxState
+} from '../shared/inbox';
 import { resendAttachments } from './attachments';
 import { ChatView, type ChatViewHandle } from './chat/ChatView';
 import { OnboardingGate } from './onboarding/OnboardingGate';
@@ -339,10 +349,67 @@ export default function App() {
     setStatus(await window.stem.runtimeStatus());
   }, []);
 
+  // ---- optimistic inbox triage ----
+  //
+  // Every inbox mutator answers with the fresh chat list, but on a slow link
+  // that answer is the better part of a second away, and a bold dot that hangs
+  // around after you clicked it reads as a click that didn't take. So the
+  // renderer applies the same stamp the server is about to (the with* mirrors
+  // in shared/inbox.ts) the instant the user acts, and reconciles when the
+  // answer lands.
+  //
+  // The map holds the patches still in flight, so any list arriving from
+  // elsewhere in the meantime — a refresh, a cache:fresh push, an earlier
+  // mutation's answer — gets them re-applied on top rather than visibly
+  // reverting a triage the user already made.
+  const pendingInboxPatches = useRef(new Map<number, (inbox: InboxState) => InboxState>());
+  const inboxPatchSeq = useRef(0);
+
+  /** Adopt a server-fresh list, keeping any optimistic inbox patches in flight. */
+  const applyServerList = useCallback((list: ChatListResult) => {
+    setChatList(() => {
+      let inbox = list.inbox;
+      for (const patch of pendingInboxPatches.current.values()) inbox = patch(inbox);
+      return inbox === list.inbox ? list : { ...list, inbox };
+    });
+  }, []);
+
   const refreshChats = useCallback(async () => {
     if (!window.stem) return;
-    setChatList(await window.stem.listChats());
-  }, []);
+    applyServerList(await window.stem.listChats());
+  }, [applyServerList]);
+
+  /** Patch the inbox now, fire the write, reconcile with what it returns. */
+  const mutateInbox = useCallback(
+    (patch: (inbox: InboxState) => InboxState, call: () => Promise<ChatListResult>) => {
+      const seq = ++inboxPatchSeq.current;
+      pendingInboxPatches.current.set(seq, patch);
+      setChatList((prev) => ({ ...prev, inbox: patch(prev.inbox) }));
+      call()
+        .then((list) => {
+          pendingInboxPatches.current.delete(seq);
+          applyServerList(list);
+        })
+        .catch(() => {
+          // The write failed (offline, server error). Drop the optimistic stamp
+          // and refetch so the screen settles back to what the server holds.
+          pendingInboxPatches.current.delete(seq);
+          void refreshChats();
+        });
+    },
+    [applyServerList, refreshChats]
+  );
+
+  // The chats' updatedAt map, read at act time so the optimistic read stamp can
+  // apply the same clock-skew guard the server does (see setRead in
+  // server/workspace/inbox.ts). A ref so triage handlers don't have to be
+  // rebuilt on every list change.
+  const chatsForStampsRef = useRef(chatList.chats);
+  chatsForStampsRef.current = chatList.chats;
+  const updatedAtMap = useCallback(
+    () => new Map(chatsForStampsRef.current.map((c) => [c.threadId, c.updatedAt] as const)),
+    []
+  );
 
   useEffect(() => {
     refreshStatus();
@@ -357,6 +424,24 @@ export default function App() {
   // that has just renamed a thread. Push, so the row updates the moment it lands
   // instead of on whatever the next refresh happens to be.
   useEffect(() => window.stem?.onChatsChanged(() => void refreshChats()), [refreshChats]);
+
+  // A read answered from the offline cache (stale-while-revalidate on remote
+  // installs) has its wire answer now, and it differs from what was served.
+  // Adopt it — the settings branch covers this component's own reads; panes
+  // refetch on mount and get the revalidated copy then.
+  useEffect(
+    () =>
+      window.stem?.onCacheFresh(({ channel, result }) => {
+        if (channel === 'chats:list') {
+          applyServerList(result as ChatListResult);
+        } else if (channel === 'settings:get') {
+          const s = result as AppSettings;
+          setEscapeAction(s.escapeAction);
+          setOnboardingCompleted(s.onboarding.completed);
+        }
+      }),
+    [applyServerList]
+  );
 
   // Fetch the model catalog once the runtime is ready; seed defaults from the backend
   // (the `isDefault` model + its default effort) when nothing is remembered yet.
@@ -472,7 +557,7 @@ export default function App() {
           if (id === activeThreadIdRef.current && document.hasFocus())
             void window.stem
               .setInboxRead([id], true)
-              .then(setChatList)
+              .then(applyServerList)
               .catch(() => {});
           else void refreshChats();
         }
@@ -491,7 +576,7 @@ export default function App() {
       }
     });
     return events.detach;
-  }, [core, handlePossibleAuthFailure, refreshChats]);
+  }, [core, handlePossibleAuthFailure, refreshChats, applyServerList]);
 
   // Scheduled tasks: keep the list in sync (drives chat badges + the Tasks tab),
   // insert a collapsed run row into an open thread when a run starts, and raise the
@@ -632,7 +717,7 @@ export default function App() {
             }));
             // Persist the folder assignment (if any) so it survives once the backend lists
             // the thread; otherwise just refresh the list.
-            if (sendFolder) window.stem.setChatFolder(realId, sendFolder).then(setChatList);
+            if (sendFolder) window.stem.setChatFolder(realId, sendFolder).then(applyServerList);
             else refreshChats();
           } else {
             // Existing thread: record the turn id and stamp it onto the user bubble.
@@ -648,7 +733,7 @@ export default function App() {
         }
       });
     },
-    [core, refreshChats, modelId, effort, serviceTier, format, setThread]
+    [core, refreshChats, applyServerList, modelId, effort, serviceTier, format, setThread]
   );
 
   // Quick Chat hand-off → main window: adopt the overlay's conversation as the
@@ -806,12 +891,15 @@ export default function App() {
       const request = openGateRef.current.begin();
       if (deletedThreadsRef.current.has(threadId)) return;
       // Opening is what marks a thread read — the persisted half of clearing the
-      // unread dot below. Fire-and-forget: the row is already on screen and the
-      // returned list only settles the bold/not-bold, never the navigation.
-      void window.stem
-        .setInboxRead([threadId], true)
-        .then(setChatList)
-        .catch(() => {});
+      // unread dot below. Optimistic: the dot clears now, the write settles it.
+      {
+        const stamps = updatedAtMap();
+        const now = Date.now();
+        mutateInbox(
+          (inbox) => withRead(inbox, [threadId], true, stamps, now),
+          () => window.stem.setInboxRead([threadId], true)
+        );
+      }
       const existing = core.store.getThread(threadId);
       // A scheduled run streamed into this thread while it was never open → its slice
       // is partial. Reload from disk unless a turn is actively streaming (which we'd
@@ -838,7 +926,7 @@ export default function App() {
       if (forceReload) forceReloadRef.current.delete(threadId);
       setActiveThreadId(history.threadId);
     },
-    [core, setThread]
+    [core, setThread, mutateInbox, updatedAtMap]
   );
 
   // Reading is what marks a thread read, and "reading" means the thread is on
@@ -861,15 +949,17 @@ export default function App() {
       const last = readStampRef.current;
       if (last && last.id === id && last.updatedAt === chat.updatedAt) return;
       readStampRef.current = { id, updatedAt: chat.updatedAt };
-      void window.stem
-        .setInboxRead([id], true)
-        .then(setChatList)
-        .catch(() => {});
+      const stamps = updatedAtMap();
+      const now = Date.now();
+      mutateInbox(
+        (inbox) => withRead(inbox, [id], true, stamps, now),
+        () => window.stem.setInboxRead([id], true)
+      );
     };
     markVisibleRead();
     window.addEventListener('focus', markVisibleRead);
     return () => window.removeEventListener('focus', markVisibleRead);
-  }, [displayList, activeThreadId]);
+  }, [displayList, activeThreadId, mutateInbox, updatedAtMap]);
 
   // ---- Coming back after the event stream was away ----
   //
@@ -921,22 +1011,38 @@ export default function App() {
     void openChat(open);
   }, [offline, refreshChats, openChat]);
 
-  // Folder mutations return the fresh list; apply it directly.
-  const onCreateFolder = useCallback((name: string, parentId: string | null) => {
-    window.stem.createFolder(name, parentId).then(setChatList);
-  }, []);
-  const onRenameFolder = useCallback((folderId: string, name: string) => {
-    window.stem.renameFolder(folderId, name).then(setChatList);
-  }, []);
-  const onDeleteFolder = useCallback((folderId: string) => {
-    window.stem.deleteFolder(folderId).then(setChatList);
-  }, []);
-  const onMoveFolder = useCallback((folderId: string, parentId: string | null) => {
-    window.stem.moveFolder(folderId, parentId).then(setChatList);
-  }, []);
-  const onMoveChat = useCallback((threadId: string, folderId: string | null) => {
-    window.stem.setChatFolder(threadId, folderId).then(setChatList);
-  }, []);
+  // Folder mutations return the fresh list; apply it (through the guard that
+  // re-applies any optimistic inbox patches still in flight).
+  const onCreateFolder = useCallback(
+    (name: string, parentId: string | null) => {
+      window.stem.createFolder(name, parentId).then(applyServerList);
+    },
+    [applyServerList]
+  );
+  const onRenameFolder = useCallback(
+    (folderId: string, name: string) => {
+      window.stem.renameFolder(folderId, name).then(applyServerList);
+    },
+    [applyServerList]
+  );
+  const onDeleteFolder = useCallback(
+    (folderId: string) => {
+      window.stem.deleteFolder(folderId).then(applyServerList);
+    },
+    [applyServerList]
+  );
+  const onMoveFolder = useCallback(
+    (folderId: string, parentId: string | null) => {
+      window.stem.moveFolder(folderId, parentId).then(applyServerList);
+    },
+    [applyServerList]
+  );
+  const onMoveChat = useCallback(
+    (threadId: string, folderId: string | null) => {
+      window.stem.setChatFolder(threadId, folderId).then(applyServerList);
+    },
+    [applyServerList]
+  );
 
   /**
    * Auto-advance: triaging the thread you are reading moves you on to the next
@@ -975,32 +1081,59 @@ export default function App() {
     [displayList, openChat, newConversation]
   );
 
-  // Inbox triage. Like the folder mutators, each returns the fresh list.
+  // Inbox triage. Each mutator returns the fresh list, but the row moves NOW —
+  // the optimistic patch — and the answer only reconciles.
   const onArchive = useCallback(
     (threadIds: string[], archived: boolean) => {
-      window.stem.setInboxArchived(threadIds, archived).then(setChatList);
+      const now = Date.now();
+      mutateInbox(
+        (inbox) => withArchived(inbox, threadIds, archived, now),
+        () => window.stem.setInboxArchived(threadIds, archived)
+      );
       if (archived) advanceAfter(threadIds);
     },
-    [advanceAfter]
+    [mutateInbox, advanceAfter]
   );
   const onSnooze = useCallback(
     (threadIds: string[], until: number | null) => {
-      window.stem.snoozeChats(threadIds, until).then(setChatList);
+      const now = Date.now();
+      mutateInbox(
+        (inbox) => withSnooze(inbox, threadIds, until, now),
+        () => window.stem.snoozeChats(threadIds, until)
+      );
       if (until !== null) advanceAfter(threadIds);
     },
-    [advanceAfter]
+    [mutateInbox, advanceAfter]
   );
-  const onSetRead = useCallback((threadIds: string[], read: boolean) => {
-    window.stem.setInboxRead(threadIds, read).then(setChatList);
-  }, []);
+  const onSetRead = useCallback(
+    (threadIds: string[], read: boolean) => {
+      const stamps = updatedAtMap();
+      const now = Date.now();
+      mutateInbox(
+        (inbox) => withRead(inbox, threadIds, read, stamps, now),
+        () => window.stem.setInboxRead(threadIds, read)
+      );
+    },
+    [mutateInbox, updatedAtMap]
+  );
   const onMarkAllRead = useCallback(() => {
-    window.stem.markInboxAllRead().then(setChatList);
-  }, []);
-  const onWriteSubject = useCallback((threadId: string) => {
-    // Round-trips through a model, so this resolves in a second or two rather
-    // than immediately; the row simply renames itself when it lands.
-    window.stem.writeChatSubject(threadId).then(setChatList);
-  }, []);
+    // Stamp the rows on screen; the server stamps the threads the backend
+    // lists. Any difference is settled by the answer.
+    const chats = [...chatsForStampsRef.current];
+    const now = Date.now();
+    mutateInbox(
+      (inbox) => withAllRead(inbox, chats, now),
+      () => window.stem.markInboxAllRead()
+    );
+  }, [mutateInbox]);
+  const onWriteSubject = useCallback(
+    (threadId: string) => {
+      // Round-trips through a model, so this resolves in a second or two rather
+      // than immediately; the row simply renames itself when it lands.
+      window.stem.writeChatSubject(threadId).then(applyServerList);
+    },
+    [applyServerList]
+  );
   const onRenameChat = useCallback(
     async (threadId: string, name: string) => {
       await window.stem.renameChat(threadId, name);

@@ -104,6 +104,95 @@ export function nextWakeAt(chats: InboxSubject[], state: InboxState, now: number
   return soonest;
 }
 
+// ---- optimistic mirrors of the server's mutators ----
+//
+// The renderer applies these to its own copy of the state the instant the user
+// acts, then reconciles with the list the server's mutator returns. They must
+// stamp exactly the fields server/workspace/inbox.ts stamps, the same way, or
+// rows would jump when the authoritative answer lands. Pure — a patch built from
+// one of these can be re-applied to a fresher state and mean the same thing.
+
+/** Copy-and-mutate the entries for `threadIds`, pruning any left empty. */
+function patchEntries(
+  state: InboxState,
+  threadIds: readonly string[],
+  mutate: (entry: InboxEntry, threadId: string) => void
+): InboxState {
+  const entries = { ...state.entries };
+  for (const threadId of threadIds) {
+    const entry: InboxEntry = { ...entries[threadId] };
+    mutate(entry, threadId);
+    if (Object.keys(entry).length) entries[threadId] = entry;
+    else delete entries[threadId];
+  }
+  return { ...state, entries };
+}
+
+/**
+ * Mirror of the server's `setRead`. `updatedAt` (per thread, ms or backend
+ * seconds) lets the stamp cover a thread mtime sitting in the future relative
+ * to `now` — the same clock-skew guard the server applies.
+ */
+export function withRead(
+  state: InboxState,
+  threadIds: readonly string[],
+  read: boolean,
+  updatedAt: ReadonlyMap<string, number>,
+  now: number
+): InboxState {
+  return patchEntries(state, threadIds, (entry, threadId) => {
+    if (read) {
+      entry.readAt = Math.max(now, toMs(updatedAt.get(threadId) ?? 0));
+      delete entry.forcedUnread;
+    } else {
+      entry.forcedUnread = true;
+    }
+  });
+}
+
+/** Mirror of the server's `setArchived`. */
+export function withArchived(
+  state: InboxState,
+  threadIds: readonly string[],
+  archived: boolean,
+  now: number
+): InboxState {
+  return patchEntries(state, threadIds, (entry) => {
+    if (archived) {
+      entry.archivedAt = now;
+      delete entry.snoozedAt;
+      delete entry.snoozedUntil;
+    } else {
+      delete entry.archivedAt;
+    }
+  });
+}
+
+/** Mirror of the server's `setSnooze` (`until` null or past = wake now). */
+export function withSnooze(
+  state: InboxState,
+  threadIds: readonly string[],
+  until: number | null,
+  now: number
+): InboxState {
+  return patchEntries(state, threadIds, (entry) => {
+    if (until != null && until > now) {
+      entry.snoozedAt = now;
+      entry.snoozedUntil = until;
+      delete entry.archivedAt;
+    } else {
+      delete entry.snoozedAt;
+      delete entry.snoozedUntil;
+    }
+  });
+}
+
+/** Mirror of the server's `markAllRead`: stamp every listed thread in one pass. */
+export function withAllRead(state: InboxState, chats: readonly InboxSubject[], now: number): InboxState {
+  const updatedAt = new Map(chats.map((c) => [c.threadId, c.updatedAt]));
+  return withRead(state, [...updatedAt.keys()], true, updatedAt, now);
+}
+
 // ---- snooze presets ----
 
 export interface SnoozePreset {

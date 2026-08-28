@@ -27,7 +27,8 @@ import {
 } from '../../src/server/startup/transport';
 import { createServerProxy, type ServerProxy } from '../../src/desktop/proxy';
 import { clientCredentials } from '../../src/desktop/server-endpoint';
-import type { AppSettings, BackendEventEnvelope, QuickChatSettings } from '../../src/shared/types';
+import { emptyInboxState } from '../../src/shared/inbox';
+import type { AppSettings, BackendEventEnvelope, ChatListResult, QuickChatSettings } from '../../src/shared/types';
 
 let endpoint: TransportEndpoint;
 /**
@@ -298,6 +299,90 @@ describe('when the server is somewhere else', () => {
       { input: 'local', attachments: [{ name: 'note.txt', path: localFile }] }
     ])) as { attachments: { path: string }[] };
     expect(result.attachments[0].path).toBe(localFile);
+  });
+});
+
+// Stale-while-revalidate: on a remote install with a warm cache, the two
+// whole-document reads answer from the cached copy immediately and the wire's
+// answer catches up as a `cache:fresh` push. What a slow link buys back: the
+// sidebar and the settings panes paint what was true a moment ago instead of
+// blanks and hardcoded defaults, and the truth still arrives — pushed, not polled.
+describe('stale-while-revalidate', () => {
+  let swr: ServerProxy;
+  const pushes: { channel: string; payload: unknown }[] = [];
+  /** The server-side truth, mutable so the cache can be caught being stale. */
+  let chatsAnswer: ChatListResult;
+
+  const chats = (...threadIds: string[]): ChatListResult => ({
+    chats: threadIds.map((threadId) => ({
+      threadId,
+      title: threadId,
+      folderId: null,
+      createdAt: 100,
+      updatedAt: 100
+    })),
+    folders: [],
+    inbox: emptyInboxState()
+  });
+
+  beforeAll(async () => {
+    registerServer('chats:list', () => chatsAnswer);
+    swr = createServerProxy({
+      ...(await clientCredentials(serverUrl, { external: false })),
+      // Remote is what turns the cache on; an embedded server cannot be slow
+      // enough to be worth painting ahead of.
+      remote: true,
+      sendToMain: (channel, payload) => pushes.push({ channel, payload }),
+      sendToOverlay: () => undefined,
+      revealIfOwns: () => undefined,
+      routeBackendEvent: () => undefined,
+      revealMainWindow: () => undefined,
+      requestAttention: () => undefined,
+      oauthCourier: { expectSignIn: () => undefined, offer: () => undefined, close: () => undefined },
+      mcpHost: { onRequest: () => undefined, onAssignmentsChanged: () => undefined },
+      execHost: { onRequest: () => undefined },
+      harnessHost: { onRequest: () => undefined, onCancel: () => undefined },
+      threadOpened: async () => undefined,
+      applyQuickChatSettings: () => undefined,
+      resync: () => undefined,
+      liveTurns: () => undefined,
+      connection: () => undefined
+    });
+  });
+
+  afterAll(() => swr.close());
+
+  it('serves the cached list, then pushes the wire answer when it differs', async () => {
+    chatsAnswer = chats('t-1');
+    // Cold cache: the wire answers, and the answer is recorded on its way past.
+    expect(await swr.invoke('chats:list', [])).toEqual(chats('t-1'));
+
+    // The world changes behind the cache's back…
+    chatsAnswer = chats('t-1', 't-2');
+    // …and the next read is answered from the copy — no waiting on the wire —
+    // while a revalidating fetch runs behind it.
+    expect(await swr.invoke('chats:list', [])).toEqual(chats('t-1'));
+
+    // The fresh answer reaches the window as a push, because a renderer that was
+    // handed the stale copy has no second call coming to learn better from.
+    await until(() => pushes.some((p) => p.channel === 'cache:fresh'), 'the revalidation push');
+    const fresh = pushes.find((p) => p.channel === 'cache:fresh')!.payload as {
+      channel: string;
+      result: ChatListResult;
+    };
+    expect(fresh.channel).toBe('chats:list');
+    expect(fresh.result).toEqual(chats('t-1', 't-2'));
+
+    // The revalidation also refreshed the copy: the next read serves the truth.
+    expect(await swr.invoke('chats:list', [])).toEqual(chats('t-1', 't-2'));
+  });
+
+  it('stays quiet when the wire answer matches what was served', async () => {
+    pushes.length = 0;
+    expect(await swr.invoke('chats:list', [])).toEqual(chatsAnswer);
+    // Give the revalidation time to land; an identical answer is not news.
+    await new Promise((r) => setTimeout(r, 150));
+    expect(pushes.filter((p) => p.channel === 'cache:fresh')).toEqual([]);
   });
 });
 

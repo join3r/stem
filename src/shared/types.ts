@@ -3317,6 +3317,14 @@ export interface StemApi {
    */
   onChatsChanged(listener: () => void): () => void;
   /**
+   * A read that was answered from the offline cache (stale-while-revalidate on
+   * a remote install — see proxy.ts) has its wire answer now, and it differs
+   * from what was served. Carries the fresh answer so the renderer can adopt it
+   * without another round trip. `channel` is the RPC channel the stale answer
+   * went out on (`chats:list` | `settings:get`).
+   */
+  onCacheFresh(listener: (payload: { channel: string; result: unknown }) => void): () => void;
+  /**
    * The event stream came back after a gap the server could no longer replay, so
    * nothing this window is showing can be assumed current. Payload-free for the
    * same reason as onChatsChanged: the answer is always "ask again".
