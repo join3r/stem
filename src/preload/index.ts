@@ -120,6 +120,8 @@ const api: StemApi = {
   revealFiles: () => ipcRenderer.invoke('files:reveal'),
   downloadFile: (rel: string) => ipcRenderer.invoke('files:download', rel),
   previewImage: (path: string) => ipcRenderer.invoke('files:preview', path),
+  previewImageData: (dataBase64: string, mime?: string, name?: string) =>
+    ipcRenderer.invoke('files:previewData', dataBase64, mime, name),
 
   listConnectedFolders: () => ipcRenderer.invoke('cfolders:list'),
   addConnectedFolders: (paths: string[]) => ipcRenderer.invoke('cfolders:add', paths),

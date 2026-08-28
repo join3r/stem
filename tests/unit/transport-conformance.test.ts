@@ -39,6 +39,7 @@ const CLIENT_OWNED = [
   'dialog:openDirectory',
   'files:reveal',
   'files:preview',
+  'files:previewData',
   'cfolders:reveal',
   'cfolders:revealWorkspace',
   'quickchat:newThread',

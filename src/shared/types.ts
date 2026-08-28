@@ -3116,6 +3116,11 @@ export interface StemApi {
   downloadFile(rel: string): Promise<string>;
   /** Read an on-disk image → `data:` URL for a bubble thumbnail (null if not an image). */
   previewImage(path: string): Promise<string | null>;
+  /**
+   * Decode pasted image bytes → `data:` URL. HEIC is converted to JPEG first
+   * because Chromium cannot display it. Null if this machine cannot decode it.
+   */
+  previewImageData(dataBase64: string, mime?: string, name?: string): Promise<string | null>;
 
   // Connected folders: external folders the assistant reads in place. Mutations
   // return the fresh list.

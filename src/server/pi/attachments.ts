@@ -2,9 +2,10 @@
 //
 // pi's `prompt` RPC accepts images natively (`images: [{type:'image', data, mimeType}]`).
 // It has no slot for arbitrary files, so text-like files are inlined into the message as
-// fenced blocks, PDFs are inlined as their extracted text layer, and other binary files
-// are rejected. This module is the single place that reads attachment bytes (from
-// `dataBase64` or an on-disk `path`) and classifies them.
+// fenced blocks, PDFs are inlined as their extracted text layer, HEIC/HEIF is decoded
+// to JPEG via the OS (see heic.ts), and other binary files are rejected. This module
+// is the single place that reads attachment bytes (from `dataBase64` or an on-disk
+// `path`) and classifies them.
 //
 // `path` is the CLIENT's path, which is only a path we can read when the client is on
 // this machine. A client whose server is elsewhere streams the bytes to POST /upload
@@ -15,6 +16,7 @@ import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { isUploadHandle, resolveUploadHandle } from '../files/staging';
 import { extractPdfText } from '../folder-index/pdf';
+import { heicToJpeg, isHeicAttachment, isHeicNameOrMime } from './heic';
 import type { TurnAttachment } from '../../shared/types';
 
 /** pi `ImageContent` — the shape of each entry in the prompt's `images` array. */
@@ -29,7 +31,7 @@ export interface ResolvedAttachments {
   images: PiImageContent[];
   /** Fenced file contents appended to the message text. */
   textBlocks: string[];
-  /** Basenames of attachments skipped: unsupported binaries, unreadable bytes, or PDFs with no text layer. */
+  /** Basenames of attachments skipped: unsupported binaries, unreadable bytes, PDFs with no text layer, or HEIC this machine cannot decode. */
   rejected: string[];
 }
 
@@ -71,11 +73,24 @@ function imageMimeFor(att: TurnAttachment, ext: string): string | null {
   const mime = att.mime?.toLowerCase();
   if (mime?.startsWith('image/')) {
     // Normalise to a type pi accepts; drop unknown image subtypes to the ext map.
+    // HEIC is not in this list — Chromium and most model APIs cannot take it, so
+    // it is decoded to JPEG first (see maybeHeicJpeg).
     if (mime === 'image/png' || mime === 'image/jpeg' || mime === 'image/gif' || mime === 'image/webp') {
       return mime;
     }
   }
   return IMAGE_EXT_MIME[ext] ?? null;
+}
+
+/** JPEG base64 for a HEIC attachment, or null if this machine cannot decode it. */
+async function maybeHeicJpeg(
+  att: TurnAttachment,
+  bytes: Buffer
+): Promise<{ data: string; mimeType: 'image/jpeg' } | null> {
+  if (!isHeicAttachment(att, bytes)) return null;
+  const jpeg = await heicToJpeg(bytes);
+  if (!jpeg) return null;
+  return { data: jpeg.toString('base64'), mimeType: 'image/jpeg' };
 }
 
 function looksTextual(att: TurnAttachment, ext: string, bytes: Buffer): boolean {
@@ -111,6 +126,31 @@ function fenceText(name: string, lang: string, body: string, truncated: boolean)
 }
 
 /**
+ * Turn image bytes into a Chromium-displayable `data:` URL. HEIC is decoded to
+ * JPEG first — Electron cannot paint `image/heic`. Null if it isn't a supported
+ * image or this machine cannot decode it.
+ */
+export async function imagePreviewFromBytes(
+  dataBase64: string,
+  mime?: string,
+  name?: string
+): Promise<string | null> {
+  try {
+    const bytes = Buffer.from(dataBase64, 'base64');
+    const jpeg = await maybeHeicJpeg({ name: name || 'image', mime, dataBase64 }, bytes);
+    if (jpeg) return `data:${jpeg.mimeType};base64,${jpeg.data}`;
+    const ext = extname(name || '').toLowerCase();
+    const resolved = imageMimeFor({ name: name || 'image', mime }, ext);
+    if (!resolved) return null;
+    return `data:${resolved};base64,${dataBase64}`;
+  } catch {
+    // quiet: this is the thumbnail in the live bubble, not the attachment — the
+    // send path reads the same bytes again, and that read is the one that reports.
+    return null;
+  }
+}
+
+/**
  * Read an on-disk image and return a `data:` URL for an inline thumbnail, or null if the
  * file isn't a supported image or can't be read. Used to preview dialog/drop-picked
  * images in the live bubble, where the renderer never holds the bytes.
@@ -118,9 +158,16 @@ function fenceText(name: string, lang: string, body: string, truncated: boolean)
 export async function imagePreviewDataUrl(path: string): Promise<string | null> {
   const ext = extname(path).toLowerCase();
   const mime = IMAGE_EXT_MIME[ext];
-  if (!mime) return null;
+  const heic = isHeicNameOrMime({ name: path, path });
+  if (!mime && !heic) return null;
   try {
     const bytes = await readFile(path);
+    if (heic || isHeicAttachment({ name: path, path }, bytes)) {
+      const jpeg = await heicToJpeg(bytes);
+      if (!jpeg) return null;
+      return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+    }
+    if (!mime) return null;
     return `data:${mime};base64,${bytes.toString('base64')}`;
   } catch {
     // quiet: this is the thumbnail in the live bubble, not the attachment — the
@@ -137,7 +184,8 @@ export async function resolveAttachments(atts: TurnAttachment[]): Promise<Resolv
     const imageMime = imageMimeFor(att, ext);
 
     // Fast path for pasted images: bytes are already base64, no decode round-trip needed.
-    if (imageMime && att.dataBase64 && !att.path) {
+    // HEIC never takes this path — it has to be decoded to JPEG first.
+    if (imageMime && att.dataBase64 && !att.path && !isHeicNameOrMime(att)) {
       out.images.push({ type: 'image', data: att.dataBase64, mimeType: imageMime });
       continue;
     }
@@ -145,6 +193,16 @@ export async function resolveAttachments(atts: TurnAttachment[]): Promise<Resolv
     const bytes = await bytesOf(att);
     if (!bytes) {
       out.rejected.push(att.name);
+      continue;
+    }
+
+    const fromHeic = await maybeHeicJpeg(att, bytes);
+    if (fromHeic) {
+      out.images.push({ type: 'image', data: fromHeic.data, mimeType: fromHeic.mimeType });
+      continue;
+    }
+    if (isHeicAttachment(att, bytes)) {
+      out.rejected.push(`${att.name} (could not decode HEIC)`);
       continue;
     }
 

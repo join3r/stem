@@ -6,7 +6,23 @@
 
 import type { ChatMessage, MessageAttachment, TurnAttachment } from '../shared/types';
 
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|heic|heif|hif)$/i;
+
+function isHeic(att: TurnAttachment): boolean {
+  const mime = att.mime?.toLowerCase() ?? '';
+  if (mime === 'image/jpeg' || mime === 'image/png' || mime === 'image/gif' || mime === 'image/webp') {
+    return false;
+  }
+  if (
+    mime === 'image/heic' ||
+    mime === 'image/heif' ||
+    mime === 'image/heic-sequence' ||
+    mime === 'image/heif-sequence'
+  ) {
+    return true;
+  }
+  return /\.(heic|heif|hif)$/i.test(att.name || att.path || '');
+}
 
 function isImage(att: TurnAttachment): boolean {
   if (att.mime?.toLowerCase().startsWith('image/')) return true;
@@ -17,10 +33,12 @@ function isImage(att: TurnAttachment): boolean {
  * Synchronous attachment shape for the optimistic bubble. On-disk images need an
  * IPC read before their thumbnail is available, so they begin as ordinary chips
  * and are upgraded by `toMessageAttachments()` without delaying the send itself.
+ * Pasted HEIC is the same: Chromium cannot paint `image/heic`, so it starts as a
+ * chip until the main process has decoded it to JPEG.
  */
 export function optimisticMessageAttachments(atts: TurnAttachment[]): MessageAttachment[] {
   return atts.map((att) => {
-    if (isImage(att) && att.dataBase64) {
+    if (isImage(att) && att.dataBase64 && !isHeic(att)) {
       const mime = att.mime || 'image/png';
       return { kind: 'image', name: att.name, mime, dataUrl: `data:${mime};base64,${att.dataBase64}` };
     }
@@ -32,13 +50,21 @@ export async function toMessageAttachments(atts: TurnAttachment[]): Promise<Mess
   return Promise.all(
     atts.map(async (att): Promise<MessageAttachment> => {
       if (isImage(att)) {
-        const mime = att.mime || 'image/png';
         if (att.dataBase64) {
-          return { kind: 'image', name: att.name, mime, dataUrl: `data:${mime};base64,${att.dataBase64}` };
+          if (isHeic(att)) {
+            const dataUrl = await window.stem.previewImageData(att.dataBase64, att.mime, att.name);
+            if (dataUrl) return { kind: 'image', name: att.name, mime: 'image/jpeg', dataUrl };
+          } else {
+            const mime = att.mime || 'image/png';
+            return { kind: 'image', name: att.name, mime, dataUrl: `data:${mime};base64,${att.dataBase64}` };
+          }
         }
         if (att.path) {
           const dataUrl = await window.stem.previewImage(att.path);
-          if (dataUrl) return { kind: 'image', name: att.name, mime, dataUrl };
+          if (dataUrl) {
+            const mime = isHeic(att) ? 'image/jpeg' : att.mime || 'image/png';
+            return { kind: 'image', name: att.name, mime, dataUrl };
+          }
         }
       }
       return { kind: 'file', name: att.name };
