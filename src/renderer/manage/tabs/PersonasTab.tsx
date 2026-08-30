@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Copy, FolderSearch, Plus, Trash2 } from 'lucide-react';
-import type { DeviceInfo, ModelSummary, Persona } from '../../../shared/types';
+import type {
+  ClientInfo,
+  DeviceInfo,
+  ModelSummary,
+  Persona,
+  PersonaHarnessPin
+} from '../../../shared/types';
 import { ModelPicker } from '../../ui/ModelPicker';
 import { clampEffort, effortsOf, EffortSelect } from '../../ui/EffortSelect';
 import { EFFORT_LABELS } from '../../modelLabels';
@@ -81,6 +87,9 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   // Persona id whose cwd is being picked in the server-folder browser.
   const [pickingCwdFor, setPickingCwdFor] = useState<string | null>(null);
+  // Who THIS client is: its device id (to spot a pin targeting this very
+  // computer) and whether the server runs in-process (its disk = this disk).
+  const [client, setClient] = useState<ClientInfo | null>(null);
 
   useEffect(() => {
     void window.stem.listPersonas().then(setPersonas);
@@ -89,7 +98,26 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
       .listDevices()
       .then((s) => setDevices(s.devices))
       .catch(() => setDevices([]));
+    window.stem
+      .clientInfo()
+      .then(setClient)
+      .catch(() => setClient(null));
   }, []);
+
+  /** Whether this pin's folders live on THIS computer's disk — the native dialog applies. */
+  const nativeBrowse = (h: PersonaHarnessPin) =>
+    h.device ? h.device === client?.deviceId : client !== null && !client.remote;
+
+  /** Browse for a pin's cwd: the native dialog for this computer's disk, the server picker otherwise. */
+  async function browseCwd(p: Persona) {
+    if (!p.harness) return;
+    if (!nativeBrowse(p.harness)) {
+      setPickingCwdFor(p.id);
+      return;
+    }
+    const [path] = await window.stem.pickDirectory();
+    if (path) setDraft({ ...p, harness: { ...p.harness, cwd: path } });
+  }
 
   const setDraft = (draft: Persona) =>
     setDrafts((cur) => new Map(cur).set(draft.id, draft));
@@ -355,12 +383,16 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       />
                       <button
                         className="icon-action sm"
-                        onClick={() => setPickingCwdFor(p.id)}
-                        disabled={!p.harness || !!p.harness.device}
+                        onClick={() => void browseCwd(p)}
+                        disabled={
+                          !p.harness || (!!p.harness.device && !nativeBrowse(p.harness))
+                        }
                         title={
-                          p.harness?.device
-                            ? 'Only the server’s folders can be browsed from here — type the path on that computer.'
-                            : 'Browse the server’s folders'
+                          !p.harness || nativeBrowse(p.harness)
+                            ? 'Choose a folder on this computer'
+                            : p.harness.device
+                              ? 'Another computer’s folders can’t be browsed from here — type the path as that computer sees it.'
+                              : 'Browse the server’s folders'
                         }
                         aria-label="Browse for a working directory"
                       >
