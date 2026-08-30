@@ -11,6 +11,7 @@ Everything Stem binds to a key, and a few composer tricks that no keycap adverti
 | Action | Mac | Windows / Linux |
 | --- | --- | --- |
 | **New chat** — starts a fresh conversation; the current one stays in Chats | ⌘N | Ctrl+N |
+| **New mail** — opens a mail compose addressed to your personas | ⌘⇧N | Ctrl+Shift+N |
 | **Toggle inspector** — shows or hides the right-hand panel | ⌘\\ | Ctrl+\\ |
 | **Cycle effort** — steps through the effort levels the chosen model supports | ⌘E | Ctrl+E |
 | **Toggle Fast** — turns the faster service tier on or off, where the model has one | ⌘⇧F | Ctrl+Shift+F |

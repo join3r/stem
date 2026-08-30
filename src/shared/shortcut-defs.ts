@@ -14,6 +14,7 @@
 
 export type ShortcutId =
   | 'new-conversation'
+  | 'new-mail'
   | 'toggle-inspector'
   | 'cycle-effort'
   | 'toggle-speed'
@@ -81,6 +82,13 @@ export const SHORTCUTS: ShortcutDef[] = [
     label: 'New chat',
     description: 'starts a fresh conversation; the current one stays in Chats',
     chord: { mod: true, shift: false, key: 'N' }
+  },
+  // The Shift variant of New chat — the mail-client convention for compose.
+  {
+    id: 'new-mail',
+    label: 'New mail',
+    description: 'opens a mail compose addressed to your personas',
+    chord: { mod: true, shift: true, key: 'N' }
   },
   {
     id: 'toggle-inspector',

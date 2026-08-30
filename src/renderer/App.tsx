@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { SquarePen, PanelRight } from 'lucide-react';
+import { MailPlus, SquarePen, PanelRight } from 'lucide-react';
 import type {
   AppSettings,
   AuthProviderId,
@@ -1110,6 +1110,8 @@ export default function App() {
 
   // ---- mail actions the rail and centre pane share ----
   const composeMail = useCallback(() => setMailView({ kind: 'compose' }), []);
+  // ⌘⇧N — mirror of ⌘N for mail, and the titlebar's MailPlus button.
+  useShortcut('new-mail', () => composeMail());
   const onMailMarkAllRead = useCallback(() => {
     const now = Date.now();
     const ids = mail.conversations
@@ -1752,6 +1754,10 @@ export default function App() {
       >
         <SquarePen size={17} />
         <ShortcutHint id="new-conversation" />
+      </button>
+      <button className="tbtn" title={`New mail (${glyphsFor('new-mail')})`} onClick={() => composeMail()}>
+        <MailPlus size={17} />
+        <ShortcutHint id="new-mail" />
       </button>
       <div className="toolbar-title">
         <strong>Stem</strong>

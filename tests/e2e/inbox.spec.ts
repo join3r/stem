@@ -15,7 +15,7 @@ const snoozePreset = (win: Page) => win.locator('.snooze-menu .snooze-preset').f
 /** Compose a mail to the built-in Normal persona and wait for its reply. */
 async function compose(win: Page, subject: string, body: string): Promise<void> {
   await tab(win, 'Inbox').click();
-  await win.getByTitle('New mail').click();
+  await win.getByTitle('New mail', { exact: true }).click(); // the rail pen, not the titlebar button
   await win.getByPlaceholder('What this is about').fill(subject);
   await win.getByPlaceholder(/Write the task/).fill(body);
   await win.getByRole('button', { name: 'Send' }).click();
@@ -55,7 +55,7 @@ test('composing a mail delivers it and the reply lands as one conversation', asy
 
 test('the To: chips build a multi-persona conversation with the first pick driving', async ({ mainWindow }) => {
   await tab(mainWindow, 'Inbox').click();
-  await mainWindow.getByTitle('New mail').click();
+  await mainWindow.getByTitle('New mail', { exact: true }).click();
   // Normal is pre-selected as the default driver; adding Verifier keeps it first.
   const verifierChip = mainWindow.locator('.mail-to-chip', { hasText: 'Verifier' });
   await verifierChip.click();
@@ -179,6 +179,17 @@ test('the New conversation button stays enabled over a mail view and dismisses i
   await expect(btn).toBeEnabled();
   await btn.click();
   await expect(mainWindow.locator('.mail-view')).toHaveCount(0);
+});
+
+test('the titlebar New mail button and its shortcut open the compose view', async ({ mainWindow }) => {
+  // The titlebar button (title carries the keycap, unlike the rail's pen).
+  await mainWindow.getByTitle(/New mail \(/).click();
+  await expect(mainWindow.getByPlaceholder('What this is about')).toBeVisible();
+  // Back to a blank chat, then the shortcut route.
+  await mainWindow.getByTitle(/New conversation/).click();
+  await expect(mainWindow.getByPlaceholder('What this is about')).toHaveCount(0);
+  await mainWindow.keyboard.press('ControlOrMeta+Shift+N');
+  await expect(mainWindow.getByPlaceholder('What this is about')).toBeVisible();
 });
 
 test('an unread reply bolds the row and badges the rail until read', async ({ mainWindow }) => {
