@@ -1935,7 +1935,11 @@ export interface MemoryConsolidateResult {
 export interface PersonaHarnessPin {
   /** acpx agent name (claude, opencode, …), as HarnessSettings.agents keys it. */
   agent: string;
-  /** Absolute path coding_agent runs in for this persona. */
+  /**
+   * Absolute path coding_agent runs in for this persona. May be '' while the
+   * user is still typing the pin (the editor saves per keystroke); the runtime
+   * treats a blank pinned cwd as no cwd.
+   */
   cwd: string;
 }
 

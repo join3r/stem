@@ -103,8 +103,12 @@ describe('save', () => {
     expect((await getPersona('p1'))?.canAddPersonas).toBeUndefined();
   });
 
-  it('drops a harness pin missing either half', async () => {
+  it('keeps a harness pin with a blank cwd (mid-edit save) but drops one without an agent', async () => {
+    // The editor saves per keystroke: the agent name lands before the cwd is
+    // typed, and dropping the pin would wipe the field under the user's cursor.
     await savePersona(persona({ harness: { agent: 'claude', cwd: '' } }));
+    expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '' });
+    await savePersona(persona({ harness: { agent: '', cwd: '/src/stem' } }));
     expect((await getPersona('p1'))?.harness).toBeUndefined();
     await savePersona(persona({ harness: { agent: 'claude', cwd: '/src/stem' } }));
     expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '/src/stem' });

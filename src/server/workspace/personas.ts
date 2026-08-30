@@ -73,8 +73,12 @@ function coerceHarness(raw: unknown): PersonaHarnessPin | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const r = raw as Record<string, unknown>;
   if (typeof r.agent !== 'string' || !r.agent.trim()) return undefined;
-  if (typeof r.cwd !== 'string' || !r.cwd.trim()) return undefined;
-  return { agent: r.agent.trim(), cwd: r.cwd.trim() };
+  // A blank cwd is a pin mid-edit, not garbage: the editor saves per keystroke,
+  // so the agent name arrives before the directory exists. Dropping the pin
+  // here would erase the field under the user's cursor. The runtime treats a
+  // blank pinned cwd as "no cwd" (thread scratch dir).
+  const cwd = typeof r.cwd === 'string' ? r.cwd.trim() : '';
+  return { agent: r.agent.trim(), cwd };
 }
 
 /** Reshape one stored/submitted persona; null when it isn't one. */

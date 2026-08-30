@@ -23,7 +23,9 @@ function summaryLabel(p: Persona, models: ModelSummary[]): string {
   } else {
     parts.push('App default model');
   }
-  if (p.harness) parts.push(`${p.harness.agent} in ${p.harness.cwd}`);
+  if (p.harness) {
+    parts.push(p.harness.cwd ? `${p.harness.agent} in ${p.harness.cwd}` : p.harness.agent);
+  }
   return parts.join(' · ');
 }
 
@@ -65,7 +67,11 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
     window.stem
       .savePersona(persona)
       .then((list) => {
-        setPersonas(list);
+        // A row with a pending debounce timer was edited again after this save
+        // left — its local version is newer than the reply. Keep it.
+        setPersonas((cur) =>
+          list.map((p) => (timers.current.has(p.id) ? cur.find((c) => c.id === p.id) ?? p : p))
+        );
         setError(null);
       })
       .catch(async (err: unknown) => {
@@ -83,7 +89,12 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
     if (timer) clearTimeout(timer);
     timers.current.set(
       persona.id,
-      setTimeout(() => persist(persona), 400)
+      setTimeout(() => {
+        // Cleared before persisting: a still-present timer is how persist's
+        // reply detects "edited again since" — a fired one must not count.
+        timers.current.delete(persona.id);
+        persist(persona);
+      }, 400)
     );
   }
 
