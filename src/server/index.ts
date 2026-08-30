@@ -8,6 +8,7 @@ import {
   registerDevicesIpc,
   registerMcpIpc,
   registerMemoryIpc,
+  registerMailIpc,
   registerPersonasIpc,
   registerServer,
   registerWorkspaceIpc,
@@ -19,6 +20,7 @@ import { ensureWorkspace } from './workspace/bootstrap';
 import { publishProtectedRootsNow } from './workspace/connected-folders';
 import { piHome } from './workspace/paths';
 import type { TaskScheduler } from './scheduler';
+import { MailRouter } from './mail/router';
 import { initTaskScheduler } from './startup/scheduler';
 import type { ExecService } from './exec/service';
 import { detectGitBash } from './exec/git-bash';
@@ -164,6 +166,7 @@ let execService: ExecService | null = null;
 let harness: { service: HarnessService; close: () => Promise<void> } | null = null;
 /** Scheduled-tasks engine (cron/once → autonomous turns). Created in startServer. */
 let scheduler: TaskScheduler | null = null;
+let mailRouter: MailRouter | null = null;
 // In-app provider sign-in (OAuth / API key) for the onboarding wizard; created in
 // startServer alongside the runtime.
 let providerAuth: ProviderAuth | null = null;
@@ -344,6 +347,7 @@ function registerIpc(): void {
   registerMemoryIpc(deps);
   registerChatsIpc(deps);
   registerPersonasIpc();
+  registerMailIpc({ router: () => mailRouter, runtime: () => runtime! });
   registerDevicesIpc();
   registerHarnessIpc();
 
@@ -688,6 +692,11 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   // conversation.
   const busyWithin = (idleMs: number): boolean =>
     liveTurnCount() > 0 || Date.now() - lastInteractiveAt < idleMs;
+
+  // The mail router: turns MailItems into persona turns and settled turns back
+  // into reply mail. Created with the runtime; the IPC layer reaches it through
+  // the late-bound getter registerIpc wires.
+  mailRouter = new MailRouter({ runtime, onChange: () => emit('mail:changed', undefined) });
 
   scheduler = initTaskScheduler({
     runtime,

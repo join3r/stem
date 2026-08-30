@@ -48,6 +48,7 @@ import type {
   QuickChatSessionStarted,
   QuickChatStatus,
   ScheduledRunPayload,
+  MailComposeInput,
   Persona,
   ScheduledTask,
   SkillProposal,
@@ -340,6 +341,22 @@ const api: StemApi = {
   listPersonas: () => ipcRenderer.invoke('personas:list'),
   savePersona: (persona: Persona) => ipcRenderer.invoke('personas:save', persona),
   deletePersona: (id: string) => ipcRenderer.invoke('personas:delete', id),
+
+  listMail: () => ipcRenderer.invoke('mail:list'),
+  composeMail: (input: MailComposeInput) => ipcRenderer.invoke('mail:compose', input),
+  replyMail: (conversationId: string, body: string) => ipcRenderer.invoke('mail:reply', conversationId, body),
+  setMailRead: (conversationIds: string[], read: boolean) =>
+    ipcRenderer.invoke('mail:setRead', conversationIds, read),
+  setMailArchived: (conversationIds: string[], archived: boolean) =>
+    ipcRenderer.invoke('mail:setArchived', conversationIds, archived),
+  snoozeMail: (conversationIds: string[], until: number | null) =>
+    ipcRenderer.invoke('mail:snooze', conversationIds, until),
+  deleteMailConversation: (conversationId: string) => ipcRenderer.invoke('mail:delete', conversationId),
+  onMailChanged: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on('mail:changed', handler);
+    return () => ipcRenderer.removeListener('mail:changed', handler);
+  },
 
   setInboxArchived: (threadIds: string[], archived: boolean) =>
     ipcRenderer.invoke('inbox:setArchived', threadIds, archived),

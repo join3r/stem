@@ -15,6 +15,7 @@ export { registerAuthIpc } from './auth';
 export { registerChatsIpc } from './chats';
 export { registerDevicesIpc } from './devices';
 export { registerMcpIpc } from './mcp';
+export { registerMailIpc } from './mail';
 export { registerMemoryIpc } from './memory';
 export { registerPersonasIpc } from './personas';
 export { registerWorkspaceIpc } from './workspace';

@@ -129,7 +129,11 @@ export class HarnessService implements HarnessBridge {
         error: 'Coding agents are disabled. The user can enable them in Settings → Chat → Coding agents.'
       };
     }
-    if (req.isScheduled) {
+    // Mail deliveries are autonomous too, but they are the carve-out: the
+    // assisted approval tiers answer the cards, and an unanswered/refused one
+    // comes back as a tool error to a persona whose brief is to mail the user
+    // about exactly that. A plain scheduled run has no such return path.
+    if (req.isScheduled && !req.isMail) {
       return {
         ok: false,
         error:

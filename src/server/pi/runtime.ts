@@ -177,6 +177,24 @@ function scheduledPreamble(at: string): string {
   ].join('\n');
 }
 
+const MAIL_CLOSE = '<!--/stem:mail-->';
+// No quotes around the attribute, deliberately: a quote inside a regex literal
+// derails the quiet-scanner's string-blanking pass for the rest of this file.
+const MAIL_STRIP_RE = /^<!--stem:mail from=([^>]*)-->[\s\S]*?<!--\/stem:mail-->\n+/;
+
+/** The model-visible mail-delivery preamble, fenced for replay stripping + detection. */
+function mailPreamble(mail: { subject: string; from: string }): string {
+  return [
+    `<!--stem:mail from=${mail.from.split('>').join('')}-->`,
+    `This is a mail delivery in the conversation "${mail.subject}", from ${
+      mail.from === 'user' ? 'the user' : mail.from
+    }. Nobody is reading live.`,
+    'Work the task with your tools. Your final message is sent back to the sender as your reply mail — write it as the reply.',
+    'If you are blocked, need a decision, or an approval was refused, say exactly what you need in your reply: it lands in the sender’s inbox and the conversation waits for their answer.',
+    MAIL_CLOSE
+  ].join('\n');
+}
+
 // Argument keys a built-in file tool (read/grep/find/ls/edit/write) carries its
 // target path under. Probed on the raw pi event for the memory-taint check.
 const TOOL_PATH_KEYS = ['path', 'file_path', 'filename'] as const;
@@ -981,7 +999,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // without this gate a model-authored task prompt saying "Remember that …"
     // would mint an explicit, confidence-1, consolidation-protected fact with
     // supersede authority. Scheduled input never gets the user's word treatment.
-    const memory = input.scheduled
+    // Mail deliveries are gated the same way: the router re-sends persona-
+    // authored text through here, and even the user's own compose is addressed
+    // to a persona, not to memory.
+    const memory = input.scheduled || input.mail
       ? { captured: false, shouldAcknowledge: false, factId: undefined, path: undefined }
       : await captureMemoryFromUserInput(input.input);
     if (memory.shouldAcknowledge) {
@@ -1119,7 +1140,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       turn.recall = {};
       // Autonomous scheduled run: run_command's manual-approval tier is rejected
       // (nobody is present to answer the card) — see handleExecBridgeRequest.
-      turn.isScheduled = !!input.scheduled;
+      // Mail deliveries inherit the same nobody-is-watching semantics, with one
+      // carve-out flagged by isMail: coding_agent stays available (its cards go
+      // to the assisted approval tiers, and a refusal reaches a persona that
+      // can mail the user about it).
+      turn.isScheduled = !!input.scheduled || !!input.mail;
+      turn.isMail = !!input.mail;
+      if (input.persona?.harness) turn.personaHarness = input.persona.harness;
       // The exec safety judge classifies commands relative to this request.
       turn.userText = input.input;
       // Folders connected memorize:false: if the assistant reads inside one this turn,
@@ -2337,15 +2364,20 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           fresh_session?: boolean;
           item_id?: string;
         };
+        // The persona's coding pin fills the defaults; explicit tool args win.
+        // This is the whole meaning of a persona's cwd — see shared/types.ts.
+        const pin = turn?.personaHarness;
         const result = await bridge.handleHarnessRequest({
-          agent: req.agent ?? '',
+          agent: (req.agent ?? '').trim() || (pin?.agent ?? ''),
           prompt: req.prompt ?? '',
-          cwd: typeof req.cwd === 'string' && req.cwd.trim() ? req.cwd : undefined,
+          cwd:
+            typeof req.cwd === 'string' && req.cwd.trim() ? req.cwd : pin?.cwd ?? undefined,
           device: typeof req.device === 'string' && req.device.trim() ? req.device : undefined,
           freshSession: req.fresh_session === true,
           itemId: typeof req.item_id === 'string' && req.item_id ? req.item_id : undefined,
           threadId: turn?.threadId ?? '',
-          isScheduled: turn?.isScheduled === true
+          isScheduled: turn?.isScheduled === true,
+          isMail: turn?.isMail === true
         });
         respond(result);
       } catch (e) {
@@ -3609,7 +3641,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       : userText;
     // A scheduled run prepends its fenced preamble (before the context fence) so the
     // model knows it's running headless and the persisted message carries the marker.
-    const message = input.scheduled ? `${scheduledPreamble(input.scheduled.at)}\n\n${body}` : body;
+    // A mail delivery does the same with its own fence — who the mail is from, and
+    // that the final message becomes the reply.
+    const message = input.scheduled
+      ? `${scheduledPreamble(input.scheduled.at)}\n\n${body}`
+      : input.mail
+        ? `${mailPreamble(input.mail)}\n\n${body}`
+        : body;
     return { message, images };
   }
 
@@ -3849,7 +3887,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     scheduled?: { at: string };
   } {
     const sched = raw.match(SCHED_STRIP_RE);
-    const text = stripCiteMarkers(raw.replace(SCHED_STRIP_RE, '').replace(CONTEXT_STRIP_RE, ''));
+    const text = stripCiteMarkers(
+      raw.replace(SCHED_STRIP_RE, '').replace(MAIL_STRIP_RE, '').replace(CONTEXT_STRIP_RE, '')
+    );
     return sched ? { text, images, scheduled: { at: sched[1] } } : { text, images };
   }
 

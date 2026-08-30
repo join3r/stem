@@ -309,6 +309,18 @@ export function personasStorePath(): string {
 }
 
 /**
+ * Stem-owned mail store: the Inbox's conversations and items (user ↔ persona
+ * mail), plus the per-conversation read/archive/snooze state. The persona work
+ * behind each reply lives in hidden backend threads named by each
+ * conversation's `sessions` map — this file holds only the mail layer.
+ */
+export function mailStorePath(): string {
+  // STEM_MAIL_STORE lets unit tests point at a throwaway file, like the other
+  // store path helpers.
+  return process.env.STEM_MAIL_STORE ?? join(userDataRoot(), 'mail.json');
+}
+
+/**
  * State dir for the embedded acpx runtime's FileSessionStore: the harness
  * session records (one JSON per external coding-agent session) that let a
  * later coding_agent call resume the same conversation. Server-side runs only;

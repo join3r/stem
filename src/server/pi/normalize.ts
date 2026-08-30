@@ -110,6 +110,19 @@ export interface TurnContext {
    * need a manual approval nobody is present to give.
    */
   isScheduled?: boolean;
+  /**
+   * True for a mail delivery (the router's turns). Mail turns carry
+   * `isScheduled` too — the same nobody-is-watching exec semantics — but the
+   * harness bridge reads this flag to ALLOW coding_agent where a scheduled run
+   * refuses it: the assisted approval tiers answer its cards, and a refusal
+   * comes back to a persona that can mail the user about it.
+   */
+  isMail?: boolean;
+  /**
+   * The turn's persona coding-harness pin (agent + cwd), when the persona has
+   * one. Fills coding_agent's agent/cwd defaults — explicit tool arguments win.
+   */
+  personaHarness?: { agent: string; cwd: string };
   /** The raw user message that started this turn — intent context for the exec safety judge. */
   userText?: string;
   phase: 'pending' | 'thinking' | 'tool' | 'answer';

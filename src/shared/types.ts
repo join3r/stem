@@ -374,10 +374,20 @@ export interface StartTurnInput {
    * Server-internal: the persona this turn runs as (mail deliveries). Carries
    * the role prompt because that is spawn-time state — the pool matches the
    * turn to a worker spawned for this persona, replacing a child whose prompt
-   * has since been edited. Stripped by the `backend:startTurn` transport
-   * handler; only server-side callers (the mail router) set it.
+   * has since been edited. `harness` is the persona's coding-agent pin, filling
+   * coding_agent's agent/cwd defaults for the turn. Stripped by the
+   * `backend:startTurn` transport handler; only server-side callers (the mail
+   * router) set it.
    */
-  persona?: { id: string; prompt: string };
+  persona?: { id: string; prompt: string; harness?: PersonaHarnessPin };
+  /**
+   * Server-internal (stripped at the transport handler like `persona`): this
+   * turn is a mail delivery. The backend prepends a fenced mail preamble — who
+   * the mail is from, and that the final message becomes the reply — and runs
+   * the turn under nobody-is-watching exec semantics, except that coding_agent
+   * stays available (the assisted approval tiers answer its cards).
+   */
+  mail?: { conversationId: string; subject: string; from: string };
 }
 
 // ---- Models (backend catalog) ----
@@ -1938,6 +1948,79 @@ export interface Persona {
   builtin?: boolean;
 }
 
+// ---- Mail (the email-like Inbox: conversations between the user and personas) ----
+//
+// Mail is the one primitive: the user's compose, a persona's reply, and (in a
+// later phase) persona-to-persona exchanges are all MailItems in one
+// conversation. The Inbox lists conversations and shows the items addressed to
+// the user; the persona work behind a reply lives in hidden pi threads (one per
+// conversation+persona, recorded in `sessions`) and is collapsible, not gone.
+
+/** 'user', or a persona id. */
+export type MailAddress = string;
+
+/** One immutable mail in a conversation. */
+export interface MailItem {
+  id: string;
+  conversationId: string;
+  from: MailAddress;
+  to: MailAddress[];
+  body: string;
+  /** ms. */
+  at: number;
+  /** Present when a scheduled task's run produced this mail. */
+  taskId?: string;
+}
+
+export interface MailConversation {
+  id: string;
+  subject: string;
+  /**
+   * The To: list — the conversation's closed participant set (persona ids).
+   * The first entry is the driver: it receives the user's mails and owns
+   * returning to them.
+   */
+  participants: string[];
+  /** personaId -> hidden pi threadId, created on that persona's first delivery. */
+  sessions: Record<string, string>;
+  /**
+   * 'working' while a delivery is in flight; 'awaiting-user' once a persona's
+   * reply asked for the user's input/decision (set when a delivery fails or is
+   * blocked); 'idle' otherwise.
+   */
+  status: 'idle' | 'working' | 'awaiting-user';
+  /** Inter-persona mails spent, against the global cap (later phase). */
+  exchangeCount: number;
+  /** ms of the latest item, whoever it addressed (sort key). */
+  updatedAt: number;
+  /**
+   * ms of the latest item addressed to the USER — the unread/placement input,
+   * so persona-internal traffic can never resurrect an archived conversation.
+   */
+  userUpdatedAt: number;
+  createdAt: number;
+}
+
+/** The whole mail payload: conversations + items + per-conversation triage state. */
+export interface MailListResult {
+  conversations: MailConversation[];
+  items: MailItem[];
+  /**
+   * Read/archive/snooze per CONVERSATION id — same semantics as the chat
+   * Inbox's state (src/shared/inbox.ts), fed `userUpdatedAt` as the activity
+   * timestamp.
+   */
+  inbox: InboxState;
+}
+
+/** What the compose surface sends. */
+export interface MailComposeInput {
+  /** Persona ids for the To: field; empty = the built-in Normal persona. */
+  to: string[];
+  subject: string;
+  body: string;
+}
+
 // ---- Chats (backend-backed) + Folders (Stem-owned organization) ----
 //
 // A "chat" is a backend thread (the backend persists threads on disk in its home).
@@ -3236,6 +3319,20 @@ export interface StemApi {
   savePersona(persona: Persona): Promise<Persona[]>;
   /** Delete a persona. Built-ins are refused. Returns the fresh list. */
   deletePersona(id: string): Promise<Persona[]>;
+
+  // Mail. Mutations return the fresh MailListResult, like the inbox mutators.
+  listMail(): Promise<MailListResult>;
+  /** Compose a new mail conversation and deliver it to its driver persona. */
+  composeMail(input: MailComposeInput): Promise<MailListResult>;
+  /** Reply into a conversation (resumes the driver persona with full context). */
+  replyMail(conversationId: string, body: string): Promise<MailListResult>;
+  setMailRead(conversationIds: string[], read: boolean): Promise<MailListResult>;
+  setMailArchived(conversationIds: string[], archived: boolean): Promise<MailListResult>;
+  snoozeMail(conversationIds: string[], until: number | null): Promise<MailListResult>;
+  /** Delete a conversation, its items, and its hidden persona threads. */
+  deleteMailConversation(conversationId: string): Promise<MailListResult>;
+  /** Fired whenever mail changes server-side (a delivery landed, a reply arrived). */
+  onMailChanged(listener: () => void): () => void;
 
   listMcpServers(): Promise<McpServerSummary[]>;
   /** Live per-server connection status (keyed by name) from the running app-server. */

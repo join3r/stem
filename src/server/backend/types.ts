@@ -89,6 +89,13 @@ export interface HarnessRequest {
   /** Injected by PiRuntime from the live turn, never trusted from the payload. */
   threadId: string;
   isScheduled?: boolean;
+  /**
+   * Injected like `isScheduled`: the turn is a mail delivery. Mail runs carry
+   * `isScheduled` for the exec semantics, but coding_agent is allowed — the
+   * assisted approval tiers answer its cards, and a refusal reaches a persona
+   * that can mail the user about it — where a plain scheduled run refuses.
+   */
+  isMail?: boolean;
 }
 
 /** What the HarnessService answers a coding_agent round-trip with. */

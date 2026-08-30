@@ -23,6 +23,7 @@ import {
   setRead,
   setSnooze
 } from '../workspace/inbox';
+import { mailSessionThreadIds } from '../workspace/mail';
 import { forgetQuickChatThread } from '../quickchat-threads';
 import { memoryRunOf } from '../workspace/settings';
 import type { LlmClient } from '../recall/llm';
@@ -45,13 +46,18 @@ const CHAT_SEARCH_COMPLETION_TIMEOUT_MS = 4_000;
 
 export function registerChatsIpc(deps: IpcDeps): void {
   const chatList = async (): Promise<ChatListResult> => {
-    const [chats, folders, assignments, subjects, inbox] = await Promise.all([
+    const [allChats, folders, assignments, subjects, inbox, mailThreads] = await Promise.all([
       deps.runtime().listThreads(),
       listFolders(),
       getAssignments(),
       getSubjects(),
-      readInbox()
+      readInbox(),
+      // The hidden persona sessions behind mail conversations are backend
+      // threads like any other — the Inbox shows them as mail, so the chat
+      // list must not show them again as chats.
+      mailSessionThreadIds()
     ]);
+    const chats = allChats.filter((chat) => !mailThreads.has(chat.threadId));
     const valid = new Set(folders.map((f) => f.id));
     for (const chat of chats) {
       const folderId = assignments[chat.threadId];

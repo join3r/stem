@@ -161,6 +161,15 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   // so it is absent.)
   'personas:save': [a.object],
   'personas:delete': [a.string],
+  // Mail: compose is reshaped where it lands (mail/router.ts). The triage
+  // mutators take conversation-id lists, the inbox-mutator shape.
+  // ('mail:list' takes no arguments, so it is absent.)
+  'mail:compose': [a.object],
+  'mail:reply': [a.string, a.string],
+  'mail:setRead': [a.stringArray, a.boolean],
+  'mail:setArchived': [a.stringArray, a.boolean],
+  'mail:snooze': [a.stringArray, a.nullish(a.number)],
+  'mail:delete': [a.string],
   'inbox:setArchived': [a.stringArray, a.boolean],
   'inbox:snooze': [a.stringArray, a.nullish(a.number)],
   'inbox:setRead': [a.stringArray, a.boolean],
