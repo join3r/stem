@@ -27,7 +27,13 @@ export function initTaskScheduler(deps: {
    * still lives in its chat thread, but the thread no longer has an Inbox row
    * to go bold.
    */
-  deliverTaskMail: (input: { subject: string; body: string; taskId: string }) => Promise<void>;
+  deliverTaskMail: (input: {
+    subject: string;
+    body: string;
+    taskId: string;
+    /** The persona the run executed as (schedule-as-persona): the mail's sender. */
+    personaId?: string;
+  }) => Promise<void>;
 }): TaskScheduler {
   const scheduler = new TaskScheduler({
     runtime: deps.runtime,
@@ -80,7 +86,8 @@ export function initTaskScheduler(deps: {
           .deliverTaskMail({
             subject: title?.trim() || running.title,
             body: message,
-            taskId: running.id
+            taskId: running.id,
+            ...(running.personaId ? { personaId: running.personaId } : {})
           })
           .catch((err) =>
             // The mail IS the surfacing now — an undelivered one is a watch

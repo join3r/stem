@@ -118,6 +118,33 @@ export interface HarnessBridge {
   settleAll(): void;
 }
 
+/**
+ * Who is calling the mail bridge, resolved by PiRuntime from the worker's live
+ * turn — never from the tool payload. `personaId` is the sender of anything the
+ * op appends; `turnId` lets the router mark the turn as having sent mail (which
+ * suppresses its implicit reply).
+ */
+export interface MailBridgeContext {
+  conversationId: string;
+  participants: string[];
+  personaId: string;
+  turnId: string;
+}
+
+/** What a mail-bridge op answers the tool with. */
+export type MailBridgeResult = { ok: true; text: string } | { ok: false; error: string };
+
+/**
+ * The seam the backend uses to reach the mail router from inside a mail
+ * delivery turn: send_mail (persona→persona hops and mid-chain mail to the
+ * user) and add_persona (growing the conversation's participant set, gated by
+ * the calling persona's capability flag).
+ */
+export interface MailBridge {
+  send(req: { to: string[]; body: string }, ctx: MailBridgeContext): Promise<MailBridgeResult>;
+  addPersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult>;
+}
+
 export interface TaskBridge {
   /** Create a task bound to `threadId` from the assistant's schedule_task tool. */
   schedule(
@@ -261,6 +288,10 @@ export interface ChatBackend extends EventEmitter {
   // Scheduled tasks: wire the bridge the assistant's schedule_task/notify_user
   // tools route through. Pass null to detach. No-op on a backend without scheduling.
   setTaskBridge(bridge: TaskBridge | null): void;
+
+  // Mail: wire the bridge the assistant's send_mail/add_persona tools route
+  // through. Pass null to detach. No-op on a backend without mail.
+  setMailBridge(bridge: MailBridge | null): void;
 
   // Command execution: wire the bridge the assistant's run_command tool routes
   // through. Pass null to detach. No-op on a backend without exec.

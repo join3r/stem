@@ -31,7 +31,8 @@ import type {
   ServerSettings,
   SkillsSettings,
   TaskNotifyMode,
-  TasksSettings
+  TasksSettings,
+  MailSettings
 } from '../../shared/types';
 import { type BackgroundRole, resolveRoleEffort } from '../../shared/modelRoles';
 import { degrade } from '../degrade';
@@ -91,6 +92,9 @@ const DEFAULTS: ServerSettings = {
   // miss. `nudge` and `inbox` are for the user who disagrees: both still leave
   // the run's chat bold in the Inbox, they just stop it grabbing focus.
   tasks: { notify: 'alert' },
+  // Mail: how many inter-persona mails one wave may spend before the next hop
+  // is forced back to the user. Reset by each user send (see workspace/mail.ts).
+  mail: { exchangeCap: 10 },
   // Command execution: on by default with the tiered policy as the guard rail.
   // approvalMode is Stem-wide — it governs run_command AND the commands a
   // coding agent asks to run (harness/service.ts), even when exec.enabled is
@@ -444,6 +448,15 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
       ? (rawTasks.notify as TaskNotifyMode)
       : DEFAULTS.tasks.notify
   };
+  const rawMail = (parsed?.mail ?? {}) as Partial<MailSettings>;
+  const mail: MailSettings = {
+    // Clamped to a sane band: 0 would make every consultation refuse, and an
+    // absurd cap makes the runaway guard decorative.
+    exchangeCap:
+      typeof rawMail.exchangeCap === 'number' && Number.isFinite(rawMail.exchangeCap)
+        ? Math.min(100, Math.max(1, Math.round(rawMail.exchangeCap)))
+        : DEFAULTS.mail.exchangeCap
+  };
   const rawExec = (parsed?.exec ?? {}) as Partial<ExecSettings>;
   const exec: ExecSettings = {
     enabled: typeof rawExec.enabled === 'boolean' ? rawExec.enabled : DEFAULTS.exec.enabled,
@@ -618,6 +631,7 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
     skills,
     chats,
     tasks,
+    mail,
     exec,
     harness,
     retrieval,
@@ -772,6 +786,16 @@ export function updateTasksSettings(patch: Partial<TasksSettings>): Promise<Serv
   return enqueue(async () => {
     const cur = await readForUpdate();
     const next = coerce({ ...cur, tasks: { ...cur.tasks, ...patch } });
+    await writeSettings(next);
+    return next;
+  });
+}
+
+/** Patch the mail settings (the inter-persona exchange cap) and persist. */
+export function updateMailSettings(patch: Partial<MailSettings>): Promise<ServerSettings> {
+  return enqueue(async () => {
+    const cur = await readForUpdate();
+    const next = coerce({ ...cur, mail: { ...cur.mail, ...patch } });
     await writeSettings(next);
     return next;
   });

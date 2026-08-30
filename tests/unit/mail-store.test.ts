@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
+  addParticipant,
   appendMailItem,
   createConversation,
   deleteConversation,
@@ -53,6 +54,25 @@ describe('conversations and items', () => {
     expect((await readMail()).items).toHaveLength(3);
   });
 
+  it('the exchange window: user mail resets the count, and a CC to the user still spends budget', async () => {
+    const c = await createConversation('window', ['a', 'b']);
+    await appendMailItem({ conversationId: c.id, from: 'a', to: ['b'], body: 'hop' });
+    // A persona mail that CCs the user still counts its persona recipients —
+    // otherwise CCing the user would launder hops past the runaway guard.
+    await appendMailItem({ conversationId: c.id, from: 'b', to: ['a', 'user'], body: 'hop with cc' });
+    expect((await readMail()).conversations[0].exchangeCount).toBe(2);
+    // The user sending into the conversation buys a fresh window.
+    await appendMailItem({ conversationId: c.id, from: 'user', to: ['a', 'b'], body: 'continue' });
+    expect((await readMail()).conversations[0].exchangeCount).toBe(0);
+  });
+
+  it('addParticipant grows the To: set idempotently', async () => {
+    const c = await createConversation('grow', ['secretary']);
+    await addParticipant(c.id, 'verifier');
+    await addParticipant(c.id, 'verifier');
+    expect((await readMail()).conversations[0].participants).toEqual(['secretary', 'verifier']);
+  });
+
   it('records sessions and lists their thread ids for the chat-list filter', async () => {
     const c = await createConversation('s', ['normal']);
     await setConversationSession(c.id, 'normal', 'thread-9');
@@ -93,7 +113,10 @@ describe('triage (shared inbox semantics over userUpdatedAt)', () => {
     let row = await conversationRow();
     expect(placement(row.subject, row.inbox, Date.now())).toBe('archived');
 
-    await appendMailItem({ conversationId: c.id, from: 'normal', to: ['user'], body: 'more' });
+    // An explicit `at` strictly after the archive stamp: on a warm runner the
+    // archive and the reply otherwise land in the same millisecond and the
+    // resurrect reads as still-archived.
+    await appendMailItem({ conversationId: c.id, from: 'normal', to: ['user'], body: 'more', at: Date.now() + 10 });
     row = await conversationRow();
     expect(placement(row.subject, row.inbox, Date.now())).toBe('inbox');
   });

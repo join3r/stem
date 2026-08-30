@@ -222,7 +222,10 @@ export function createConversation(subject: string, participants: string[]): Pro
 /**
  * Append one item, stamping the conversation's activity clocks: `updatedAt`
  * always, `userUpdatedAt` only when the item addresses the user (that is the
- * unread/placement input), `exchangeCount` only for persona→persona mail.
+ * unread/placement input), `exchangeCount` only for persona→persona mail — and
+ * a mail FROM the user resets the count: each user send buys the personas a
+ * fresh window of exchanges (the cap guards one runaway wave, not the
+ * conversation's lifetime).
  */
 export function appendMailItem(
   input: Omit<MailItem, 'id' | 'at'> & { at?: number }
@@ -232,8 +235,20 @@ export function appendMailItem(
     const item: MailItem = { ...input, id: randomUUID(), at: input.at ?? Date.now() };
     store.items.push(item);
     conversation.updatedAt = item.at;
+    if (item.from === 'user') conversation.exchangeCount = 0;
     if (item.to.includes('user')) conversation.userUpdatedAt = item.at;
-    if (item.from !== 'user' && !item.to.includes('user')) conversation.exchangeCount += 1;
+    // Every persona recipient of a persona's mail spends cap budget — counting
+    // only pure persona→persona items would let a CC to the user launder the
+    // hop past the runaway guard.
+    if (item.from !== 'user') conversation.exchangeCount += item.to.filter((t) => t !== 'user').length;
+  });
+}
+
+/** Grow a conversation's participant set (the add_persona tool). Idempotent. */
+export function addParticipant(conversationId: string, personaId: string): Promise<MailListResult> {
+  return update((store) => {
+    const conversation = conversationOf(store, conversationId);
+    if (!conversation.participants.includes(personaId)) conversation.participants.push(personaId);
   });
 }
 

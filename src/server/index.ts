@@ -76,7 +76,8 @@ import {
   updateQuickChat,
   updateRetrievalSettings,
   updateSkillsSettings,
-  updateTasksSettings
+  updateTasksSettings,
+  updateMailSettings
 } from './workspace/settings';
 import { needsBackendRestart, needsWebSearchConfigWrite, writeWebSearchConfig } from './pi/web-search';
 import type {
@@ -96,6 +97,7 @@ import type {
   RetrievalTestResult,
   SkillsSettings,
   TasksSettings,
+  MailSettings,
   QuickChatSettings,
   RuntimeStatus,
   StartTurnInput
@@ -353,9 +355,12 @@ function registerIpc(): void {
         ? [ci.main, ci.quickChat].map((s) => s.trim()).filter(Boolean).join('\n')
         : ci.main,
       // Server-internal: a client claiming a persona would run its turn under
-      // an arbitrary system prompt on a persona-reserved worker. Only the mail
-      // router (which calls the runtime directly) sets this.
-      persona: undefined
+      // an arbitrary system prompt on a persona-reserved worker, and a client
+      // claiming `mail` would get the mail bridge (send_mail into a real
+      // conversation) plus unattended exec semantics on an interactive turn.
+      // Only the mail router (which calls the runtime directly) sets these.
+      persona: undefined,
+      mail: undefined
     });
     // Start the turn's clock the moment there is a turn. Waiting for its first
     // event (which is where the fold otherwise learns of it) means a turn that
@@ -486,6 +491,11 @@ function registerIpc(): void {
     // Just persist — the scheduler's notify bridge reads the mode fresh on every
     // notify_user, so the change applies to the very next run.
     return updateTasksSettings(patch);
+  });
+  registerServer('settings:updateMail', async (_e, patch: Partial<MailSettings>) => {
+    // Just persist — the mail router reads the cap fresh on every send_mail and
+    // chain hop, so the change applies to the very next exchange.
+    return updateMailSettings(patch);
   });
   registerServer('settings:updateExec', async (_e, patch: Partial<ExecSettings>) => {
     // Just persist — the ExecService reads the policy fresh from settings on each
@@ -675,6 +685,12 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   // into reply mail. Created with the runtime; the IPC layer reaches it through
   // the late-bound getter registerIpc wires.
   mailRouter = new MailRouter({ runtime, onChange: () => emit('mail:changed', undefined) });
+  // The send_mail/add_persona tools inside a persona's delivery turn route here;
+  // the runtime supplies the conversation + sender off the live turn.
+  runtime.setMailBridge({
+    send: (req, ctx) => mailRouter!.bridgeSend(req, ctx),
+    addPersona: (personaId, ctx) => mailRouter!.bridgeAddPersona(personaId, ctx)
+  });
 
   scheduler = initTaskScheduler({
     runtime,

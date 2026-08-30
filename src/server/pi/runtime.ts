@@ -57,7 +57,7 @@ import { buildConnectedFoldersContext } from '../connected-folders/inject';
 import { getPrivateRoots } from '../workspace/connected-folders';
 import { resolveAttachments, type PiImageContent } from './attachments';
 import { captureUserMessage } from '../recall/capture';
-import type { ApprovalId, ChatBackend, ExecBridge, HarnessBridge, TaskBridge } from '../backend/types';
+import type { ApprovalId, ChatBackend, ExecBridge, HarnessBridge, MailBridge, TaskBridge } from '../backend/types';
 import type { SkillBridge } from '../skills/bridge';
 import {
   buildMcpCatalogContext,
@@ -126,6 +126,7 @@ import {
   EXEC_BRIDGE_TITLE,
   HARNESS_BRIDGE_TITLE,
   INSTRUCTIONS_APPROVAL_TITLE,
+  MAIL_BRIDGE_TITLE,
   SKILL_BRIDGE_TITLE,
   SKILLS_REV_FILE,
   TASK_BRIDGE_TITLE,
@@ -183,13 +184,22 @@ const MAIL_CLOSE = '<!--/stem:mail-->';
 const MAIL_STRIP_RE = /^<!--stem:mail from=([^>]*)-->[\s\S]*?<!--\/stem:mail-->\n+/;
 
 /** The model-visible mail-delivery preamble, fenced for replay stripping + detection. */
-function mailPreamble(mail: { subject: string; from: string }): string {
+function mailPreamble(mail: { subject: string; from: string; participants?: string[] }): string {
+  // The other personas this conversation can reach — the To: list is the closed
+  // participant set, and this line is how a persona learns who else is in it.
+  const others = (mail.participants ?? []).filter((p) => p !== mail.from);
   return [
     `<!--stem:mail from=${mail.from.split('>').join('')}-->`,
     `This is a mail delivery in the conversation "${mail.subject}", from ${
       mail.from === 'user' ? 'the user' : mail.from
     }. Nobody is reading live.`,
     'Work the task with your tools. Your final message is sent back to the sender as your reply mail — write it as the reply.',
+    others.length
+      ? `Other personas in this conversation: ${others.join(', ')}. You may consult them with the send_mail tool ` +
+        '(their reply arrives as a later mail to you; your current turn ends after sending). To answer the USER ' +
+        'after such a consultation, call send_mail with to ["user"] — a plain final message goes back to whoever ' +
+        'mailed you, which mid-conversation may be a persona, not the user.'
+      : 'send_mail can also reach the user directly (to ["user"]) — useful for a progress note mid-work.',
     'If you are blocked, need a decision, or an approval was refused, say exactly what you need in your reply: it lands in the sender’s inbox and the conversation waits for their answer.',
     MAIL_CLOSE
   ].join('\n');
@@ -596,6 +606,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private instructionsApprovalProcesses = new Map<string, PiProcess | null>();
   /** Wired by main to route the assistant's schedule_task/notify_user tools. */
   private taskBridge: TaskBridge | null = null;
+  /** Wired by main to route the assistant's send_mail/add_persona tools. */
+  private mailBridge: MailBridge | null = null;
   /** Wired by main to route the assistant's run_command tool. */
   private execBridge: ExecBridge | null = null;
   /** Wired by main to route the assistant's coding_agent tool. */
@@ -1146,6 +1158,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // can mail the user about it).
       turn.isScheduled = !!input.scheduled || !!input.mail;
       turn.isMail = !!input.mail;
+      // The mail bridge's authority: which conversation this delivery belongs
+      // to, who may be mailed, and who the sender is — all read from the live
+      // turn, never from the tool payload.
+      if (input.mail) turn.mail = { conversationId: input.mail.conversationId, participants: input.mail.participants };
+      if (input.persona) turn.personaId = input.persona.id;
       if (input.persona?.harness) turn.personaHarness = input.persona.harness;
       // The exec safety judge classifies commands relative to this request.
       turn.userText = input.input;
@@ -2250,6 +2267,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     this.taskBridge = bridge;
   }
 
+  setMailBridge(bridge: MailBridge | null): void {
+    this.mailBridge = bridge;
+  }
+
   setExecBridge(bridge: ExecBridge | null): void {
     this.execBridge = bridge;
   }
@@ -2518,6 +2539,51 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return true;
   }
 
+  /**
+   * Handle a mail tool's ctx.ui.input round-trip (sentinel MAIL_BRIDGE_TITLE).
+   * The op payload rides in `placeholder`; the conversation, participant set,
+   * and sending persona all come from the worker's LIVE turn — the payload is
+   * only the recipients and the body. Latched like the exec/skill bridges: the
+   * op awaits store writes and delivery bookkeeping, long enough for a restart
+   * to have replaced the process, whose elicitation table knows nothing about
+   * this id.
+   */
+  private handleMailBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    const requestProcess = worker.proc;
+    const respond = (value: unknown): void => {
+      if (worker.proc !== requestProcess) return;
+      requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    };
+    const turn = worker.currentTurn;
+    void (async () => {
+      try {
+        const bridge = this.mailBridge;
+        if (!bridge) return respond({ ok: false, error: 'Mail is unavailable.' });
+        if (!turn?.mail || !turn.personaId)
+          return respond({ ok: false, error: 'send_mail only works inside a mail conversation. Just write your reply.' });
+        const ctx = {
+          conversationId: turn.mail.conversationId,
+          participants: turn.mail.participants,
+          personaId: turn.personaId,
+          turnId: turn.turnId
+        };
+        const req = JSON.parse(payload ?? '{}') as { op?: string; to?: unknown; body?: string; personaId?: string };
+        switch (req.op) {
+          case 'send': {
+            const to = Array.isArray(req.to) ? req.to.filter((t): t is string => typeof t === 'string') : [];
+            return respond(await bridge.send({ to, body: req.body ?? '' }, ctx));
+          }
+          case 'add_persona':
+            return respond(await bridge.addPersona(req.personaId ?? '', ctx));
+          default:
+            return respond({ ok: false, error: `Unknown mail op "${req.op}".` });
+        }
+      } catch (e) {
+        respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+  }
+
   private handleTaskBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
     const respond = (value: unknown): void =>
       worker.proc?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
@@ -2532,13 +2598,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           prompt?: string;
           cron?: string;
           at?: string;
+          personaId?: string;
           taskId?: string;
           title?: string;
           message?: string;
         };
         switch (req.op) {
           case 'schedule': {
-            const res = await bridge.schedule({ prompt: req.prompt ?? '', cron: req.cron, at: req.at }, threadId);
+            const res = await bridge.schedule(
+              { prompt: req.prompt ?? '', cron: req.cron, at: req.at, personaId: req.personaId },
+              threadId
+            );
             return respond(res);
           }
           case 'list': {
@@ -2808,6 +2878,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // payload rides in `placeholder` (ctx.ui.input's second arg); we never show UI.
       if (ev.method === 'input' && ev.title === TASK_BRIDGE_TITLE) {
         this.handleTaskBridgeRequest(worker, id, ev.placeholder as string | undefined);
+        return;
+      }
+      // A mail tool round-trip (send_mail / add_persona): routed to the mail
+      // router with the conversation identity read from the worker's live turn.
+      if (ev.method === 'input' && ev.title === MAIL_BRIDGE_TITLE) {
+        this.handleMailBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
       // The run_command tool round-trip: policy + spawn happen in main (ExecService);

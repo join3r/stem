@@ -387,7 +387,7 @@ export interface StartTurnInput {
    * the turn under nobody-is-watching exec semantics, except that coding_agent
    * stays available (the assisted approval tiers answer its cards).
    */
-  mail?: { conversationId: string; subject: string; from: string };
+  mail?: { conversationId: string; subject: string; from: string; participants: string[] };
 }
 
 // ---- Models (backend catalog) ----
@@ -814,6 +814,13 @@ export interface ScheduledTask {
   model?: string;
   /** Reasoning effort pinned to this task; absent → the thread's persisted level. */
   effort?: string;
+  /**
+   * Persona this task's runs execute AS: the run gets the persona's worker,
+   * role prompt, and coding-agent pin, with the persona's model/effort winning
+   * over the task's own; its notify_user mails arrive from this persona.
+   * Absent → a plain run, as every task started out.
+   */
+  personaId?: string;
 }
 
 /** What the assistant's `schedule_task` tool passes (exactly one of cron/at). */
@@ -823,6 +830,8 @@ export interface ScheduleTaskRequest {
   cron?: string;
   /** An ISO datetime for a one-time task. */
   at?: string;
+  /** Run the task as this persona (validated to exist when the task is created). */
+  personaId?: string;
 }
 
 /** Editable fields when updating a task's schedule from the Tasks tab. */
@@ -830,6 +839,9 @@ export type TaskSchedulePatch = { schedule: TaskSchedule };
 
 /** The Tasks tab's model row: null clears a pin back to "the chat's model". */
 export type TaskModelPatch = { model: string | null; effort: string | null };
+
+/** The Tasks tab's persona row: null clears the pin back to "a plain run". */
+export type TaskPersonaPatch = { personaId: string | null };
 
 /** Main → renderer: a scheduled run just started (insert a collapsed run row live). */
 export interface ScheduledRunPayload {
@@ -1944,6 +1956,13 @@ export interface Persona {
    * roles only.
    */
   lightweight?: boolean;
+  /**
+   * May grow a mail conversation's participant set (the add_persona tool).
+   * Off by default because the To: list is the conversation's reachability
+   * boundary — widening it is the user's call per persona. Secretary ships
+   * with it on.
+   */
+  canAddPersonas?: boolean;
   /** Seeded by Stem. Editable like any persona, but cannot be deleted. */
   builtin?: boolean;
 }
@@ -2297,6 +2316,17 @@ export type TaskNotifyMode = 'alert' | 'nudge' | 'inbox';
 /** Scheduled tasks: how a run that has something to say reaches you. */
 export interface TasksSettings {
   notify: TaskNotifyMode;
+}
+
+/** Mail: the persona-conversation guard rails. */
+export interface MailSettings {
+  /**
+   * Inter-persona mails allowed per user-send: each mail the user sends into a
+   * conversation buys the personas a fresh window of this many exchanges among
+   * themselves before the next hop is forced back to the user. The runaway
+   * being guarded against is one wave that will not stop.
+   */
+  exchangeCap: number;
 }
 
 /** Skills: the automatic-authoring policy plus the model that does the writing. */
@@ -2874,6 +2904,7 @@ export interface AppSettings {
   chats: ChatsSettings;
   /** Scheduled tasks: how prominently a run's notify_user is allowed to interrupt. */
   tasks: TasksSettings;
+  mail: MailSettings;
   /** Command execution (run_command) policy: enable switch, judge model, learned allowlist. */
   exec: ExecSettings;
   /** Coding agents (coding_agent): enable switch + acpx registry overrides. */
@@ -3300,6 +3331,8 @@ export interface StemApi {
   updateTaskSchedule(id: string, patch: TaskSchedulePatch): Promise<ScheduledTask[]>;
   /** Pin (or clear) the model/effort this task's runs execute on. Returns the fresh list. */
   updateTaskModel(id: string, patch: TaskModelPatch): Promise<ScheduledTask[]>;
+  /** Pin (or clear) the persona a task's runs execute as. */
+  updateTaskPersona(id: string, patch: TaskPersonaPatch): Promise<ScheduledTask[]>;
   /** Fired whenever the task list changes (created/updated/run/deleted). */
   onTasksChanged(listener: (tasks: ScheduledTask[]) => void): () => void;
   /** Fired when a scheduled run starts, so the open thread can show a collapsed run row. */
@@ -3583,6 +3616,8 @@ export interface StemApi {
   updateChatsSettings(patch: Partial<ChatsSettings>): Promise<AppSettings>;
   /** Patch the scheduled-task settings (how loudly a run's notify_user arrives). */
   updateTasksSettings(patch: Partial<TasksSettings>): Promise<AppSettings>;
+  /** Patch the mail settings (the inter-persona exchange cap). */
+  updateMailSettings(patch: Partial<MailSettings>): Promise<AppSettings>;
   /** The model you chat with, and the fallback every background role inherits. */
   updateDefaults(patch: Partial<DefaultsSettings>): Promise<AppSettings>;
   /** Patch the standing custom instructions (e.g. { main } or { quickChat }). */

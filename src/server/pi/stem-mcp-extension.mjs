@@ -1547,6 +1547,12 @@ export default async function stemMcpBridge(pi) {
   // current thread id, so a task is always bound to the conversation it's created in.
   registerTaskTools(pi);
 
+  // Mail: send_mail / add_persona inside a persona's mail-delivery turn. Both
+  // route to the MailRouter in main via a ctx.ui.input round-trip; main reads
+  // the conversation, participant set, and sender off the live turn, so the
+  // tools are inert (and say so) outside a mail delivery.
+  registerMailTools(pi);
+
   // Command execution: run a shell command on the user's machine. The tool only
   // forwards the request — the main process runs the tiered auto-approve policy
   // (allowlist → LLM judge → approval card) and spawns the command itself.
@@ -1950,12 +1956,13 @@ function registerTaskTools(pi) {
       properties: {
         prompt: { type: 'string', description: 'What to do on each run, e.g. "Check the news page and summarize anything new about LLM releases."' },
         cron: { type: 'string', description: 'A 5-field cron expression (minute hour day-of-month month day-of-week) for a recurring task.' },
-        at: { type: 'string', description: 'A future ISO 8601 datetime in the user\'s local time, without a "Z" suffix (e.g. 2026-07-01T08:00:00), for a one-time task.' }
+        at: { type: 'string', description: 'A future ISO 8601 datetime in the user\'s local time, without a "Z" suffix (e.g. 2026-07-01T08:00:00), for a one-time task.' },
+        personaId: { type: 'string', description: 'Optional: run the task AS this persona (its role prompt, model, and coding-agent pin); its results mail from that persona. The persona must already exist.' }
       },
       required: ['prompt']
     },
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const res = await taskBridge(ctx, { op: 'schedule', prompt: params?.prompt, cron: params?.cron, at: params?.at });
+      const res = await taskBridge(ctx, { op: 'schedule', prompt: params?.prompt, cron: params?.cron, at: params?.at, personaId: params?.personaId });
       if (!res.ok) return taskErr(res.error || 'Could not schedule the task.');
       return taskOk(`Scheduled this conversation to run ${describeSchedule(res.task)}. Manage it in the Tasks tab.`);
     }
@@ -2013,6 +2020,79 @@ function registerTaskTools(pi) {
       const res = await taskBridge(ctx, { op: 'notify', message, title: params?.title });
       if (!res.ok) return taskErr(res.error || 'Could not notify the user.');
       return taskOk('Notified the user.');
+    }
+  });
+}
+
+// ---- Mail: personas consult each other and reach the user between turns ----
+
+// Sentinel title for the ctx.ui.input round-trip PiRuntime intercepts. The
+// payload carries only recipients + body: WHICH conversation is speaking, who
+// may be mailed, and who the sender is are all read from the live turn in main,
+// so a persona can never mail outside its conversation or spoof its sender.
+const MAIL_BRIDGE_TITLE = 'stem-mail-bridge';
+
+/** Round-trip one mail op through PiRuntime; returns the parsed result (or an error object). */
+async function mailBridge(ctx, payload) {
+  if (!ctx || !ctx.ui || typeof ctx.ui.input !== 'function') {
+    return { ok: false, error: 'Mail is unavailable in this context.' };
+  }
+  const raw = await ctx.ui.input(MAIL_BRIDGE_TITLE, JSON.stringify(payload));
+  if (typeof raw !== 'string') return { ok: false, error: 'No response from Stem.' };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { ok: false, error: 'Malformed response from Stem.' };
+  }
+}
+
+function registerMailTools(pi) {
+  pi.registerTool({
+    name: 'send_mail',
+    label: 'Send mail',
+    description:
+      'Send a mail within the CURRENT mail conversation. Recipients are the conversation\'s other personas ' +
+      'and/or "user". Mailing a persona is asynchronous: finish your turn after sending — its reply arrives ' +
+      'as a later mail to you. Mailing ["user"] is how you answer the user after consulting personas; a plain ' +
+      'final message (no send_mail) instead replies to whoever mailed you. Only works during a mail delivery — ' +
+      'in an ordinary chat, just reply normally.',
+    parameters: {
+      type: 'object',
+      properties: {
+        to: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Recipient persona ids from this conversation, and/or "user".'
+        },
+        body: { type: 'string', description: 'The mail body.' }
+      },
+      required: ['to', 'body']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const res = await mailBridge(ctx, { op: 'send', to: params?.to, body: params?.body });
+      if (!res.ok) return taskErr(res.error || 'Could not send the mail.');
+      return taskOk(res.text || 'Mail sent.');
+    }
+  });
+
+  pi.registerTool({
+    name: 'add_persona',
+    label: 'Add persona to conversation',
+    description:
+      'Add an existing persona to the CURRENT mail conversation\'s participant list so it becomes reachable ' +
+      'with send_mail. Only personas whose configuration grants the add-personas capability may call this. ' +
+      'The persona is added silently — mail it to bring it in.',
+    parameters: {
+      type: 'object',
+      properties: {
+        personaId: { type: 'string', description: 'The id of the persona to add (it must already exist).' }
+      },
+      required: ['personaId']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const res = await mailBridge(ctx, { op: 'add_persona', personaId: params?.personaId });
+      if (!res.ok) return taskErr(res.error || 'Could not add the persona.');
+      return taskOk(res.text || 'Persona added.');
     }
   });
 }

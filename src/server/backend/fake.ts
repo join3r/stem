@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { ApprovalId, ChatBackend, ExecBridge, HarnessBridge, TaskBridge } from './types';
+import type { ApprovalId, ChatBackend, ExecBridge, HarnessBridge, MailBridge, TaskBridge } from './types';
 import type {
   ChatMessage,
   ChatSummary,
@@ -370,6 +370,8 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
   setSkillBridge(): void {}
 
   setTaskBridge(_bridge: TaskBridge | null): void {}
+
+  setMailBridge(_bridge: MailBridge | null): void {}
 
   /**
    * Held rather than dropped, so `[e2e:exec]` can drive the REAL ExecService —

@@ -13,6 +13,7 @@ import {
   saveCustomModel,
   skillsRunFor,
   updateChatsSettings,
+  updateMailSettings,
   updateDefaultModel,
   updateDefaults,
   updateEscapeAction,
@@ -805,6 +806,25 @@ describe('exec settings', () => {
     });
     expect(next.exec.windowsShell).toBe('git-bash');
     expect(next.exec.gitBashPath).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+  });
+});
+
+describe('mail settings', () => {
+  it('defaults the exchange cap to 10 and round-trips a patch', async () => {
+    expect((await readSettings()).mail).toEqual({ exchangeCap: 10 });
+    const next = await updateMailSettings({ exchangeCap: 5 });
+    expect(next.mail.exchangeCap).toBe(5);
+    expect((await readSettings()).mail.exchangeCap).toBe(5);
+  });
+
+  it('clamps the cap to a sane band and coerces junk to the default', async () => {
+    // 0 would refuse every consultation; an absurd cap makes the guard decorative.
+    writeFileSync(path, JSON.stringify({ mail: { exchangeCap: 0 } }));
+    expect((await readSettings()).mail.exchangeCap).toBe(1);
+    writeFileSync(path, JSON.stringify({ mail: { exchangeCap: 9999 } }));
+    expect((await readSettings()).mail.exchangeCap).toBe(100);
+    writeFileSync(path, JSON.stringify({ mail: { exchangeCap: 'lots' } }));
+    expect((await readSettings()).mail.exchangeCap).toBe(10);
   });
 });
 

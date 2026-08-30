@@ -58,8 +58,10 @@ import type {
   StemApi,
   TaskNotifyPayload,
   TaskModelPatch,
+  TaskPersonaPatch,
   TaskSchedulePatch,
   TasksSettings,
+  MailSettings,
   ThemeSettings,
   ThemeState,
   UpdateStatus,
@@ -149,6 +151,8 @@ const api: StemApi = {
     ipcRenderer.invoke('tasks:updateSchedule', id, patch),
   updateTaskModel: (id: string, patch: TaskModelPatch) =>
     ipcRenderer.invoke('tasks:updateModel', id, patch),
+  updateTaskPersona: (id: string, patch: TaskPersonaPatch) =>
+    ipcRenderer.invoke('tasks:updatePersona', id, patch),
   onTasksChanged: (listener: (tasks: ScheduledTask[]) => void) => {
     const handler = (_e: unknown, tasks: ScheduledTask[]) => listener(tasks);
     ipcRenderer.on('tasks:changed', handler);
@@ -438,6 +442,7 @@ const api: StemApi = {
     ipcRenderer.invoke('settings:updateSkills', patch),
   updateChatsSettings: (patch: Partial<ChatsSettings>) => ipcRenderer.invoke('settings:updateChats', patch),
   updateTasksSettings: (patch: Partial<TasksSettings>) => ipcRenderer.invoke('settings:updateTasks', patch),
+  updateMailSettings: (patch: Partial<MailSettings>) => ipcRenderer.invoke('settings:updateMail', patch),
   updateDefaults: (patch: Partial<DefaultsSettings>) => ipcRenderer.invoke('settings:updateDefaults', patch),
   updateRetrievalSettings: (patch: PartialRetrievalSettings) =>
     ipcRenderer.invoke('settings:updateRetrieval', patch),

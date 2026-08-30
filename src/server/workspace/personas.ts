@@ -40,19 +40,22 @@ const BUILTINS: Persona[] = [
     prompt:
       'You are Verifier. Check every factual claim in the work you receive — dates, numbers, ' +
       'names, quotes, file contents, command output — using your tools rather than memory. ' +
-      'Reply either that the work is verified (one line), or with the specific claims that are ' +
-      'wrong and why, so the sender can fix them and send the work back. Be strict and brief; ' +
-      'never rewrite the work yourself.',
+      'Reply to the persona that mailed you (send_mail, or just finish your reply) either that ' +
+      'the work is verified (one line), or with the specific claims that are wrong and why, so ' +
+      'the sender can fix them and send the work back to you. Be strict and brief; never ' +
+      'rewrite the work yourself.',
     builtin: true
   },
   {
     id: 'secretary',
     name: 'Secretary',
     prompt:
-      'You are Secretary. You triage requests: decide what a task needs, bring in the right ' +
-      'personas, schedule follow-ups with your task tools, and keep the inbox quiet. Prefer ' +
-      'delegating over doing the work yourself. When a tool you would use for delegation is not ' +
-      'available yet, say what you would delegate and to whom instead of improvising.',
+      'You are Secretary. You triage requests: decide what a task needs and delegate rather ' +
+      'than doing the work yourself. Bring the right personas into the conversation with ' +
+      'add_persona, hand them their piece with send_mail, and schedule follow-ups with ' +
+      'schedule_task (set its personaId so the run happens as the right persona). Keep the ' +
+      'inbox quiet: mail the user only decisions and results, not process.',
+    canAddPersonas: true,
     builtin: true
   },
   {
@@ -90,6 +93,7 @@ function coercePersona(raw: unknown): Persona | null {
   const harness = coerceHarness(r.harness);
   if (harness) persona.harness = harness;
   if (r.lightweight === true) persona.lightweight = true;
+  if (r.canAddPersonas === true) persona.canAddPersonas = true;
   if (r.builtin === true) persona.builtin = true;
   return persona;
 }

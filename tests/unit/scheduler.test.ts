@@ -373,6 +373,56 @@ class NotifyingRuntime extends FakeRuntime {
   }
 }
 
+describe('schedule-as-persona', () => {
+  it('validates the persona at creation and threads it into the run', async () => {
+    const runtime = new FakeRuntime();
+    const { scheduler } = makeScheduler(runtime);
+    // A typo'd persona fails the create loudly, not every future run quietly.
+    expect((await scheduler.create({ prompt: 'x', cron: '0 8 * * *', personaId: 'ghost' }, 't1')).ok).toBe(false);
+    const res = await scheduler.create({ prompt: 'watch it', cron: '0 8 * * *', personaId: 'verifier' }, 't1');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.task.personaId).toBe('verifier');
+    scheduler.runNow(res.task.id);
+    await until(() => runtime.starts.length === 1, 'the persona run');
+    // The run executes AS the persona: worker match + spawn prompt come from this.
+    expect(runtime.starts[0].persona?.id).toBe('verifier');
+    expect(runtime.starts[0].persona?.prompt).toContain('Verifier');
+    expect(runtime.starts[0].scheduled?.taskId).toBe(res.task.id);
+    scheduler.stop();
+  });
+
+  it('the persona model pin wins over the task pin; a vanished persona degrades to a plain run', async () => {
+    const { savePersona, deletePersona } = await import('../../src/server/workspace/personas');
+    await savePersona({ id: 'temp-runner', name: 'Temp runner', prompt: 'You are Temp.', model: 'prov/persona-model' });
+    try {
+      const runtime = new FakeRuntime();
+      const { scheduler } = makeScheduler(runtime);
+      const res = await scheduler.create({ prompt: 'go', cron: '0 8 * * *', personaId: 'temp-runner' }, 't1');
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      await scheduler.updateModel(res.task.id, 'prov/task-model', null);
+      scheduler.runNow(res.task.id);
+      await until(() => runtime.starts.length === 1, 'the pinned run');
+      expect(runtime.starts[0].model).toBe('prov/persona-model');
+
+      // The persona disappears: the next run is plain rather than skipped.
+      await deletePersona('temp-runner');
+      scheduler.runNow(res.task.id);
+      await until(() => runtime.starts.length === 2, 'the degraded run');
+      expect(runtime.starts[1].persona).toBeUndefined();
+      expect(runtime.starts[1].model).toBe('prov/task-model');
+
+      // updatePersona clears the pin for good.
+      await scheduler.updatePersona(res.task.id, null);
+      expect((await readTasks())[0].personaId).toBeUndefined();
+      scheduler.stop();
+    } finally {
+      await deletePersona('temp-runner').catch(() => undefined);
+    }
+  });
+});
+
 describe('silent runs', () => {
   // A scheduled run appends a turn whether or not it found anything, and that turn
   // bumps the thread's mtime — the Inbox's only notion of "something happened".

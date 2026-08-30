@@ -119,6 +119,15 @@ export interface TurnContext {
    */
   isMail?: boolean;
   /**
+   * The mail delivery's conversation + participant set, for the mail bridge:
+   * send_mail's recipients are validated against `participants`, and the
+   * conversation id comes from HERE, never from the tool payload — the same
+   * authority rule as the task bridge's threadId.
+   */
+  mail?: { conversationId: string; participants: string[] };
+  /** The persona this delivery runs as (the mail bridge's authoritative sender). */
+  personaId?: string;
+  /**
    * The turn's persona coding-harness pin (agent + cwd), when the persona has
    * one. Fills coding_agent's agent/cwd defaults — explicit tool arguments win.
    */

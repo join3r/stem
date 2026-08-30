@@ -94,6 +94,15 @@ describe('save', () => {
     expect(verifier?.prompt).toBe('stricter');
   });
 
+  it('round-trips the add-personas capability; Secretary is seeded with it on', async () => {
+    expect((await getPersona('secretary'))?.canAddPersonas).toBe(true);
+    expect((await getPersona('verifier'))?.canAddPersonas).toBeUndefined();
+    await savePersona(persona({ canAddPersonas: true }));
+    expect((await getPersona('p1'))?.canAddPersonas).toBe(true);
+    await savePersona(persona({ canAddPersonas: false }));
+    expect((await getPersona('p1'))?.canAddPersonas).toBeUndefined();
+  });
+
   it('drops a harness pin missing either half', async () => {
     await savePersona(persona({ harness: { agent: 'claude', cwd: '' } }));
     expect((await getPersona('p1'))?.harness).toBeUndefined();

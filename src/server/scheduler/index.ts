@@ -14,6 +14,7 @@ import { noteTurnStart } from '../live-turns';
 import { toMs } from '../../shared/inbox';
 import { isValidCron, nextAfter } from './cron';
 import { clipError, readTasks, saveTasks, titleFromPrompt } from '../workspace/tasks';
+import { getPersona } from '../workspace/personas';
 import * as activity from '../activity';
 
 // The main-process scheduler. Holds tasks in memory, keeps ONE timer armed for the
@@ -186,6 +187,12 @@ export class TaskScheduler {
     if (!schedule.ok) return { ok: false, error: schedule.error };
     const prompt = (req.prompt ?? '').trim();
     if (!prompt) return { ok: false, error: 'A task needs a prompt to run.' };
+    // Schedule-as-persona: validated at creation so a typo'd persona fails the
+    // tool call loudly instead of every future run quietly.
+    const personaId = (req.personaId ?? '').trim();
+    if (personaId && !(await getPersona(personaId))) {
+      return { ok: false, error: `No persona "${personaId}" exists.` };
+    }
 
     const now = new Date();
     const task: ScheduledTask = {
@@ -196,7 +203,8 @@ export class TaskScheduler {
       enabled: true,
       createdAt: now.toISOString(),
       title: titleFromPrompt(prompt),
-      nextRunAt: null
+      nextRunAt: null,
+      ...(personaId ? { personaId } : {})
     };
     task.nextRunAt = this.computeNextRunAt(task, now);
     this.tasks.push(task);
@@ -240,6 +248,17 @@ export class TaskScheduler {
       else delete task.model;
       if (effort) task.effort = effort;
       else delete task.effort;
+      await this.persistAndArm();
+    }
+    return this.snapshot();
+  }
+
+  /** Pin (or clear, with null) the persona this task's runs execute AS. */
+  async updatePersona(id: string, personaId: string | null): Promise<ScheduledTask[]> {
+    const task = this.tasks.find((t) => t.id === id);
+    if (task) {
+      if (personaId) task.personaId = personaId;
+      else delete task.personaId;
       await this.persistAndArm();
     }
     return this.snapshot();
@@ -432,6 +451,37 @@ export class TaskScheduler {
     task.lastStatus = 'running';
     this.opts.onChange(this.snapshot());
 
+    // Schedule-as-persona: the run executes AS the persona — its worker, role
+    // prompt, and harness pin, with the persona's model/effort winning over the
+    // task's own (the mail router's precedence). A persona deleted since the
+    // task was created degrades to a plain run rather than wedging the task.
+    let persona = null;
+    if (task.personaId) {
+      // quiet: a registry read that rejects is indistinguishable here from a
+      // missing persona — the degrade below names the plain-run fallback either way.
+      persona = await getPersona(task.personaId).catch(() => null);
+      if (!persona) {
+        degrade(
+          'tasks',
+          'ran a persona task as a plain run',
+          new Error(`persona "${task.personaId}" no longer exists`)
+        );
+      }
+    }
+    const turnExtras = {
+      ...(persona?.model ?? task.model ? { model: persona?.model ?? task.model } : {}),
+      ...(persona?.effort ?? task.effort ? { effort: persona?.effort ?? task.effort } : {}),
+      ...(persona
+        ? {
+            persona: {
+              id: persona.id,
+              prompt: persona.prompt,
+              ...(persona.harness ? { harness: persona.harness } : {})
+            }
+          }
+        : {})
+    };
+
     const run: ActiveRun = {
       taskId: id,
       threadId: task.threadId,
@@ -447,10 +497,9 @@ export class TaskScheduler {
       const { turnId } = await this.opts.runtime.startTurn({
         input: task.prompt,
         threadId: task.threadId,
-        // The task's own pin, when set; the runtime falls back to the thread's
-        // persisted model/effort (then the app default) when these are absent.
-        ...(task.model ? { model: task.model } : {}),
-        ...(task.effort ? { effort: task.effort } : {}),
+        // The persona's pin, then the task's own; the runtime falls back to the
+        // thread's persisted model/effort (then the app default) beyond those.
+        ...turnExtras,
         webSearch: true,
         scheduled: { at: atIso, taskId: task.id }
       });
@@ -490,8 +539,7 @@ export class TaskScheduler {
             const retry = await this.opts.runtime.startTurn({
               input: task.prompt,
               threadId: task.threadId,
-              ...(task.model ? { model: task.model } : {}),
-              ...(task.effort ? { effort: task.effort } : {}),
+              ...turnExtras,
               webSearch: true,
               scheduled: { at: atIso, taskId: task.id }
             });
