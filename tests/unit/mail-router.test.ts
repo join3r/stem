@@ -28,8 +28,8 @@ afterEach(() => {
 interface FakeBackend {
   backend: ChatBackend;
   starts: StartTurnInput[];
-  /** Script the next turn: 'ok' settles with `reply` as the assistant text. */
-  script: { mode: 'ok' | 'failed' | 'reject'; reply?: string; error?: string };
+  /** Script the next turn: 'ok' settles with `reply` (or `replies`) as the assistant text. */
+  script: { mode: 'ok' | 'failed' | 'reject'; reply?: string; replies?: string[]; error?: string };
 }
 
 function fakeBackend(): FakeBackend {
@@ -49,7 +49,9 @@ function fakeBackend(): FakeBackend {
       const turnId = input.turnId ?? `turn-${fake.starts.length}`;
       const log = transcripts.get(threadId) ?? [];
       log.push({ role: 'user', content: input.input });
-      if (fake.script.mode === 'ok') log.push({ role: 'assistant', content: fake.script.reply ?? '' });
+      if (fake.script.mode === 'ok')
+        for (const content of fake.script.replies ?? [fake.script.reply ?? ''])
+          log.push({ role: 'assistant', content });
       transcripts.set(threadId, log);
       const outcome = fake.script.mode;
       const error = fake.script.error;
@@ -108,6 +110,26 @@ describe('mail router', () => {
     expect(start.mail?.conversationId).toBe(mail.conversations[0].id);
     // The hidden session was recorded for the next delivery.
     expect(mail.conversations[0].sessions.verifier).toBe('thread-1');
+  });
+
+  it('the reply is the WHOLE turn, not its last message: tool-using turns write several', async () => {
+    const fake = fakeBackend();
+    fake.script = { mode: 'ok', replies: ['I looked it up.', 'Here is the answer.', 'Want prices too?'] };
+    const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined });
+    await router.compose({ to: ['verifier'], subject: 's', body: 'question' });
+    const mail = await settledMail();
+    expect(mail.items[1].body).toBe('I looked it up.\n\nHere is the answer.\n\nWant prices too?');
+
+    // …and a follow-up reply gathers only the NEW turn's messages, not the
+    // first turn's answer over again.
+    fake.script = { mode: 'ok', replies: ['Second turn.'] };
+    await router.reply(mail.conversations[0].id, 'follow-up');
+    const after = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items).toHaveLength(4);
+      return m;
+    });
+    expect(after.items[3].body).toBe('Second turn.');
   });
 
   it('defaults an empty To: to the built-in Normal persona', async () => {

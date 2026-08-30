@@ -225,14 +225,27 @@ export class MailRouter {
     this.opts.onChange();
   }
 
-  /** The final assistant message of the settled turn — the implicit reply. */
+  /**
+   * Everything the settled turn said — the implicit reply. A turn that uses
+   * tools writes SEVERAL assistant messages (text between tool calls), so the
+   * reply is all of them since the last user message, not just the final one:
+   * taking the last alone once mailed back only a turn's closing sentence.
+   */
   private async lastAssistantText(threadId: string): Promise<string> {
     try {
       const { messages } = await this.opts.runtime.readThread(threadId);
+      let start = 0;
       for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === 'assistant' && messages[i].content.trim()) return messages[i].content.trim();
+        if (messages[i].role === 'user') {
+          start = i + 1;
+          break;
+        }
       }
-      return '';
+      return messages
+        .slice(start)
+        .filter((m) => m.role === 'assistant' && m.content.trim())
+        .map((m) => m.content.trim())
+        .join('\n\n');
     } catch (error) {
       degrade('mail', 'replied without the turn transcript', error);
       return '';
