@@ -16,11 +16,20 @@ import type { ServerFolderListing } from '../../shared/types';
 
 export function ServerFolderPicker({
   onConnect,
-  onClose
+  onClose,
+  title = 'Choose a folder on Stem’s server',
+  hint = 'This Stem’s server is another machine, so its folders are what can be connected — browse below, or paste a path the server knows.',
+  confirmLabel = 'Connect this folder'
 }: {
   /** The user chose the folder currently listed. The caller closes the dialog. */
   onConnect: (path: string) => void;
   onClose: () => void;
+  /** Dialog heading; the default is the connected-folders wording. */
+  title?: string;
+  /** Explainer under the heading. */
+  hint?: string;
+  /** The confirm button's label. */
+  confirmLabel?: string;
 }) {
   const [listing, setListing] = useState<ServerFolderListing | null>(null);
   // The path field's draft. Follows navigation; diverges while the user types.
@@ -71,7 +80,7 @@ export function ServerFolderPicker({
       className="mcp-approval-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="Choose a folder on Stem's server"
+      aria-label={title}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.preventDefault();
@@ -87,12 +96,9 @@ export function ServerFolderPicker({
           <span className="row-icon">
             <FolderSearch size={15} />
           </span>
-          <strong>Choose a folder on Stem&rsquo;s server</strong>
+          <strong>{title}</strong>
         </div>
-        <p className="muted folder-picker-hint">
-          This Stem&rsquo;s server is another machine, so its folders are what can be connected —
-          browse below, or paste a path the server knows.
-        </p>
+        <p className="muted folder-picker-hint">{hint}</p>
 
         <div className="folder-picker-path">
           <button
@@ -165,7 +171,7 @@ export function ServerFolderPicker({
             disabled={busy || !path}
             onClick={() => path && onConnect(path)}
           >
-            Connect this folder
+            {confirmLabel}
           </button>
         </div>
       </div>

@@ -3347,6 +3347,12 @@ export interface StemApi {
 
   // Personas. Mutations return the fresh list (like the folders APIs).
   listPersonas(): Promise<Persona[]>;
+  /**
+   * Names the coding-agent picker offers: acpx's built-in registry plus custom
+   * entries from harness settings. A listed agent still needs its CLI installed
+   * wherever the turn runs (the server, or a targeted device).
+   */
+  listCodingAgents(): Promise<string[]>;
   /** Create or update a persona (upsert by id). Returns the fresh list. */
   savePersona(persona: Persona): Promise<Persona[]>;
   /** Delete a persona. Built-ins are refused. Returns the fresh list. */

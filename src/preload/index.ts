@@ -343,6 +343,7 @@ const api: StemApi = {
     ipcRenderer.invoke('chats:setFolder', threadId, folderId),
 
   listPersonas: () => ipcRenderer.invoke('personas:list'),
+  listCodingAgents: () => ipcRenderer.invoke('personas:agents'),
   savePersona: (persona: Persona) => ipcRenderer.invoke('personas:save', persona),
   deletePersona: (id: string) => ipcRenderer.invoke('personas:delete', id),
 

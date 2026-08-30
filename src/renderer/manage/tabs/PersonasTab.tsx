@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Copy, Plus, Trash2 } from 'lucide-react';
+import { Copy, FolderSearch, Plus, Trash2 } from 'lucide-react';
 import type { ModelSummary, Persona } from '../../../shared/types';
 import { ModelPicker } from '../../ui/ModelPicker';
 import { clampEffort, effortsOf, EffortSelect } from '../../ui/EffortSelect';
 import { EFFORT_LABELS } from '../../modelLabels';
+import { ServerFolderPicker } from '../ServerFolderPicker';
 
 // ---- Personas tab: the named agent configurations mail addresses ----
 //
@@ -63,9 +64,16 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [savingId, setSavingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Agent names the coding-agent select offers (acpx registry + custom entries
+  // from harness settings). Empty on a server too old to answer — the editor
+  // falls back to a plain text field there.
+  const [agents, setAgents] = useState<string[]>([]);
+  // Persona id whose cwd is being picked in the server-folder browser.
+  const [pickingCwdFor, setPickingCwdFor] = useState<string | null>(null);
 
   useEffect(() => {
     void window.stem.listPersonas().then(setPersonas);
+    window.stem.listCodingAgents().then(setAgents).catch(() => setAgents([]));
   }, []);
 
   const setDraft = (draft: Persona) =>
@@ -247,32 +255,68 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                     />
                   </div>
                   <div className="persona-harness">
-                    <input
-                      className="vfield"
-                      aria-label="Coding agent this persona drives"
-                      value={p.harness?.agent ?? ''}
-                      onChange={(e) => {
-                        const agent = e.target.value;
-                        setDraft({
-                          ...p,
-                          harness: agent.trim() ? { agent, cwd: p.harness?.cwd ?? '' } : undefined
-                        });
-                      }}
-                      placeholder="Coding agent (e.g. claude)"
-                    />
-                    <input
-                      className="vfield persona-cwd"
-                      aria-label="Working directory for the coding agent"
-                      value={p.harness?.cwd ?? ''}
-                      onChange={(e) =>
-                        setDraft({
-                          ...p,
-                          harness: p.harness ? { ...p.harness, cwd: e.target.value } : undefined
-                        })
-                      }
-                      placeholder="Its working directory (absolute path)"
-                      disabled={!p.harness}
-                    />
+                    {agents.length > 0 ? (
+                      <select
+                        className="vfield"
+                        aria-label="Coding agent this persona drives"
+                        value={p.harness?.agent ?? ''}
+                        onChange={(e) => {
+                          const agent = e.target.value;
+                          setDraft({
+                            ...p,
+                            harness: agent ? { agent, cwd: p.harness?.cwd ?? '' } : undefined
+                          });
+                        }}
+                      >
+                        <option value="">No coding agent</option>
+                        {p.harness?.agent && !agents.includes(p.harness.agent) && (
+                          <option value={p.harness.agent}>{p.harness.agent} (custom)</option>
+                        )}
+                        {agents.map((a) => (
+                          <option key={a} value={a}>
+                            {a}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        className="vfield"
+                        aria-label="Coding agent this persona drives"
+                        value={p.harness?.agent ?? ''}
+                        onChange={(e) => {
+                          const agent = e.target.value;
+                          setDraft({
+                            ...p,
+                            harness: agent.trim() ? { agent, cwd: p.harness?.cwd ?? '' } : undefined
+                          });
+                        }}
+                        placeholder="Coding agent (e.g. claude)"
+                      />
+                    )}
+                    <div className="persona-cwd-row">
+                      <input
+                        className="vfield persona-cwd"
+                        aria-label="Working directory for the coding agent"
+                        value={p.harness?.cwd ?? ''}
+                        onChange={(e) =>
+                          setDraft({
+                            ...p,
+                            harness: p.harness ? { ...p.harness, cwd: e.target.value } : undefined
+                          })
+                        }
+                        placeholder="Its working directory (absolute path)"
+                        disabled={!p.harness}
+                      />
+                      <button
+                        className="icon-action sm"
+                        onClick={() => setPickingCwdFor(p.id)}
+                        disabled={!p.harness}
+                        title="Browse the server's folders"
+                        aria-label="Browse for a working directory"
+                      >
+                        <FolderSearch size={14} />
+                      </button>
+                    </div>
                   </div>
                   <label className="persona-cap">
                     <input
@@ -308,6 +352,26 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
       <button className="link-btn" onClick={() => add()}>
         <Plus size={14} /> New persona
       </button>
+      {pickingCwdFor &&
+        (() => {
+          // The row is expanded (the Browse button lives in the editor), so a
+          // draft with a harness exists; the guard covers a state race anyway.
+          const target = drafts.get(pickingCwdFor);
+          if (!target?.harness) return null;
+          const harness = target.harness;
+          return (
+            <ServerFolderPicker
+              title="Choose the agent’s working directory"
+              hint="The coding agent runs on Stem’s server, so this browses the server’s folders — pick where it should work, or paste a path the server knows."
+              confirmLabel="Use this folder"
+              onConnect={(path) => {
+                setDraft({ ...target, harness: { ...harness, cwd: path } });
+                setPickingCwdFor(null);
+              }}
+              onClose={() => setPickingCwdFor(null)}
+            />
+          );
+        })()}
     </div>
   );
 }
