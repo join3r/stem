@@ -1124,12 +1124,13 @@ export default function App() {
     },
     [mailApi]
   );
-  /** Send from the compose form; resolves into the new conversation's view. */
+  /** Send from the compose form; the mail is on its way (Sent has the copy), so
+   *  the pane closes back to the app's resting state — email semantics, not chat:
+   *  the reply arrives in the Inbox, it isn't watched for. */
   const onComposeSend = useCallback(
     async (input: Parameters<typeof mailApi.compose>[0]) => {
-      const list = await mailApi.compose(input);
-      const newest = [...list.conversations].sort((a, b) => b.createdAt - a.createdAt)[0];
-      if (newest) setMailView({ kind: 'conversation', id: newest.id });
+      await mailApi.compose(input);
+      setMailView(null);
     },
     [mailApi]
   );

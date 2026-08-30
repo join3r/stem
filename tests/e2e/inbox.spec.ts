@@ -19,11 +19,12 @@ async function compose(win: Page, subject: string, body: string): Promise<void> 
   await win.getByPlaceholder('What this is about').fill(subject);
   await win.getByPlaceholder(/Write the task/).fill(body);
   await win.getByRole('button', { name: 'Send' }).click();
-  // The compose view resolves into the conversation; the persona's reply is the
-  // fake's echo of the body.
-  await expect(win.locator('.mail-view .mail-item').filter({ hasText: `Echo: ${body}` })).toBeVisible({
-    timeout: 15_000
-  });
+  // Sending closes the pane (email semantics — the copy is under Sent); the
+  // conversation surfaces in the Inbox when the persona's reply (the fake's
+  // echo) lands. Open it so callers find the conversation view up, as before.
+  await expect(mailRow(win, subject)).toBeVisible({ timeout: 15_000 });
+  await mailRow(win, subject).click();
+  await expect(win.locator('.mail-view .mail-item').filter({ hasText: `Echo: ${body}` })).toBeVisible();
 }
 
 async function sendChat(win: Page, text: string): Promise<void> {
@@ -65,11 +66,14 @@ test('the To: chips build a multi-persona conversation with the first pick drivi
   await mainWindow.getByPlaceholder('What this is about').fill('Team errand');
   await mainWindow.getByPlaceholder(/Write the task/).fill('check it twice');
   await mainWindow.getByRole('button', { name: 'Send' }).click();
-  // The conversation lists BOTH participants; only the driver replied (the fake echo).
+  // Sending closes the pane; the reply surfaces the row. The conversation lists
+  // BOTH participants; only the driver replied (the fake echo).
+  await expect(mailRow(mainWindow, 'Team errand')).toBeVisible({ timeout: 15_000 });
+  await mailRow(mainWindow, 'Team errand').click();
   await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal, Verifier');
   await expect(
     mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: check it twice' })
-  ).toBeVisible({ timeout: 15_000 });
+  ).toBeVisible();
 });
 
 test('replying resumes the same conversation and the exchange stays threaded', async ({ mainWindow }) => {
