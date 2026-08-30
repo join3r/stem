@@ -1742,12 +1742,13 @@ export default function App() {
         className="tbtn"
         title={`New conversation (${glyphsFor('new-conversation')})`}
         onClick={() => newConversation()}
-        // Allow a new chat even while another runs in the background. Only block
-        // when the visible chat is empty, or its first turn hasn't yet produced a
-        // thread id (DRAFT still running) — switching away would orphan it. With
-        // a mail view covering the pane the empty-draft case no longer applies:
-        // the button's job is then "back to a blank chat" (it dismisses the mail).
-        disabled={(mailView === null && cur.messages.length === 0) || (activeThreadId === null && cur.running)}
+        // Always available, with one exception: a DRAFT whose first turn hasn't
+        // produced a thread id yet — switching away would orphan it. It used to
+        // also disable over an empty chat, but a mail view sits exactly over an
+        // empty draft, and a top-left button that greys out for an invisible
+        // reason reads as broken; on a blank chat the click is a harmless
+        // refocus of the composer.
+        disabled={activeThreadId === null && cur.running}
       >
         <SquarePen size={17} />
         <ShortcutHint id="new-conversation" />
