@@ -638,14 +638,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /**
    * The pool bound. Each worker is a whole pi child (with its own MCP bridge),
-   * so this is a memory/CPU dial, not a free concurrency knob: 3 covers "a chat
-   * streaming, a Quick Chat, and a scheduled run" without letting a burst of
-   * turns spawn a process apiece. Overridable for constrained hosts (a small
-   * VPS wants 1–2) and for the day personas want a worker each.
+   * so this is a memory/CPU dial, not a free concurrency knob: 4 covers "a chat
+   * streaming, a Quick Chat, a scheduled run, and a persona working a mail"
+   * without letting a burst of turns spawn a process apiece. Overridable for
+   * constrained hosts (a small VPS wants 1–2). Personas share this bound rather
+   * than getting their own (an idle persona worker is evicted before any turn
+   * queues — see acquireWorkerNow), so persona traffic borrows slots instead of
+   * reserving them.
    */
   private readonly maxWorkers = (() => {
     const raw = Number.parseInt(process.env.STEM_PI_MAX_WORKERS ?? '', 10);
-    return Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 8) : 3;
+    return Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 8) : 4;
   })();
 
   /** Where a worker's per-turn gate files live (STEM_GATE_DIR for its child). */
@@ -653,14 +656,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return join(this.options.piHome, 'workers', String(id));
   }
 
-  /** The worker at the primary slot, created (not yet spawned) if the pool is empty. */
+  /**
+   * The plain worker the app keeps warm, created (not yet spawned) when there
+   * isn't one. Never a persona worker: their spawn args carry a role prompt, so
+   * warming one would warm the wrong process for the next chat. Creating past
+   * the bound is possible when the pool is momentarily all personas — accepted:
+   * this is the warm-chat slot, and the reaper trims persona workers as they idle.
+   */
   private primaryWorker(): PiWorker {
-    if (!this.workers.length) {
-      const id = this.nextWorkerId;
-      this.nextWorkerId += 1;
-      this.workers.push(new PiWorker(id, this.workerGateDir(id)));
-    }
-    return this.workers[0];
+    const plain = this.workers.find((w) => !w.disposed && !w.personaId);
+    if (plain) return plain;
+    const id = this.nextWorkerId;
+    this.nextWorkerId += 1;
+    const worker = new PiWorker(id, this.workerGateDir(id));
+    this.workers.push(worker);
+    return worker;
   }
 
   /** Any worker with a live child — for read-only RPCs that don't care which session. */
@@ -675,22 +685,28 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /**
    * Pick (or wait for) the worker that will serve `threadId` — or any free
-   * worker when the thread is new/unknown (null). Serialized on a chain so two
+   * worker when the thread is new/unknown (null). `personaId` narrows the pool
+   * to workers spawned for that persona (null = plain workers only): the
+   * persona prompt rides in the spawn args, so a mismatched worker would run
+   * the turn under the wrong system prompt. Serialized on a chain so two
    * concurrent acquisitions can't both claim the same idle worker or both spawn
    * past the bound. The rules, in order:
    *
    *  1. A thread keeps its bound worker, busy or not — queueing behind your own
    *     thread's turn is the per-thread serialization the app has always had.
-   *  2. Otherwise take an idle worker: one that has never been bound beats
-   *     evicting somebody's affinity; among bound-but-idle workers the
-   *     least-recently-used loses its binding.
+   *  2. Otherwise take an idle worker OF THE SAME PERSONA-NESS: one that has
+   *     never been bound beats evicting somebody's affinity; among
+   *     bound-but-idle workers the least-recently-used loses its binding.
    *  3. Otherwise grow the pool, up to the bound.
-   *  4. Otherwise wait for a worker to go idle and try again.
+   *  4. At the bound, retire an idle worker that cannot serve this turn (idle
+   *     persona workers first, the warm plain slot last) and grow into its
+   *     place — a turn never queues behind a process that is merely parked.
+   *  5. Otherwise wait for a worker to go idle and try again.
    */
-  private acquireWorker(threadId: string | null): Promise<PiWorker> {
+  private acquireWorker(threadId: string | null, personaId: string | null = null): Promise<PiWorker> {
     const run = this.acquireChain.then(
-      () => this.acquireWorkerNow(threadId),
-      () => this.acquireWorkerNow(threadId)
+      () => this.acquireWorkerNow(threadId, personaId),
+      () => this.acquireWorkerNow(threadId, personaId)
     );
     this.acquireChain = run.then(
       () => undefined,
@@ -699,7 +715,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return run;
   }
 
-  private async acquireWorkerNow(threadId: string | null): Promise<PiWorker> {
+  private async acquireWorkerNow(threadId: string | null, personaId: string | null): Promise<PiWorker> {
     // Every return path RESERVES the worker (leases += 1) before handing it out:
     // the lease is what the idle test reads, so without the reservation two
     // concurrent acquisitions could both be given the same "idle" worker in the
@@ -714,18 +730,37 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     for (;;) {
       if (threadId) {
         const bound = this.threadWorkers.get(threadId);
-        if (bound && !bound.disposed) return reserve(bound);
+        // A binding to the wrong persona-ness is dropped, not honored: it can
+        // only mean the thread's role changed (or a stale map entry), and
+        // serving it would run the turn under the wrong system prompt.
+        if (bound && !bound.disposed && bound.personaId === personaId) return reserve(bound);
         if (bound) this.threadWorkers.delete(threadId);
       }
-      const idle = this.workers.filter((w) => !w.disposed && w.idle);
+      const idle = this.workers.filter((w) => !w.disposed && w.idle && w.personaId === personaId);
       if (idle.length) {
         const unbound = idle.filter((w) => ![...this.threadWorkers.values()].includes(w));
         const chosen = unbound[0] ?? idle.sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
         if (threadId) this.bindThread(threadId, chosen);
         return reserve(chosen);
       }
+      if (this.workers.length >= this.maxWorkers) {
+        // Nothing here can serve the turn, but a parked process might be
+        // holding the slot it needs. Idle persona workers go first (mail is
+        // async and a respawn is invisible there); the warm plain slot goes
+        // last, and only so a quiet pool can never wedge an acquisition.
+        const keepWarm = this.workers.find((w) => !w.disposed && !w.personaId);
+        const victim = this.workers
+          .filter((w) => !w.disposed && w.idle)
+          .sort(
+            (a, b) =>
+              (a.personaId ? 0 : 1) - (b.personaId ? 0 : 1) ||
+              (a === keepWarm ? 1 : 0) - (b === keepWarm ? 1 : 0) ||
+              a.lastUsedAt - b.lastUsedAt
+          )[0];
+        if (victim) this.retireWorker(victim);
+      }
       if (this.workers.length < this.maxWorkers) {
-        const worker = new PiWorker(this.nextWorkerId, this.workerGateDir(this.nextWorkerId));
+        const worker = new PiWorker(this.nextWorkerId, this.workerGateDir(this.nextWorkerId), personaId);
         this.nextWorkerId += 1;
         this.workers.push(worker);
         if (threadId) this.bindThread(threadId, worker);
@@ -787,17 +822,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /**
    * Retire extra workers that have sat idle: dispose the child, drop the slot
-   * and its bindings. The primary slot survives — the app always keeps one warm
-   * process once it has spawned one. Runs through the acquisition chain so it
-   * can never retire a worker an acquisition is about to hand out.
+   * and its bindings. The warm plain slot survives — the app always keeps one
+   * warm process for chat once it has spawned one; persona workers are always
+   * reapable, wherever they sit in the list. Runs through the acquisition chain
+   * so it can never retire a worker an acquisition is about to hand out.
    */
   private scheduleWorkerReaper(): void {
     if (this.reapTimer) return;
     this.reapTimer = setInterval(() => {
       void this.acquireChain.then(() => {
         const cutoff = Date.now() - PiRuntime.WORKER_IDLE_REAP_MS;
-        for (const worker of [...this.workers.slice(1)]) {
-          if (!worker.idle || worker.lastUsedAt > cutoff) continue;
+        const keepWarm = this.workers.find((w) => !w.personaId);
+        for (const worker of [...this.workers]) {
+          if (worker === keepWarm || !worker.idle || worker.lastUsedAt > cutoff) continue;
           this.retireWorker(worker);
         }
         if (this.workers.length <= 1 && this.reapTimer) {
@@ -989,7 +1026,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     try {
       // Acquisition can wait for pool capacity; a Stop clicked in that window
       // wins the race below the same way one clicked behind the gate does.
-      const acquired = this.acquireWorker(input.threadId ?? null);
+      const acquired = this.acquireWorker(input.threadId ?? null, input.persona?.id ?? null);
       const worker = await Promise.race([acquired, canceledAnswer.then(() => null)]);
       if (!worker || token.canceled) {
         // The acquisition (pending or already landed) still holds a reservation
@@ -1006,6 +1043,22 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // Canceled while queued behind the worker's gate — the turn never touches pi.
       if (token.canceled) return canceledResult;
       const startedAt = Date.now();
+      if (input.persona) {
+        // The role prompt is spawn-time state. A live child spawned with a
+        // different one (the persona was edited) is stale: replace it rather
+        // than serve the mail on yesterday's prompt. proc is nulled BEFORE the
+        // dispose so the exit handler reads it as deliberate, not a crash.
+        w.personaPrompt = input.persona.prompt;
+        if (w.proc?.running && w.spawnedPersonaPrompt !== input.persona.prompt) {
+          const stale = w.proc;
+          w.proc = null;
+          w.activeThreadId = null;
+          w.currentModel = null;
+          w.currentThinking = null;
+          // quiet: dispose carries its own SIGKILL backstop; there is no second lever.
+          void stale.dispose().catch(() => undefined);
+        }
+      }
       await this.ensureWorkerStarted(w);
       const ensureMs = Date.now() - startedAt;
 
@@ -2627,10 +2680,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         '--model',
         modelId,
         '--append-system-prompt',
-        // Built per spawn: it names the machine the assistant is running on.
-        stemAssistantInstructions()
+        // Built per spawn: it names the machine the assistant is running on. A
+        // persona worker appends its role prompt here — spawn-time state, which
+        // is why a persona owns a whole worker rather than a per-turn block.
+        worker.personaPrompt
+          ? `${stemAssistantInstructions()}\n\n${worker.personaPrompt}`
+          : stemAssistantInstructions()
       ]
     });
+    worker.spawnedPersonaPrompt = worker.personaPrompt;
     worker.proc = proc;
     worker.currentModel = `${provider}/${modelId}`;
     // A fresh process starts a fresh session whose thinking level is unknown to us.

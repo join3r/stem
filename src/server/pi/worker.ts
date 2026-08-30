@@ -49,6 +49,16 @@ export class PiWorker {
   /** Set by the pool when the worker is being retired; a disposed worker is never reused. */
   disposed = false;
 
+  /**
+   * The persona role prompt this worker should be spawned with (updated on
+   * acquisition), and the one its live child actually got. A persona's prompt
+   * is spawn-time state (`--append-system-prompt`), which is the whole reason a
+   * persona owns a worker; when the two differ the child is stale — the persona
+   * was edited — and the next turn replaces it before prompting.
+   */
+  personaPrompt = '';
+  spawnedPersonaPrompt: string | null = null;
+
   constructor(
     /** Stable per-pool id; names the worker's gate directory and log lines. */
     readonly id: number,
@@ -59,7 +69,14 @@ export class PiWorker {
      * would let one thread's turn run on another thread's web-search/tier
      * setting — the exact mutable-state sharing the pool exists to end.
      */
-    readonly gateDir: string
+    readonly gateDir: string,
+    /**
+     * The persona this worker serves, or null for a plain worker. Fixed for the
+     * worker's life: a persona's prompt rides in the spawn args, so a plain
+     * turn on a persona worker would inherit the role prompt (and vice versa) —
+     * acquisition therefore only ever matches like with like.
+     */
+    readonly personaId: string | null = null
   ) {}
 
   /** Free for the pool to hand to another thread: nothing queued, nothing streaming. */

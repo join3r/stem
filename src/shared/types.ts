@@ -370,6 +370,14 @@ export interface StartTurnInput {
    * UI renders the run collapsed. `at` is the run's ISO timestamp.
    */
   scheduled?: { at: string; taskId: string };
+  /**
+   * Server-internal: the persona this turn runs as (mail deliveries). Carries
+   * the role prompt because that is spawn-time state — the pool matches the
+   * turn to a worker spawned for this persona, replacing a child whose prompt
+   * has since been edited. Stripped by the `backend:startTurn` transport
+   * handler; only server-side callers (the mail router) set it.
+   */
+  persona?: { id: string; prompt: string };
 }
 
 // ---- Models (backend catalog) ----

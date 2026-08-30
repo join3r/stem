@@ -366,7 +366,11 @@ function registerIpc(): void {
       webSearch: quickChat ? settings.webSearch.quickChat : settings.webSearch.main,
       instructions: quickChat
         ? [ci.main, ci.quickChat].map((s) => s.trim()).filter(Boolean).join('\n')
-        : ci.main
+        : ci.main,
+      // Server-internal: a client claiming a persona would run its turn under
+      // an arbitrary system prompt on a persona-reserved worker. Only the mail
+      // router (which calls the runtime directly) sets this.
+      persona: undefined
     });
     // Start the turn's clock the moment there is a turn. Waiting for its first
     // event (which is where the fold otherwise learns of it) means a turn that

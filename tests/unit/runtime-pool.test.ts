@@ -20,8 +20,10 @@ afterEach(async () => {
 type FakeWorker = Omit<PiWorker, 'proc'> & {
   proc: {
     running: boolean;
+    disposed?: boolean;
     send: (command: unknown) => void;
     request: (cmd: Record<string, unknown>) => Promise<{ success: boolean; error?: string; data?: unknown }>;
+    dispose: () => Promise<void>;
   } | null;
 };
 
@@ -56,7 +58,7 @@ async function poolRuntime(): Promise<Harness> {
     if (worker.proc?.running) return;
     const requests: Array<Record<string, unknown>> = [];
     requestsByWorker.set(worker.id, requests);
-    worker.proc = {
+    const proc: NonNullable<FakeWorker['proc']> = {
       running: true,
       send: () => undefined,
       request: async (cmd) => {
@@ -66,8 +68,15 @@ async function poolRuntime(): Promise<Harness> {
           return { success: true, data: { sessionId: `session-${nextSession}` } };
         }
         return { success: true };
+      },
+      dispose: async () => {
+        proc.running = false;
+        proc.disposed = true;
       }
     };
+    worker.proc = proc;
+    // What the real spawn records: the prompt this child was started with.
+    worker.spawnedPersonaPrompt = worker.personaPrompt;
   };
   internal.buildMessage = async () => ({ message: 'prompt', images: [] });
   return { runtime, internal, requestsByWorker, piHome };
@@ -159,6 +168,88 @@ describe('runtime worker pool', () => {
     expect(internal.workers).toHaveLength(2);
     expect(freed.currentTurn?.threadId).toBe(result.threadId);
     for (const w of internal.workers) settle(harness, w);
+  });
+
+  it('gives a persona its own worker and never lends it to a plain turn', async () => {
+    const harness = await poolRuntime();
+    const { runtime, internal } = harness;
+
+    const mail = await runtime.startTurn({
+      input: 'work the mail',
+      persona: { id: 'verifier', prompt: 'You are Verifier.' }
+    });
+    const personaWorker = internal.workers[0];
+    expect(personaWorker.personaId).toBe('verifier');
+    expect(personaWorker.spawnedPersonaPrompt).toBe('You are Verifier.');
+    settle(harness, personaWorker);
+
+    // The persona worker is idle, but a plain turn must not inherit its role
+    // prompt — it gets a fresh plain worker instead.
+    const chat = await runtime.startTurn({ input: 'plain chat' });
+    expect(internal.workers).toHaveLength(2);
+    const chatWorker = internal.workers.find((w) => w.currentTurn?.threadId === chat.threadId)!;
+    expect(chatWorker).not.toBe(personaWorker);
+    expect(chatWorker.personaId).toBeNull();
+    settle(harness, chatWorker);
+
+    // The persona's next mail lands back on its own worker (thread affinity).
+    await runtime.startTurn({
+      input: 'more mail',
+      threadId: mail.threadId!,
+      persona: { id: 'verifier', prompt: 'You are Verifier.' }
+    });
+    expect(internal.workers).toHaveLength(2);
+    expect(personaWorker.currentTurn?.threadId).toBe(mail.threadId);
+    for (const w of internal.workers) if (w.currentTurn) settle(harness, w);
+  });
+
+  it('replaces a persona worker whose spawned prompt has been edited', async () => {
+    const harness = await poolRuntime();
+    const { runtime, internal } = harness;
+
+    const first = await runtime.startTurn({
+      input: 'v1 mail',
+      persona: { id: 'verifier', prompt: 'v1' }
+    });
+    const worker = internal.workers[0];
+    const staleProc = worker.proc!;
+    settle(harness, worker);
+
+    await runtime.startTurn({
+      input: 'v2 mail',
+      threadId: first.threadId!,
+      persona: { id: 'verifier', prompt: 'v2' }
+    });
+    // Same worker slot, but the stale child was deliberately replaced.
+    expect(staleProc.disposed).toBe(true);
+    expect(worker.proc).not.toBe(staleProc);
+    expect(worker.spawnedPersonaPrompt).toBe('v2');
+    settle(harness, worker);
+  });
+
+  it('evicts an idle persona worker at the bound instead of queueing a plain turn', async () => {
+    const harness = await poolRuntime();
+    const { runtime, internal } = harness;
+    (runtime as unknown as { maxWorkers: number }).maxWorkers = 2;
+
+    await runtime.startTurn({ input: 'mail', persona: { id: 'p1', prompt: 'a' } });
+    const personaWorker = internal.workers[0];
+    settle(harness, personaWorker);
+    const chat = await runtime.startTurn({ input: 'chat one' });
+    const chatWorker = internal.workers.find((w) => w.personaId === null)!;
+    expect(internal.workers).toHaveLength(2);
+
+    // Pool full, one chat streaming, the persona worker merely parked: a second
+    // plain thread must not wait five minutes for the reaper — the parked
+    // persona worker gives up its slot now.
+    const second = await runtime.startTurn({ input: 'chat two' });
+    expect(second.threadId).toBeDefined();
+    expect(second.threadId).not.toBe(chat.threadId);
+    expect(internal.workers).toHaveLength(2);
+    expect(internal.workers.every((w) => w.personaId === null)).toBe(true);
+    expect(internal.workers.some((w) => w === personaWorker)).toBe(false);
+    settle(harness, chatWorker);
+    for (const w of internal.workers) if (w.currentTurn) settle(harness, w);
   });
 
   it('serializes turns of ONE thread while other threads run free', async () => {
