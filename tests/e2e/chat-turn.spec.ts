@@ -25,7 +25,9 @@ test('sends a message and renders the streamed reply', async ({ mainWindow }) =>
   await expect(mainWindow.getByTitle('Stop')).toHaveCount(0);
   await expect(mainWindow.locator('.message-user').last().locator('.message-actions')).toBeAttached();
 
-  // The thread joined the sidebar once its first turn ran.
+  // The thread joined the sidebar once its first turn ran. (The list opens on
+  // the mail Inbox now; chats live under the Chats tab.)
+  await mainWindow.locator('.chats-modes').getByRole('button', { name: 'Chats', exact: true }).click();
   await expect(mainWindow.locator('.chat-row')).toHaveCount(1);
 });
 
@@ -40,6 +42,7 @@ test('a second turn continues the same thread', async ({ mainWindow }) => {
   ).toContainText('Echo: second');
 
   await expect(mainWindow.locator('.message-user')).toHaveCount(2);
+  await mainWindow.locator('.chats-modes').getByRole('button', { name: 'Chats', exact: true }).click();
   await expect(mainWindow.locator('.chat-row')).toHaveCount(1);
 });
 

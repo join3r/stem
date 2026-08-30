@@ -17,16 +17,7 @@ import type {
   UpdateStatus
 } from '../shared/types';
 import { AUTH_PROVIDER_IDS, providerName } from '../shared/providers';
-import {
-  emptyInboxState,
-  isUnread,
-  placement,
-  withAllRead,
-  withArchived,
-  withRead,
-  withSnooze,
-  type InboxState
-} from '../shared/inbox';
+import { emptyInboxState, isUnread, placement, withRead, type InboxState } from '../shared/inbox';
 import { resendAttachments } from './attachments';
 import { ChatView, type ChatViewHandle } from './chat/ChatView';
 import { OnboardingGate } from './onboarding/OnboardingGate';
@@ -40,7 +31,8 @@ import { ExecApprovalCard } from './manage/ExecApprovalCard';
 import { HarnessApprovalCard } from './manage/HarnessApprovalCard';
 import { DeleteThreadDialog } from './DeleteThreadDialog';
 import { SnoozeMenu } from './chats/SnoozeMenu';
-import type { InboxSelectionApi } from './chats/ChatList';
+import { useMail } from './mail/useMail';
+import { MailComposeView, MailConversationView } from './mail/MailView';
 import { ActivityIndicator } from './ui/ActivityIndicator';
 import { TaskAlertModal } from './TaskAlertModal';
 import { ReleaseNotesModal } from './ReleaseNotesModal';
@@ -114,6 +106,12 @@ export default function App() {
   // clicks Reconnect, so a dead token never hijacks the screen.
   const [reauthOpen, setReauthOpen] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  // The centre pane's mail surface: an open conversation or the compose form.
+  // Set → MailView replaces ChatView; opening a chat (or ⌘N) clears it. The
+  // chat slice underneath is untouched, so nothing is lost by switching over.
+  const [mailView, setMailView] = useState<{ kind: 'conversation'; id: string } | { kind: 'compose' } | null>(
+    null
+  );
   // The active thread queued for deletion behind the ⌃X confirm popup (null = closed).
   const [pendingDelete, setPendingDelete] = useState<{ threadId: string; title: string } | null>(null);
   // The snooze picker opened by ⌘⇧S, and the threads it will apply to. The chat
@@ -235,18 +233,47 @@ export default function App() {
   const inboxRef = useRef(displayList.inbox);
   inboxRef.current = displayList.inbox;
 
-  // Unread threads sitting in the Inbox — the count badge on the Chats tab. Only
-  // the Inbox counts: an archived or snoozed thread is one you've decided about,
-  // and a badge you can't clear without un-archiving would be a nag, not a signal.
+  // ---- mail ----
+  // The Inbox is mail now. One copy of the mail state for the whole window:
+  // the list in the rail, the conversation/compose views in the centre pane,
+  // and the unread badge all read from here.
+  const mailApi = useMail(!!status?.ok);
+  const { mail } = mailApi;
+
+  // Unread mail conversations waiting in the Inbox — the count badge on the
+  // Chats rail tab. Only the Inbox placement counts: an archived or snoozed
+  // conversation is one you've decided about, and a badge you can't clear
+  // without un-archiving would be a nag, not a signal.
   const inboxUnreadCount = useMemo(
     () =>
-      displayList.chats.filter(
-        (c) =>
-          placement(c, displayList.inbox, Date.now()) === 'inbox' &&
-          isUnread(c, displayList.inbox, threadStatuses[c.threadId] === 'running')
-      ).length,
-    [displayList, threadStatuses]
+      mail.conversations.filter((c) => {
+        const subject = { threadId: c.id, updatedAt: c.userUpdatedAt };
+        return (
+          placement(subject, mail.inbox, Date.now()) === 'inbox' && isUnread(subject, mail.inbox)
+        );
+      }).length,
+    [mail]
   );
+
+  /** Open a mail conversation in the centre pane; opening is what marks it read. */
+  const openMail = useCallback(
+    (conversationId: string) => {
+      setMailView({ kind: 'conversation', id: conversationId });
+      mailApi.setRead([conversationId], true);
+    },
+    [mailApi]
+  );
+
+  // A reply landing in the conversation you are reading marks itself read, the
+  // same rule the open chat follows — but never overrule an explicit unread.
+  useEffect(() => {
+    if (mailView?.kind !== 'conversation' || !document.hasFocus()) return;
+    const subject = mail.conversations.find((c) => c.id === mailView.id);
+    if (!subject) return;
+    const row = { threadId: subject.id, updatedAt: subject.userUpdatedAt };
+    if (mail.inbox.entries[subject.id]?.forcedUnread) return;
+    if (isUnread(row, mail.inbox)) mailApi.setRead([subject.id], true);
+  }, [mail, mailView, mailApi]);
 
   // Thread ids that own at least one scheduled task → a clock badge on those chat rows.
   const scheduledThreadIds = useMemo(() => new Set(tasks.map((t) => t.threadId)), [tasks]);
@@ -881,6 +908,7 @@ export default function App() {
     setDraftFolderId(folderId);
     core.store.replace(DRAFT, EMPTY_STATE);
     setActiveThreadId(null);
+    setMailView(null);
     setFocusComposerSeq((n) => n + 1);
   }, [core]);
 
@@ -904,6 +932,9 @@ export default function App() {
       draftSeqRef.current += 1;
       const request = openGateRef.current.begin();
       if (deletedThreadsRef.current.has(threadId)) return;
+      // A chat and a mail conversation share the centre pane; opening one
+      // dismisses the other.
+      setMailView(null);
       // Opening is what marks a thread read — the persisted half of clearing the
       // unread dot below. Optimistic: the dot clears now, the write settles it.
       {
@@ -1063,67 +1094,8 @@ export default function App() {
     [applyServerList]
   );
 
-  /**
-   * Auto-advance: triaging the thread you are reading moves you on to the next
-   * one waiting, so an Inbox can be emptied without a trip back to the list
-   * between every row. When nothing is left to advance to, you get a new chat —
-   * an empty Inbox should leave you ready to write, not staring at a thread you
-   * have just dealt with.
-   *
-   * Only fires when the active thread is one of the ones being triaged: archiving
-   * some other row is housekeeping, and must not yank you out of what you are
-   * reading. Only leaving the Inbox counts — un-snoozing or restoring a thread is
-   * how you go *to* it.
-   *
-   * Lives here rather than in the chat list because the triage shortcuts have to
-   * work with the inspector hidden or parked on another tab, where the list is
-   * unmounted; the list's buttons route through the same handlers.
-   */
-  const advanceAfter = useCallback(
-    (threadIds: string[]) => {
-      const active = activeThreadIdRef.current;
-      if (!active || !threadIds.includes(active)) return;
-      const going = new Set(threadIds);
-      const now = Date.now();
-      const order = displayList.chats
-        .filter((c) => placement(c, displayList.inbox, now) === 'inbox')
-        .map((c) => c.threadId);
-      const from = order.indexOf(active);
-      // The row below, as drawn — then the row above, so triaging the last thread
-      // in the list doesn't fall straight through to a new chat.
-      const next =
-        order.slice(from + 1).find((id) => !going.has(id)) ??
-        [...order.slice(0, Math.max(from, 0))].reverse().find((id) => !going.has(id));
-      if (next) void openChat(next);
-      else newConversation();
-    },
-    [displayList, openChat, newConversation]
-  );
-
-  // Inbox triage. Each mutator returns the fresh list, but the row moves NOW —
-  // the optimistic patch — and the answer only reconciles.
-  const onArchive = useCallback(
-    (threadIds: string[], archived: boolean) => {
-      const now = Date.now();
-      mutateInbox(
-        (inbox) => withArchived(inbox, threadIds, archived, now),
-        () => window.stem.setInboxArchived(threadIds, archived)
-      );
-      if (archived) advanceAfter(threadIds);
-    },
-    [mutateInbox, advanceAfter]
-  );
-  const onSnooze = useCallback(
-    (threadIds: string[], until: number | null) => {
-      const now = Date.now();
-      mutateInbox(
-        (inbox) => withSnooze(inbox, threadIds, until, now),
-        () => window.stem.snoozeChats(threadIds, until)
-      );
-      if (until !== null) advanceAfter(threadIds);
-    },
-    [mutateInbox, advanceAfter]
-  );
+  // Chat read/unread (the tree's bolding). The mutator returns the fresh list,
+  // but the row moves NOW — the optimistic patch — and the answer reconciles.
   const onSetRead = useCallback(
     (threadIds: string[], read: boolean) => {
       const stamps = updatedAtMap();
@@ -1135,16 +1107,32 @@ export default function App() {
     },
     [mutateInbox, updatedAtMap]
   );
-  const onMarkAllRead = useCallback(() => {
-    // Stamp the rows on screen; the server stamps the threads the backend
-    // lists. Any difference is settled by the answer.
-    const chats = [...chatsForStampsRef.current];
+
+  // ---- mail actions the rail and centre pane share ----
+  const composeMail = useCallback(() => setMailView({ kind: 'compose' }), []);
+  const onMailMarkAllRead = useCallback(() => {
     const now = Date.now();
-    mutateInbox(
-      (inbox) => withAllRead(inbox, chats, now),
-      () => window.stem.markInboxAllRead()
-    );
-  }, [mutateInbox]);
+    const ids = mail.conversations
+      .filter((c) => placement({ threadId: c.id, updatedAt: c.userUpdatedAt }, mail.inbox, now) === 'inbox')
+      .map((c) => c.id);
+    if (ids.length) mailApi.setRead(ids, true);
+  }, [mail, mailApi]);
+  const onMailDelete = useCallback(
+    (conversationId: string) => {
+      mailApi.remove(conversationId);
+      setMailView((v) => (v?.kind === 'conversation' && v.id === conversationId ? null : v));
+    },
+    [mailApi]
+  );
+  /** Send from the compose form; resolves into the new conversation's view. */
+  const onComposeSend = useCallback(
+    async (input: Parameters<typeof mailApi.compose>[0]) => {
+      const list = await mailApi.compose(input);
+      const newest = [...list.conversations].sort((a, b) => b.createdAt - a.createdAt)[0];
+      if (newest) setMailView({ kind: 'conversation', id: newest.id });
+    },
+    [mailApi]
+  );
   const onWriteSubject = useCallback(
     (threadId: string) => {
       // Round-trips through a model, so this resolves in a second or two rather
@@ -1207,75 +1195,52 @@ export default function App() {
     setPendingDelete({ threadId: id, title });
   });
 
-  // ---- inbox triage shortcuts ----
-  // ⌘⇧A / ⌘⇧S / ⌘⇧U act on the multi-selection when the list is showing one, and
-  // on the thread you are reading otherwise — the same two targets the row
-  // buttons and the selection bar already act on. Registered here, not in the
+  // ---- triage shortcuts ----
+  // ⌘⇧A / ⌘⇧S act on the mail conversation you are reading — archive and snooze
+  // are mail concepts now. ⌘⇧U toggles read on whichever the centre pane holds:
+  // the open mail conversation, else the open chat. Registered here, not in the
   // list, so they survive a hidden inspector or a parked-on-Settings panel.
-  const inboxSelection = useRef<InboxSelectionApi | null>(null);
-  const onSelectionApi = useCallback((api: InboxSelectionApi | null) => {
-    inboxSelection.current = api;
-  }, []);
+  const mailViewRef = useRef(mailView);
+  mailViewRef.current = mailView;
 
-  const triageTargets = useCallback((): string[] => {
-    const selected = inboxSelection.current?.ids ?? [];
-    if (selected.length > 0) return selected;
-    const id = activeThreadIdRef.current;
-    return id ? [id] : [];
-  }, []);
-
-  /** Where the triaged threads sit right now — the direction each toggle reverses. */
-  const triageWhere = useCallback(
-    (threadIds: string[], want: 'inbox' | 'snoozed' | 'archived') => {
-      const now = Date.now();
-      return threadIds.every((id) => {
-        const chat = displayList.chats.find((c) => c.threadId === id);
-        return !!chat && placement(chat, displayList.inbox, now) === want;
-      });
-    },
-    [displayList]
-  );
+  const openMailId = (): string | null =>
+    mailViewRef.current?.kind === 'conversation' ? mailViewRef.current.id : null;
 
   useShortcut('archive-thread', () => {
-    const ids = triageTargets();
-    if (ids.length === 0) return;
-    // An all-archived target restores; anything else archives — the same rule the
-    // selection bar uses, and the reversible direction when the target is mixed.
-    onArchive(ids, !triageWhere(ids, 'archived'));
-    inboxSelection.current?.clear();
+    const id = openMailId();
+    if (!id) return;
+    mailApi.archive([id], true);
+    setMailView(null);
   });
 
   useShortcut('snooze-thread', () => {
-    const ids = triageTargets();
-    if (ids.length === 0) return;
-    if (triageWhere(ids, 'snoozed')) {
-      onSnooze(ids, null); // Already snoozed → the shortcut wakes them.
-      inboxSelection.current?.clear();
-      return;
-    }
-    // Anchor the picker under the row it applies to when that row is on screen;
-    // with the list hidden there is nothing to point at, so it opens up high and
-    // centred rather than at a stale coordinate.
-    const row = document.querySelector(`[data-thread-id="${CSS.escape(ids[0])}"]`);
+    const id = openMailId();
+    if (!id) return;
+    const row = document.querySelector(`[data-conversation-id="${CSS.escape(id)}"]`);
     const rect = row?.getBoundingClientRect();
     setSnoozePicker({
-      ids,
+      ids: [id],
       x: rect ? rect.left + 24 : Math.round(window.innerWidth / 2) - 90,
       y: rect ? rect.bottom : Math.round(window.innerHeight / 4)
     });
   });
 
   useShortcut('toggle-read', () => {
-    const ids = triageTargets();
-    if (ids.length === 0) return;
-    // Opening a thread marks it read, so on the thread you are reading this is
-    // "mark unread and move on"; a selection with anything unread in it clears.
-    const anyUnread = ids.some((id) => {
-      const chat = displayList.chats.find((c) => c.threadId === id);
-      return !!chat && isUnread(chat, displayList.inbox, threadStatuses[id] === 'running');
-    });
-    onSetRead(ids, anyUnread);
-    inboxSelection.current?.clear();
+    const mailId = openMailId();
+    if (mailId) {
+      const c = mail.conversations.find((x) => x.id === mailId);
+      if (!c) return;
+      const unread = isUnread({ threadId: c.id, updatedAt: c.userUpdatedAt }, mail.inbox);
+      mailApi.setRead([mailId], unread);
+      return;
+    }
+    // Opening a chat marks it read, so on the one you are reading this is
+    // "mark unread and move on".
+    const id = activeThreadIdRef.current;
+    if (!id) return;
+    const chat = displayList.chats.find((c) => c.threadId === id);
+    if (!chat) return;
+    onSetRead([id], isUnread(chat, displayList.inbox, threadStatuses[id] === 'running'));
   });
 
   // Roll back to (and including) a turn on the backend, drop that turn + everything
@@ -1587,6 +1552,37 @@ export default function App() {
         )}
       <div className={`app${showInspector ? '' : ' no-inspector'}`}>
         <main className="conversation">
+          {mailView?.kind === 'compose' && (
+            <MailComposeView
+              personas={mailApi.personas}
+              onCompose={onComposeSend}
+              onCancel={() => setMailView(null)}
+            />
+          )}
+          {mailView?.kind === 'conversation' &&
+            (() => {
+              const conversation = mail.conversations.find((c) => c.id === mailView.id);
+              // Deleted (or not yet loaded) under us — the chat pane below shows.
+              if (!conversation) return null;
+              return (
+                <MailConversationView
+                  conversation={conversation}
+                  items={mail.items}
+                  personas={mailApi.personas}
+                  onReply={(body) => void mailApi.reply(conversation.id, body)}
+                />
+              );
+            })()}
+          {/* Kept mounted (hidden) under an open mail view, so the composer's
+              draft and the streaming slice survive a trip through the Inbox. */}
+          <div
+            className="chatview-host"
+            hidden={
+              mailView?.kind === 'compose' ||
+              (mailView?.kind === 'conversation' &&
+                mail.conversations.some((c) => c.id === mailView.id))
+            }
+          >
           <ChatView
             key={activeKey}
           ref={chatViewRef}
@@ -1624,6 +1620,7 @@ export default function App() {
           reportDraft={previewActive}
           onDraftChange={setPreviewDraft}
         />
+        </div>
       </main>
       {showInspector && (
         <aside className="inspector" ref={inspectorRef}>
@@ -1644,12 +1641,19 @@ export default function App() {
             onRenameChat={onRenameChat}
             onDeleteChat={onDeleteChat}
             onMoveChat={onMoveChat}
-            onArchive={onArchive}
-            onSnooze={onSnooze}
             onSetRead={onSetRead}
-            onMarkAllRead={onMarkAllRead}
-            onSelectionApi={onSelectionApi}
             onWriteSubject={onWriteSubject}
+            mail={mail}
+            personas={mailApi.personas}
+            activeMailId={mailView?.kind === 'conversation' ? mailView.id : null}
+            onOpenMail={openMail}
+            onComposeMail={composeMail}
+            onMailArchive={mailApi.archive}
+            onMailSnooze={mailApi.snooze}
+            onMailSetRead={mailApi.setRead}
+            onMailMarkAllRead={onMailMarkAllRead}
+            onMailDelete={onMailDelete}
+            mailUnreadCount={inboxUnreadCount}
             inboxUnreadCount={inboxUnreadCount}
             activeRunning={cur.running}
             previewActive={previewActive}
@@ -1684,9 +1688,13 @@ export default function App() {
           count={snoozePicker.ids.length}
           autoFocus
           onPick={(until) => {
-            onSnooze(snoozePicker.ids, until);
+            mailApi.snooze(snoozePicker.ids, until);
             setSnoozePicker(null);
-            inboxSelection.current?.clear();
+            // Snoozing the conversation you are reading dismisses it — it comes
+            // back on its own at the wake time.
+            setMailView((v) =>
+              v?.kind === 'conversation' && snoozePicker.ids.includes(v.id) ? null : v
+            );
           }}
           onClose={() => setSnoozePicker(null)}
         />

@@ -100,7 +100,9 @@ test.describe('message actions', () => {
     await send(mainWindow, 'Reply with exactly the single word BLUE and nothing else.');
     await waitForReply(mainWindow, /blue/i);
 
-    // One chat row exists for the conversation we just started.
+    // One chat row exists for the conversation we just started (chats live
+    // under the Chats tab now — the Inbox is mail).
+    await mainWindow.locator('.chats-modes').getByRole('button', { name: 'Chats', exact: true }).click();
     await expect(mainWindow.locator('.chat-row')).toHaveCount(1);
 
     const userMsg = mainWindow.locator('.message-user').last();

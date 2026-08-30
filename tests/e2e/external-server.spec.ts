@@ -148,7 +148,8 @@ test.describe('against an externally started stem-server', () => {
 
   test('the chat list and re-opening a thread cross the wire', async () => {
     // chats:list is the plainest possible RPC; the sidebar row is the server's
-    // answer rendered.
+    // answer rendered. (Chats live under the Chats tab — the Inbox is mail.)
+    await win.locator('.chats-modes').getByRole('button', { name: 'Chats', exact: true }).click();
     await expect(win.locator('.chat-row')).toHaveCount(1);
 
     // A second thread, so opening the first is a real navigation rather than a
@@ -163,7 +164,9 @@ test.describe('against an externally started stem-server', () => {
     // chats:open — a WRAPPED channel: the desktop runs the Quick Chat hand-off
     // check locally and only then forwards the open. The messages that come back
     // are the server's, read from its disk.
-    await win.locator('.chat-row').filter({ hasText: 'Hello from another process' }).click();
+    // The tree shows the written subject ("About Hello from another"), not the
+    // raw first message — match on the words the subject keeps.
+    await win.locator('.chat-row').filter({ hasText: 'Hello from another' }).click();
     await expect(win.locator('.message-user').first()).toContainText('Hello from another process');
     await expect(win.locator('.message-assistant:not(.activity-row) .message-body').first()).toContainText(
       'Echo: Hello from another process'

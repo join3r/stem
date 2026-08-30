@@ -77,6 +77,7 @@ test.describe('with the server stopped', () => {
       'Echo: the reading list for the trip',
       { timeout: 30_000 }
     );
+    await win.locator('.chats-modes').getByRole('button', { name: 'Chats', exact: true }).click();
     await expect(win.locator('.chat-row')).toHaveCount(2);
 
     // Nobody asked for this. The catch-up run is triggered by the turn ending
@@ -115,7 +116,8 @@ test.describe('with the server stopped', () => {
 
     // And a thread opens. Nothing on the other end answered chats:open; this
     // transcript came off this Mac's own disk.
-    await offlineWin.locator('.chat-row').filter({ hasText: 'roof' }).click();
+    // Rows carry the written subject ("About what did we"), so match on that.
+    await offlineWin.locator('.chat-row').filter({ hasText: 'what did we' }).click();
     await expect(offlineWin.locator('.message-user').first()).toContainText(
       'what did we decide about the roof'
     );
