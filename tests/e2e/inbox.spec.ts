@@ -171,6 +171,16 @@ test('the archive shortcut acts on the mail conversation you are reading', async
   await expect(group(mainWindow, /Archived \(1\)/)).toBeVisible();
 });
 
+test('the New conversation button stays enabled over a mail view and dismisses it', async ({ mainWindow }) => {
+  await compose(mainWindow, 'Dismiss me', 'hello');
+  // The conversation sits over an EMPTY chat draft — the state that used to
+  // disable the button and made it look dead.
+  const btn = mainWindow.getByTitle(/New conversation/);
+  await expect(btn).toBeEnabled();
+  await btn.click();
+  await expect(mainWindow.locator('.mail-view')).toHaveCount(0);
+});
+
 test('an unread reply bolds the row and badges the rail until read', async ({ mainWindow }) => {
   await compose(mainWindow, 'Badge check', 'ping');
   // Mark it unread from the context menu; the row bolds and the segment counts.

@@ -1744,8 +1744,10 @@ export default function App() {
         onClick={() => newConversation()}
         // Allow a new chat even while another runs in the background. Only block
         // when the visible chat is empty, or its first turn hasn't yet produced a
-        // thread id (DRAFT still running) — switching away would orphan it.
-        disabled={cur.messages.length === 0 || (activeThreadId === null && cur.running)}
+        // thread id (DRAFT still running) — switching away would orphan it. With
+        // a mail view covering the pane the empty-draft case no longer applies:
+        // the button's job is then "back to a blank chat" (it dismisses the mail).
+        disabled={(mailView === null && cur.messages.length === 0) || (activeThreadId === null && cur.running)}
       >
         <SquarePen size={17} />
         <ShortcutHint id="new-conversation" />
