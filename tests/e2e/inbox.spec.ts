@@ -52,6 +52,26 @@ test('composing a mail delivers it and the reply lands as one conversation', asy
   await group(mainWindow, /Sent \(1\)/).click();
 });
 
+test('the To: chips build a multi-persona conversation with the first pick driving', async ({ mainWindow }) => {
+  await tab(mainWindow, 'Inbox').click();
+  await mainWindow.getByTitle('New mail').click();
+  // Normal is pre-selected as the default driver; adding Verifier keeps it first.
+  const verifierChip = mainWindow.locator('.mail-to-chip', { hasText: 'Verifier' });
+  await verifierChip.click();
+  await expect(verifierChip).toHaveClass(/on/);
+  await expect(
+    mainWindow.locator('.mail-to-chip', { hasText: 'Normal' }).locator('.mail-to-driver')
+  ).toBeVisible();
+  await mainWindow.getByPlaceholder('What this is about').fill('Team errand');
+  await mainWindow.getByPlaceholder(/Write the task/).fill('check it twice');
+  await mainWindow.getByRole('button', { name: 'Send' }).click();
+  // The conversation lists BOTH participants; only the driver replied (the fake echo).
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal, Verifier');
+  await expect(
+    mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: check it twice' })
+  ).toBeVisible({ timeout: 15_000 });
+});
+
 test('replying resumes the same conversation and the exchange stays threaded', async ({ mainWindow }) => {
   await compose(mainWindow, 'Errand', 'first ask');
 

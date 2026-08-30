@@ -2,13 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Send, X } from 'lucide-react';
 import type { MailComposeInput, MailConversation, MailItem, Persona } from '../../shared/types';
 import { MdxView } from '../chat/MdxView';
+import { groupMailTimeline } from './grouping';
 import { personaName } from './useMail';
 
 // The centre pane's mail surface: a conversation read like email (discrete
 // mails, newest last, a reply box underneath), or the compose form for a new
 // one. Deliberately NOT a chat view — items are immutable mails, there is no
 // streaming, and the persona's work happens out of sight on its hidden thread;
-// the row spinner in the list is the only "in progress" signal.
+// the row spinner in the list is the only "in progress" signal. Persona↔persona
+// exchanges collapse behind per-gap "N mails exchanged" dividers: the user's
+// conversation reads clean, the work is inspectable in place.
 
 function formatAt(at: number, now: number): string {
   const d = new Date(at);
@@ -31,12 +34,15 @@ export function MailConversationView({
   onReply: (body: string) => void;
 }) {
   const [draft, setDraft] = useState('');
+  // Expanded exchange groups, keyed by their first item's id (stable across refreshes).
+  const [openExchanges, setOpenExchanges] = useState<Set<string>>(new Set());
   const now = Date.now();
   const scrollRef = useRef<HTMLDivElement>(null);
   const mails = useMemo(
     () => items.filter((i) => i.conversationId === conversation.id).sort((a, b) => a.at - b.at),
     [items, conversation.id]
   );
+  const groups = useMemo(() => groupMailTimeline(mails), [mails]);
   // Land at the newest mail on open and when one arrives — email reads bottom-up here.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -49,6 +55,26 @@ export function MailConversationView({
     setDraft('');
   };
 
+  const toggleExchange = (key: string) => {
+    setOpenExchanges((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const mailCard = (m: MailItem, exchange: boolean) => (
+    <article key={m.id} className={`mail-item${m.from === 'user' ? ' from-user' : ''}${exchange ? ' exchange' : ''}`}>
+      <div className="mail-item-head">
+        <strong>{m.from === 'user' ? 'You' : personaName(personas, m.from)}</strong>
+        {exchange && <span className="mail-item-to">→ {m.to.map((t) => (t === 'user' ? 'You' : personaName(personas, t))).join(', ')}</span>}
+        <span className="mail-item-at">{formatAt(m.at, now)}</span>
+      </div>
+      {m.from === 'user' ? <p className="mail-item-body-plain">{m.body}</p> : <MdxView text={m.body} />}
+    </article>
+  );
+
   return (
     <div className="mail-view">
       <header className="mail-head">
@@ -60,19 +86,20 @@ export function MailConversationView({
         </span>
       </header>
       <div className="mail-items" ref={scrollRef}>
-        {mails.map((m) => (
-          <article key={m.id} className={`mail-item${m.from === 'user' ? ' from-user' : ''}`}>
-            <div className="mail-item-head">
-              <strong>{m.from === 'user' ? 'You' : personaName(personas, m.from)}</strong>
-              <span className="mail-item-at">{formatAt(m.at, now)}</span>
+        {groups.map((group) => {
+          if (group.kind === 'mail') return mailCard(group.item, false);
+          const key = group.items[0].id;
+          const open = openExchanges.has(key);
+          const n = group.items.length;
+          return (
+            <div key={key} className="mail-exchange">
+              <button className="mail-exchange-toggle" onClick={() => toggleExchange(key)}>
+                {n} {n === 1 ? 'mail' : 'mails'} exchanged · {open ? 'hide' : 'show'}
+              </button>
+              {open && group.items.map((m) => mailCard(m, true))}
             </div>
-            {m.from === 'user' ? (
-              <p className="mail-item-body-plain">{m.body}</p>
-            ) : (
-              <MdxView text={m.body} />
-            )}
-          </article>
-        ))}
+          );
+        })}
         {mails.length === 0 && (
           <p className="muted">This conversation has no mail yet.</p>
         )}
@@ -108,18 +135,25 @@ export function MailComposeView({
   onCompose: (input: MailComposeInput) => Promise<void>;
   onCancel: () => void;
 }) {
-  const [to, setTo] = useState('normal');
+  // The To: list in SELECTION ORDER — the first-picked persona is the driver
+  // (it receives the mail and owns returning to the user); the rest are
+  // participants the driver can consult with send_mail.
+  const [to, setTo] = useState<string[]>(['normal']);
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const toggleTo = (id: string) => {
+    setTo((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
+  };
 
   const send = async () => {
     if (sending || !body.trim()) return;
     setSending(true);
     setError(null);
     try {
-      await onCompose({ to: [to], subject, body });
+      await onCompose({ to, subject, body });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSending(false);
@@ -135,16 +169,27 @@ export function MailComposeView({
         </button>
       </header>
       <div className="mail-compose-form">
-        <label className="mail-field">
+        <div className="mail-field">
           <span>To</span>
-          <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Persona this mail goes to">
-            {personas.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+          <div className="mail-to-chips" role="group" aria-label="Personas this mail goes to">
+            {personas.map((p) => {
+              const at = to.indexOf(p.id);
+              return (
+                <button
+                  key={p.id}
+                  className={`mail-to-chip${at >= 0 ? ' on' : ''}`}
+                  aria-pressed={at >= 0}
+                  onClick={() => toggleTo(p.id)}
+                  title={at === 0 ? `${p.name} drives the conversation` : p.name}
+                >
+                  {p.name}
+                  {at === 0 && to.length > 1 && <em className="mail-to-driver">driver</em>}
+                </button>
+              );
+            })}
+          </div>
+          {to.length === 0 && <p className="muted mail-to-hint">Pick at least one persona — the first picked drives.</p>}
+        </div>
         <label className="mail-field">
           <span>Subject</span>
           <input
@@ -157,7 +202,7 @@ export function MailComposeView({
           className="mail-compose-body"
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="Write the task. The persona works it unattended and its reply lands in your Inbox."
+          placeholder="Write the task. The personas work it unattended and the reply lands in your Inbox."
           rows={10}
           autoFocus
           onKeyDown={(e) => {
@@ -169,7 +214,11 @@ export function MailComposeView({
         />
         {error && <p className="task-failed">{error}</p>}
         <div className="mail-compose-actions">
-          <button className="mail-send" onClick={() => void send()} disabled={sending || !body.trim()}>
+          <button
+            className="mail-send"
+            onClick={() => void send()}
+            disabled={sending || !body.trim() || to.length === 0}
+          >
             <Send size={14} /> {sending ? 'Sending…' : 'Send'}
           </button>
         </div>

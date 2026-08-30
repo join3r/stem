@@ -219,6 +219,17 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                     disabled={!p.harness}
                   />
                 </div>
+                <label className="persona-cap">
+                  <input
+                    type="checkbox"
+                    checked={p.canAddPersonas === true}
+                    onChange={(e) => mutate({ ...p, canAddPersonas: e.target.checked || undefined })}
+                  />
+                  <span>
+                    Can add personas to conversations — lets this persona widen a mail conversation’s
+                    To: list with the add_persona tool.
+                  </span>
+                </label>
               </div>
             )}
           </div>

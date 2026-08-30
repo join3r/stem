@@ -2783,6 +2783,7 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
    form row — it is a property of the task, not a section of its own. The gap
    matches what .mp-effort's negative top margin was tuned against. */
 .task-model { display: flex; flex-direction: column; gap: var(--sp-3); max-width: 320px; padding-left: 2px; }
+.task-persona { border: 0.5px solid var(--hair); border-radius: var(--radius-sm); padding: 6px 8px; font: inherit; background: transparent; color: inherit; }
 /* Hover carries the reason the run failed, so the mark has to invite the hover. */
 .task-failed { color: var(--warn); cursor: help; }
 
@@ -2820,6 +2821,16 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-compose-body { resize: vertical; border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 8px 10px; font: inherit; background: transparent; color: inherit; }
 .mail-compose-body:focus, .mail-field input:focus { outline: none; border-color: var(--accent); }
 .mail-compose-actions { display: flex; justify-content: flex-end; }
+.mail-to-chips { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; }
+.mail-to-chip { display: inline-flex; align-items: center; gap: 5px; border: 0.5px solid var(--hair); border-radius: 999px; padding: 4px 10px; background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-12, 12px); cursor: pointer; }
+.mail-to-chip.on { border-color: var(--accent); color: inherit; background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.mail-to-driver { font-style: normal; font-size: var(--fs-11); color: var(--accent); }
+.mail-to-hint { margin: 4px 0 0 66px; font-size: var(--fs-12, 12px); }
+.mail-exchange { display: flex; flex-direction: column; gap: 8px; }
+.mail-exchange-toggle { align-self: center; border: none; background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-12, 12px); cursor: pointer; padding: 2px 8px; }
+.mail-exchange-toggle:hover { color: inherit; }
+.mail-item.exchange { opacity: 0.75; margin-left: 24px; }
+.mail-item-to { font-size: var(--fs-11); color: var(--muted); }
 
 /* The hidden chat host under an open mail view. */
 .chatview-host { display: contents; }
@@ -2839,6 +2850,8 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 }
 .persona-harness { display: flex; flex-direction: column; gap: var(--sp-3); }
 .persona-harness .persona-cwd:disabled { opacity: 0.5; }
+.persona-cap { display: flex; align-items: flex-start; gap: 8px; font-size: var(--fs-12, 12px); color: var(--muted); cursor: pointer; }
+.persona-cap input { margin-top: 2px; }
 
 /* Clock badge on a chat row that owns a scheduled task. */
 .chat-sched-badge { flex: none; display: inline-flex; align-items: center; color: var(--muted); margin-left: 6px; }

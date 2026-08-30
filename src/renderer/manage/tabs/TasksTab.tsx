@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Trash2, Play, Pause, ExternalLink } from 'lucide-react';
 import type {
   ModelSummary,
+  Persona,
   ScheduledTask,
   ThreadTurnSettings
 } from '../../../shared/types';
@@ -13,13 +14,22 @@ import { EFFORT_LABELS } from '../../modelLabels';
 
 /** "GPT-5.6 Sol · High" — what a run of this task will execute on: its own pin,
  *  else the model selected in its chat. The collapsed face of the editor row. */
-function runsOnLabel(task: ScheduledTask, thread: ThreadTurnSettings, models: ModelSummary[]): string {
-  const modelId = task.model ?? thread.model;
-  if (!modelId) return 'Chat model';
-  const m = models.find((x) => x.id === modelId);
-  const name = m ? m.displayName : modelId.split('/').pop() ?? modelId;
-  const effort = task.effort ?? thread.effort;
-  return effort ? `${name} · ${EFFORT_LABELS[effort] ?? effort}` : name;
+function runsOnLabel(
+  task: ScheduledTask,
+  thread: ThreadTurnSettings,
+  models: ModelSummary[],
+  personas: Persona[]
+): string {
+  // A persona run: the persona's pins win, so its name IS the answer to "runs
+  // on" — plus its model pin when it has one.
+  const persona = task.personaId ? personas.find((p) => p.id === task.personaId) : undefined;
+  const modelId = (persona ? persona.model : undefined) ?? task.model ?? thread.model;
+  const m = modelId ? models.find((x) => x.id === modelId) : undefined;
+  const name = modelId ? (m ? m.displayName : modelId.split('/').pop() ?? modelId) : 'Chat model';
+  const effort = (persona ? persona.effort : undefined) ?? task.effort ?? thread.effort;
+  const base = effort && modelId ? `${name} · ${EFFORT_LABELS[effort] ?? effort}` : name;
+  if (task.personaId) return `as ${persona?.name ?? task.personaId} · ${base}`;
+  return base;
 }
 
 /** Human-readable schedule, e.g. "cron 0 8 * * 1-5" or "once · Jul 1, 08:00". */
@@ -67,8 +77,12 @@ export function TasksTab({
       return next;
     });
 
+  // For the "runs as" persona pin: the registry, loaded once per visit.
+  const [personas, setPersonas] = useState<Persona[]>([]);
+
   useEffect(() => {
     window.stem.listTasks().then(setTasks);
+    void window.stem.listPersonas().then(setPersonas);
     // Stay in sync as runs fire / the assistant schedules new tasks.
     return window.stem.onTasksChanged(setTasks);
   }, []);
@@ -91,6 +105,8 @@ export function TasksTab({
   const remove = async (t: ScheduledTask) => setTasks(await window.stem.deleteTask(t.id));
   const pinModel = async (t: ScheduledTask, model: string | null, effort: string | null) =>
     setTasks(await window.stem.updateTaskModel(t.id, { model, effort }));
+  const pinPersona = async (t: ScheduledTask, personaId: string | null) =>
+    setTasks(await window.stem.updateTaskPersona(t.id, { personaId }));
 
   return (
     <div>
@@ -183,7 +199,7 @@ export function TasksTab({
                   title="The model this task's runs execute on — click to change it"
                   aria-expanded={modelOpen.has(t.id)}
                 >
-                  {runsOnLabel(t, thread, models)}
+                  {runsOnLabel(t, thread, models, personas)}
                 </button>
               </div>
               {/* The model this task's runs execute on. Unset = the pinless
@@ -192,6 +208,21 @@ export function TasksTab({
                   is visible right where it can be overridden. */}
               {modelOpen.has(t.id) && (
               <div className="task-model">
+                {/* Runs AS: a persona run gets the persona's worker, role prompt
+                    and pins — its model/effort win over the two pickers below. */}
+                <select
+                  className="task-persona"
+                  aria-label="Persona this task runs as"
+                  value={t.personaId ?? ''}
+                  onChange={(e) => pinPersona(t, e.target.value || null)}
+                >
+                  <option value="">Plain run</option>
+                  {personas.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      as {p.name}
+                    </option>
+                  ))}
+                </select>
                 <ModelPicker
                   models={models}
                   value={t.model ?? null}
