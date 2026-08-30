@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { access, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -261,30 +261,25 @@ export async function writeWebSearchConfig(settings: WebSearchSettings): Promise
   await writeFile(webSearchConfigPath(), JSON.stringify(file, null, 2) + '\n', { mode: 0o600 });
 }
 
-// mtime-cached read of the backend we wrote into web-search.json. That file — not
+// Fresh read of the backend we wrote into web-search.json. That file — not
 // settings.json — is what pi-web-access actually reads, so naming it in the prompt
 // can never claim a backend the search tools aren't using.
-// Keyed on path as well as mtime: the path is fixed in the app, but not under a
-// test that repoints piHome, and a stale hit there would be silent.
-let backendCache: { key: string; provider: string } = { key: '', provider: 'auto' };
-
+// Deliberately NOT mtime-cached: the file is a few hundred bytes read once per
+// turn, and an mtime key serves the STALE backend when two writes land in the
+// same millisecond — a user flipping the setting twice quickly, or the suite on
+// a coarse-mtime filesystem, both hit it silently.
 function activeBackend(): string {
-  const path = webSearchConfigPath();
   try {
-    const key = `${path}:${statSync(path).mtimeMs}`;
-    if (key !== backendCache.key) {
-      const raw = JSON.parse(readFileSync(path, 'utf8')) as { provider?: unknown };
-      // writeWebSearchConfig omits `provider` for `auto`, which is also what an
-      // absent/corrupt file should mean — the keyless fallback chain.
-      backendCache = { key, provider: typeof raw.provider === 'string' ? raw.provider : 'auto' };
-    }
+    const raw = JSON.parse(readFileSync(webSearchConfigPath(), 'utf8')) as { provider?: unknown };
+    // writeWebSearchConfig omits `provider` for `auto`, which is also what an
+    // absent/corrupt file should mean — the keyless fallback chain.
+    return typeof raw.provider === 'string' ? raw.provider : 'auto';
   } catch {
     // quiet: 'auto' is what an absent or unreadable file means to pi-web-access
     // too — it walks the same keyless fallback chain — so the prompt still names
     // the backend the search tools will actually use.
-    backendCache = { key: '', provider: 'auto' };
+    return 'auto';
   }
-  return backendCache.provider;
 }
 
 /** How the backend reads in the prompt; the meta-values need spelling out. */
