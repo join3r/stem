@@ -357,6 +357,11 @@ const api: StemApi = {
   snoozeMail: (conversationIds: string[], until: number | null) =>
     ipcRenderer.invoke('mail:snooze', conversationIds, until),
   deleteMailConversation: (conversationId: string) => ipcRenderer.invoke('mail:delete', conversationId),
+  onPersonasChanged: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on('personas:changed', handler);
+    return () => ipcRenderer.removeListener('personas:changed', handler);
+  },
   onMailChanged: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on('mail:changed', handler);

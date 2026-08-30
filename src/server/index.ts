@@ -329,7 +329,7 @@ function registerIpc(): void {
   registerMcpIpc(deps);
   registerMemoryIpc(deps);
   registerChatsIpc(deps);
-  registerPersonasIpc();
+  registerPersonasIpc(() => emit('personas:changed', undefined));
   registerMailIpc({ router: () => mailRouter, runtime: () => runtime! });
   registerDevicesIpc();
   registerHarnessIpc();

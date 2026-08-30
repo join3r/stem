@@ -3382,6 +3382,8 @@ export interface StemApi {
   deleteMailConversation(conversationId: string): Promise<MailListResult>;
   /** Fired whenever mail changes server-side (a delivery landed, a reply arrived). */
   onMailChanged(listener: () => void): () => void;
+  /** Fired after any persona is saved or deleted, on every connected client. */
+  onPersonasChanged(listener: () => void): () => void;
 
   listMcpServers(): Promise<McpServerSummary[]>;
   /** Live per-server connection status (keyed by name) from the running app-server. */

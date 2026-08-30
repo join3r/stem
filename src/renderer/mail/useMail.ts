@@ -56,6 +56,15 @@ export function useMail(ready: boolean): MailApi {
     if (ready) refresh();
   }, [ready, refresh]);
   useEffect(() => window.stem?.onMailChanged(() => refresh()), [refresh]);
+  // A persona created or renamed in the Manage panel (any client) shows in the
+  // composer's To: list without waiting for the next mail event.
+  useEffect(
+    () =>
+      window.stem?.onPersonasChanged(() => {
+        window.stem.listPersonas().then(setPersonas).catch(() => {});
+      }),
+    []
+  );
 
   const mutate = useCallback(
     (patch: (inbox: InboxState) => InboxState, call: () => Promise<MailListResult>) => {

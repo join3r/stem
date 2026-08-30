@@ -104,6 +104,16 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
       .catch(() => setClient(null));
   }, []);
 
+  // Edits from another client (or another panel) land here live. Drafts are an
+  // overlay keyed by id, so refreshing the stored list never touches them.
+  useEffect(
+    () =>
+      window.stem.onPersonasChanged(() => {
+        void window.stem.listPersonas().then(setPersonas);
+      }),
+    []
+  );
+
   /** Whether this pin's folders live on THIS computer's disk — the native dialog applies. */
   const nativeBrowse = (h: PersonaHarnessPin) =>
     h.device ? h.device === client?.deviceId : client !== null && !client.remote;
