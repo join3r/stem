@@ -2786,6 +2786,21 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 /* Hover carries the reason the run failed, so the mark has to invite the hover. */
 .task-failed { color: var(--warn); cursor: help; }
 
+/* ---- Personas tab ---- */
+/* The in-place editor a persona row expands into. Reuses the task-item shell
+   and the ci-textarea for the role prompt; the fields stack in the 320px rail. */
+.persona-editor { display: flex; flex-direction: column; gap: var(--sp-3); padding-left: 2px; }
+.persona-editor .vfield {
+  text-align: left;
+  border: 0.5px solid var(--hair);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  width: 100%;
+  max-width: 320px;
+}
+.persona-harness { display: flex; flex-direction: column; gap: var(--sp-3); }
+.persona-harness .persona-cwd:disabled { opacity: 0.5; }
+
 /* Clock badge on a chat row that owns a scheduled task. */
 .chat-sched-badge { flex: none; display: inline-flex; align-items: center; color: var(--muted); margin-left: 6px; }
 

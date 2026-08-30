@@ -8,6 +8,7 @@ import {
   registerDevicesIpc,
   registerMcpIpc,
   registerMemoryIpc,
+  registerPersonasIpc,
   registerServer,
   registerWorkspaceIpc,
   type IpcDeps
@@ -342,6 +343,7 @@ function registerIpc(): void {
   registerMcpIpc(deps);
   registerMemoryIpc(deps);
   registerChatsIpc(deps);
+  registerPersonasIpc();
   registerDevicesIpc();
   registerHarnessIpc();
 

@@ -1,16 +1,17 @@
 import { memo } from 'react';
-import { Brain, Plug, FolderTree, CalendarClock, Settings, MessageSquare } from 'lucide-react';
+import { Brain, Plug, FolderTree, CalendarClock, Settings, MessageSquare, Users } from 'lucide-react';
 import { ChatList, type ChatListProps } from '../chats/ChatList';
 import { MemoryTab } from './tabs/MemoryTab';
 import { McpSkillsTab } from './tabs/McpTab';
 import { SourcesTab } from './tabs/FoldersTab';
+import { PersonasTab } from './tabs/PersonasTab';
 import { TasksTab } from './tabs/TasksTab';
 import { SettingsTab } from './tabs/settings/SettingsTab';
 import { useRememberedTab } from '../hooks/useRememberedTab';
 import { useRetrievalHealth } from '../hooks/useRetrievalHealth';
 import type { ModelTabProps, ActiveFactsViewProps } from './tabs/shared';
 
-type Tab = 'chats' | 'memory' | 'mcp' | 'folders' | 'tasks' | 'settings';
+type Tab = 'chats' | 'memory' | 'mcp' | 'personas' | 'folders' | 'tasks' | 'settings';
 
 // Naming notes: "Tools", not "MCP" — the tab holds skills as well as MCP servers.
 // "Sources", not "Folders" — the Chats tab already organizes threads into folders,
@@ -21,6 +22,7 @@ const TABS: { id: Tab; label: string; icon: typeof Brain }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'mcp', label: 'Tools — MCP & skills', icon: Plug },
+  { id: 'personas', label: 'Personas', icon: Users },
   { id: 'folders', label: 'Sources — files & connected folders', icon: FolderTree },
   { id: 'tasks', label: 'Scheduled tasks', icon: CalendarClock },
   { id: 'settings', label: 'Settings', icon: Settings }
@@ -110,6 +112,7 @@ function ManagePanelImpl({
         {tab === 'chats' && <ChatList {...chatProps} activeThreadId={activeThreadId} />}
         {tab === 'memory' && <MemoryTab models={models} activeFacts={activeFacts} />}
         {tab === 'mcp' && <McpSkillsTab models={models} />}
+        {tab === 'personas' && <PersonasTab models={models} />}
         {tab === 'folders' && <SourcesTab models={models} />}
         {tab === 'tasks' && <TasksTab onOpenChat={chatProps.onOpen} models={models} />}
         {tab === 'settings' && (

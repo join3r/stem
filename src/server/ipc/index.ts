@@ -16,4 +16,5 @@ export { registerChatsIpc } from './chats';
 export { registerDevicesIpc } from './devices';
 export { registerMcpIpc } from './mcp';
 export { registerMemoryIpc } from './memory';
+export { registerPersonasIpc } from './personas';
 export { registerWorkspaceIpc } from './workspace';

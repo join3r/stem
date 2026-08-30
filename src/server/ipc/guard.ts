@@ -156,6 +156,11 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'chats:writeSubject': [a.string],
   // Inbox mutators take a list of thread ids so bulk selection and a single row
   // are one code path. ('inbox:markAllRead' takes no arguments, so it is absent.)
+  // Personas: save takes the whole persona (reshaped where it lands, see
+  // workspace/personas.ts coercePersona). ('personas:list' takes no arguments,
+  // so it is absent.)
+  'personas:save': [a.object],
+  'personas:delete': [a.string],
   'inbox:setArchived': [a.stringArray, a.boolean],
   'inbox:snooze': [a.stringArray, a.nullish(a.number)],
   'inbox:setRead': [a.stringArray, a.boolean],

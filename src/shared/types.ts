@@ -1886,6 +1886,50 @@ export interface MemoryConsolidateResult {
   contents: MemoryContents;
 }
 
+// ---- Personas (named agent configurations the mail Inbox addresses) ----
+//
+// A persona is a named configuration, not an engine feature: a role prompt plus
+// optional pins (model/effort, a coding-harness agent+cwd). The special
+// behaviours of the built-ins are their prompts and the tools they use, never
+// server code that knows a persona by name. Personas run on dedicated pool
+// workers (the prompt is a spawn-time argument — see pi/runtime.ts), and the
+// mail router addresses them by id.
+
+/**
+ * Pins coding_agent for this persona: which external agent it drives and where.
+ * This is the whole meaning of a persona's "working directory" — pi's own cwd
+ * never moves off the workspace root. A "code — stem" persona is exactly this
+ * pin plus a prompt.
+ */
+export interface PersonaHarnessPin {
+  /** acpx agent name (claude, opencode, …), as HarnessSettings.agents keys it. */
+  agent: string;
+  /** Absolute path coding_agent runs in for this persona. */
+  cwd: string;
+}
+
+export interface Persona {
+  /** Stable id (built-ins use fixed slugs; user personas a UUID). */
+  id: string;
+  /** Unique (case-insensitive) — this is what the To: field addresses. */
+  name: string;
+  /** Role prompt, appended to the base system prompt at worker spawn. */
+  prompt: string;
+  /** Model pinned to this persona (`provider/modelId`); absent → app default. */
+  model?: string;
+  /** Reasoning effort pinned to this persona. */
+  effort?: string;
+  harness?: PersonaHarnessPin;
+  /**
+   * Run via the sessionless one-shot path (ChatBackend.complete) instead of a
+   * worker: cheaper, but no tools and no memory between mails. For pure-text
+   * roles only.
+   */
+  lightweight?: boolean;
+  /** Seeded by Stem. Editable like any persona, but cannot be deleted. */
+  builtin?: boolean;
+}
+
 // ---- Chats (backend-backed) + Folders (Stem-owned organization) ----
 //
 // A "chat" is a backend thread (the backend persists threads on disk in its home).
@@ -3177,6 +3221,13 @@ export interface StemApi {
   onScheduledRun(listener: (run: ScheduledRunPayload) => void): () => void;
   /** Fired when the agent calls notify_user during a run — show the prominent alert modal. */
   onTaskNotify(listener: (payload: TaskNotifyPayload) => void): () => void;
+
+  // Personas. Mutations return the fresh list (like the folders APIs).
+  listPersonas(): Promise<Persona[]>;
+  /** Create or update a persona (upsert by id). Returns the fresh list. */
+  savePersona(persona: Persona): Promise<Persona[]>;
+  /** Delete a persona. Built-ins are refused. Returns the fresh list. */
+  deletePersona(id: string): Promise<Persona[]>;
 
   listMcpServers(): Promise<McpServerSummary[]>;
   /** Live per-server connection status (keyed by name) from the running app-server. */

@@ -298,6 +298,17 @@ export function tasksStorePath(): string {
 }
 
 /**
+ * Stem-owned persona registry: the named agent configurations the mail Inbox
+ * addresses (role prompt + model/harness pins). Seeded with the built-ins on
+ * first read — see workspace/personas.ts.
+ */
+export function personasStorePath(): string {
+  // STEM_PERSONAS_STORE lets unit tests point at a throwaway file, like the
+  // other store path helpers.
+  return process.env.STEM_PERSONAS_STORE ?? join(userDataRoot(), 'personas.json');
+}
+
+/**
  * State dir for the embedded acpx runtime's FileSessionStore: the harness
  * session records (one JSON per external coding-agent session) that let a
  * later coding_agent call resume the same conversation. Server-side runs only;

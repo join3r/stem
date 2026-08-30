@@ -48,6 +48,7 @@ import type {
   QuickChatSessionStarted,
   QuickChatStatus,
   ScheduledRunPayload,
+  Persona,
   ScheduledTask,
   SkillProposal,
   SkillsMode,
@@ -335,6 +336,10 @@ const api: StemApi = {
   moveFolder: (folderId: string, parentId: string | null) => ipcRenderer.invoke('folders:move', folderId, parentId),
   setChatFolder: (threadId: string, folderId: string | null) =>
     ipcRenderer.invoke('chats:setFolder', threadId, folderId),
+
+  listPersonas: () => ipcRenderer.invoke('personas:list'),
+  savePersona: (persona: Persona) => ipcRenderer.invoke('personas:save', persona),
+  deletePersona: (id: string) => ipcRenderer.invoke('personas:delete', id),
 
   setInboxArchived: (threadIds: string[], archived: boolean) =>
     ipcRenderer.invoke('inbox:setArchived', threadIds, archived),
