@@ -67,6 +67,10 @@ function ManagePanelImpl({
   // A down retrieval model degrades recall silently (selection falls back to
   // lexical/recency), so it gets the same red dot a dead provider does.
   const retrievalBroken = useRetrievalHealth().broken;
+  // Personas working on mail in the background: the desktop's HUD pill stays
+  // quiet for hidden mail turns, so this pulsing dot is the one "something is
+  // happening" signal until the reply lands (and becomes the unread badge).
+  const mailWorking = chatProps.mail.conversations.some((c) => c.status === 'working');
   return (
     <div className="manage">
       <div className="insp-tabs">
@@ -80,7 +84,9 @@ function ManagePanelImpl({
                   ? `${label} — a retrieval model failed`
                   : unread
                     ? `${label} — ${unread} unread`
-                    : label;
+                    : id === 'chats' && mailWorking
+                      ? `${label} — a persona is working on your mail`
+                      : label;
             return (
               <button
                 key={id}
@@ -97,6 +103,8 @@ function ManagePanelImpl({
                 </span>
                 {id === 'settings' && authDeadProvider && <span className="tab-alert-dot" />}
                 {id === 'memory' && retrievalBroken && <span className="tab-alert-dot" />}
+                {/* The unread badge wins the corner once a reply lands. */}
+                {id === 'chats' && mailWorking && unread === 0 && <span className="tab-working-dot" />}
                 {/* Capped at 99+ so a long-ignored Inbox can't widen the rail. */}
                 {unread > 0 && (
                   <span className="tab-count-badge" aria-hidden="true">

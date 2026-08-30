@@ -1382,6 +1382,23 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   background: var(--danger);
   box-shadow: 0 0 0 1.5px var(--panel);
 }
+/* Accent twin of .tab-alert-dot: a persona is working on mail in the background.
+   Pulses like a running chat's row dot; the unread count badge replaces it once
+   the reply lands. */
+.tab-working-dot {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--panel);
+  animation: stem-dot-pulse 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-working-dot { animation: none; opacity: 0.8; }
+}
 /* Unread-inbox count on the Chats tab. Same anchor as .tab-alert-dot, but it
    carries a number and is accent-colored — this is a "there's something for you",
    not the red "something is broken" the alert dot means. */
@@ -1585,6 +1602,9 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   font-weight: 700;
   color: var(--accent);
 }
+/* Personas working on mail in the background — the pulsing per-chat dot, scaled
+   down to sit inline on the Inbox segment label. */
+.seg-working { width: 6px; height: 6px; }
 /* Unread reads as weight + a leading accent dot, not color: the row's title is
    already the only strong thing on it, so tinting the text would fight the
    selected state. */

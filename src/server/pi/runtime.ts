@@ -219,6 +219,16 @@ function mailPreamble(mail: { subject: string; from: string; participants?: stri
 // target path under. Probed on the raw pi event for the memory-taint check.
 const TOOL_PATH_KEYS = ['path', 'file_path', 'filename'] as const;
 
+/**
+ * Stamp `mail: true` onto a mail turn's normalized events. Clients need it to
+ * tell a hidden persona delivery from the user's own turn — the desktop's
+ * follow-me HUD pill must not announce "Answer ready" for background mail work.
+ */
+function tagMailEvent(params: unknown, turn: { isMail?: boolean }): unknown {
+  if (!turn.isMail || typeof params !== 'object' || params === null) return params;
+  return { ...params, mail: true };
+}
+
 
 // How many settled turns keep their tool trace in memory (see `recentTurns`).
 const RECENT_TURNS_KEPT = 3;
@@ -2941,7 +2951,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const leftover = worker.currentTurn;
       if (leftover) {
         const { events } = normalizePiEvent({ type: 'agent_end' }, leftover);
-        for (const e of events) this.emitEvent(e.method, e.params);
+        for (const e of events) this.emitEvent(e.method, tagMailEvent(e.params, leftover));
         this.settleTurn(worker, leftover, Date.now());
       }
       this.releaseForeground(worker);
@@ -2987,7 +2997,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
       this.advancePhase(turn, events, now);
     }
-    for (const e of events) this.emitEvent(e.method, e.params);
+    for (const e of events) this.emitEvent(e.method, tagMailEvent(e.params, turn));
     if (done) this.settleTurn(worker, turn, now);
   }
 

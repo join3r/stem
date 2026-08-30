@@ -301,7 +301,11 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
    * 'finished' transition (and its chime) only fires when the pill is already
    * shown for the main app (hud.owner === 'main') — i.e. the user is away.
    */
-  function noteMainThreadEvent(method: string, threadId: string): void {
+  function noteMainThreadEvent(method: string, threadId: string, params?: unknown): void {
+    // Hidden persona mail turns (params.mail) are background work, not "your
+    // answer" — the Inbox surfaces them; the pill would be noise ("Answer
+    // ready" for a mail the user never asked this window about).
+    if ((params as { mail?: boolean } | undefined)?.mail === true) return;
     if (method === 'item/started' || method === 'item/agentMessage/delta') {
       runningMainThreads.add(threadId);
       syncMainHud(); // handles a thread that starts while you're already away
@@ -499,7 +503,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       return false;
     }
     deps.sendToMain('backend:event', event);
-    noteMainThreadEvent(event.method, threadId);
+    noteMainThreadEvent(event.method, threadId, event.params);
     return false;
   }
 
