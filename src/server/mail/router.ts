@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatBackend, MailBridgeContext, MailBridgeResult } from '../backend/types';
 import type { BackendEventEnvelope, MailComposeInput, MailListResult } from '../../shared/types';
+import * as activity from '../activity';
 import { degrade } from '../degrade';
 import { noteTurnStart } from '../live-turns';
 import { getPersona, listPersonas } from '../workspace/personas';
@@ -55,6 +56,13 @@ export class MailRouter {
   private readonly pending = new Map<string, number>();
   /** The status to write when a conversation's deliveries drain (default idle). */
   private readonly drainStatus = new Map<string, 'idle' | 'awaiting-user'>();
+  /**
+   * One background-activity row per working conversation, labeled by its
+   * subject and counting the turns of the wave — mail otherwise works entirely
+   * out of sight, and invisible agent turns were exactly what the activity
+   * popover exists to show. Closed when the conversation's deliveries drain.
+   */
+  private readonly activityRows = new Map<string, { handle: activity.ActivityHandle; turns: number }>();
 
   constructor(private readonly opts: MailRouterOptions) {}
 
@@ -275,6 +283,19 @@ export class MailRouter {
       const { conversations } = await readMail();
       const conversation = conversations.find((c) => c.id === conversationId);
       if (!conversation) return; // deleted while queued
+      const row = this.activityRows.get(conversationId) ?? {
+        handle: activity.begin('mail.deliver', `Mail: ${conversation.subject || '(no subject)'}`),
+        turns: 0
+      };
+      row.turns += 1;
+      this.activityRows.set(conversationId, row);
+      // Deliveries serialize per conversation, so one persona works at a time;
+      // the rest of the wave sits queued behind it.
+      const queued = (this.pending.get(conversationId) ?? 1) - 1;
+      activity.setDetail(
+        row.handle,
+        `${persona.name} working · turn ${row.turns}${queued > 0 ? ` · ${queued} queued` : ''}`
+      );
       const threadId = conversation.sessions[personaId];
 
       // Mint the turn id and subscribe for its settle BEFORE starting the turn:
@@ -355,6 +376,11 @@ export class MailRouter {
       else {
         // The conversation's last delivery drained: settle its status.
         this.pending.delete(conversationId);
+        const row = this.activityRows.get(conversationId);
+        if (row) {
+          this.activityRows.delete(conversationId);
+          activity.end(row.handle, { worked: true, detail: `${row.turns} turn${row.turns === 1 ? '' : 's'}` });
+        }
         const status = this.drainStatus.get(conversationId) ?? 'idle';
         this.drainStatus.delete(conversationId);
         await setConversationStatus(conversationId, status).catch(() => {

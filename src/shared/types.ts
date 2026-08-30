@@ -1852,7 +1852,8 @@ export type ActivityKind =
   | 'chatIndex.backfill'
   | 'models.embed'
   | 'models.rerank'
-  | 'tasks.run';
+  | 'tasks.run'
+  | 'mail.deliver';
 
 /**
  * One background run — in flight, or finished and kept in the history buffer.

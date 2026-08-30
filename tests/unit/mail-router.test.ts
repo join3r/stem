@@ -8,6 +8,7 @@ import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetActivity, snapshot } from '../../src/server/activity';
 import { MailRouter } from '../../src/server/mail/router';
 import { readMail } from '../../src/server/workspace/mail';
 import { updateMailSettings } from '../../src/server/workspace/settings';
@@ -24,6 +25,7 @@ beforeEach(() => {
   rmSync(mailPath, { force: true });
   rmSync(personasPath, { force: true });
   rmSync(settingsPath, { force: true });
+  resetActivity();
 });
 afterEach(() => {
   rmSync(mailPath, { force: true });
@@ -277,6 +279,44 @@ describe('mail router', () => {
     expect(fake.starts).toHaveLength(3);
     expect(fake.starts[0].threadId).toBeUndefined(); // fresh session
     expect(fake.starts[2].threadId).toBe(mail.conversations[0].sessions.verifier);
+  });
+
+  it('a working conversation gets one background-activity row, closed with its turn count', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    let midRun: ReturnType<typeof snapshot> | null = null;
+    fake.scripts = [
+      {
+        mode: 'ok',
+        reply: 'consulting…',
+        bridge: async (bridge, ctx) => {
+          midRun = snapshot(); // taken mid-turn 1, while the wave is in flight
+          await bridge.send({ to: ['orchestrator'], body: 'check this' }, ctx);
+        }
+      },
+      { mode: 'ok', reply: 'verdict' },
+      {
+        mode: 'ok',
+        reply: 'wrapping up',
+        bridge: async (bridge, ctx) => {
+          await bridge.send({ to: ['user'], body: 'answer' }, ctx);
+        }
+      }
+    ];
+    await router.compose({ to: ['verifier', 'orchestrator'], subject: 'Shoes', body: 'q' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items).toHaveLength(4);
+      expect(m.conversations[0].status).not.toBe('working');
+    });
+    // Mid-wave: one running row, named by the conversation's subject.
+    const running = midRun!.running.find((e) => e.kind === 'mail.deliver');
+    expect(running?.label).toBe('Mail: Shoes');
+    expect(running?.detail).toContain('Verifier working · turn 1');
+    // Drained: the row moved to history carrying the wave's turn count.
+    expect(snapshot().running).toHaveLength(0);
+    const done = snapshot().history.find((e) => e.kind === 'mail.deliver');
+    expect(done).toMatchObject({ label: 'Mail: Shoes', state: 'done', detail: '3 turns' });
   });
 
   it('at the cap, send_mail to a persona is refused and an implicit hop is forced to the user', async () => {
