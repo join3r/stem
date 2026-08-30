@@ -77,7 +77,10 @@ export function MailList(props: MailListProps) {
       const where = placement(subjectOf(c), mail.inbox, now);
       if (where === 'snoozed') snoozed.push(c);
       else if (where === 'archived') archived.push(c);
-      else inbox.push(c);
+      // The Inbox holds mail you RECEIVED. A conversation nothing has been
+      // mailed back on yet (userUpdatedAt 0) is just your own send — it lives
+      // under Sent (spinner included) until a reply lands, like email.
+      else if (c.userUpdatedAt > 0) inbox.push(c);
     }
     inbox.sort((a, b) => b.updatedAt - a.updatedAt);
     snoozed.sort(
