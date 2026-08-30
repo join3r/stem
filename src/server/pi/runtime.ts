@@ -2413,7 +2413,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           prompt: req.prompt ?? '',
           cwd:
             typeof req.cwd === 'string' && req.cwd.trim() ? req.cwd : pin?.cwd?.trim() || undefined,
-          device: typeof req.device === 'string' && req.device.trim() ? req.device : undefined,
+          device:
+            typeof req.device === 'string' && req.device.trim()
+              ? req.device
+              : pin?.device?.trim() || undefined,
           freshSession: req.fresh_session === true,
           itemId: typeof req.item_id === 'string' && req.item_id ? req.item_id : undefined,
           threadId: turn?.threadId ?? '',

@@ -93,6 +93,8 @@ export interface HarnessDeviceRouter {
   /** Record a device's account of whether it runs coding agents. */
   announce(deviceId: string, report: unknown): Promise<void>;
   hostFor(deviceId: string): Promise<DeviceHarnessHostEntry | null>;
+  /** Every device's last announcement, for the devices snapshot. */
+  hosts(): Promise<Record<string, DeviceHarnessHostEntry>>;
   isAvailable(deviceId: string): boolean;
   ensure(deviceId: string, label: string, spec: HarnessSessionSpec): Promise<HarnessEnsureResult>;
   runTurn(deviceId: string, label: string, input: HarnessRunTurnInput, sink: HarnessTurnSink): HarnessTurnHandle;
@@ -165,6 +167,8 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
     async hostFor(deviceId) {
       return (await deps.store.read())[deviceId] ?? null;
     },
+
+    hosts: () => deps.store.read(),
 
     isAvailable: (deviceId) => deps.connectedDevices().has(deviceId),
 

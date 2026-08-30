@@ -128,10 +128,11 @@ export interface TurnContext {
   /** The persona this delivery runs as (the mail bridge's authoritative sender). */
   personaId?: string;
   /**
-   * The turn's persona coding-harness pin (agent + cwd), when the persona has
-   * one. Fills coding_agent's agent/cwd defaults — explicit tool arguments win.
+   * The turn's persona coding-harness pin (agent + cwd + optional device),
+   * when the persona has one. Fills coding_agent's agent/cwd/device defaults —
+   * explicit tool arguments win.
    */
-  personaHarness?: { agent: string; cwd: string };
+  personaHarness?: { agent: string; cwd: string; device?: string };
   /** The raw user message that started this turn — intent context for the exec safety judge. */
   userText?: string;
   phase: 'pending' | 'thinking' | 'tool' | 'answer';

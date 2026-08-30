@@ -134,10 +134,11 @@ export function registerDevicesIpc(): void {
 }
 
 async function snapshot(): Promise<DevicesSnapshot> {
-  const [devices, pending, execHosts] = await Promise.all([
+  const [devices, pending, execHosts, harnessHosts] = await Promise.all([
     readDevices(),
     pendingPairings(),
-    execDeviceRouter().hosts()
+    execDeviceRouter().hosts(),
+    harnessDeviceRouter().hosts()
   ]);
   return {
     devices: devices.map(
@@ -152,7 +153,9 @@ async function snapshot(): Promise<DevicesSnapshot> {
         // Only when it said yes: "announced enabled: false" and "never
         // announced" are the same fact to the list — this machine does not run
         // commands — and neither earns a tag.
-        ...(execHosts[d.id]?.enabled ? { runsCommands: true } : {})
+        ...(execHosts[d.id]?.enabled ? { runsCommands: true } : {}),
+        // Same rule as runsCommands: only an announced yes earns the tag.
+        ...(harnessHosts[d.id]?.enabled ? { runsCodingAgents: true } : {})
       })
     ),
     pending: pending.map((p) => ({ label: p.label, expiresAt: p.expiresAt }))

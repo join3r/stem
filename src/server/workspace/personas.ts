@@ -78,7 +78,8 @@ function coerceHarness(raw: unknown): PersonaHarnessPin | undefined {
   // here would erase the field under the user's cursor. The runtime treats a
   // blank pinned cwd as "no cwd" (thread scratch dir).
   const cwd = typeof r.cwd === 'string' ? r.cwd.trim() : '';
-  return { agent: r.agent.trim(), cwd };
+  const device = typeof r.device === 'string' ? r.device.trim() : '';
+  return { agent: r.agent.trim(), cwd, ...(device ? { device } : {}) };
 }
 
 /** Reshape one stored/submitted persona; null when it isn't one. */

@@ -1936,11 +1936,16 @@ export interface PersonaHarnessPin {
   /** acpx agent name (claude, opencode, …), as HarnessSettings.agents keys it. */
   agent: string;
   /**
-   * Absolute path coding_agent runs in for this persona. May be '' while the
-   * user is still typing the pin (the editor saves per keystroke); the runtime
-   * treats a blank pinned cwd as no cwd.
+   * Absolute path coding_agent runs in for this persona. May be '' for a pin
+   * saved before its directory is decided; the runtime treats a blank pinned
+   * cwd as no cwd.
    */
   cwd: string;
+  /**
+   * Paired computer the agent runs on (device id; resolveHarnessTarget also
+   * accepts labels). Absent = Stem's server, the default host.
+   */
+  device?: string;
 }
 
 export interface Persona {
@@ -3074,6 +3079,12 @@ export interface DeviceInfo {
    * the Devices list can say which machines accept commands.
    */
   runsCommands?: boolean;
+  /**
+   * Whether this computer said it runs coding agents (`harnessHost:announce`).
+   * Absent when it never announced or announced off. Surfaced so the persona
+   * editor can offer it as a place a coding pin runs.
+   */
+  runsCodingAgents?: boolean;
 }
 
 /**

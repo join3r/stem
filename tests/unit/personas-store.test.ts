@@ -112,6 +112,12 @@ describe('save', () => {
     expect((await getPersona('p1'))?.harness).toBeUndefined();
     await savePersona(persona({ harness: { agent: 'claude', cwd: '/src/stem' } }));
     expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '/src/stem' });
+    await savePersona(persona({ harness: { agent: 'claude', cwd: '/src/stem', device: 'dev-1' } }));
+    expect((await getPersona('p1'))?.harness).toEqual({
+      agent: 'claude',
+      cwd: '/src/stem',
+      device: 'dev-1'
+    });
   });
 });
 

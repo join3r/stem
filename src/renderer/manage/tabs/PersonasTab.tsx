@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Copy, FolderSearch, Plus, Trash2 } from 'lucide-react';
-import type { ModelSummary, Persona } from '../../../shared/types';
+import type { DeviceInfo, ModelSummary, Persona } from '../../../shared/types';
 import { ModelPicker } from '../../ui/ModelPicker';
 import { clampEffort, effortsOf, EffortSelect } from '../../ui/EffortSelect';
 import { EFFORT_LABELS } from '../../modelLabels';
@@ -18,8 +18,8 @@ import { ServerFolderPicker } from '../ServerFolderPicker';
 // keystroke saves fight the user mid-word.
 // Built-ins can be edited but not deleted; "duplicate" is how variants start.
 
-/** "Fable · High · claude in ~/src/stem" — the collapsed face of a persona row. */
-function summaryLabel(p: Persona, models: ModelSummary[]): string {
+/** "Fable · High · claude on MacBook in ~/src/stem" — the collapsed face of a persona row. */
+function summaryLabel(p: Persona, models: ModelSummary[], devices: DeviceInfo[]): string {
   const parts: string[] = [];
   if (p.model) {
     const m = models.find((x) => x.id === p.model);
@@ -29,7 +29,14 @@ function summaryLabel(p: Persona, models: ModelSummary[]): string {
     parts.push('App default model');
   }
   if (p.harness) {
-    parts.push(p.harness.cwd ? `${p.harness.agent} in ${p.harness.cwd}` : p.harness.agent);
+    const where = p.harness.device
+      ? ` on ${devices.find((d) => d.id === p.harness?.device)?.label ?? p.harness.device}`
+      : '';
+    parts.push(
+      p.harness.cwd
+        ? `${p.harness.agent}${where} in ${p.harness.cwd}`
+        : `${p.harness.agent}${where}`
+    );
   }
   return parts.join(' · ');
 }
@@ -52,6 +59,7 @@ function sameEdit(a: Persona, b: Persona): boolean {
     a.effort === b.effort &&
     (a.harness?.agent ?? '') === (b.harness?.agent ?? '') &&
     (a.harness?.cwd ?? '') === (b.harness?.cwd ?? '') &&
+    (a.harness?.device ?? '') === (b.harness?.device ?? '') &&
     (a.canAddPersonas ?? false) === (b.canAddPersonas ?? false)
   );
 }
@@ -68,12 +76,19 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
   // from harness settings). Empty on a server too old to answer — the editor
   // falls back to a plain text field there.
   const [agents, setAgents] = useState<string[]>([]);
+  // Paired devices, for the "runs on" picker (filtered to coding-agent hosts
+  // there) and for naming a pinned device in the row summary.
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
   // Persona id whose cwd is being picked in the server-folder browser.
   const [pickingCwdFor, setPickingCwdFor] = useState<string | null>(null);
 
   useEffect(() => {
     void window.stem.listPersonas().then(setPersonas);
     window.stem.listCodingAgents().then(setAgents).catch(() => setAgents([]));
+    window.stem
+      .listDevices()
+      .then((s) => setDevices(s.devices))
+      .catch(() => setDevices([]));
   }, []);
 
   const setDraft = (draft: Persona) =>
@@ -193,7 +208,7 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                     {p.name}
                   </strong>
                   <em>
-                    {summaryLabel(p, models)}
+                    {summaryLabel(p, models, devices)}
                     {dirty && !expanded.has(p.id) ? ' · unsaved' : ''}
                   </em>
                 </span>
@@ -293,6 +308,37 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                         placeholder="Coding agent (e.g. claude)"
                       />
                     )}
+                    <select
+                      className="vfield"
+                      aria-label="Computer the coding agent runs on"
+                      value={p.harness?.device ?? ''}
+                      disabled={!p.harness}
+                      onChange={(e) =>
+                        setDraft({
+                          ...p,
+                          harness: p.harness
+                            ? { ...p.harness, device: e.target.value || undefined }
+                            : undefined
+                        })
+                      }
+                    >
+                      <option value="">On Stem’s server</option>
+                      {p.harness?.device &&
+                        !devices.some((d) => d.id === p.harness?.device && d.runsCodingAgents) && (
+                          <option value={p.harness.device}>
+                            On {devices.find((d) => d.id === p.harness?.device)?.label ??
+                              p.harness.device}{' '}
+                            (not hosting coding agents)
+                          </option>
+                        )}
+                      {devices
+                        .filter((d) => d.runsCodingAgents)
+                        .map((d) => (
+                          <option key={d.id} value={d.id}>
+                            On {d.label}
+                          </option>
+                        ))}
+                    </select>
                     <div className="persona-cwd-row">
                       <input
                         className="vfield persona-cwd"
@@ -310,8 +356,12 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       <button
                         className="icon-action sm"
                         onClick={() => setPickingCwdFor(p.id)}
-                        disabled={!p.harness}
-                        title="Browse the server's folders"
+                        disabled={!p.harness || !!p.harness.device}
+                        title={
+                          p.harness?.device
+                            ? 'Only the server’s folders can be browsed from here — type the path on that computer.'
+                            : 'Browse the server’s folders'
+                        }
                         aria-label="Browse for a working directory"
                       >
                         <FolderSearch size={14} />
