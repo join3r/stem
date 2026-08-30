@@ -272,19 +272,6 @@ export function QuickChatSection({ models }: { models: ModelSummary[] }) {
           />
         </ValueRow>
 
-        <ValueRow
-          label="Skip the Inbox"
-          hint="Quick chats go straight to Archived once answered — opening one brings it back"
-        >
-          <button
-            className={`switch${qc.skipInbox ? ' on' : ''}`}
-            role="switch"
-            aria-checked={qc.skipInbox}
-            aria-label="Skip the Inbox"
-            onClick={() => update({ skipInbox: !qc.skipInbox })}
-          />
-        </ValueRow>
-
         <ValueRow label="New thread after idle" hint="Re-summoning after this idle time starts fresh">
           <RowSelect
             ariaLabel="New thread after idle"

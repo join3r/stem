@@ -37,16 +37,20 @@ async function notifyUnder(mode: TaskNotifyMode) {
   const emitted: string[] = [];
   let revealed = 0;
   let attention = 0;
+  const mails: { subject: string; body: string; taskId: string }[] = [];
   const scheduler = initTaskScheduler({
     runtime: runtime as unknown as ChatBackend,
     emit: (channel) => emitted.push(channel),
     isUserActive: () => false,
     revealMainWindow: () => revealed++,
-    requestAttention: () => attention++
+    requestAttention: () => attention++,
+    deliverTaskMail: async (input) => {
+      mails.push(input);
+    }
   });
   await runtime.bridge!.notify({ title: 'Build', message: 'main went red' }, 't1');
   scheduler.stop();
-  return { revealed, attention, alerts: emitted.filter((c) => c === 'tasks:notify').length };
+  return { revealed, attention, alerts: emitted.filter((c) => c === 'tasks:notify').length, mails };
 }
 
 beforeEach(() => {
@@ -61,15 +65,15 @@ afterEach(() => {
 
 describe('notify_user prominence', () => {
   it('alert (the default) raises the window, nudges the OS and pushes the modal', async () => {
-    expect(await notifyUnder('alert')).toEqual({ revealed: 1, attention: 1, alerts: 1 });
+    expect(await notifyUnder('alert')).toEqual({ revealed: 1, attention: 1, alerts: 1, mails: [] });
   });
 
   it('nudge bounces the dock without stealing focus or popping the modal', async () => {
-    expect(await notifyUnder('nudge')).toEqual({ revealed: 0, attention: 1, alerts: 0 });
+    expect(await notifyUnder('nudge')).toEqual({ revealed: 0, attention: 1, alerts: 0, mails: [] });
   });
 
   it('inbox interrupts in no way at all', async () => {
-    expect(await notifyUnder('inbox')).toEqual({ revealed: 0, attention: 0, alerts: 0 });
+    expect(await notifyUnder('inbox')).toEqual({ revealed: 0, attention: 0, alerts: 0, mails: [] });
   });
 
   it('reads the mode per notification, so a change applies to the very next run', async () => {
@@ -82,7 +86,8 @@ describe('notify_user prominence', () => {
       emit: () => undefined,
       isUserActive: () => false,
       revealMainWindow: () => revealed++,
-      requestAttention: () => undefined
+      requestAttention: () => undefined,
+      deliverTaskMail: async () => undefined
     });
     await runtime.bridge!.notify({ message: 'first' }, 't1');
     expect(revealed).toBe(1);

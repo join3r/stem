@@ -24,7 +24,6 @@ import {
   setSnooze
 } from '../workspace/inbox';
 import { mailSessionThreadIds } from '../workspace/mail';
-import { forgetQuickChatThread } from '../quickchat-threads';
 import { memoryRunOf } from '../workspace/settings';
 import type { LlmClient } from '../recall/llm';
 import type { ChatListResult } from '../../shared/types';
@@ -125,7 +124,6 @@ export function registerChatsIpc(deps: IpcDeps): void {
       deps.scheduler()?.removeForThread(threadId) ?? Promise.resolve()
     ]);
     dropChatThread(threadId); // forget it from the search index
-    forgetQuickChatThread(threadId);
   });
   registerServer('chats:setFolder', async (_e, threadId: string, folderId: string | null) => {
     await setChatFolder(threadId, folderId);
@@ -147,10 +145,6 @@ export function registerChatsIpc(deps: IpcDeps): void {
   // Inbox state. Each returns the fresh list so the renderer applies one payload
   // rather than re-fetching — the same contract the folder mutators use.
   registerServer('inbox:setArchived', async (_e, threadIds: string[], archived: boolean) => {
-    // An explicit un-archive — the user, or a Quick Chat hand-off — pulls the
-    // thread back into play; the skip-Inbox auto-archiver must not fight that
-    // on the thread's next settled turn or subject write.
-    if (!archived) for (const threadId of threadIds) forgetQuickChatThread(threadId);
     await setArchived(threadIds, archived);
     return chatList();
   });

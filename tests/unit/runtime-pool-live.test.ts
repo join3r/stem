@@ -91,7 +91,10 @@ function barrierOpenAI(barrier: number): Promise<{
 const cleanups: Array<() => Promise<void> | void> = [];
 
 afterEach(async () => {
-  for (const fn of cleanups.splice(0)) await fn();
+  // Reverse order: the shutdown was registered after the rm, and running them
+  // as pushed deletes the pi home out from under children that are still
+  // writing to it (ENOTEMPTY under suite load). Tear down, then sweep.
+  for (const fn of cleanups.splice(0).reverse()) await fn();
 });
 
 describe('runtime pool against real pi', () => {

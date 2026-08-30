@@ -266,8 +266,7 @@ describe('the fields a machine owns rather than Stem', () => {
       'defaultModel',
       'defaultServiceTier',
       'finishSound',
-      'newThreadTimeoutMs',
-      'skipInbox'
+      'newThreadTimeoutMs'
     ]);
   });
 
@@ -287,12 +286,11 @@ describe('the fields a machine owns rather than Stem', () => {
     expect(next.quickChat).not.toHaveProperty('shortcut');
   });
 
-  it('round-trips the Quick Chat skip-Inbox toggle, defaulting off', async () => {
-    // Off by default: an existing install must not wake up to quick chats
-    // silently vanishing from its Inbox.
-    expect((await readSettings()).quickChat.skipInbox).toBe(false);
-    expect((await updateQuickChat({ skipInbox: true })).quickChat.skipInbox).toBe(true);
-    expect((await readSettings()).quickChat.skipInbox).toBe(true);
+  it('sheds the retired skip-Inbox toggle instead of storing it', async () => {
+    // The Inbox is mail now; quick chats never sat in it to be skipped. A stale
+    // client patching the old flag must not smuggle it back into the file.
+    const next = await updateQuickChat({ skipInbox: true } as never);
+    expect(next.quickChat).not.toHaveProperty('skipInbox');
   });
 
   it('no longer touches the seen-marker when onboarding completes', async () => {

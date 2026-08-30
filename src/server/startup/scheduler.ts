@@ -21,6 +21,13 @@ export function initTaskScheduler(deps: {
   revealMainWindow: () => void;
   /** OS-level attention nudge (dock bounce / taskbar flash — see platform.ts). */
   requestAttention: () => void;
+  /**
+   * Land a notify_user's message in the mail Inbox, grouped per task. This is
+   * how a scheduled result surfaces now that the Inbox is mail — the run's turn
+   * still lives in its chat thread, but the thread no longer has an Inbox row
+   * to go bold.
+   */
+  deliverTaskMail: (input: { subject: string; body: string; taskId: string }) => Promise<void>;
 }): TaskScheduler {
   const scheduler = new TaskScheduler({
     runtime: deps.runtime,
@@ -30,19 +37,15 @@ export function initTaskScheduler(deps: {
     // run yields (preemptForUser) when the user sends a message.
     isUserActive: deps.isUserActive,
     interrupt: (turnId) => deps.runtime.interruptTurn(turnId),
-    // A run that found nothing still wrote a turn, and a written turn is all the
-    // Inbox needs to lift the thread back out of the archive and bold the row.
-    // Absorb the bump so a watch task only reappears on the run that had something
-    // to say, then ask the client for a fresh list (the placement changed under it).
+    // A run that found nothing still wrote a turn, which bumps the thread's
+    // mtime — the read-state signal the CHATS TREE bolds rows by. (The Inbox is
+    // mail now and never sees the thread; this absorber only keeps a quiet
+    // watch task's chat row from going bold for a turn nobody took.)
     onSilentRun: (threadId, before, at) => {
       void noteSilentRun(threadId, before, at)
         .then(() => deps.emit('chats:changed', undefined))
         .catch((err) => {
-          // Absorbing the bump is the only thing keeping a run that found nothing
-          // out of the Inbox. Unwritten, the thread lifts back out of the archive
-          // and bolds itself for a turn nobody took — which is the whole reason
-          // the before/after pair is carried down here.
-          degrade('tasks', 'left a silent scheduled run showing as new activity', err);
+          degrade('tasks', 'left a silent scheduled run showing as unread in the chats tree', err);
         });
     }
   });
@@ -67,6 +70,25 @@ export function initTaskScheduler(deps: {
     // signal the Inbox reads.
     notify: async ({ title, message }, threadId) => {
       scheduler.noteNotify(threadId);
+      // The Inbox half, in every mode: a scheduled run's notify_user is a mail
+      // from the task, grouped with the task's earlier firings. Only for a run
+      // actually in flight — an interactive turn calling notify_user has the
+      // user right there, and a mail about it would be a copy of the reply.
+      const running = scheduler.runningTask(threadId);
+      if (running) {
+        await deps
+          .deliverTaskMail({
+            subject: title?.trim() || running.title,
+            body: message,
+            taskId: running.id
+          })
+          .catch((err) =>
+            // The mail IS the surfacing now — an undelivered one is a watch
+            // task that found something and told nobody but the modal (if the
+            // mode even shows one).
+            degrade('tasks', 'dropped a scheduled result on the way to the Inbox', err)
+          );
+      }
       // Read per notification rather than once at wiring time: a task fires long
       // after startup, and the toggle must apply to the very next run.
       // quiet: readSettings answers with the defaults and degrades ('settings')
@@ -91,8 +113,7 @@ export function initTaskScheduler(deps: {
       // nothing, on top of the push that turn's own ending already sends. The
       // desktop half below still runs, because a model that asked for the user's
       // attention at the desk should get it either way.
-      const task = scheduler.runningTask(threadId);
-      if (task) pushTaskAlert({ threadId, taskId: task.id, label: task.title });
+      if (running) pushTaskAlert({ threadId, taskId: running.id, label: running.title });
       if (mode === 'alert') deps.revealMainWindow();
       deps.requestAttention();
       if (mode === 'nudge') return;

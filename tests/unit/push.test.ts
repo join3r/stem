@@ -627,7 +627,8 @@ describe('task notifications', () => {
       emit: () => undefined,
       isUserActive: () => false,
       revealMainWindow: () => undefined,
-      requestAttention: () => undefined
+      requestAttention: () => undefined,
+      deliverTaskMail: async () => undefined
     });
   }
 

@@ -149,8 +149,6 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
   let followAcrossSpaces = true;
   /** Play a chime when a turn finishes while the pill is visible. */
   let finishSound = false;
-  /** Quick chats skip the Inbox (the server archives them as turns settle). */
-  let skipInbox = false;
   /** Main-window threads currently running (working/answering), keyed by threadId. */
   const runningMainThreads = new Set<string>();
   /** Ownership + last phase of the shared pill (chime edge detection) — see HudPill. */
@@ -221,20 +219,6 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     overlayResetBarrier.settle();
   }
 
-  /**
-   * A hand-off turns the thread into an ordinary main-window chat, so pull it
-   * back out of the Archive the skip-Inbox setting sent (or will send) it to.
-   * The server also stops auto-archiving an explicitly un-archived thread, which
-   * is what keeps a turn still settling after the hand-off from re-burying it.
-   * Best-effort: if it fails, the conversation just sits in Archived.
-   */
-  function unarchiveHandedOffThread(threadId: string): void {
-    if (!skipInbox) return;
-    void deps
-      .invoke('inbox:setArchived', [[threadId], false])
-      .then(() => deps.sendToMain('chats:changed', undefined))
-      .catch(() => undefined);
-  }
 
   /**
    * HUD state machine, driven by the overlay-owned thread's event stream. Only runs
@@ -471,7 +455,6 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     overlay.stopTurn();
     hideHud();
     hideOverlayWindow();
-    unarchiveHandedOffThread(threadId);
     deps.sendToMain('quickchat:adopt', transition.snapshot);
     for (const bufferedEvent of transition.events) {
       deps.sendToMain('backend:event', bufferedEvent);
@@ -620,7 +603,6 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       newThreadTimeoutMs = settings.newThreadTimeoutMs;
       followAcrossSpaces = settings.followAcrossSpaces;
       finishSound = settings.finishSound;
-      skipInbox = settings.skipInbox;
       // Pre-create both windows (hidden) so the shortcut summons instantly, and
       // bind the global accelerator from the saved settings.
       ensureOverlayWindow();
@@ -658,7 +640,6 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
         if (overlayResetBarrier.pending) finishOverlayReset();
         hideHud();
         hideOverlayWindow();
-        unarchiveHandedOffThread(payload.threadId);
         deps.revealMainWindow();
         deps.sendToMain('quickchat:adopt', payload);
         for (const bufferedEvent of bufferedEvents) {
@@ -697,7 +678,6 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
         if (!followAcrossSpaces && hud.owner === 'main') hideHud();
       }
       if ('finishSound' in patch) finishSound = next.finishSound;
-      if ('skipInbox' in patch) skipInbox = next.skipInbox;
     },
 
     shortcutStatus: quickChatShortcutStatus,

@@ -37,8 +37,20 @@ export interface MailRouterOptions {
 export class MailRouter {
   /** Serializes deliveries per conversation, so a reply can't overtake its turn. */
   private readonly queues = new Map<string, Promise<unknown>>();
+  /** Threads with a delivery in flight — the mail-turn suppressions read this. */
+  private readonly liveThreads = new Set<string>();
 
   constructor(private readonly opts: MailRouterOptions) {}
+
+  /**
+   * Whether a live delivery owns this thread right now. The turn-finished phone
+   * push reads it: a mail turn's ending is not "your answer is ready" — the
+   * reply mail is the news, and it lands via mail:changed. In-memory on purpose
+   * (deliveries never survive a restart, so neither must this).
+   */
+  ownsThread(threadId: string): boolean {
+    return this.liveThreads.has(threadId);
+  }
 
   /** Compose a new conversation and deliver the first mail to its driver. */
   async compose(input: MailComposeInput): Promise<MailListResult> {
@@ -174,10 +186,11 @@ export class MailRouter {
         return;
       }
       threadIdRef.current = runThreadId;
+      this.liveThreads.add(runThreadId);
       if (runThreadId !== threadId) await setConversationSession(conversationId, personaId, runThreadId);
       noteTurnStart(runThreadId, started.turnId);
 
-      const settle = await settling.done;
+      const settle = await settling.done.finally(() => this.liveThreads.delete(runThreadId));
       const reply =
         settle.status === 'ok'
           ? await this.lastAssistantText(runThreadId)

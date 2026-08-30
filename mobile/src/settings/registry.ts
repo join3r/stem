@@ -256,14 +256,6 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         mobile: false,
         read: (s) => s.quickChat.finishSound,
         save: (c, finishSound) => c.rpc('settings:updateQuickChat', { finishSound })
-      },
-      {
-        kind: 'toggle',
-        key: 'qc-skip-inbox',
-        label: 'Keep quick chats out of the Inbox',
-        mobile: false,
-        read: (s) => s.quickChat.skipInbox,
-        save: (c, skipInbox) => c.rpc('settings:updateQuickChat', { skipInbox })
       }
     ]
   }
