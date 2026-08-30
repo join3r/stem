@@ -919,10 +919,15 @@ export default function App() {
       // is partial. Reload from disk unless a turn is actively streaming (which we'd
       // clobber); clear the flag once consumed.
       const forceReload = forceReloadRef.current.has(threadId) && !existing?.running;
-      // If we already hold a live or hydrated slice (e.g. a chat that ran in the
-      // background), just switch to it — reloading from disk would clobber the
-      // in-flight stream. Opening clears the unread (done) dot.
-      if (!forceReload && existing && (existing.running || existing.messages.length > 0)) {
+      // A slice that already holds the whole transcript (hydrated from disk, or
+      // complete by construction) is just switched to — re-reading it would
+      // clobber an in-flight stream for nothing. A slice WITHOUT the flag was
+      // seeded from background events (a turn run from another device or a
+      // schedule landed in a thread this window never opened) and starts at that
+      // turn, so it must go through the disk read below — mergeHydratedThread
+      // lays its live tail over the full transcript, streaming included.
+      // Opening clears the unread (done) dot.
+      if (!forceReload && existing?.hydrated && (existing.running || existing.messages.length > 0)) {
         if (!openGateRef.current.isCurrent(request)) return;
         setActiveThreadId(threadId);
         setThread(threadId, (s) => ({ status: s.status === 'done' ? 'idle' : s.status }));

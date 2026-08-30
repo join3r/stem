@@ -44,6 +44,15 @@ export interface ThreadState {
   activeTurnId: string | null;
   /** Drives the status dot on the chat row. */
   status: ThreadStatus;
+  /**
+   * True once the slice holds the whole transcript — hydrated from disk, or
+   * complete by construction (a draft, an adopted overlay chat). Absent on a
+   * slice seeded purely from background events (a turn started on another
+   * device or by a schedule lands in a thread this window never opened), whose
+   * messages begin at that turn: such a slice streams fine but must not be
+   * shown as the conversation on open without a disk read behind it.
+   */
+  hydrated?: boolean;
 }
 
 export const EMPTY_STATE: ThreadState = {
@@ -59,10 +68,12 @@ export const EMPTY_STATE: ThreadState = {
 /** Merge a newly-sent draft into a real thread whose early backend events may
  * already have produced assistant messages before startTurn returned its id. */
 export function mergeDraftIntoReal(draft: ThreadState, live: ThreadState | undefined): ThreadState {
-  if (!live) return draft;
+  // The draft IS the whole conversation (the send created the chat), so the
+  // merged slice is complete even when `live` was seeded from events alone.
+  if (!live) return { ...draft, hydrated: true };
   const ids = new Set(draft.messages.map((m) => m.id));
   const extra = live.messages.filter((m) => !ids.has(m.id));
-  return { ...live, messages: [...draft.messages, ...extra] };
+  return { ...live, messages: [...draft.messages, ...extra], hydrated: true };
 }
 
 /**
@@ -76,7 +87,7 @@ export function mergeHydratedThread(
   live: ThreadState | undefined,
   stateAtRequest: ThreadState | undefined
 ): ThreadState {
-  const hydrated: ThreadState = { ...EMPTY_STATE, messages: historyMessages };
+  const hydrated: ThreadState = { ...EMPTY_STATE, messages: historyMessages, hydrated: true };
   if (!live || (live === stateAtRequest && !live.running)) return hydrated;
 
   // Disk supplies older transcript entries; newer in-memory versions win for
@@ -129,6 +140,9 @@ export function mergeHydratedThread(
     ...hydrated,
     ...live,
     messages,
+    // The disk read is what makes this slice whole — `...live` must not carry
+    // an event-seeded slice's missing flag over it.
+    hydrated: true,
     // Opening the thread consumes its unread completion indicator.
     status: live.status === 'done' ? 'idle' : live.status
   };
@@ -194,7 +208,10 @@ export function mergeQuickChatHandoff(
     activity: payload.activity,
     activities: payload.activities,
     activeTurnId: payload.activeTurnId,
-    status: payload.status
+    status: payload.status,
+    // The overlay hands over its complete in-memory conversation, so the
+    // adopted slice needs no disk read behind it.
+    hydrated: true
   };
   if (!existing) return transferred;
 
@@ -202,7 +219,7 @@ export function mergeQuickChatHandoff(
   const messages = payload.messages.map((m) => newer.get(m.id) ?? m);
   const known = new Set(messages.map((m) => m.id));
   for (const m of existing.messages) if (!known.has(m.id)) messages.push(m);
-  return { ...transferred, ...existing, messages };
+  return { ...transferred, ...existing, messages, hydrated: true };
 }
 
 /** Copy the live activity list onto the turn's assistant bubble (if it exists yet). */

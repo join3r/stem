@@ -5,6 +5,7 @@ import type { ChatMessage, QuickChatHandoff, TurnAttachment } from '../../src/sh
 import { optimisticMessageAttachments, resendAttachments, toMessageAttachments } from '../../src/renderer/attachments';
 import {
   EMPTY_STATE,
+  applyBackendEventToThread,
   mergeDraftIntoReal,
   mergeHydratedThread,
   mergeQuickChatHandoff,
@@ -564,5 +565,68 @@ describe('signed chart regression', () => {
 
     expect(heights).toHaveLength(2);
     expect(heights.every((height) => height > 0)).toBe(true);
+  });
+});
+
+describe('background-thread hydration regression', () => {
+  // A turn started on another device (or by a schedule) streams into a thread
+  // this window never opened. The events seed a slice that begins at that turn,
+  // and openChat used to mistake it for the conversation: opening the thread
+  // showed only the last exchange until the app restarted. The hydrated flag is
+  // what now tells the two apart — event-seeded slices never carry it, every
+  // complete slice does.
+  it('leaves an event-seeded slice unhydrated so the open path reads the disk', () => {
+    const seeded = applyBackendEventToThread(EMPTY_STATE, {
+      method: 'item/agentMessage/delta',
+      params: { threadId: 'bg', turnId: 'turn-9', itemId: 'turn-9', delta: 'Only the last reply' },
+      receivedAt: '2026-08-30T00:00:00.000Z'
+    })!;
+    expect(seeded.hydrated).toBeUndefined();
+  });
+
+  it('stamps hydration when the disk transcript is merged in, even over a live slice', () => {
+    const seeded: ThreadState = {
+      ...EMPTY_STATE,
+      messages: [{ id: 'assistant-turn-9', role: 'assistant', content: 'Last reply', turnId: 'turn-9' }],
+      running: true,
+      status: 'running',
+      activeTurnId: 'turn-9'
+    };
+    const merged = mergeHydratedThread(
+      [{ id: 'user-entry-1', role: 'user', content: 'First question', turnId: 'entry-1' }],
+      seeded,
+      undefined
+    );
+    // `...live` in the merge must not carry the seeded slice's missing flag over
+    // the read that just made it whole.
+    expect(merged.hydrated).toBe(true);
+    expect(merged.running).toBe(true);
+    expect(merged.messages.map((message) => message.id)).toEqual(['user-entry-1', 'assistant-turn-9']);
+  });
+
+  it('marks slices that are complete by construction as hydrated', () => {
+    const draft: ThreadState = {
+      ...EMPTY_STATE,
+      messages: [{ id: 'user-1', role: 'user', content: 'New chat' }]
+    };
+    expect(mergeDraftIntoReal(draft, undefined).hydrated).toBe(true);
+    expect(mergeDraftIntoReal(draft, { ...EMPTY_STATE }).hydrated).toBe(true);
+
+    const payload: QuickChatHandoff = {
+      threadId: 't1',
+      messages: [{ id: 'user-1', role: 'user', content: 'Question' }],
+      running: false,
+      streamingId: null,
+      activity: null,
+      activities: [],
+      activeTurnId: null,
+      status: 'idle',
+      model: null,
+      effort: null,
+      serviceTier: null
+    };
+    expect(mergeQuickChatHandoff(undefined, payload).hydrated).toBe(true);
+    // `...existing` (an event-seeded slice) must not strip the flag either.
+    expect(mergeQuickChatHandoff({ ...EMPTY_STATE }, payload).hydrated).toBe(true);
   });
 });
