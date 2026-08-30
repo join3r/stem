@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   ADMIN_APPROVAL_TITLE,
   DEVICE_MCP_BRIDGE_TITLE,
+  ENV_GATE_DIR,
   ENV_SECRET_KEY,
   EXEC_BRIDGE_TITLE,
   HARNESS_BRIDGE_TITLE,
@@ -98,6 +99,16 @@ describe('gate files referenced by the bridge extension', () => {
   // looks exactly like a device that has never connected.
   it(`reads ${MCP_DEVICE_CATALOG_FILE} next to the config`, () => {
     expect(extensionConst('MCP_DEVICE_CATALOG_FILE')).toBe(MCP_DEVICE_CATALOG_FILE);
+  });
+});
+
+describe('per-worker gate directory env', () => {
+  // Each pool worker hands its child a private gate directory; the bridge must
+  // read the per-turn gates from it (falling back to the mcp.json directory when
+  // unset), or two workers' concurrent turns share one gate again — the exact
+  // mutable-state overlap the pool exists to end.
+  it('the extension reads the same env var the runtime sets', () => {
+    expect(extensionConst('ENV_GATE_DIR')).toBe(ENV_GATE_DIR);
   });
 });
 

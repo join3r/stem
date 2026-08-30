@@ -39,7 +39,7 @@ export function initSkills(deps: {
 
   const bridge = new SkillBridge({
     mode: async () => (await readSettings()).skills.mode,
-    requestApproval: (proposal) => runtime.requestSkillApproval!(proposal),
+    requestApproval: (proposal, ctx) => runtime.requestSkillApproval!(proposal, ctx),
     onChanged: deps.onChanged,
     onCreated: deps.onCreated
   });

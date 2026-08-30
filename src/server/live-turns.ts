@@ -69,9 +69,11 @@ export function noteTurnEvent(method: string, threadId: string | undefined, turn
  * an event of a turn cannot precede the turn; a different turn id means a genuinely
  * new turn and restarts it. Only the CLOCK is taken on trust here — everything
  * else about which thread is live still comes out of the event stream, and this
- * cannot strand a mark the stream would not have cleared anyway: turns serialize
- * through the backend's foreground gate, so the previous turn's terminal event has
- * been folded in by the time the next one is dispatched.
+ * cannot strand a mark the stream would not have cleared anyway: one THREAD's
+ * turns serialize on its pool worker's gate (different threads run in parallel
+ * on different workers, but each entry here is per thread), so the previous
+ * turn's terminal event has been folded in by the time the next one is
+ * dispatched.
  */
 export function noteTurnStart(threadId: string, turnId: string): void {
   const current = live.get(threadId);

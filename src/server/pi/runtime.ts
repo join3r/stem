@@ -113,11 +113,12 @@ import {
   type TurnTimingBreakdown
 } from './normalize';
 
-import { ForegroundSessionGate } from './session-gate';
+import { PiWorker } from './worker';
 import { secretKeyHex } from './secrets';
 import {
   ADMIN_APPROVAL_TITLE,
   DEVICE_MCP_BRIDGE_TITLE,
+  ENV_GATE_DIR,
   ENV_MCP_CONFIG,
   ENV_MCP_OAUTH,
   ENV_SECRET_KEY,
@@ -439,14 +440,22 @@ interface SessionFile {
 }
 
 /**
- * The pi (pi.dev) backend, run in RPC mode as a long-lived subprocess.
+ * The pi (pi.dev) backend: a BOUNDED POOL of `pi --mode rpc` subprocesses.
  * Normalizes pi's command/event protocol into Stem's canonical backend events
  * and satisfies {@link ChatBackend}.
  *
- * Architectural note: pi RPC holds ONE active session per process. So the
- * foreground process tracks the active thread (switch_session/new_session),
- * and `complete()` uses a separate warm `--no-session` worker (with hardened
- * cold fallback) so recall distillation / the exec judge never clobber chat.
+ * Architectural note: pi RPC holds ONE active session per process, so each
+ * pool worker ({@link PiWorker}) owns exactly the per-process state — its
+ * active session, model/thinking mirrors, streaming turn, and the gate that
+ * serializes its session mutations. This class owns everything shared (the
+ * session-file registry, approvals, bridges, the crash breaker, the complete()
+ * workers) plus the routing: a thread is bound to at most one worker at a
+ * time, its turns serialize on that worker exactly as they always did, and
+ * turns on DIFFERENT threads run genuinely in parallel on different workers —
+ * up to the pool bound, past which acquisition waits for a worker to go idle.
+ * `complete()` still uses its separate warm `--no-session` worker (with
+ * hardened cold fallback) so recall distillation / the exec judge never
+ * clobber chat.
  */
 /**
  * The turn's tool time, attributed. `toolMs` alone says a turn spent two minutes
@@ -465,28 +474,36 @@ function slowestTools(turn: TurnContext): { tools: string[] } | undefined {
 }
 
 export class PiRuntime extends EventEmitter implements ChatBackend {
-  private proc: PiProcess | null = null;
-  private starting: Promise<void> | null = null;
-  private foreground = new ForegroundSessionGate();
-  private activeThreadId: string | null = null;
+  // ---- the pool ----
+  /**
+   * Every worker alive (or respawnable) right now, in creation order. Workers
+   * keep their slot across a child crash — the PiWorker survives, its process
+   * respawns on the next use — and leave only through retirement (idle reaping,
+   * restart/shutdown). workers[0] is the "primary": the one prewarm spawns and
+   * the one non-thread RPCs (listModels) prefer.
+   */
+  private workers: PiWorker[] = [];
+  private nextWorkerId = 1;
+  /**
+   * Thread → the worker its pi session lives on. The load-bearing invariant of
+   * the pool: at most ONE worker ever has a given thread active, so a thread's
+   * turns serialize on that worker's gate exactly as they did on the single
+   * foreground process, and two workers can never both append to one session
+   * file. Entries are advisory beyond that — a bound worker may have moved on
+   * to another thread (ensureActive switches back on the next use), and a
+   * dropped binding only costs a session switch, never correctness.
+   */
+  private threadWorkers = new Map<string, PiWorker>();
+  /** Serializes worker acquisition so two concurrent starts can't both claim one. */
+  private acquireChain: Promise<unknown> = Promise.resolve();
+  /** Starts waiting for pool capacity, woken whenever a worker may have gone idle. */
+  private capacityWaiters: Array<() => void> = [];
+  /** Retire extra workers idle this long; the primary slot is never reaped. */
+  private static readonly WORKER_IDLE_REAP_MS = 5 * 60_000;
+  private reapTimer: NodeJS.Timeout | null = null;
+
   private mcpStatusWatcher: FSWatcher | null = null;
   private mcpStatusDebounce: NodeJS.Timeout | null = null;
-  /**
-   * The model of the CURRENTLY active pi session, mirrored so `applyModel` can skip a
-   * redundant `set_model` within one session. pi resolves the model per session — a new
-   * session resets to the spawn default, switching/forking/rolling back loads that
-   * session's own persisted model — so this MUST be invalidated (set null) on every
-   * session change, or the next `applyModel` wrongly no-ops and the turn runs on the
-   * wrong model (e.g. a vision request silently downgraded to text-only Spark).
-   */
-  private currentModel: string | null = null;
-  /**
-   * The thinking level of the CURRENTLY active pi session, mirrored like
-   * `currentModel` so `setThinking` can skip the redundant `set_thinking_level`
-   * round-trip issued on every turn. Sessions persist their own level, so this
-   * follows the exact same invalidation discipline: null on every session change.
-   */
-  private currentThinking: string | null = null;
   /** sessionId → on-disk session file, learned from get_state / dir scans. */
   private sessionFiles = new Map<string, string>();
   /**
@@ -508,11 +525,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * entry. Reloaded threads already use entry ids as turnIds (identity).
    */
   private turnEntryIds = new Map<string, string>();
-  /** The turn currently streaming on the foreground process (one at a time). */
-  private currentTurn: TurnContext | null = null;
   /**
    * Starts whose RPC is still in flight, keyed by their (client-minted) turn id.
-   * interruptTurn cancels through the token: a start queued behind the foreground
+   * interruptTurn cancels through the token: a start queued behind its worker's
    * gate — or still building its prompt — is abandoned before it touches pi,
    * instead of Stop having to wait for the whole start to complete first.
    */
@@ -525,11 +540,6 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * cap — turn ids are never reused, so a stale latch can't cancel anything.
    */
   private preStartCancels = new Set<string>();
-  /**
-   * The last turn that settled, so post-run auto-compaction (which pi runs AFTER
-   * agent_end, when no live turn exists) can still be surfaced on its bubble.
-   */
-  private lastSettledTurn: { threadId: string; turnId: string } | null = null;
   /**
    * The last few settled turns, newest last, for skill authoring after the fact.
    * `/learn` and the "Save as skill" button both act on a turn the user has
@@ -548,7 +558,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    */
   private skillApprovals = new Map<
     string,
-    (outcome: { approved: boolean; skill?: { name: string; description: string; body: string } }) => void
+    {
+      /** The conversation the card belongs to ('' when unknown) — also how a
+       * worker exit finds the cards its dead elicitations can no longer honor. */
+      threadId: string;
+      settle: (outcome: { approved: boolean; skill?: { name: string; description: string; body: string } }) => void;
+    }
   >();
   /** Pending stem-admin approvals, keyed by the bridge's extension_ui_request id. */
   private adminApprovals = new Set<string>();
@@ -569,12 +584,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private harnessBridge: HarnessBridge | null = null;
   /** Wired by main to route the assistant's manage_skill tool through the validator + policy. */
   private skillBridge: SkillBridge | null = null;
-  /** Set when an admin add/remove was approved; reloads MCP servers at turn end. */
+  /** Set when an admin add/remove was approved; reloads MCP servers once every turn ends. */
   private pendingMcpReload = false;
-  /** Set when a skill was written this turn (or by the curator); reloads at turn end. */
+  /** Set when a skill was written this turn (or by the curator); reloads once every turn ends. */
   private pendingSkillReload = false;
-  /** The skills revision marker captured at turn start, to detect in-turn skill writes. */
-  private skillsRevAtTurnStart = '';
 
   // ---- crash-loop breaker ----
   // An exit under RAPID_EXIT_MS counts a strike; SPAWN_STRIKE_LIMIT strikes pause
@@ -621,6 +634,218 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     super();
   }
 
+  // ---- worker pool ----
+
+  /**
+   * The pool bound. Each worker is a whole pi child (with its own MCP bridge),
+   * so this is a memory/CPU dial, not a free concurrency knob: 3 covers "a chat
+   * streaming, a Quick Chat, and a scheduled run" without letting a burst of
+   * turns spawn a process apiece. Overridable for constrained hosts (a small
+   * VPS wants 1–2) and for the day personas want a worker each.
+   */
+  private readonly maxWorkers = (() => {
+    const raw = Number.parseInt(process.env.STEM_PI_MAX_WORKERS ?? '', 10);
+    return Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 8) : 3;
+  })();
+
+  /** Where a worker's per-turn gate files live (STEM_GATE_DIR for its child). */
+  private workerGateDir(id: number): string {
+    return join(this.options.piHome, 'workers', String(id));
+  }
+
+  /** The worker at the primary slot, created (not yet spawned) if the pool is empty. */
+  private primaryWorker(): PiWorker {
+    if (!this.workers.length) {
+      const id = this.nextWorkerId;
+      this.nextWorkerId += 1;
+      this.workers.push(new PiWorker(id, this.workerGateDir(id)));
+    }
+    return this.workers[0];
+  }
+
+  /** Any worker with a live child — for read-only RPCs that don't care which session. */
+  private anyRunningWorker(): PiWorker | null {
+    return this.workers.find((w) => w.proc?.running) ?? null;
+  }
+
+  /** The worker streaming `threadId`'s turn right now, if any. */
+  private turnWorker(threadId: string): PiWorker | null {
+    return this.workers.find((w) => w.currentTurn?.threadId === threadId) ?? null;
+  }
+
+  /**
+   * Pick (or wait for) the worker that will serve `threadId` — or any free
+   * worker when the thread is new/unknown (null). Serialized on a chain so two
+   * concurrent acquisitions can't both claim the same idle worker or both spawn
+   * past the bound. The rules, in order:
+   *
+   *  1. A thread keeps its bound worker, busy or not — queueing behind your own
+   *     thread's turn is the per-thread serialization the app has always had.
+   *  2. Otherwise take an idle worker: one that has never been bound beats
+   *     evicting somebody's affinity; among bound-but-idle workers the
+   *     least-recently-used loses its binding.
+   *  3. Otherwise grow the pool, up to the bound.
+   *  4. Otherwise wait for a worker to go idle and try again.
+   */
+  private acquireWorker(threadId: string | null): Promise<PiWorker> {
+    const run = this.acquireChain.then(
+      () => this.acquireWorkerNow(threadId),
+      () => this.acquireWorkerNow(threadId)
+    );
+    this.acquireChain = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  private async acquireWorkerNow(threadId: string | null): Promise<PiWorker> {
+    // Every return path RESERVES the worker (leases += 1) before handing it out:
+    // the lease is what the idle test reads, so without the reservation two
+    // concurrent acquisitions could both be given the same "idle" worker in the
+    // gap before their gated work begins. The reservation is consumed by
+    // runLeased (which releases in its finally) or by releaseWorker directly
+    // (an abandoned/canceled acquisition).
+    const reserve = (worker: PiWorker): PiWorker => {
+      worker.leases += 1;
+      worker.lastUsedAt = Date.now();
+      return worker;
+    };
+    for (;;) {
+      if (threadId) {
+        const bound = this.threadWorkers.get(threadId);
+        if (bound && !bound.disposed) return reserve(bound);
+        if (bound) this.threadWorkers.delete(threadId);
+      }
+      const idle = this.workers.filter((w) => !w.disposed && w.idle);
+      if (idle.length) {
+        const unbound = idle.filter((w) => ![...this.threadWorkers.values()].includes(w));
+        const chosen = unbound[0] ?? idle.sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
+        if (threadId) this.bindThread(threadId, chosen);
+        return reserve(chosen);
+      }
+      if (this.workers.length < this.maxWorkers) {
+        const worker = new PiWorker(this.nextWorkerId, this.workerGateDir(this.nextWorkerId));
+        this.nextWorkerId += 1;
+        this.workers.push(worker);
+        if (threadId) this.bindThread(threadId, worker);
+        return reserve(worker);
+      }
+      await new Promise<void>((resolve) => this.capacityWaiters.push(resolve));
+    }
+  }
+
+  /**
+   * Make `worker` the home of `threadId`. Any previous binding of the thread is
+   * dropped (the invariant is one worker per thread, never two), and the map is
+   * kept from growing without bound — stale bindings only ever cost a session
+   * switch on the thread's next use.
+   */
+  private bindThread(threadId: string, worker: PiWorker): void {
+    this.threadWorkers.set(threadId, worker);
+    if (this.threadWorkers.size > 256) {
+      for (const [id, w] of this.threadWorkers) {
+        if (this.threadWorkers.size <= 128) break;
+        // Keep bindings that are actually in use; everything else re-acquires.
+        if (w.activeThreadId !== id && w.currentTurn?.threadId !== id) this.threadWorkers.delete(id);
+      }
+    }
+  }
+
+  /** A worker may have gone idle: let every waiting acquisition re-check the pool. */
+  private pumpCapacityWaiters(): void {
+    const waiters = this.capacityWaiters;
+    this.capacityWaiters = [];
+    for (const wake of waiters) wake();
+  }
+
+  /** Give back an acquisition's reservation without running anything on it. */
+  private releaseWorker(worker: PiWorker): void {
+    worker.leases -= 1;
+    worker.lastUsedAt = Date.now();
+    this.pumpCapacityWaiters();
+  }
+
+  /**
+   * Run one gated operation on an ACQUIRED worker, consuming (and releasing)
+   * the reservation acquireWorker took. Every gated use of a worker goes
+   * through here or, for an abandoned acquisition, through releaseWorker.
+   */
+  private async runLeased<T>(worker: PiWorker, task: (worker: PiWorker) => Promise<T>): Promise<T> {
+    try {
+      return await worker.gate.run(() => task(worker));
+    } finally {
+      this.releaseWorker(worker);
+    }
+  }
+
+  /** Acquire the thread's worker and run one gated operation on it. */
+  private async withThreadWorker<T>(threadId: string, task: (worker: PiWorker) => Promise<T>): Promise<T> {
+    const worker = await this.acquireWorker(threadId);
+    return this.runLeased(worker, task);
+  }
+
+  /**
+   * Retire extra workers that have sat idle: dispose the child, drop the slot
+   * and its bindings. The primary slot survives — the app always keeps one warm
+   * process once it has spawned one. Runs through the acquisition chain so it
+   * can never retire a worker an acquisition is about to hand out.
+   */
+  private scheduleWorkerReaper(): void {
+    if (this.reapTimer) return;
+    this.reapTimer = setInterval(() => {
+      void this.acquireChain.then(() => {
+        const cutoff = Date.now() - PiRuntime.WORKER_IDLE_REAP_MS;
+        for (const worker of [...this.workers.slice(1)]) {
+          if (!worker.idle || worker.lastUsedAt > cutoff) continue;
+          this.retireWorker(worker);
+        }
+        if (this.workers.length <= 1 && this.reapTimer) {
+          clearInterval(this.reapTimer);
+          this.reapTimer = null;
+        }
+      });
+    }, 60_000);
+    this.reapTimer.unref?.();
+  }
+
+  /** Drop one worker from the pool and kill its child (detached first, so the
+   * exit handler treats it as deliberate). */
+  private retireWorker(worker: PiWorker): void {
+    worker.disposed = true;
+    this.workers = this.workers.filter((w) => w !== worker);
+    for (const [id, w] of this.threadWorkers) if (w === worker) this.threadWorkers.delete(id);
+    const proc = worker.proc;
+    worker.proc = null;
+    worker.activeThreadId = null;
+    // quiet: dispose carries its own SIGKILL backstop; there is no second lever.
+    if (proc) void proc.dispose().catch(() => undefined);
+  }
+
+  /** Tear the whole pool down (shutdown/restart). Deliberate: no breaker strikes. */
+  private async shutdownWorkers(): Promise<void> {
+    if (this.reapTimer) {
+      clearInterval(this.reapTimer);
+      this.reapTimer = null;
+    }
+    const workers = this.workers;
+    this.workers = [];
+    this.threadWorkers.clear();
+    this.settleAllApprovals();
+    await Promise.all(
+      workers.map(async (worker) => {
+        worker.disposed = true;
+        const proc = worker.proc;
+        worker.proc = null;
+        worker.activeThreadId = null;
+        worker.currentTurn = null;
+        worker.gate.reset();
+        if (proc) await proc.dispose();
+      })
+    );
+    this.pumpCapacityWaiters();
+  }
+
   // ---- lifecycle / auth ----
 
   async status(): Promise<RuntimeStatus> {
@@ -659,15 +884,18 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   async restart(): Promise<void> {
     // A deliberate restart is the manual breaker reset: the user (or a config
-    // change) asked for a fresh spawn, so it always gets one immediately.
+    // change) asked for a fresh spawn, so it always gets one immediately. The
+    // whole pool goes — every worker reads config/auth once at spawn, so a
+    // restart that left an old worker alive would leave old credentials
+    // answering some threads.
     this.spawnStrikes = 0;
     this.cooldownUntil = 0;
     await this.shutdown();
-    await this.ensureStarted();
+    await this.ensureWorkerStarted(this.primaryWorker());
   }
 
   async prewarm(): Promise<void> {
-    await this.ensureStarted();
+    await this.ensureWorkerStarted(this.primaryWorker());
     // Warm the complete worker in the background so the first exec judge / distill
     // call does not pay Electron-as-Node cold start on the critical path.
     void this.ensureCompleteWorker().catch((e) => {
@@ -683,23 +911,22 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   async shutdown(): Promise<void> {
     await this.disposeCompleteWorker();
-    const proc = this.proc;
-    this.proc = null;
-    this.activeThreadId = null;
-    this.currentTurn = null;
-    this.foreground.reset();
-    if (proc) await proc.dispose();
+    await this.shutdownWorkers();
   }
 
   // ---- turns ----
 
   async createThread(model?: string): Promise<string> {
-    return this.foreground.run(async () => {
-      await this.ensureStarted();
+    const worker = await this.acquireWorker(null);
+    return this.runLeased(worker, async (w) => {
+      await this.ensureWorkerStarted(w);
       // Create the session FIRST: newSession resets the active model, so applying the
       // model before it would be undone. Apply after so the pre-created session is on it.
-      const id = await this.newSession();
-      if (model) await this.applyModel(model);
+      const id = await this.newSession(w);
+      // Bind now, before the first prompt: the pre-created session has no file
+      // until pi's first append, so only this worker can serve its first turn.
+      this.bindThread(id, w);
+      if (model) await this.applyModel(w, model);
       this.unnamedThreads.add(id);
       return id;
     });
@@ -740,6 +967,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const canceledAnswer = new Promise<StartTurnResult>((resolve) => {
       answerCanceled = () => resolve(canceledResult);
     });
+    // Which worker this start landed on, once acquisition has decided — the
+    // cancel token needs it to find (and abort) the live turn.
+    const claimed: { worker: PiWorker | null } = { worker: null };
     const token: PendingStartCancel = {
       canceled: false,
       cancel: () => {
@@ -748,24 +978,44 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // live match here means pi (may) already have the turn — abort it. An
         // earlier cancel must NOT abort: pi could still be running the previous
         // turn's post-run work, and the checkpoints abandon ours anyway.
-        const live = this.currentTurn;
-        if (live && live.turnId === turnId && live.promptSentAt) this.abortLiveTurn(live);
+        const live = claimed.worker?.currentTurn;
+        if (claimed.worker && live && live.turnId === turnId && live.promptSentAt) {
+          this.abortLiveTurn(claimed.worker, live);
+        }
         answerCanceled();
       }
     };
     this.pendingStarts.set(turnId, token);
     try {
-      const run = this.foreground.run(async () => {
-      // Canceled while queued behind the gate — the turn never touches pi.
+      // Acquisition can wait for pool capacity; a Stop clicked in that window
+      // wins the race below the same way one clicked behind the gate does.
+      const acquired = this.acquireWorker(input.threadId ?? null);
+      const worker = await Promise.race([acquired, canceledAnswer.then(() => null)]);
+      if (!worker || token.canceled) {
+        // The acquisition (pending or already landed) still holds a reservation
+        // the run below will never consume — give it back when it resolves, or
+        // the worker counts as busy forever.
+        // quiet: an acquisition that REJECTED reserved nothing, so there is
+        // nothing to give back — and the start it belonged to was canceled, so
+        // nobody is owed the error either.
+        void acquired.then((w) => this.releaseWorker(w)).catch(() => undefined);
+        return canceledResult;
+      }
+      claimed.worker = worker;
+      const run = this.runLeased(worker, async (w) => {
+      // Canceled while queued behind the worker's gate — the turn never touches pi.
       if (token.canceled) return canceledResult;
       const startedAt = Date.now();
-      await this.ensureStarted();
+      await this.ensureWorkerStarted(w);
       const ensureMs = Date.now() - startedAt;
 
       // First turn of a new chat — either a draft started here (no threadId) or a
       // session pre-created via createThread (Quick Chat) that hasn't been prompted.
       const isNewThread = !input.threadId || this.unnamedThreads.has(input.threadId);
-      const threadId = input.threadId ? await this.ensureActive(input.threadId) : await this.newSession();
+      const threadId = input.threadId ? await this.ensureActive(w, input.threadId) : await this.newSession(w);
+      // Bind whatever id the turn actually runs on: a fresh draft's new session,
+      // or the adopted id ensureActive minted for a fileless pre-created thread.
+      this.bindThread(threadId, w);
       if (input.scheduled) {
         // pi does NOT restore the session's own model on switch_session (the
         // spawn-time --model pins every runtime rebuild) — without an explicit
@@ -788,7 +1038,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         for (const model of [input.model, persisted?.model]) {
           if (!model) continue;
           try {
-            await this.applyModel(model);
+            await this.applyModel(w, model);
             break;
           } catch (error) {
             log('pi', 'scheduled run: could not apply model', {
@@ -797,8 +1047,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             });
           }
         }
-        if (!input.effort && persisted?.effort) await this.setThinking(persisted.effort);
-        await this.maybeCompactBeforeScheduledRun(threadId, persisted?.contextTokens).catch((e) =>
+        if (!input.effort && persisted?.effort) await this.setThinking(w, persisted.effort);
+        await this.maybeCompactBeforeScheduledRun(w, threadId, persisted?.contextTokens).catch((e) =>
           // This is the guard, not a retry of it: the run proceeds either way,
           // and if the thread really had outgrown the window the prompt below
           // dies on overflow — which for a scheduled run is a task that simply
@@ -806,9 +1056,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           degrade('pi.thread', 'sent the scheduled run without condensing an oversized thread', e)
         );
       } else if (input.model) {
-        await this.applyModel(input.model);
+        await this.applyModel(w, input.model);
       }
-      if (input.effort) await this.setThinking(input.effort);
+      if (input.effort) await this.setThinking(w, input.effort);
 
       const turn = newTurnContext(threadId, turnId);
       turn.startedAt = startedAt;
@@ -829,35 +1079,36 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         degrade('pi.capture', 'captured the turn with no folder marked private', e);
         return [];
       });
-      this.currentTurn = turn;
-      this.skillsRevAtTurnStart = this.readSkillsRev();
-      this.foreground.claimTurn();
+      w.currentTurn = turn;
+      w.skillsRevAtTurnStart = this.readSkillsRev();
+      w.gate.claimTurn();
 
       try {
-        // Gate native web search for THIS turn (main vs Quick Chat share one process,
-        // so the bridge can't tell them apart — we set the gate just before the prompt).
-        // Both gates fail the turn rather than degrading it. The bridge reads the
-        // FILE, not these arguments, so a write that does not land leaves whatever
-        // the previous turn wrote — and main and Quick Chat share one process, so
-        // "the previous turn" is routinely the other context's. Running anyway
-        // means search on for a turn the user turned it off in, or the wrong
-        // service tier, which is billed. Refusing is visible and costs one retry.
-        await writeNativeSearchGate(input.webSearch ?? true).catch((e) => {
+        // Gate native web search for THIS turn (surfaces sharing one process
+        // can't be told apart by the bridge — we set the gate just before the
+        // prompt, in THIS worker's own gate directory so a concurrent turn on
+        // another worker can't flip it). Both gates fail the turn rather than
+        // degrading it. The bridge reads the FILE, not these arguments, so a
+        // write that does not land leaves whatever this worker's previous turn
+        // wrote — routinely another context's setting. Running anyway means
+        // search on for a turn the user turned it off in, or the wrong service
+        // tier, which is billed. Refusing is visible and costs one retry.
+        await writeNativeSearchGate(input.webSearch ?? true, w.gateDir).catch((e) => {
           degrade('pi.gates', 'refused the turn rather than run it on the previous web-search setting', e);
           throw new Error(`Could not set this turn's web-search mode: ${e instanceof Error ? e.message : String(e)}`);
         });
-        await writeServiceTierGate(input.serviceTier ?? null).catch((e) => {
+        await writeServiceTierGate(input.serviceTier ?? null, w.gateDir).catch((e) => {
           degrade('pi.gates', 'refused the turn rather than run it on the previous service tier', e);
           throw new Error(`Could not set this turn's service tier: ${e instanceof Error ? e.message : String(e)}`);
         });
 
         const buildStart = Date.now();
-        const { message, images } = await this.buildMessage(input, threadId, turn.recall, turnId);
+        const { message, images } = await this.buildMessage(input, threadId, turn, turnId);
         turn.buildMs = Date.now() - buildStart;
         // Canceled while the prompt was being prepared (gates, recall build) —
         // abandon before pi sees anything. finishTurn drops the claim taken above.
         if (token.canceled) {
-          this.finishTurn();
+          this.finishTurn(w);
           return canceledResult;
         }
         // Anchor "send" at the write itself so send→firstToken is independent of how
@@ -865,9 +1116,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // phase bucket (it's TTFT, not thinking) — see advancePhase.
         turn.promptSentAt = Date.now();
         turn.lastEventAt = turn.promptSentAt;
-        await this.sendPrompt(message, images);
+        await this.sendPrompt(w, message, images);
       } catch (e) {
-        this.finishTurn();
+        this.finishTurn(w);
         throw e;
       }
 
@@ -881,7 +1132,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // quiet: the sidebar falls back to "New chat" until something writes a
         // name, and the step-0 schedule started just below is what writes one —
         // this title is the placeholder the naming pass replaces anyway.
-        if (name) await this.proc!.request({ type: 'set_session_name', name }).catch(() => undefined);
+        if (name) await w.proc!.request({ type: 'set_session_name', name }).catch(() => undefined);
         // …and start the thread at the top of the naming schedule, so the model
         // written name is due once this turn settles. Step 0 is what marks the
         // thread as never-named; without it a new thread would be taken for one
@@ -947,17 +1198,18 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * stem.log at all — the throw went straight to the renderer — so the log line
    * below is how a recurrence gets a duration attached to it.
    */
-  private async sendPrompt(message: string, images: PiImageContent[]): Promise<void> {
+  private async sendPrompt(worker: PiWorker, message: string, images: PiImageContent[]): Promise<void> {
     const command = { type: 'prompt', message, images: images.length ? images : undefined };
-    let res = await this.proc!.request(command);
+    let res = await worker.proc!.request(command);
     if (!res.success && isBusyRejection(res.error)) {
       const waitedFrom = Date.now();
-      const idle = await this.waitForPiIdle();
+      const idle = await this.waitForPiIdle(worker);
       log('pi', 'pi was still busy after the turn gate opened', {
+        worker: worker.id,
         waitedMs: Date.now() - waitedFrom,
         idle
       });
-      if (idle) res = await this.proc!.request(command);
+      if (idle) res = await worker.proc!.request(command);
     }
     if (!res.success) throw new Error(res.error ?? 'pi rejected the prompt.');
   }
@@ -968,13 +1220,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * recovers from, so waiting for one would hang on exactly the case that matters.
    * Returns false on timeout, leaving the original rejection to surface.
    */
-  private async waitForPiIdle(timeoutMs = PI_IDLE_WAIT_MS): Promise<boolean> {
+  private async waitForPiIdle(worker: PiWorker, timeoutMs = PI_IDLE_WAIT_MS): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       // quiet: null lands on the same `return false` as an unsuccessful reply,
       // which is this function's documented answer — and false leaves the
       // prompt's original rejection to surface from sendPrompt.
-      const state = await this.proc?.request({ type: 'get_state' }, 10_000).catch(() => null);
+      const state = await worker.proc?.request({ type: 'get_state' }, 10_000).catch(() => null);
       if (!state?.success) return false;
       if (!(state.data as { isStreaming?: boolean } | undefined)?.isStreaming) return true;
       await new Promise((resolve) => setTimeout(resolve, PI_IDLE_POLL_MS));
@@ -992,8 +1244,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       pending.cancel();
       return;
     }
-    if (this.proc && this.currentTurn && this.currentTurn.turnId === turnId) {
-      this.abortLiveTurn(this.currentTurn);
+    const live = this.workers.find((w) => w.proc && w.currentTurn?.turnId === turnId);
+    if (live) {
+      this.abortLiveTurn(live, live.currentTurn!);
       return;
     }
     // Neither live nor starting. Either the start RPC hasn't arrived yet (Stop
@@ -1012,17 +1265,23 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /** Abort the streaming turn: pi's abort reaches the extension tool, but the
    * actual child process of any command it is running lives in main — stop both. */
-  private abortLiveTurn(turn: TurnContext): void {
+  private abortLiveTurn(worker: PiWorker, turn: TurnContext): void {
     turn.aborted = true;
     this.execBridge?.abortThread(turn.threadId);
     this.harnessBridge?.abortThread(turn.threadId);
-    this.proc?.send({ type: 'abort' });
+    worker.proc?.send({ type: 'abort' });
   }
 
   async listModels(): Promise<ModelSummary[]> {
     await this.maybeRefreshLocalModels();
-    await this.ensureStarted();
-    const res = await this.proc!.request({ type: 'get_available_models' });
+    // Any live worker can answer — the catalog is process-wide, not per-session,
+    // and asking a busy worker is fine (get_available_models is a read).
+    let worker = this.anyRunningWorker();
+    if (!worker) {
+      worker = this.primaryWorker();
+      await this.ensureWorkerStarted(worker);
+    }
+    const res = await worker.proc!.request({ type: 'get_available_models' });
     const models = ((res.data as { models?: PiModel[] } | undefined)?.models ?? []).filter(Boolean);
     const providers = await this.authProviders();
     const visible = providers.size ? models.filter((m) => providers.has(m.provider)) : models;
@@ -1057,7 +1316,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * both only at spawn) use this to avoid killing a reply in progress.
    */
   isTurnRunning(): boolean {
-    return !!this.currentTurn;
+    return this.workers.some((w) => w.currentTurn);
   }
 
   /**
@@ -1066,7 +1325,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * emitted before agent_end clears currentTurn, so the flag is still live at capture.
    */
   isCaptureSuppressed(threadId: string): boolean {
-    return this.currentTurn?.threadId === threadId && this.currentTurn.memoryTainted === true;
+    return this.turnWorker(threadId)?.currentTurn?.memoryTainted === true;
   }
 
   /**
@@ -1077,7 +1336,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * them — see TurnContext.webTainted.
    */
   isWebTainted(threadId: string): boolean {
-    return this.currentTurn?.threadId === threadId && this.currentTurn.webTainted === true;
+    return this.turnWorker(threadId)?.currentTurn?.webTainted === true;
   }
 
   /**
@@ -1087,7 +1346,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * is nothing pending, the thread doesn't match, or the turn is tainted.
    */
   flushPendingUserCapture(threadId: string): void {
-    const turn = this.currentTurn;
+    const turn = this.turnWorker(threadId)?.currentTurn ?? null;
     if (!turn || turn.threadId !== threadId || turn.memoryTainted) return;
     const pending = turn.pendingUserCapture;
     if (!pending) return;
@@ -1345,8 +1604,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const file = await this.resolveSessionFile(threadId);
     if (!file) {
       // No persisted file yet (a freshly forked/created session writes lazily on
-      // first append). If it's the live active session, read its in-memory state.
-      if (this.proc?.running && this.activeThreadId === threadId) return this.readActiveMessages();
+      // first append). If some worker has it as its live session, read that
+      // worker's in-memory state.
+      const live = this.workers.find((w) => w.proc?.running && w.activeThreadId === threadId);
+      if (live) return this.readActiveMessages(live);
       return { title: 'New chat', messages: [] };
     }
     let text: string;
@@ -1512,17 +1773,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   }
 
   async resumeThread(threadId: string): Promise<void> {
-    await this.foreground.run(async () => {
-      await this.ensureStarted();
-      await this.ensureActive(threadId);
+    await this.withThreadWorker(threadId, async (w) => {
+      await this.ensureWorkerStarted(w);
+      await this.ensureActive(w, threadId);
     });
   }
 
   async renameThread(threadId: string, name: string): Promise<void> {
-    await this.foreground.run(async () => {
-      await this.ensureStarted();
-      await this.ensureActive(threadId);
-      const renamed = await this.proc!.request({ type: 'set_session_name', name });
+    await this.withThreadWorker(threadId, async (w) => {
+      await this.ensureWorkerStarted(w);
+      await this.ensureActive(w, threadId);
+      const renamed = await w.proc!.request({ type: 'set_session_name', name });
       if (!renamed.success) throw new Error(renamed.error ?? `pi could not rename chat "${threadId}".`);
     });
   }
@@ -1570,21 +1831,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // body below waits on activeTurnDone, so without this the unlink/new_session
     // would stall until the whole LLM turn finishes. pi emits `done` on abort,
     // which resolves the gate and lets the delete proceed promptly.
-    if (this.activeThreadId === threadId && this.currentTurn) {
-      await this.interruptTurn(this.currentTurn.turnId);
-    }
-    await this.foreground.run(async () => {
+    const streaming = this.turnWorker(threadId);
+    if (streaming) await this.interruptTurn(streaming.currentTurn!.turnId);
+    await this.withThreadWorker(threadId, async (w) => {
       const file = await this.resolveSessionFile(threadId);
-      if (this.activeThreadId === threadId) {
-        if (this.proc) {
-          const parked = await this.proc.request({ type: 'new_session' });
+      if (w.activeThreadId === threadId) {
+        if (w.proc) {
+          const parked = await w.proc.request({ type: 'new_session' });
           if (!parked.success) throw new Error(parked.error ?? 'pi could not leave the chat before deleting it.');
           // A successful new_session resets all active-session mirrors.
-          this.currentModel = null;
-          this.currentThinking = null;
+          w.currentModel = null;
+          w.currentThinking = null;
         }
-        this.activeThreadId = null;
+        w.activeThreadId = null;
       }
+      this.threadWorkers.delete(threadId);
       this.sessionFiles.delete(threadId);
       this.unnamedThreads.delete(threadId);
       if (file) await unlink(file).catch((e) =>
@@ -1604,8 +1865,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * id-stable). The renderer then re-sends the prompt as a fresh turn.
    */
   async rollbackToTurn(threadId: string, turnId: string): Promise<void> {
-    await this.foreground.run(async () => {
-      await this.ensureStarted();
+    await this.withThreadWorker(threadId, async (w) => {
+      await this.ensureWorkerStarted(w);
       const file = await this.resolveSessionFile(threadId);
       if (!file) throw new Error('This chat has no saved history to edit yet.');
       const entryId = this.resolveEntryId(turnId);
@@ -1613,22 +1874,23 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const lines = raw.split('\n').filter((l) => l.trim());
       const idx = lines.findIndex((l) => this.entryIdOf(l) === entryId);
       if (idx <= 0) throw new Error('Could not locate that message to edit. Reopen the chat and try again.');
-      // Park the foreground off this file so the reload reads our truncated copy.
-      const parked = await this.proc!.request({ type: 'new_session' });
+      // Park the worker off this file so the reload reads our truncated copy.
+      // (Thread→worker affinity means no OTHER worker can be on it.)
+      const parked = await w.proc!.request({ type: 'new_session' });
       if (!parked.success) throw new Error(parked.error ?? 'pi could not park the active chat for editing.');
-      // The backend is now on a fresh parking session. Clear mirrors immediately;
+      // The worker is now on a fresh parking session. Clear mirrors immediately;
       // if truncation/reload fails, never claim that it is still on either chat.
-      this.currentModel = null;
-      this.currentThinking = null;
-      this.activeThreadId = null;
+      w.currentModel = null;
+      w.currentThinking = null;
+      w.activeThreadId = null;
       await writeFile(file, lines.slice(0, idx).join('\n') + '\n');
       await repairMissingSessionCwd(file, this.options.workspaceRoot);
-      const switched = await this.proc!.request({ type: 'switch_session', sessionPath: file });
+      const switched = await w.proc!.request({ type: 'switch_session', sessionPath: file });
       if (!switched.success) throw new Error(switched.error ?? `pi could not reload chat "${threadId}" after editing.`);
       // Both RPCs above swap the active session's model/thinking out from under us.
-      this.currentModel = null;
-      this.currentThinking = null;
-      this.activeThreadId = threadId;
+      w.currentModel = null;
+      w.currentThinking = null;
+      w.activeThreadId = threadId;
     });
   }
 
@@ -1639,24 +1901,27 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * session is active and read live until its file is written on first append.
    */
   async forkThread(threadId: string, turnId: string): Promise<{ threadId: string }> {
-    return this.foreground.run(async () => {
-      await this.ensureStarted();
-      await this.ensureActive(threadId);
+    return this.withThreadWorker(threadId, async (w) => {
+      await this.ensureWorkerStarted(w);
+      await this.ensureActive(w, threadId);
       const entryId = this.resolveEntryId(turnId);
-      const fm = await this.proc!.request({ type: 'get_fork_messages' });
+      const fm = await w.proc!.request({ type: 'get_fork_messages' });
       const entries = (fm.data as { messages?: { entryId: string }[] } | undefined)?.messages ?? [];
       const i = entries.findIndex((e) => e.entryId === entryId);
       if (i === -1) throw new Error('Reopen this chat to fork from an earlier message.');
       const forkEntry = entries[i + 1]?.entryId ?? entries[i].entryId;
-      const res = await this.proc!.request({ type: 'fork', entryId: forkEntry });
+      const res = await w.proc!.request({ type: 'fork', entryId: forkEntry });
       if (!res.success) throw new Error(res.error ?? 'pi could not fork this chat.');
-      const state = await this.proc!.request({ type: 'get_state' });
-      const newId = this.recordState(state.data);
+      const state = await w.proc!.request({ type: 'get_state' });
+      const newId = this.recordState(w, state.data);
       if (!newId) throw new Error('pi did not return a forked session id.');
-      // The fork becomes the active session — invalidate the model/thinking mirrors.
-      this.currentModel = null;
-      this.currentThinking = null;
-      this.activeThreadId = newId;
+      // The fork becomes this worker's active session — invalidate the mirrors
+      // and bind the new thread here (its file is written lazily, so until the
+      // first append only this worker can read or prompt it).
+      w.currentModel = null;
+      w.currentThinking = null;
+      w.activeThreadId = newId;
+      this.bindThread(newId, w);
       return { threadId: newId };
     });
   }
@@ -1771,9 +2036,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (accept) {
         this.pendingMcpReload = true;
         // A concurrent process exit/restart can settle the originating turn while
-        // main writes config. If idle now, reload immediately; otherwise the
-        // current turn's normal finish barrier will apply it safely.
-        if (!this.currentTurn) {
+        // main writes config. If the pool is idle now, reload immediately;
+        // otherwise the last live turn's finish barrier will apply it safely.
+        if (!this.isTurnRunning()) {
           this.pendingMcpReload = false;
           void this.configMcpServerReload().catch((e) =>
             // The flag was cleared before this ran, so nothing retries. mcp.json
@@ -1835,32 +2100,64 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return true;
   }
 
+  /** The whole pool is going down (shutdown/restart): settle every held card. */
   private settleAllApprovals(): void {
     for (const id of [...this.adminApprovals]) this.settleAdminApproval(id);
     for (const id of [...this.instructionsApprovals]) this.settleInstructionsApproval(id);
-    // Skill cards: deny. The pi child that asked is gone, so an approval could
-    // never be delivered back to its tool call anyway.
-    for (const settle of [...this.skillApprovals.values()]) settle({ approved: false });
-    // Exec: deny pending approval cards and kill running commands — the pi child
-    // that asked is gone, so their results could never be delivered anyway.
+    // Skill cards: deny. The pi children that asked are gone, so an approval
+    // could never be delivered back to its tool call anyway.
+    for (const { settle } of [...this.skillApprovals.values()]) settle({ approved: false });
+    // Exec: deny pending approval cards and kill running commands — the pi
+    // children that asked are gone, so their results could never be delivered.
     this.execBridge?.settleAll();
     // Harness: same argument — cancel live coding-agent turns and dismiss their
     // cards; the sessions themselves survive on disk for the next call.
     this.harnessBridge?.settleAll();
   }
 
+  /**
+   * ONE worker's child died: settle only what that child was holding open, so a
+   * crash on one worker never kills approvals or running commands belonging to
+   * turns streaming on the others. Matched by originating process (admin /
+   * instructions cards store it) and by the dead worker's thread (skill cards,
+   * exec/harness work — a worker's held requests all belong to its live turn).
+   */
+  private settleWorkerApprovals(proc: PiProcess, threadId: string | null): void {
+    for (const [id, pending] of [...this.adminApprovalProposals]) {
+      if (pending.process === proc) {
+        this.settleAdminApproval(id);
+      }
+    }
+    for (const [id, requestProcess] of [...this.instructionsApprovalProcesses]) {
+      if (requestProcess === proc) this.settleInstructionsApproval(id);
+    }
+    if (threadId) {
+      for (const { threadId: cardThread, settle } of [...this.skillApprovals.values()]) {
+        if (cardThread === threadId) settle({ approved: false });
+      }
+      this.execBridge?.abortThread(threadId);
+      this.harnessBridge?.abortThread(threadId);
+    }
+  }
+
   private async configMcpServerReload(): Promise<void> {
-    // A reload is a full pi restart. Pay the cold-start cost HERE (spawn + MCP
-    // connect + re-activating the previous thread/model) instead of lazily on the
-    // next user turn — a user turn queued behind this gate then starts warm.
-    const prevThread = this.activeThreadId;
-    const prevModel = this.currentModel;
+    // A reload is a full pool restart — every worker reads mcp.json once at
+    // spawn. Pay the cold-start cost HERE (spawn + MCP connect + re-activating
+    // the primary worker's previous thread/model) instead of lazily on the next
+    // user turn — a user turn queued behind that worker's gate then starts warm.
+    const primary = this.workers[0] ?? null;
+    const prevThread = primary?.activeThreadId ?? null;
+    const prevModel = primary?.currentModel ?? null;
     await this.shutdown();
-    await this.foreground.run(async () => {
-      await this.ensureStarted();
+    const worker = await this.acquireWorker(null);
+    await this.runLeased(worker, async (w) => {
+      await this.ensureWorkerStarted(w);
       try {
-        if (prevThread) await this.ensureActive(prevThread);
-        if (prevModel) await this.applyModel(prevModel);
+        if (prevThread) {
+          await this.ensureActive(w, prevThread);
+          this.bindThread(prevThread, w);
+        }
+        if (prevModel) await this.applyModel(w, prevModel);
       } catch {
         // quiet: this only pays the cold-start cost early. The mirrors are left
         // unset, so the next turn re-activates the thread and applies the model on
@@ -1902,20 +2199,20 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * can be minutes away (approval + spawn) — pi holds the elicitation open, same as
    * the admin/instructions approvals.
    */
-  private handleExecBridgeRequest(id: string, payload: string | undefined): void {
+  private handleExecBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
     // Answer the process that ASKED, exactly as the skill bridge does. This used
-    // to answer whatever `this.proc` had become, which was survivable only while
-    // an approval card could not sit for long; now that one waits up to ten
-    // minutes for the person it asks, a restart in the middle is a real
+    // to answer whatever the worker's proc had become, which was survivable only
+    // while an approval card could not sit for long; now that one waits up to
+    // ten minutes for the person it asks, a restart in the middle is a real
     // possibility — and the new process's elicitation table has never heard of
     // this id, so a reply aimed at it would resolve nothing and could land on an
     // unrelated request.
-    const requestProcess = this.proc;
+    const requestProcess = worker.proc;
     const respond = (value: unknown): void => {
-      if (this.proc !== requestProcess) return;
+      if (worker.proc !== requestProcess) return;
       requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
     };
-    const turn = this.currentTurn;
+    const turn = worker.currentTurn;
     void (async () => {
       try {
         const bridge = this.execBridge;
@@ -1928,17 +2225,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         };
         // Mirror can be null after a session switch if the turn did not re-apply a
         // model; fall back to pi's live state so the judge stays on a signed-in provider.
-        let currentModel = this.currentModel;
-        if (!currentModel && this.proc?.running) {
+        let currentModel = worker.currentModel;
+        if (!currentModel && worker.proc?.running) {
           // quiet: null leaves currentModel null, which resolveJudgeModel treats
           // as "no live chat model" and answers with the shared background model
           // or the app default. And a judge that cannot run at all escalates the
           // command to an approval card rather than letting it through.
-          const state = await this.proc.request({ type: 'get_state' }).catch(() => null);
+          const state = await worker.proc.request({ type: 'get_state' }).catch(() => null);
           const data = state?.data as { model?: { provider?: string; id?: string } } | undefined;
           if (data?.model?.provider && data.model.id) {
             currentModel = `${data.model.provider}/${data.model.id}`;
-            this.currentModel = currentModel;
+            worker.currentModel = currentModel;
           }
         }
         const result = await bridge.handleExecRequest({
@@ -1968,13 +2265,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * answers the process that ASKED, exactly like the exec bridge: a restart in
    * that window leaves an elicitation table that knows nothing about this id.
    */
-  private handleHarnessBridgeRequest(id: string, payload: string | undefined): void {
-    const requestProcess = this.proc;
+  private handleHarnessBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    const requestProcess = worker.proc;
     const respond = (value: unknown): void => {
-      if (this.proc !== requestProcess) return;
+      if (worker.proc !== requestProcess) return;
       requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
     };
-    const turn = this.currentTurn;
+    const turn = worker.currentTurn;
     void (async () => {
       try {
         const bridge = this.harnessBridge;
@@ -2017,10 +2314,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * ASKED rather than whatever `this.proc` is by then: a restart in that window
    * leaves an elicitation table that knows nothing about this id.
    */
-  private handleDeviceMcpBridgeRequest(id: string, payload: string | undefined): void {
-    const requestProcess = this.proc;
+  private handleDeviceMcpBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    const requestProcess = worker.proc;
     const respond = (value: unknown): void => {
-      if (this.proc !== requestProcess) return;
+      if (worker.proc !== requestProcess) return;
       requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
     };
     void (async () => {
@@ -2045,18 +2342,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * decision runs here and the held request is answered with a JSON result the
    * tool hands straight back to the model.
    */
-  private handleSkillBridgeRequest(id: string, payload: string | undefined): void {
-    // Answer the process that ASKED, not whatever `this.proc` happens to be by the
-    // time we reply. This request can be parked behind an approval card for two
-    // minutes — long enough for a restart to have replaced the process, whose
+  private handleSkillBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    // Answer the process that ASKED, not whatever the worker's proc happens to be
+    // by the time we reply. This request can be parked behind an approval card for
+    // two minutes — long enough for a restart to have replaced the process, whose
     // elicitation table knows nothing about this id. Matches how the instructions
     // approval, and the exec bridge above, latch `requestProcess`.
-    const requestProcess = this.proc;
+    const requestProcess = worker.proc;
     const respond = (value: unknown): void => {
-      if (this.proc !== requestProcess) return;
+      if (worker.proc !== requestProcess) return;
       requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
     };
-    const isScheduled = this.currentTurn?.isScheduled === true;
+    const isScheduled = worker.currentTurn?.isScheduled === true;
+    const threadId = worker.currentTurn?.threadId;
     void (async () => {
       try {
         const bridge = this.skillBridge;
@@ -2077,7 +2375,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                 body: String(req.content ?? req.body ?? ''),
                 expectExisting: req.expect_existing === true
               },
-          { isScheduled }
+          { isScheduled, threadId }
         );
         respond(result);
       } catch (e) {
@@ -2093,23 +2391,30 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * the SkillBridge as its approval hook; only the runtime knows which turn is
    * live and can reach the renderer.
    */
-  requestSkillApproval(proposal: {
-    name: string;
-    description: string;
-    body: string;
-    isPatch: boolean;
-  }): Promise<{ approved: boolean; skill?: { name: string; description: string; body: string } }> {
+  requestSkillApproval(
+    proposal: {
+      name: string;
+      description: string;
+      body: string;
+      isPatch: boolean;
+    },
+    ctx?: { threadId?: string }
+  ): Promise<{ approved: boolean; skill?: { name: string; description: string; body: string } }> {
     const id = `skill-${randomUUID()}`;
+    // The originating conversation, threaded through the bridge from the worker
+    // whose turn asked (with parallel turns, "the" current turn is ambiguous).
+    // '' = a caller with no turn (e.g. the end-of-turn pass) — the card still shows.
+    const threadId = ctx?.threadId ?? '';
     return new Promise((resolve) => {
       const settle = (outcome: { approved: boolean; skill?: { name: string; description: string; body: string } }): void => {
         if (!this.skillApprovals.delete(id)) return;
         this.emitEvent('skills/approvalResolved', { id });
         resolve(outcome);
       };
-      this.skillApprovals.set(id, settle);
+      this.skillApprovals.set(id, { threadId, settle });
       this.emitEvent('skills/approvalRequest', {
         id,
-        threadId: this.currentTurn?.threadId ?? '',
+        threadId,
         name: proposal.name,
         description: proposal.description,
         body: proposal.body,
@@ -2122,16 +2427,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /** Answer a pending skill approval from the card. False when it already expired. */
   resolveSkillApproval(id: ApprovalId, accept: boolean, skill?: { name: string; description: string; body: string }): boolean {
-    const settle = this.skillApprovals.get(String(id));
-    if (!settle) return false;
-    settle({ approved: accept, skill });
+    const pending = this.skillApprovals.get(String(id));
+    if (!pending) return false;
+    pending.settle({ approved: accept, skill });
     return true;
   }
 
-  private handleTaskBridgeRequest(id: string, payload: string | undefined): void {
+  private handleTaskBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
     const respond = (value: unknown): void =>
-      this.proc?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
-    const threadId = this.currentTurn?.threadId;
+      worker.proc?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    const threadId = worker.currentTurn?.threadId;
     void (async () => {
       try {
         const bridge = this.taskBridge;
@@ -2204,9 +2509,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
   }
 
-  private ensureStarted(): Promise<void> {
-    if (this.proc && this.proc.running) return Promise.resolve();
-    if (this.starting) return this.starting;
+  private ensureWorkerStarted(worker: PiWorker): Promise<void> {
+    if (worker.proc && worker.proc.running) return Promise.resolve();
+    if (worker.starting) return worker.starting;
+    // The breaker is POOL-wide: a broken install fails every spawn the same way,
+    // and N workers each earning their own strikes would multiply the crash loop
+    // by the pool size instead of stopping it.
     const cooldownLeft = this.cooldownUntil - Date.now();
     if (cooldownLeft > 0) {
       // Carry the cause forward: the spawn that opened the cooldown is the only
@@ -2217,10 +2525,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         (this.lastStartError ? ` Last error: ${this.lastStartError}` : '')
       ));
     }
-    this.starting = this.start().finally(() => {
-      this.starting = null;
+    worker.starting = this.startWorker(worker).finally(() => {
+      worker.starting = null;
     });
-    return this.starting;
+    return worker.starting;
   }
 
   /**
@@ -2247,10 +2555,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
   }
 
-  private async start(): Promise<void> {
+  private async startWorker(worker: PiWorker): Promise<void> {
     const pi = await resolvePi();
     if (!pi) throw new Error('The pi backend could not be located.');
     await this.ensurePiHome();
+    // The worker's private per-turn gate directory (STEM_GATE_DIR) must exist
+    // before the child reads it; seed the search gate open so a worker that has
+    // not run a turn yet matches the bridge's own default.
+    await mkdir(worker.gateDir, { recursive: true });
     this.ensureMcpStatusWatcher();
     // Refresh the local-provider catalog (models.json) before the spawn: pi's RPC
     // mode reads the file once at startup and never again.
@@ -2281,7 +2593,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       command: pi.command,
       prefixArgs: pi.prefixArgs,
       cwd: this.options.workspaceRoot,
-      env: this.sanitizedEnv(pi),
+      env: this.sanitizedEnv(pi, worker.gateDir),
       args: [
         // Filesystem access: keep pi's read/edit/write built-ins (so the assistant can
         // open AND create/modify files in the Files folder). Exclude only `bash`
@@ -2319,31 +2631,42 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         stemAssistantInstructions()
       ]
     });
-    this.proc = proc;
-    this.currentModel = `${provider}/${modelId}`;
+    worker.proc = proc;
+    worker.currentModel = `${provider}/${modelId}`;
     // A fresh process starts a fresh session whose thinking level is unknown to us.
-    this.currentThinking = null;
+    worker.currentThinking = null;
     const gen = ++this.spawnGen;
     const spawnedAt = Date.now();
-    log('pi', 'spawning backend', { provider, model: modelId, gen });
+    log('pi', 'spawning backend', { provider, model: modelId, gen, worker: worker.id });
 
-    proc.on('event', (ev: PiEvent) => this.onPiEvent(ev));
+    proc.on('event', (ev: PiEvent) => this.onPiEvent(worker, ev));
     proc.on('stderr', (text: string) => {
       this.emitEvent('process/stderr', { text });
       log('pi.stderr', text.trim());
     });
     proc.on('exit', (info: { code: number | null; signal: string | null }) => {
-      // shutdown()/restart() detach the process before disposing it — only an
-      // exit of the CURRENT process is unexpected and feeds the breaker.
-      const unexpected = this.proc === proc;
-      this.proc = null;
-      this.activeThreadId = null;
-      this.currentTurn = null;
-      this.settleAllApprovals();
-      this.foreground.finishTurn();
+      // shutdown()/restart()/retire detach the process before disposing it — only
+      // an exit of the worker's CURRENT process is unexpected and feeds the breaker.
+      const unexpected = worker.proc === proc;
+      const deadThread = worker.currentTurn?.threadId ?? null;
+      worker.proc = null;
+      worker.activeThreadId = null;
+      worker.currentTurn = null;
+      worker.currentModel = null;
+      worker.currentThinking = null;
+      // Only what THIS child was holding: its cards, its turn's exec/harness
+      // work. Turns streaming on other workers keep going.
+      this.settleWorkerApprovals(proc, deadThread);
+      worker.gate.finishTurn();
+      this.pumpCapacityWaiters();
       this.emitEvent('process/exit', info);
       const uptimeMs = Date.now() - spawnedAt;
-      log('pi', unexpected ? 'backend exited unexpectedly' : 'backend stopped', { ...info, uptimeMs, gen });
+      log('pi', unexpected ? 'backend exited unexpectedly' : 'backend stopped', {
+        ...info,
+        uptimeMs,
+        gen,
+        worker: worker.id
+      });
       if (unexpected) this.noteProcessExit(gen, uptimeMs);
     });
 
@@ -2351,14 +2674,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       proc.start();
       // Probe readiness and capture the initial session id/file.
       const state = await proc.request({ type: 'get_state' }, 20_000);
-      this.recordState(state.data);
+      this.recordState(worker, state.data);
       this.lastStartError = null;
+      // More than one worker alive: start retiring the extras once they idle.
+      if (this.workers.length > 1) this.scheduleWorkerReaper();
     } catch (e) {
       // A spawn that never became ready must not linger half-alive: detach it so
-      // ensureStarted() doesn't mistake it for a running backend, and count it
-      // toward the crash-loop breaker (deduped with the exit handler above).
-      if (this.proc === proc) this.proc = null;
-      // quiet: the detach above is what stops ensureStarted() adopting this
+      // ensureWorkerStarted() doesn't mistake it for a running backend, and count
+      // it toward the crash-loop breaker (deduped with the exit handler above).
+      if (worker.proc === proc) worker.proc = null;
+      // quiet: the detach above is what stops ensureWorkerStarted() adopting this
       // child; dispose is the kill, and it carries its own SIGKILL backstop.
       void proc.dispose().catch(() => undefined);
       // A child that hung instead of exiting (readiness timeout) never went
@@ -2366,13 +2691,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // attach it here so a startup failure always names its cause.
       const error = withStderrReason(e, proc.stderr);
       this.lastStartError = error.message;
-      log('pi', 'backend failed to become ready', { error: error.message, gen });
+      log('pi', 'backend failed to become ready', { error: error.message, gen, worker: worker.id });
       this.noteProcessExit(gen, Date.now() - spawnedAt);
       throw error;
     }
   }
 
-  private onPiEvent(ev: PiEvent): void {
+  private onPiEvent(worker: PiWorker, ev: PiEvent): void {
     if (ev.type === 'extension_ui_request') {
       const id = ev.id as string;
       // Bridge notifications are fire-and-forget (no response needed). Nothing
@@ -2381,76 +2706,77 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (ev.method === 'notify') return;
       // The bridge's MCP add/remove approval → route to Stem's McpApprovalCard.
       if (ev.method === 'confirm' && ev.title === ADMIN_APPROVAL_TITLE) {
-        this.handleAdminApproval(id, ev.message as string | undefined);
+        this.handleAdminApproval(worker, id, ev.message as string | undefined);
         return;
       }
       // The bridge's custom-instructions approval → route to the InstructionsApprovalCard.
       if (ev.method === 'confirm' && ev.title === INSTRUCTIONS_APPROVAL_TITLE) {
-        this.handleInstructionsApproval(id, ev.message as string | undefined);
+        this.handleInstructionsApproval(worker, id, ev.message as string | undefined);
         return;
       }
       // A scheduled-task tool round-trip (schedule_task / notify_user / …). The op
       // payload rides in `placeholder` (ctx.ui.input's second arg); we never show UI.
       if (ev.method === 'input' && ev.title === TASK_BRIDGE_TITLE) {
-        this.handleTaskBridgeRequest(id, ev.placeholder as string | undefined);
+        this.handleTaskBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
       // The run_command tool round-trip: policy + spawn happen in main (ExecService);
       // the held elicitation is answered when the command settles.
       if (ev.method === 'input' && ev.title === EXEC_BRIDGE_TITLE) {
-        this.handleExecBridgeRequest(id, ev.placeholder as string | undefined);
+        this.handleExecBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
       // The coding_agent tool round-trip: the whole harness turn runs in main
       // (HarnessService); the held elicitation is answered when it ends.
       if (ev.method === 'input' && ev.title === HARNESS_BRIDGE_TITLE) {
-        this.handleHarnessBridgeRequest(id, ev.placeholder as string | undefined);
+        this.handleHarnessBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
       // An MCP server that runs on one of the user's own devices: the call
       // leaves this machine entirely (transport → that device's MCP host) and
       // the elicitation is held open until it comes back or times out.
       if (ev.method === 'input' && ev.title === DEVICE_MCP_BRIDGE_TITLE) {
-        this.handleDeviceMcpBridgeRequest(id, ev.placeholder as string | undefined);
+        this.handleDeviceMcpBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
       // The manage_skill round-trip: the contract validator, the Off/Ask/Auto
       // policy, and the approval card all live in main, so the write happens
       // there and this request is held open until it settles.
       if (ev.method === 'input' && ev.title === SKILL_BRIDGE_TITLE) {
-        this.handleSkillBridgeRequest(id, ev.placeholder as string | undefined);
+        this.handleSkillBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
       // No UI for other dialogs yet — dismiss them safely.
-      if (ev.method === 'confirm') this.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
+      if (ev.method === 'confirm') worker.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
       else if (ev.method === 'select' || ev.method === 'input' || ev.method === 'editor')
-        this.proc?.send({ type: 'extension_ui_response', id, cancelled: true });
+        worker.proc?.send({ type: 'extension_ui_response', id, cancelled: true });
       return;
     }
     if (ev.type === 'agent_settled') {
-      // pi is only NOW truly idle. agent_end can be followed by post-run work that
-      // keeps its agent busy (auto-retry of transient provider errors, context
-      // auto-compaction, extension-queued continuations) — a prompt sent in that
-      // window is rejected with "Agent is already processing". So the send gate is
-      // released HERE, not at agent_end (which stays the renderer's turn end).
+      // THIS worker's pi is only NOW truly idle. agent_end can be followed by
+      // post-run work that keeps its agent busy (auto-retry of transient provider
+      // errors, context auto-compaction, extension-queued continuations) — a
+      // prompt sent in that window is rejected with "Agent is already
+      // processing". So the worker's send gate is released HERE, not at
+      // agent_end (which stays the renderer's turn end).
       // A turn still live here announced a retry (agent_end willRetry) that never
       // materialized — settle it with its latched outcome so the renderer isn't
       // left on a forever-running turn.
-      const leftover = this.currentTurn;
+      const leftover = worker.currentTurn;
       if (leftover) {
         const { events } = normalizePiEvent({ type: 'agent_end' }, leftover);
         for (const e of events) this.emitEvent(e.method, e.params);
-        this.settleTurn(leftover, Date.now());
+        this.settleTurn(worker, leftover, Date.now());
       }
-      this.releaseForeground();
+      this.releaseForeground(worker);
       return;
     }
     // Post-run threshold compaction: pi checks context size AFTER agent_end (which
     // settled the turn here), so these events arrive with no live TurnContext.
     // Stamp a settled "condensed" row onto the just-finished bubble so the condense
     // is visible; compaction_start is skipped (nothing to animate on a settled turn).
-    if (!this.currentTurn && ev.type === 'compaction_end' && this.lastSettledTurn) {
-      const { threadId, turnId } = this.lastSettledTurn;
+    if (!worker.currentTurn && ev.type === 'compaction_end' && worker.lastSettledTurn) {
+      const { threadId, turnId } = worker.lastSettledTurn;
       const failed = ev.aborted === true || typeof ev.errorMessage === 'string';
       this.emitEvent('item/completed', {
         item: { type: 'compaction', id: `compaction-${turnId}-post`, status: failed ? 'error' : 'ok' },
@@ -2459,8 +2785,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       });
       return;
     }
-    if (!this.currentTurn) return;
-    const turn = this.currentTurn;
+    if (!worker.currentTurn) return;
+    const turn = worker.currentTurn;
     // Memory privacy, checked off the RAW event because the normalizer truncates
     // the path to a basename and loses the directory the match needs: a read
     // inside a memorize:false connected folder taints the turn so its assistant
@@ -2486,14 +2812,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       this.advancePhase(turn, events, now);
     }
     for (const e of events) this.emitEvent(e.method, e.params);
-    if (done) this.settleTurn(turn, now);
+    if (done) this.settleTurn(worker, turn, now);
   }
 
   /** The turn's stream is over (its terminal event just went out): flush timing,
-   * ride out tee-recovered sources, and drop per-turn state. The foreground gate
-   * is deliberately NOT released here — pi may still be busy with post-run work
-   * until agent_settled (see onPiEvent). */
-  private settleTurn(turn: TurnContext, now: number): void {
+   * ride out tee-recovered sources, and drop per-turn state. The worker's gate
+   * is deliberately NOT released here — its pi may still be busy with post-run
+   * work until agent_settled (see onPiEvent). */
+  private settleTurn(worker: PiWorker, turn: TurnContext, now: number): void {
     turn.endedAt = now;
     // A turn that produced no capturable assistant event still records its user
     // message — unless it ended tainted, in which case the held-back prompt is
@@ -2518,7 +2844,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
     // The assistant may have created/patched a skill via manage_skill this turn;
     // detect it (the bridge bumps the rev marker) and reload after agent_settled.
-    if (this.readSkillsRev() !== this.skillsRevAtTurnStart) {
+    if (this.readSkillsRev() !== worker.skillsRevAtTurnStart) {
       this.pendingSkillReload = true;
       this.emitEvent('skills/changed');
     }
@@ -2544,8 +2870,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (used.length > 0) recordUses(used);
       this.emitEvent('skills/changed');
     }
-    this.currentTurn = null;
-    this.lastSettledTurn = { threadId: turn.threadId, turnId: turn.turnId };
+    worker.currentTurn = null;
+    worker.lastSettledTurn = { threadId: turn.threadId, turnId: turn.turnId };
     const snapshot = snapshotTurnTrace(turn, now);
     this.recentTurns.push(snapshot);
     if (this.recentTurns.length > RECENT_TURNS_KEPT) this.recentTurns.shift();
@@ -2572,7 +2898,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     void this.nameThreadIfDue(turn.threadId);
     // Map this live turn's minted id to its persisted entry id so a later
     // fork/edit targets the right pi entry — and persist the turn's timing.
-    void this.recordTurnEntry(turn);
+    void this.recordTurnEntry(worker, turn);
     // Interactive overflow self-heal: a turn that died because the context
     // outgrew the model's window leaves a thread where EVERY next send would
     // overflow again (pi's own compact-and-retry has been seen to fail
@@ -2666,10 +2992,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     this.emitEvent('turn/timing', breakdown);
   }
 
-  private async recordTurnEntry(turn: TurnContext): Promise<void> {
+  private async recordTurnEntry(worker: PiWorker, turn: TurnContext): Promise<void> {
     try {
-      if (!this.proc || this.activeThreadId !== turn.threadId) return;
-      const fm = await this.proc.request({ type: 'get_fork_messages' });
+      if (!worker.proc || worker.activeThreadId !== turn.threadId) return;
+      const fm = await worker.proc.request({ type: 'get_fork_messages' });
       const entries = (fm.data as { messages?: { entryId: string }[] } | undefined)?.messages ?? [];
       const last = entries[entries.length - 1];
       if (!last) return;
@@ -2712,16 +3038,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return this.turnEntryIds.get(turnId) ?? turnId;
   }
 
-  /** pi is idle again (agent_settled, or a prompt that never started): release the
-   * send gate and apply any deferred bridge reload. Reloading here — after pi's
-   * post-run continuations — means the restart can no longer kill an in-flight
-   * auto-retry or auto-compaction. */
-  private releaseForeground(): void {
-    this.foreground.finishTurn();
+  /** This worker's pi is idle again (agent_settled, or a prompt that never
+   * started): release its send gate and apply any deferred bridge reload.
+   * Reloading here — after pi's post-run continuations, and only once NO worker
+   * is streaming — means the restart can kill neither an in-flight auto-retry
+   * nor another worker's live turn. */
+  private releaseForeground(worker: PiWorker): void {
+    worker.gate.finishTurn();
+    worker.lastUsedAt = Date.now();
+    this.pumpCapacityWaiters();
     // An approved MCP add/remove, or a skill written this turn, takes effect by
     // reloading the bridge after the turn (restarting mid-turn would kill the
-    // in-flight conversation, and deferring keeps the prompt cache valid).
-    if (this.pendingMcpReload || this.pendingSkillReload) {
+    // in-flight conversation, and deferring keeps the prompt cache valid). With
+    // a pool the barrier is "every turn", not just this one: the flags stay set
+    // until the last streaming worker settles, whose release applies them.
+    if ((this.pendingMcpReload || this.pendingSkillReload) && !this.isTurnRunning()) {
       this.pendingMcpReload = false;
       this.pendingSkillReload = false;
       void this.configMcpServerReload().catch((e) =>
@@ -2736,9 +3067,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /** A turn that failed before pi accepted the prompt: no agent run started, so no
    * agent_settled will come — drop the turn AND release the gate right away. */
-  private finishTurn(): void {
-    this.currentTurn = null;
-    this.releaseForeground();
+  private finishTurn(worker: PiWorker): void {
+    worker.currentTurn = null;
+    this.releaseForeground(worker);
   }
 
   /** Read the skills revision marker the bridge bumps on every skill write. */
@@ -2760,7 +3091,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    */
   async requestSkillReload(): Promise<void> {
     this.emitEvent('skills/changed');
-    if (this.currentTurn) {
+    if (this.isTurnRunning()) {
       this.pendingSkillReload = true;
       return;
     }
@@ -2772,7 +3103,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * add/remove. Hold the request open and surface it as Stem's McpApprovalCard;
    * resolveAdminApproval answers it once the user decides (or a timeout declines).
    */
-  private handleAdminApproval(id: string, message: string | undefined): void {
+  private handleAdminApproval(worker: PiWorker, id: string, message: string | undefined): void {
     let proposal: { action?: string; name?: string; input?: McpServerInput } | null = null;
     try {
       proposal = JSON.parse(message ?? '{}');
@@ -2782,20 +3113,20 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       degrade('pi.mcpAdmin', 'declined an MCP change whose proposal did not parse', e);
     }
     if (!proposal || (proposal.action !== 'add' && proposal.action !== 'remove')) {
-      this.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
+      worker.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
       return;
     }
     this.adminApprovals.add(id);
     const card: McpAdminProposal = {
       id,
-      threadId: this.currentTurn?.threadId ?? '',
+      threadId: worker.currentTurn?.threadId ?? '',
       action: proposal.action,
       input: proposal.input,
       name: proposal.name
     };
     // Keep the full mutation (including credentials) only in main-memory for the
     // accepted writer. Renderer approval cards need presence/keys, never values.
-    const requestProcess = this.proc;
+    const requestProcess = worker.proc;
     this.adminApprovalProposals.set(id, { proposal: card, process: requestProcess });
     const displayInput = card.input
       ? {
@@ -2823,7 +3154,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * InstructionsApprovalCard; resolveInstructionsApproval answers once the user
    * decides (or a timeout declines). Main writes settings.json on accept.
    */
-  private handleInstructionsApproval(id: string, message: string | undefined): void {
+  private handleInstructionsApproval(worker: PiWorker, id: string, message: string | undefined): void {
     let proposal: { action?: string; incomingText?: string; surface?: string } | null = null;
     try {
       proposal = JSON.parse(message ?? '{}');
@@ -2834,15 +3165,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
     const action = proposal?.action;
     if (action !== 'append' && action !== 'replace' && action !== 'clear') {
-      this.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
+      worker.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
       return;
     }
     this.instructionsApprovals.add(id);
-    const requestProcess = this.proc;
+    const requestProcess = worker.proc;
     this.instructionsApprovalProcesses.set(id, requestProcess);
     const card: InstructionsProposal = {
       id,
-      threadId: this.currentTurn?.threadId ?? '',
+      threadId: worker.currentTurn?.threadId ?? '',
       action,
       incomingText: typeof proposal?.incomingText === 'string' ? proposal.incomingText : '',
       suggestedSurface: proposal?.surface === 'quickChat' ? 'quickChat' : proposal?.surface === 'main' ? 'main' : undefined
@@ -2855,44 +3186,44 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }, 120_000);
   }
 
-  /** Start a fresh session on the foreground process; returns its sessionId. */
-  private async newSession(): Promise<string> {
-    const created = await this.proc!.request({ type: 'new_session' });
+  /** Start a fresh session on `worker`; returns its sessionId. */
+  private async newSession(worker: PiWorker): Promise<string> {
+    const created = await worker.proc!.request({ type: 'new_session' });
     if (!created.success) throw new Error(created.error ?? 'pi could not start a new chat.');
     // A fresh pi session resets the active model to the spawn default — invalidate the
     // mirrors so the next applyModel/setThinking re-issue their RPCs.
-    this.currentModel = null;
-    this.currentThinking = null;
-    this.activeThreadId = null;
-    const state = await this.proc!.request({ type: 'get_state' });
+    worker.currentModel = null;
+    worker.currentThinking = null;
+    worker.activeThreadId = null;
+    const state = await worker.proc!.request({ type: 'get_state' });
     if (!state.success) throw new Error(state.error ?? 'pi could not read the new chat state.');
-    const id = this.recordState(state.data);
+    const id = this.recordState(worker, state.data);
     if (!id) throw new Error('pi did not return a session id.');
-    this.activeThreadId = id;
+    worker.activeThreadId = id;
     return id;
   }
 
-  /** Make `threadId` the active session, switching to its file if needed. */
-  private async ensureActive(threadId: string): Promise<string> {
-    if (this.activeThreadId === threadId) return threadId;
+  /** Make `threadId` the worker's active session, switching to its file if needed. */
+  private async ensureActive(worker: PiWorker, threadId: string): Promise<string> {
+    if (worker.activeThreadId === threadId) return threadId;
     const file = await this.resolveSessionFile(threadId);
     if (!file) {
       // Unknown/empty thread (e.g. pre-created, no messages yet): start fresh and
       // adopt the id the caller expects by treating the new session as active.
-      const id = await this.newSession();
+      const id = await this.newSession(worker);
       return id;
     }
     await repairMissingSessionCwd(file, this.options.workspaceRoot);
-    const switched = await this.proc!.request({ type: 'switch_session', sessionPath: file });
+    const switched = await worker.proc!.request({ type: 'switch_session', sessionPath: file });
     if (!switched.success) throw new Error(switched.error ?? `pi could not switch to chat "${threadId}".`);
     // The switch does NOT restore the session's persisted model/thinking: pi only
     // restores them when no CLI --model was given, and we always spawn with one, so
     // every rebuild resets to the spawn default. Invalidate the mirrors; callers
     // needing the thread's model must re-apply it (interactive turns pass
     // input.model, scheduled runs resolve threadTurnSettings in startTurn).
-    this.currentModel = null;
-    this.currentThinking = null;
-    this.activeThreadId = threadId;
+    worker.currentModel = null;
+    worker.currentThinking = null;
+    worker.activeThreadId = threadId;
     return threadId;
   }
 
@@ -2976,24 +3307,24 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * reserve (a quarter of the window, clamped to [16384, 65536]). Best-effort: a
    * failed condense must not stop the run.
    */
-  private async maybeCompactBeforeScheduledRun(threadId: string, contextTokens?: number): Promise<void> {
+  private async maybeCompactBeforeScheduledRun(worker: PiWorker, threadId: string, contextTokens?: number): Promise<void> {
     if (!contextTokens) return;
-    const window = await this.activeModelContextWindow();
+    const window = await this.activeModelContextWindow(worker);
     const reserve = Math.max(16384, Math.min(65536, Math.floor(window / 4)));
     if (contextTokens <= window - reserve) return;
     log('pi', 'scheduled run: condensing thread before run', { threadId, contextTokens, window, reserve });
-    const res = await this.proc!.request({ type: 'compact' });
+    const res = await worker.proc!.request({ type: 'compact' });
     if (!res.success) log('pi', 'scheduled run: pre-run condense failed', { threadId, error: res.error });
   }
 
-  /** The active model's context window per pi's catalog (pi's own default when unknown). */
-  private async activeModelContextWindow(): Promise<number> {
-    const current = this.currentModel ? this.parseModel(this.currentModel) : null;
+  /** The worker's active model's context window per pi's catalog (pi's own default when unknown). */
+  private async activeModelContextWindow(worker: PiWorker): Promise<number> {
+    const current = worker.currentModel ? this.parseModel(worker.currentModel) : null;
     if (current) {
       // quiet: null falls through to the same 128k this returns whenever the
       // catalog has nothing to say about the active model — the documented
       // default, and the number the condense reserve is sized against.
-      const res = await this.proc!.request({ type: 'get_available_models' }).catch(() => null);
+      const res = await worker.proc!.request({ type: 'get_available_models' }).catch(() => null);
       const models = ((res?.data as { models?: PiModel[] } | undefined)?.models ?? []).filter(Boolean);
       const m = models.find((x) => x.provider === current.provider && x.id === current.modelId);
       if (typeof m?.contextWindow === 'number' && m.contextWindow > 0) return m.contextWindow;
@@ -3007,31 +3338,31 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * once after this succeeds. Serialized behind the foreground gate like a turn.
    */
   async compactThread(threadId: string): Promise<void> {
-    return this.foreground.run(async () => {
-      await this.ensureStarted();
-      await this.ensureActive(threadId);
-      const res = await this.proc!.request({ type: 'compact' });
+    return this.withThreadWorker(threadId, async (w) => {
+      await this.ensureWorkerStarted(w);
+      await this.ensureActive(w, threadId);
+      const res = await w.proc!.request({ type: 'compact' });
       if (!res.success) throw new Error(res.error ?? 'pi could not condense the chat.');
     });
   }
 
-  private async applyModel(model: string): Promise<void> {
-    if (model === this.currentModel) return;
+  private async applyModel(worker: PiWorker, model: string): Promise<void> {
+    if (model === worker.currentModel) return;
     const { provider, modelId } = this.parseModel(model);
-    const res = await this.proc!.request({ type: 'set_model', provider, modelId });
+    const res = await worker.proc!.request({ type: 'set_model', provider, modelId });
     if (!res.success) throw new Error(res.error ?? `pi could not select model "${model}".`);
-    this.currentModel = model;
+    worker.currentModel = model;
   }
 
-  private async setThinking(effort: string): Promise<void> {
+  private async setThinking(worker: PiWorker, effort: string): Promise<void> {
     const level = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(effort) ? effort : 'medium';
-    if (level === this.currentThinking) return;
+    if (level === worker.currentThinking) return;
     // quiet: the mirror is left untouched, so the next turn re-issues this
     // rather than believing the level took. A request that rejects rather than
     // answering unsuccessfully means the process is gone or wedged, and the
     // prompt immediately after fails out loud on the same process.
-    const res = await this.proc!.request({ type: 'set_thinking_level', level }).catch(() => null);
-    if (res?.success) this.currentThinking = level;
+    const res = await worker.proc!.request({ type: 'set_thinking_level', level }).catch(() => null);
+    if (res?.success) worker.currentThinking = level;
   }
 
   private parseModel(model: string): { provider: string; modelId: string } {
@@ -3069,13 +3400,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return { provider: DEFAULT_PROVIDER, modelId: DEFAULT_MODEL };
   }
 
-  /** Assemble the prompt: prepend recall/files/format context (pi has no per-turn context field). */
+  /** Assemble the prompt: prepend recall/files/format context (pi has no per-turn
+   * context field). `turn` is the live TurnContext this prompt is for — passed
+   * explicitly because, with parallel turns, "the current turn" is per worker. */
   private async buildMessage(
     input: StartTurnInput,
     threadId: string,
-    recallTimings?: RecallTimings,
+    turn: TurnContext | null,
     turnId?: string
   ): Promise<{ message: string; images: PiImageContent[] }> {
+    const recallTimings: RecallTimings | undefined = turn?.recall;
     const blocks: string[] = [];
     // The user's standing custom instructions — an AUTHORITATIVE block, first and
     // distinct from recall (which is explicitly "not instructions"). Already resolved
@@ -3102,8 +3436,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (recall) blocks.push(recall);
       // Documents from a memorize:false folder were injected: taint the turn the
       // same way reading such a folder does, so the reply stays out of Recall.
-      if (flags.privateDocsInjected && this.currentTurn?.threadId === threadId) {
-        this.currentTurn.memoryTainted = true;
+      if (flags.privateDocsInjected && turn?.threadId === threadId) {
+        turn.memoryTainted = true;
       }
       // Record what was injected so the Memory UI can show this chat's active facts.
       try {
@@ -3158,9 +3492,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const inlined = selection.inlined.map((s) => s.slug);
         if (inlined.length > 0) {
           recordInjections(inlined);
-          if (this.currentTurn?.threadId === threadId) {
-            this.currentTurn.skillsInjected = selection.inlined;
-            this.announceSkills(this.currentTurn, selection.inlined);
+          if (turn?.threadId === threadId) {
+            turn.skillsInjected = selection.inlined;
+            this.announceSkills(turn, selection.inlined);
           }
         }
       }
@@ -3221,11 +3555,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return { message, images };
   }
 
-  private recordState(data: unknown): string | null {
+  private recordState(worker: PiWorker, data: unknown): string | null {
     const s = data as { sessionId?: string; sessionFile?: string } | undefined;
     const id = s?.sessionId ?? null;
     if (id && s?.sessionFile) this.sessionFiles.set(id, s.sessionFile);
-    if (id) this.activeThreadId = this.activeThreadId ?? id;
+    if (id) worker.activeThreadId = worker.activeThreadId ?? id;
     return id;
   }
 
@@ -3364,9 +3698,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return '';
   }
 
-  /** Read the live foreground session's messages (for active sessions without a file yet). */
-  private async readActiveMessages(): Promise<{ title: string; messages: ChatMessage[] }> {
-    const res = await this.proc!.request({ type: 'get_messages' });
+  /** Read a worker's live session messages (for active sessions without a file yet). */
+  private async readActiveMessages(worker: PiWorker): Promise<{ title: string; messages: ChatMessage[] }> {
+    const res = await worker.proc!.request({ type: 'get_messages' });
     const raw =
       (res.data as { messages?: { role?: string; content?: unknown; provider?: string; model?: string }[] } | undefined)
         ?.messages ?? [];
@@ -3388,8 +3722,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // record here, but this path only serves the just-created active session).
         const model = m.provider && m.model ? `${m.provider}/${m.model}` : undefined;
         const meta: MessageMeta | undefined =
-          model || this.currentThinking
-            ? { ...(model ? { model } : {}), ...(this.currentThinking ? { effort: this.currentThinking } : {}) }
+          model || worker.currentThinking
+            ? { ...(model ? { model } : {}), ...(worker.currentThinking ? { effort: worker.currentThinking } : {}) }
             : undefined;
         messages.push({
           id: `assistant-${messages.length}`,
@@ -3399,7 +3733,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         });
       }
     }
-    const state = await this.proc!.request({ type: 'get_state' });
+    const state = await worker.proc!.request({ type: 'get_state' });
     const title = ((state.data as { sessionName?: string } | undefined)?.sessionName || 'New chat').trim() || 'New chat';
     return { title, messages };
   }
@@ -3479,7 +3813,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const { localProviders } = await readSettings();
       if (!Object.values(localProviders).some((p) => p.enabled)) return;
       const changed = await syncModelsConfig();
-      if (changed && this.proc?.running && !this.currentTurn) await this.restart();
+      if (changed && this.anyRunningWorker() && !this.isTurnRunning()) await this.restart();
     } catch (e) {
       // Non-fatal for the turn, but a probe that keeps failing means models the
       // user pulled into Ollama or LM Studio never show up and nothing says why.
@@ -3690,7 +4024,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return `env PI_CODING_AGENT_DIR="${this.options.piHome}" ${extra}${argv}`;
   }
 
-  private sanitizedEnv(pi?: PiInvocation): NodeJS.ProcessEnv {
+  private sanitizedEnv(pi?: PiInvocation, gateDir?: string): NodeJS.ProcessEnv {
     const env = { ...process.env, ...(pi?.env ?? {}) };
     env.PI_CODING_AGENT_DIR = this.options.piHome;
     env.PI_CODING_AGENT_SESSION_DIR = this.options.sessionsDir;
@@ -3698,6 +4032,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Tell the bridge extension where Stem's MCP config lives.
     env[ENV_MCP_CONFIG] = piMcpConfigPath();
     env[ENV_MCP_OAUTH] = piMcpOAuthPath();
+    // The worker's private per-turn gate directory; complete()/judge children
+    // run no turns and take the bridge's default (next to mcp.json).
+    if (gateDir) env[ENV_GATE_DIR] = gateDir;
     // The bridge decrypts/re-encrypts MCP secrets with the same key main uses
     // (safeStorage is main-process-only). Unset in plaintext mode.
     const secretKey = secretKeyHex();

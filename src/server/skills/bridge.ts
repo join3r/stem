@@ -61,8 +61,13 @@ export interface SkillApprovalOutcome {
 
 export interface SkillBridgeDeps {
   mode(): Promise<SkillsMode>;
-  /** Raise the approval card and resolve when the user answers (or it expires). */
-  requestApproval(proposal: { name: string; description: string; body: string; isPatch: boolean }): Promise<SkillApprovalOutcome>;
+  /** Raise the approval card and resolve when the user answers (or it expires).
+   * `ctx.threadId` names the originating conversation when the request came from
+   * a live turn — with parallel turns there is no single "current" one to read. */
+  requestApproval(
+    proposal: { name: string; description: string; body: string; isPatch: boolean },
+    ctx?: { threadId?: string }
+  ): Promise<SkillApprovalOutcome>;
   /** A skill file changed on disk: reload the backend and refresh the Manage panel. */
   onChanged(): void;
   /**
@@ -88,7 +93,10 @@ const SCHEDULED_REFUSAL =
 export class SkillBridge {
   constructor(private readonly deps: SkillBridgeDeps) {}
 
-  async handleRequest(req: SkillBridgeRequest, ctx: { isScheduled: boolean }): Promise<SkillBridgeResult> {
+  async handleRequest(
+    req: SkillBridgeRequest,
+    ctx: { isScheduled: boolean; threadId?: string }
+  ): Promise<SkillBridgeResult> {
     if (req.op === 'remove') return this.handleRemove(req);
     return this.handleSave(req, ctx);
   }
@@ -104,7 +112,10 @@ export class SkillBridge {
     return { ok: true, text: `Removed skill "${slug}".` };
   }
 
-  private async handleSave(req: SkillSaveRequest, ctx: { isScheduled: boolean }): Promise<SkillBridgeResult> {
+  private async handleSave(
+    req: SkillSaveRequest,
+    ctx: { isScheduled: boolean; threadId?: string }
+  ): Promise<SkillBridgeResult> {
     const draft: SkillDraft = {
       name: String(req.name ?? '').trim(),
       description: String(req.description ?? '').trim(),
@@ -155,7 +166,10 @@ export class SkillBridge {
     if (mode === null) return this.write(draft, req.origin ?? 'user-requested', req.expectExisting);
     if (mode === 'auto') return this.write(draft, req.origin ?? 'assistant', req.expectExisting);
 
-    const outcome = await this.deps.requestApproval({ ...draft, isPatch: !!req.expectExisting });
+    const outcome = await this.deps.requestApproval(
+      { ...draft, isPatch: !!req.expectExisting },
+      { threadId: ctx.threadId }
+    );
     if (!outcome.approved) {
       return { ok: false, text: 'The user declined saving that skill. Do not retry the tool; carry on with the conversation.' };
     }

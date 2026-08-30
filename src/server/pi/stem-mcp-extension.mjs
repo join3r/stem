@@ -63,6 +63,12 @@ function writeSecretSync(path, data) {
 const ENV_SECRET_KEY = 'STEM_SECRET_KEY';
 const SECRET_VALUE_PREFIX = 'stemenc:1:';
 const SECRET_ENVELOPE_KEY = '__stemenc__';
+// Where THIS process's per-turn gate files live (native-search.json /
+// service-tier.json, plus the active-tools.json diagnostic). Each worker of the
+// runtime pool gets its own directory so concurrent turns on different pi
+// processes never read each other's gate; unset (single-process spawns, older
+// mains) it falls back to the mcp.json directory, the historical location.
+const ENV_GATE_DIR = 'STEM_GATE_DIR';
 
 function bridgeSecretKey() {
   const hex = process.env[ENV_SECRET_KEY];
@@ -1560,12 +1566,16 @@ export default async function stemMcpBridge(pi) {
   // ever changes mid-conversation.
   registerSkillTools(pi);
 
-  // Per-turn gates read from sibling files (native-search.json / service-tier.json)
-  // that the main process rewrites before each prompt, since main and Quick Chat
-  // share one pi process and the hooks can't tell them apart.
+  // Per-turn gates (native-search.json / service-tier.json) that the main
+  // process rewrites before each prompt, since surfaces sharing one pi process
+  // can't be told apart by the hooks. They are read from THIS process's own
+  // gate directory (STEM_GATE_DIR, one per pool worker) so a concurrent turn on
+  // another worker can never flip this one's setting; without the env they sit
+  // next to mcp.json as they always did.
   if (typeof pi.on === 'function') {
-    const webSearchEnabled = makeNativeSearchGate(join(dirname(cfgPath), 'native-search.json'));
-    const serviceTier = makeServiceTierGate(join(dirname(cfgPath), 'service-tier.json'));
+    const gateDir = process.env[ENV_GATE_DIR] || dirname(cfgPath);
+    const webSearchEnabled = makeNativeSearchGate(join(gateDir, 'native-search.json'));
+    const serviceTier = makeServiceTierGate(join(gateDir, 'service-tier.json'));
 
     // Keep hold of a context that can raise a dialog. A server pinned to a
     // device reaches its machine through ctx.ui.input, and the code that needs
@@ -1606,7 +1616,7 @@ export default async function stemMcpBridge(pi) {
           // Publish the resulting active set (like mcp-status.json) so Stem can confirm
           // the browse tools are live without spawning a turn.
           try {
-            writeFileSync(join(dirname(cfgPath), 'active-tools.json'), JSON.stringify({ active: pi.getActiveTools() }, null, 2));
+            writeFileSync(join(gateDir, 'active-tools.json'), JSON.stringify({ active: pi.getActiveTools() }, null, 2));
           } catch {
             // best-effort diagnostic
           }

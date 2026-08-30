@@ -131,14 +131,16 @@ describe('runtime side', () => {
       seedGlobalAuth: false
     });
     const sent: Array<{ id: string; value: string }> = [];
-    const internal = runtime as unknown as {
+    const worker = (runtime as unknown as { primaryWorker(): unknown }).primaryWorker() as {
       proc: { send: (m: { id: string; value: string }) => void } | null;
       currentTurn: ReturnType<typeof newTurnContext> | null;
-      handleHarnessBridgeRequest: (id: string, payload: string | undefined) => void;
     };
-    internal.proc = { send: (m) => sent.push(m) };
+    const internal = runtime as unknown as {
+      handleHarnessBridgeRequest: (worker: unknown, id: string, payload: string | undefined) => void;
+    };
+    worker.proc = { send: (m) => sent.push(m) };
     runtime.setHarnessBridge(bridge);
-    return { internal, sent };
+    return { internal, worker, sent };
   }
 
   async function settleSends(sent: unknown[]): Promise<void> {
@@ -148,7 +150,7 @@ describe('runtime side', () => {
 
   it('injects the live turn identity and never trusts the payload', async () => {
     const seen: HarnessRequest[] = [];
-    const { internal, sent } = runtimeWithBridge({
+    const { internal, worker, sent } = runtimeWithBridge({
       handleHarnessRequest: async (req) => {
         seen.push(req);
         return { ok: true, text: 'done' };
@@ -156,9 +158,10 @@ describe('runtime side', () => {
       abortThread: () => {},
       settleAll: () => {}
     });
-    internal.currentTurn = newTurnContext('the-real-thread', 'turn-1');
-    internal.currentTurn.isScheduled = true;
+    worker.currentTurn = newTurnContext('the-real-thread', 'turn-1');
+    worker.currentTurn.isScheduled = true;
     internal.handleHarnessBridgeRequest(
+      worker,
       'elicit-1',
       JSON.stringify({ agent: 'claude', prompt: 'go', threadId: 'forged-thread', isScheduled: false })
     );
@@ -169,15 +172,15 @@ describe('runtime side', () => {
   });
 
   it('answers honestly when no bridge is wired', async () => {
-    const { internal, sent } = runtimeWithBridge(null);
-    internal.handleHarnessBridgeRequest('elicit-1', JSON.stringify({ agent: 'claude', prompt: 'go' }));
+    const { internal, worker, sent } = runtimeWithBridge(null);
+    internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ agent: 'claude', prompt: 'go' }));
     await settleSends(sent);
     expect(JSON.parse(sent[0].value)).toMatchObject({ ok: false });
   });
 
   it('refuses to answer a replaced process', async () => {
     let release: (() => void) | null = null;
-    const { internal, sent } = runtimeWithBridge({
+    const { internal, worker, sent } = runtimeWithBridge({
       handleHarnessRequest: () =>
         new Promise((resolve) => {
           release = () => resolve({ ok: true, text: 'late' });
@@ -185,10 +188,10 @@ describe('runtime side', () => {
       abortThread: () => {},
       settleAll: () => {}
     });
-    internal.handleHarnessBridgeRequest('elicit-1', JSON.stringify({ agent: 'claude', prompt: 'go' }));
+    internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ agent: 'claude', prompt: 'go' }));
     // The pi child restarts while the harness turn runs; the reply must not
     // land on the new process's unrelated elicitation table.
-    internal.proc = { send: () => {} };
+    worker.proc = { send: () => {} };
     await new Promise((resolve) => setTimeout(resolve, 0));
     release!();
     await new Promise((resolve) => setTimeout(resolve, 0));

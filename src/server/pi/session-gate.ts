@@ -10,6 +10,11 @@ export class ForegroundSessionGate {
   private activeTurnDone: Promise<void> | null = null;
   private resolveActiveTurn: (() => void) | null = null;
 
+  /** True between claimTurn() and finishTurn() — a turn is streaming past the gate. */
+  get turnActive(): boolean {
+    return this.activeTurnDone !== null;
+  }
+
   run<T>(task: () => Promise<T>): Promise<T> {
     const run = this.chain.then(
       () => this.waitForTurnThenRun(task),

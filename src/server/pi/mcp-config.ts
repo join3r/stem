@@ -291,36 +291,43 @@ async function buildDeviceCatalogSection(): Promise<DeviceCatalogBlock> {
  * Per-turn gate the bridge reads to decide whether the vendored pi-web-access
  * search tools are active for this turn. The main process rewrites it just before
  * each prompt with the originating context's setting (main vs Quick Chat), since
- * both share one pi process and the hooks can't tell them apart. Carries no
+ * the hooks can't tell surfaces apart. One file per POOL WORKER (its STEM_GATE_DIR),
+ * so concurrent turns on different workers never share it. Carries no
  * credentials, so a plain (non-secret) file is fine.
  *
  * The file keeps its `native-search.json` name from when search WAS the provider's
  * own server-side tool: renaming it would strand the file in every existing pi
  * home for no behavioral gain.
  */
-export function piNativeSearchPath(): string {
-  return join(piHome(), NATIVE_SEARCH_GATE_FILE);
+export function piNativeSearchPath(gateDir?: string): string {
+  return join(gateDir ?? piHome(), NATIVE_SEARCH_GATE_FILE);
 }
 
-/** Write the `{ enabled }` web-search gate the bridge reads for the next turn. */
-export async function writeNativeSearchGate(enabled: boolean): Promise<void> {
-  await mkdir(piHome(), { recursive: true });
-  await writeFile(piNativeSearchPath(), JSON.stringify({ enabled }, null, 2), 'utf8');
+/**
+ * Write the `{ enabled }` web-search gate the bridge reads for the next turn.
+ * `gateDir` is the owning worker's private gate directory (STEM_GATE_DIR) — each
+ * pool worker has its own, so concurrent turns can't overwrite each other's
+ * setting; omitted, it lands in the shared pi home (single-process callers, tests).
+ */
+export async function writeNativeSearchGate(enabled: boolean, gateDir?: string): Promise<void> {
+  await mkdir(gateDir ?? piHome(), { recursive: true });
+  await writeFile(piNativeSearchPath(gateDir), JSON.stringify({ enabled }, null, 2), 'utf8');
 }
 
 /**
  * Per-turn gate the bridge's service-tier hook reads to decide whether to inject the
  * OpenAI `service_tier` field on the next request. Like the web-search gate, the main
- * process rewrites it just before each prompt (main vs Quick Chat share one pi process).
+ * process rewrites it just before each prompt, one file per pool worker.
  */
-export function piServiceTierPath(): string {
-  return join(piHome(), SERVICE_TIER_GATE_FILE);
+export function piServiceTierPath(gateDir?: string): string {
+  return join(gateDir ?? piHome(), SERVICE_TIER_GATE_FILE);
 }
 
-/** Write the `{ tier }` gate: 'priority' = Fast; null = Standard (omit service_tier). */
-export async function writeServiceTierGate(tier: string | null): Promise<void> {
-  await mkdir(piHome(), { recursive: true });
-  await writeFile(piServiceTierPath(), JSON.stringify({ tier }, null, 2), 'utf8');
+/** Write the `{ tier }` gate: 'priority' = Fast; null = Standard (omit service_tier).
+ * Same per-worker `gateDir` contract as writeNativeSearchGate above. */
+export async function writeServiceTierGate(tier: string | null, gateDir?: string): Promise<void> {
+  await mkdir(gateDir ?? piHome(), { recursive: true });
+  await writeFile(piServiceTierPath(gateDir), JSON.stringify({ tier }, null, 2), 'utf8');
 }
 
 /**

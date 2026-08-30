@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalPolicyPath, pathInsideAny, PiRuntime } from '../../src/server/pi/runtime';
+import type { PiWorker } from '../../src/server/pi/worker';
 import { newTurnContext } from '../../src/server/pi/normalize';
 import { PiProcess, stderrReason } from '../../src/server/pi/rpc';
 import { updateDefaultModel } from '../../src/server/workspace/settings';
@@ -33,6 +34,24 @@ afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
+/**
+ * The primary pool worker, as a writable state bag. Tests that used to poke the
+ * runtime's per-process fields (proc, currentTurn, activeThreadId, mirrors) now
+ * poke the same fields on the worker that owns them.
+ */
+type FakeWorker = Omit<PiWorker, 'proc' | 'currentTurn'> & {
+  proc: {
+    running?: boolean;
+    send?: (message: unknown) => void;
+    request?: (command: Record<string, unknown>) => Promise<{ success: boolean; error?: string; data?: unknown }>;
+  } | null;
+  currentTurn: ReturnType<typeof newTurnContext> | null;
+};
+
+function workerOf(runtime: PiRuntime): FakeWorker {
+  return (runtime as unknown as { primaryWorker(): FakeWorker }).primaryWorker();
+}
+
 describe('approval lifecycle', () => {
   it('broadcasts explicit decisions and timeout expiry to every renderer', async () => {
     vi.useFakeTimers();
@@ -40,16 +59,15 @@ describe('approval lifecycle', () => {
     const events: Array<{ method: string; params?: unknown }> = [];
     runtime.on('event', (event) => events.push(event));
     const sent: unknown[] = [];
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      proc: { send: (message: unknown) => void };
-      currentTurn: ReturnType<typeof newTurnContext> | null;
-      handleAdminApproval: (id: string, message: string) => void;
-      handleInstructionsApproval: (id: string, message: string) => void;
+      handleAdminApproval: (worker: FakeWorker, id: string, message: string) => void;
+      handleInstructionsApproval: (worker: FakeWorker, id: string, message: string) => void;
     };
-    internal.proc = { send: (message) => sent.push(message) };
-    internal.currentTurn = newTurnContext('approval-thread', 'approval-turn');
+    worker.proc = { send: (message) => sent.push(message) };
+    worker.currentTurn = newTurnContext('approval-thread', 'approval-turn');
 
-    internal.handleAdminApproval('answered-admin', JSON.stringify({
+    internal.handleAdminApproval(worker, 'answered-admin', JSON.stringify({
       action: 'add',
       name: 'active-server',
       input: {
@@ -78,7 +96,7 @@ describe('approval lifecycle', () => {
     );
     await expect(runtime.resolveAdminApproval('already-expired-admin', true, persistAdmin)).resolves.toBe(false);
     expect(persistAdmin).toHaveBeenCalledOnce();
-    internal.handleInstructionsApproval('answered-instructions', JSON.stringify({
+    internal.handleInstructionsApproval(worker, 'answered-instructions', JSON.stringify({
       action: 'append',
       incomingText: 'Always be concise.'
     }));
@@ -91,7 +109,7 @@ describe('approval lifecycle', () => {
       runtime.resolveInstructionsApproval('already-expired', true, persistInstructions)
     ).resolves.toBe(false);
     expect(persistInstructions).toHaveBeenCalledOnce();
-    internal.handleAdminApproval('expired-admin', JSON.stringify({ action: 'remove', name: 'old-server' }));
+    internal.handleAdminApproval(worker, 'expired-admin', JSON.stringify({ action: 'remove', name: 'old-server' }));
     await vi.advanceTimersByTimeAsync(120_001);
 
     expect(events.filter((event) => event.method.endsWith('/approvalResolved')).map((event) => event.params))
@@ -147,12 +165,12 @@ describe('connected-folder path policy', () => {
     });
     const turn = newTurnContext('thread', 'turn');
     turn.privateRoots = [vault];
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      currentTurn: typeof turn;
-      onPiEvent: (event: Record<string, unknown>) => void;
+      onPiEvent: (worker: FakeWorker, event: Record<string, unknown>) => void;
     };
-    internal.currentTurn = turn;
-    internal.onPiEvent({
+    worker.currentTurn = turn;
+    internal.onPiEvent(worker, {
       type: 'tool_execution_start',
       toolName: 'read',
       toolCallId: 'read-1',
@@ -162,8 +180,8 @@ describe('connected-folder path policy', () => {
 
     const variantTurn = newTurnContext('thread', 'variant-turn');
     variantTurn.privateRoots = [vault];
-    internal.currentTurn = variantTurn;
-    internal.onPiEvent({
+    worker.currentTurn = variantTurn;
+    internal.onPiEvent(worker, {
       type: 'tool_execution_start',
       toolName: 'read',
       toolCallId: 'read-variant',
@@ -180,7 +198,7 @@ describe('crash-loop breaker', () => {
     runtime.on('event', (event) => events.push(event));
     const internal = runtime as unknown as {
       noteProcessExit: (gen: number, uptimeMs: number) => void;
-      ensureStarted: () => Promise<void>;
+      ensureWorkerStarted: (worker: FakeWorker) => Promise<void>;
       cooldownUntil: number;
       spawnStrikes: number;
     };
@@ -195,7 +213,8 @@ describe('crash-loop breaker', () => {
     internal.noteProcessExit(3, 500);
     expect(internal.cooldownUntil).toBeGreaterThan(Date.now());
     expect(events.some((e) => e.method === 'process/cooldown')).toBe(true);
-    await expect(internal.ensureStarted()).rejects.toThrow(/keeps exiting/);
+    // The breaker is pool-wide: EVERY worker's spawn answers from the cooldown.
+    await expect(internal.ensureWorkerStarted(workerOf(runtime))).rejects.toThrow(/keeps exiting/);
 
     // A process that lived a while resets the strike count entirely.
     internal.cooldownUntil = 0;
@@ -378,38 +397,34 @@ describe('pi RPC failure handling', () => {
     const { runtime, root } = await tempRuntime();
     const session = join(root, 'target.jsonl');
     await writeFile(session, '{}\n');
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      activeThreadId: string;
       sessionFiles: Map<string, string>;
-      proc: { request: () => Promise<{ success: boolean; error?: string }> };
-      ensureActive: (threadId: string) => Promise<string>;
+      ensureActive: (worker: FakeWorker, threadId: string) => Promise<string>;
     };
-    internal.activeThreadId = 'currently-active';
+    worker.activeThreadId = 'currently-active';
     internal.sessionFiles.set('requested', session);
-    internal.proc = { request: async () => ({ success: false, error: 'corrupt session' }) };
+    worker.proc = { request: async () => ({ success: false, error: 'corrupt session' }) };
 
-    await expect(internal.ensureActive('requested')).rejects.toThrow('corrupt session');
-    expect(internal.activeThreadId).toBe('currently-active');
+    await expect(internal.ensureActive(worker, 'requested')).rejects.toThrow('corrupt session');
+    expect(worker.activeThreadId).toBe('currently-active');
   });
 
   it('preserves the current session mirrors when new_session is rejected', async () => {
     const { runtime } = await tempRuntime();
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      activeThreadId: string | null;
-      currentModel: string | null;
-      currentThinking: string | null;
-      proc: { request: () => Promise<{ success: boolean; error?: string }> };
-      newSession: () => Promise<string>;
+      newSession: (worker: FakeWorker) => Promise<string>;
     };
-    internal.activeThreadId = 'still-active';
-    internal.currentModel = 'openai-codex/current';
-    internal.currentThinking = 'high';
-    internal.proc = { request: async () => ({ success: false, error: 'cannot create session' }) };
+    worker.activeThreadId = 'still-active';
+    worker.currentModel = 'openai-codex/current';
+    worker.currentThinking = 'high';
+    worker.proc = { request: async () => ({ success: false, error: 'cannot create session' }) };
 
-    await expect(internal.newSession()).rejects.toThrow('cannot create session');
-    expect(internal.activeThreadId).toBe('still-active');
-    expect(internal.currentModel).toBe('openai-codex/current');
-    expect(internal.currentThinking).toBe('high');
+    await expect(internal.newSession(worker)).rejects.toThrow('cannot create session');
+    expect(worker.activeThreadId).toBe('still-active');
+    expect(worker.currentModel).toBe('openai-codex/current');
+    expect(worker.currentThinking).toBe('high');
   });
 
   it('does not truncate a rollback target unless parking succeeds', async () => {
@@ -417,45 +432,41 @@ describe('pi RPC failure handling', () => {
     const session = join(root, 'rollback.jsonl');
     const original = '{"id":"header"}\n{"id":"target"}\n{"id":"later"}\n';
     await writeFile(session, original);
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      activeThreadId: string | null;
-      currentModel: string | null;
-      currentThinking: string | null;
       sessionFiles: Map<string, string>;
-      ensureStarted: () => Promise<void>;
-      proc: { request: () => Promise<{ success: boolean; error?: string }> };
+      ensureWorkerStarted: (worker: FakeWorker) => Promise<void>;
     };
-    internal.ensureStarted = async () => undefined;
-    internal.activeThreadId = 'currently-active';
-    internal.currentModel = 'openai-codex/current';
-    internal.currentThinking = 'high';
+    internal.ensureWorkerStarted = async () => undefined;
+    worker.activeThreadId = 'currently-active';
+    worker.currentModel = 'openai-codex/current';
+    worker.currentThinking = 'high';
     internal.sessionFiles.set('target-thread', session);
-    internal.proc = { request: async () => ({ success: false, error: 'parking rejected' }) };
+    worker.proc = { request: async () => ({ success: false, error: 'parking rejected' }) };
 
     await expect(runtime.rollbackToTurn('target-thread', 'target')).rejects.toThrow('parking rejected');
     expect(await readFile(session, 'utf8')).toBe(original);
-    expect(internal.activeThreadId).toBe('currently-active');
-    expect(internal.currentModel).toBe('openai-codex/current');
-    expect(internal.currentThinking).toBe('high');
+    expect(worker.activeThreadId).toBe('currently-active');
+    expect(worker.currentModel).toBe('openai-codex/current');
+    expect(worker.currentThinking).toBe('high');
   });
 
   it('does not delete the active chat when parking is rejected', async () => {
     const { runtime, root } = await tempRuntime();
     const session = join(root, 'active-delete.jsonl');
     await writeFile(session, '{"id":"active-thread"}\n');
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      activeThreadId: string | null;
       sessionFiles: Map<string, string>;
       unnamedThreads: Set<string>;
-      proc: { request: () => Promise<{ success: boolean; error?: string }> };
     };
-    internal.activeThreadId = 'active-thread';
+    worker.activeThreadId = 'active-thread';
     internal.sessionFiles.set('active-thread', session);
     internal.unnamedThreads.add('active-thread');
-    internal.proc = { request: async () => ({ success: false, error: 'cannot park active chat' }) };
+    worker.proc = { request: async () => ({ success: false, error: 'cannot park active chat' }) };
 
     await expect(runtime.deleteThread('active-thread')).rejects.toThrow('cannot park active chat');
-    expect(internal.activeThreadId).toBe('active-thread');
+    expect(worker.activeThreadId).toBe('active-thread');
     expect(internal.sessionFiles.get('active-thread')).toBe(session);
     expect(internal.unnamedThreads.has('active-thread')).toBe(true);
     expect(await readFile(session, 'utf8')).toContain('active-thread');
@@ -463,14 +474,13 @@ describe('pi RPC failure handling', () => {
 
   it('propagates a rejected set_session_name response', async () => {
     const { runtime } = await tempRuntime();
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      activeThreadId: string | null;
-      ensureStarted: () => Promise<void>;
-      proc: { request: () => Promise<{ success: boolean; error?: string }> };
+      ensureWorkerStarted: (worker: FakeWorker) => Promise<void>;
     };
-    internal.activeThreadId = 'active-thread';
-    internal.ensureStarted = async () => undefined;
-    internal.proc = { request: async () => ({ success: false, error: 'rename rejected' }) };
+    worker.activeThreadId = 'active-thread';
+    internal.ensureWorkerStarted = async () => undefined;
+    worker.proc = { request: async () => ({ success: false, error: 'rename rejected' }) };
 
     await expect(runtime.renameThread('active-thread', 'New name')).rejects.toThrow('rename rejected');
   });
@@ -479,20 +489,17 @@ describe('pi RPC failure handling', () => {
     const { runtime, root } = await tempRuntime();
     const session = join(root, 'rollback-switch.jsonl');
     await writeFile(session, '{"id":"header"}\n{"id":"target"}\n{"id":"later"}\n');
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      activeThreadId: string | null;
-      currentModel: string | null;
-      currentThinking: string | null;
       sessionFiles: Map<string, string>;
-      ensureStarted: () => Promise<void>;
-      proc: { request: (command: { type?: string }) => Promise<{ success: boolean; error?: string }> };
+      ensureWorkerStarted: (worker: FakeWorker) => Promise<void>;
     };
-    internal.ensureStarted = async () => undefined;
-    internal.activeThreadId = 'currently-active';
-    internal.currentModel = 'openai-codex/current';
-    internal.currentThinking = 'high';
+    internal.ensureWorkerStarted = async () => undefined;
+    worker.activeThreadId = 'currently-active';
+    worker.currentModel = 'openai-codex/current';
+    worker.currentThinking = 'high';
     internal.sessionFiles.set('target-thread', session);
-    internal.proc = {
+    worker.proc = {
       request: async (command) => command.type === 'new_session'
         ? { success: true }
         : { success: false, error: 'reload rejected' }
@@ -500,23 +507,22 @@ describe('pi RPC failure handling', () => {
 
     await expect(runtime.rollbackToTurn('target-thread', 'target')).rejects.toThrow('reload rejected');
     expect(await readFile(session, 'utf8')).toBe('{"id":"header"}\n');
-    expect(internal.activeThreadId).toBeNull();
-    expect(internal.currentModel).toBeNull();
-    expect(internal.currentThinking).toBeNull();
+    expect(worker.activeThreadId).toBeNull();
+    expect(worker.currentModel).toBeNull();
+    expect(worker.currentThinking).toBeNull();
   });
 
   it('fails before a turn can continue when set_model is rejected', async () => {
     const { runtime } = await tempRuntime();
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      currentModel: string;
-      proc: { request: () => Promise<{ success: boolean; error?: string }> };
-      applyModel: (model: string) => Promise<void>;
+      applyModel: (worker: FakeWorker, model: string) => Promise<void>;
     };
-    internal.currentModel = 'openai-codex/old';
-    internal.proc = { request: async () => ({ success: false, error: 'model unavailable' }) };
+    worker.currentModel = 'openai-codex/old';
+    worker.proc = { request: async () => ({ success: false, error: 'model unavailable' }) };
 
-    await expect(internal.applyModel('openai-codex/requested')).rejects.toThrow('model unavailable');
-    expect(internal.currentModel).toBe('openai-codex/old');
+    await expect(internal.applyModel(worker, 'openai-codex/requested')).rejects.toThrow('model unavailable');
+    expect(worker.currentModel).toBe('openai-codex/old');
   });
 
   it('releases the send gate on agent_settled, not agent_end', async () => {
@@ -524,50 +530,49 @@ describe('pi RPC failure handling', () => {
     // continuations) until agent_settled; a prompt sent in that window is rejected
     // with "Agent is already processing". The gate must span the gap.
     const { runtime } = await tempRuntime();
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      currentTurn: unknown;
-      foreground: { claimTurn(): void; run<T>(task: () => Promise<T>): Promise<T> };
-      onPiEvent: (event: Record<string, unknown>) => void;
+      onPiEvent: (worker: FakeWorker, event: Record<string, unknown>) => void;
     };
-    internal.currentTurn = newTurnContext('thread', 'turn1');
-    internal.foreground.claimTurn();
+    worker.currentTurn = newTurnContext('thread', 'turn1');
+    worker.gate.claimTurn();
 
-    internal.onPiEvent({ type: 'agent_end' });
-    expect(internal.currentTurn).toBeNull(); // the renderer's turn end fired…
+    internal.onPiEvent(worker, { type: 'agent_end' });
+    expect(worker.currentTurn).toBeNull(); // the renderer's turn end fired…
 
     let ran = false;
-    const queued = internal.foreground.run(async () => {
+    const queued = worker.gate.run(async () => {
       ran = true;
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(ran).toBe(false); // …but sends stay queued while pi may still be busy
 
-    internal.onPiEvent({ type: 'agent_settled' });
+    internal.onPiEvent(worker, { type: 'agent_settled' });
     await queued;
     expect(ran).toBe(true);
   });
 
   it('settles a willRetry turn whose promised continuation never came', async () => {
     const { runtime } = await tempRuntime();
+    const worker = workerOf(runtime);
     const internal = runtime as unknown as {
-      currentTurn: unknown;
-      onPiEvent: (event: Record<string, unknown>) => void;
+      onPiEvent: (worker: FakeWorker, event: Record<string, unknown>) => void;
     };
     const methods: string[] = [];
     runtime.on('event', (e: { method: string }) => methods.push(e.method));
 
-    internal.currentTurn = newTurnContext('thread', 'turn1');
-    internal.onPiEvent({
+    worker.currentTurn = newTurnContext('thread', 'turn1');
+    internal.onPiEvent(worker, {
       type: 'message_end',
       message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'overloaded' }
     });
-    internal.onPiEvent({ type: 'agent_end', willRetry: true });
+    internal.onPiEvent(worker, { type: 'agent_end', willRetry: true });
     // Kept open for the announced retry: no terminal event yet.
-    expect(internal.currentTurn).not.toBeNull();
+    expect(worker.currentTurn).not.toBeNull();
     expect(methods).not.toContain('turn/failed');
 
-    internal.onPiEvent({ type: 'agent_settled' });
-    expect(internal.currentTurn).toBeNull();
+    internal.onPiEvent(worker, { type: 'agent_settled' });
+    expect(worker.currentTurn).toBeNull();
     expect(methods).toContain('turn/failed');
   });
 
@@ -575,12 +580,9 @@ describe('pi RPC failure handling', () => {
     const { runtime } = await tempRuntime();
     const sent: unknown[] = [];
     const current = newTurnContext('thread', 'current-turn');
-    const internal = runtime as unknown as {
-      currentTurn: typeof current;
-      proc: { send: (command: unknown) => void };
-    };
-    internal.currentTurn = current;
-    internal.proc = { send: (command) => sent.push(command) };
+    const worker = workerOf(runtime);
+    worker.currentTurn = current;
+    worker.proc = { send: (command) => sent.push(command) };
 
     await runtime.interruptTurn('stale-turn');
     expect(current.aborted).toBe(false);
@@ -599,17 +601,17 @@ describe('prompting a pi that says it is still busy', () => {
   // the composer for a message pi never looked at. The rejection is a "not yet":
   // poll pi's own state, then send again. Nothing was queued on pi's side (the
   // refusal happens in its preflight), so the re-send cannot duplicate a message.
-  type FakeProc = { request: (command: { type: string }) => Promise<{ success: boolean; error?: string; data?: unknown }> };
   const BUSY = "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.";
 
   it('waits for pi to go idle and sends the prompt once more', async () => {
     const { runtime } = await tempRuntime();
     const sent: string[] = [];
     let streaming = true;
-    const internal = runtime as unknown as { proc: FakeProc; sendPrompt: (message: string, images: unknown[]) => Promise<void> };
-    internal.proc = {
+    const worker = workerOf(runtime);
+    const internal = runtime as unknown as { sendPrompt: (worker: FakeWorker, message: string, images: unknown[]) => Promise<void> };
+    worker.proc = {
       request: async (command) => {
-        sent.push(command.type);
+        sent.push(command.type as string);
         if (command.type === 'get_state') {
           // Busy on the first look, idle on the second: the post-run work finishes
           // while we are asking.
@@ -622,37 +624,39 @@ describe('prompting a pi that says it is still busy', () => {
       }
     };
 
-    await expect(internal.sendPrompt('hello', [])).resolves.toBeUndefined();
+    await expect(internal.sendPrompt(worker, 'hello', [])).resolves.toBeUndefined();
     expect(sent.filter((type) => type === 'prompt')).toHaveLength(2);
   });
 
   it('surfaces the rejection when pi cannot say whether it is idle', async () => {
     const { runtime } = await tempRuntime();
     const sent: string[] = [];
-    const internal = runtime as unknown as { proc: FakeProc; sendPrompt: (message: string, images: unknown[]) => Promise<void> };
-    internal.proc = {
+    const worker = workerOf(runtime);
+    const internal = runtime as unknown as { sendPrompt: (worker: FakeWorker, message: string, images: unknown[]) => Promise<void> };
+    worker.proc = {
       request: async (command) => {
-        sent.push(command.type);
+        sent.push(command.type as string);
         return command.type === 'get_state' ? { success: false, error: 'no state' } : { success: false, error: BUSY };
       }
     };
 
-    await expect(internal.sendPrompt('hello', [])).rejects.toThrow('already processing');
+    await expect(internal.sendPrompt(worker, 'hello', [])).rejects.toThrow('already processing');
     expect(sent.filter((type) => type === 'prompt')).toHaveLength(1);
   });
 
   it('does not re-send a prompt pi rejected for any other reason', async () => {
     const { runtime } = await tempRuntime();
     const sent: string[] = [];
-    const internal = runtime as unknown as { proc: FakeProc; sendPrompt: (message: string, images: unknown[]) => Promise<void> };
-    internal.proc = {
+    const worker = workerOf(runtime);
+    const internal = runtime as unknown as { sendPrompt: (worker: FakeWorker, message: string, images: unknown[]) => Promise<void> };
+    worker.proc = {
       request: async (command) => {
-        sent.push(command.type);
+        sent.push(command.type as string);
         return { success: false, error: 'No API key found for provider "openai-codex".' };
       }
     };
 
-    await expect(internal.sendPrompt('hello', [])).rejects.toThrow('No API key found');
+    await expect(internal.sendPrompt(worker, 'hello', [])).rejects.toThrow('No API key found');
     expect(sent).toEqual(['prompt']);
   });
 });
@@ -664,14 +668,14 @@ describe('stopping a turn before its start completes', () => {
   // queued behind another turn's foreground gate — before interrupting anything.
   const TURN_ID = '11111111-2222-4333-8444-555555555555';
 
-  it('cancels a start still queued behind the foreground gate without touching pi', async () => {
+  it('cancels a start still queued behind the worker gate without touching pi', async () => {
     const { runtime } = await tempRuntime();
-    const internal = runtime as unknown as {
-      proc: unknown;
-      foreground: { claimTurn(): void; finishTurn(): void };
-    };
+    // Pin the pool to one worker so the new start genuinely has to queue —
+    // with spare capacity it would (correctly) go to a fresh worker instead.
+    (runtime as unknown as { maxWorkers: number }).maxWorkers = 1;
+    const worker = workerOf(runtime);
     // A previous turn is still streaming: the new start parks on the gate.
-    internal.foreground.claimTurn();
+    worker.gate.claimTurn();
 
     const start = runtime.startTurn({ input: 'hello', turnId: TURN_ID });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -681,9 +685,10 @@ describe('stopping a turn before its start completes', () => {
     await expect(start).resolves.toEqual({ handled: true, canceled: true });
 
     // And when the gate finally opens, the abandoned task bails before pi spawns.
-    internal.foreground.finishTurn();
+    worker.gate.finishTurn();
+    (runtime as unknown as { pumpCapacityWaiters(): void }).pumpCapacityWaiters();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(internal.proc).toBeNull();
+    expect(worker.proc).toBeNull();
   });
 
   it('consumes a cancel that overtook its start on the wire', async () => {
@@ -694,8 +699,8 @@ describe('stopping a turn before its start completes', () => {
       handled: true,
       canceled: true
     });
-    const internal = runtime as unknown as { proc: unknown };
-    expect(internal.proc).toBeNull();
+    const workers = (runtime as unknown as { workers: FakeWorker[] }).workers;
+    expect(workers.every((w) => w.proc === null)).toBe(true);
   });
 
   it('a pre-start cancel also suppresses the remember fast path', async () => {
@@ -772,26 +777,29 @@ describe('scheduled-run model restore', () => {
   ];
 
   type Internal = {
-    ensureStarted: () => Promise<void>;
+    ensureWorkerStarted: (worker: FakeWorker) => Promise<void>;
     buildMessage: () => Promise<{ message: string; images: unknown[] }>;
     sessionFiles: Map<string, string>;
     threadTurnSettings: (threadId: string) => Promise<{ model?: string; effort?: string }>;
-    proc: {
-      running: boolean;
-      request: (cmd: Record<string, unknown>) => Promise<{ success: boolean; error?: string; data?: unknown }>;
-    };
   };
 
-  async function scheduledRuntime(extraLines: object[] = []): Promise<{ runtime: PiRuntime; internal: Internal; requests: Array<Record<string, unknown>>; workspace: string }> {
+  async function scheduledRuntime(extraLines: object[] = []): Promise<{
+    runtime: PiRuntime;
+    internal: Internal;
+    worker: FakeWorker;
+    requests: Array<Record<string, unknown>>;
+    workspace: string;
+  }> {
     const { runtime, sessions, workspace } = await tempRuntime();
     const session = join(sessions, 'sched.jsonl');
     await writeFile(session, [...sessionLines, ...extraLines].map((l) => JSON.stringify(l)).join('\n'));
     const internal = runtime as unknown as Internal;
-    internal.ensureStarted = async () => undefined;
+    const worker = workerOf(runtime);
+    internal.ensureWorkerStarted = async () => undefined;
     internal.buildMessage = async () => ({ message: 'scheduled prompt', images: [] });
     internal.sessionFiles.set('sched-1', session);
     const requests: Array<Record<string, unknown>> = [];
-    internal.proc = {
+    worker.proc = {
       running: true,
       request: async (cmd) => {
         requests.push(cmd);
@@ -804,7 +812,7 @@ describe('scheduled-run model restore', () => {
         return { success: true };
       }
     };
-    return { runtime, internal, requests, workspace };
+    return { runtime, internal, worker, requests, workspace };
   }
 
   it('resolves the last explicitly chosen model/effort, ignoring assistant-message models', async () => {
@@ -855,9 +863,9 @@ describe('scheduled-run model restore', () => {
   });
 
   it('degrades a pin that cannot be applied to the thread model, not the app default', async () => {
-    const { runtime, internal, requests } = await scheduledRuntime();
-    const base = internal.proc.request;
-    internal.proc.request = async (cmd) => {
+    const { runtime, worker, requests } = await scheduledRuntime();
+    const base = worker.proc!.request!;
+    worker.proc!.request = async (cmd) => {
       // The pinned model has vanished from the registry; the thread's own still works.
       if (cmd.type === 'set_model' && cmd.modelId === 'gpt-5.6-terra') {
         requests.push(cmd);
@@ -883,9 +891,9 @@ describe('scheduled-run model restore', () => {
   });
 
   it('falls back to the active model instead of failing the run when set_model is rejected', async () => {
-    const { runtime, internal, requests } = await scheduledRuntime();
-    const base = internal.proc.request;
-    internal.proc.request = async (cmd) => {
+    const { runtime, worker, requests } = await scheduledRuntime();
+    const base = worker.proc!.request!;
+    worker.proc!.request = async (cmd) => {
       if (cmd.type === 'set_model') {
         requests.push(cmd);
         return { success: false, error: 'model unavailable' };
@@ -1008,7 +1016,7 @@ describe('scheduled-run model restore', () => {
     // …no explicit fact was written…
     expect(recallStore.getAllFacts()).toHaveLength(0);
     // …and the prompt is not queued for user-role episodic capture.
-    const turn = (runtime as unknown as { currentTurn?: { pendingUserCapture?: unknown } }).currentTurn;
+    const turn = (runtime as unknown as { workers: FakeWorker[] }).workers[0]?.currentTurn;
     expect(turn?.pendingUserCapture).toBeUndefined();
 
     // The same wording typed interactively keeps the fast path.
@@ -1071,11 +1079,11 @@ describe('interactive overflow self-heal', () => {
       compacted.push(id);
     };
     const internal = runtime as unknown as {
-      settleTurn: (turn: ReturnType<typeof newTurnContext>, now: number) => void;
+      settleTurn: (worker: FakeWorker, turn: ReturnType<typeof newTurnContext>, now: number) => void;
     };
     const turn = newTurnContext('thread-x', 'turn-x');
     Object.assign(turn, patch);
-    internal.settleTurn(turn, Date.now());
+    internal.settleTurn(workerOf(runtime), turn, Date.now());
     await new Promise((r) => setTimeout(r, 0));
     return compacted;
   }

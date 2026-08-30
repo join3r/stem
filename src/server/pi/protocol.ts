@@ -112,6 +112,14 @@ export const SKILLS_REV_FILE = '.skills-rev';
 export const ENV_MCP_CONFIG = 'STEM_MCP_CONFIG';
 export const ENV_MCP_OAUTH = 'STEM_PI_MCP_OAUTH';
 export const ENV_SKILLS_DIR = 'STEM_SKILLS_DIR';
+/**
+ * Directory this process's PER-TURN gate files live in (native-search.json /
+ * service-tier.json, plus the active-tools.json diagnostic). Each worker of the
+ * runtime pool gets its own so concurrent turns on different processes can't
+ * clobber each other's web-search/tier setting; the bridge falls back to the
+ * mcp.json directory when unset (single-process spawns, older mains).
+ */
+export const ENV_GATE_DIR = 'STEM_GATE_DIR';
 /** Hex AES-256 key for secrets at rest, handed to the pi process at spawn. */
 export const ENV_SECRET_KEY = 'STEM_SECRET_KEY';
 
