@@ -200,26 +200,29 @@ function mailPreamble(mail: { subject: string; from: string; participants?: stri
   const isDriver = !participants.length || participants[0] === self;
   const role = isDriver
     ? others.length
-      ? // Firm, not optional: the user PUT those personas on the To: line — in
-        // the first smoke test a soft "you may consult" was simply ignored and
-        // the verifier the user asked for never heard a word. The single-voice
-        // and don't-restate rules exist for the opposite failure: the first
-        // real fan-out thread answered one user question three times, twice
-        // near-verbatim.
-        `You drive this conversation: you alone answer the user, and each of their mails deserves ONE reply, not ` +
-        `an echo per consultation. The user also addressed it to: ${others.join(', ')}. They put each persona ` +
-        'there for a reason — involve them with the send_mail tool for the parts that match their role (a ' +
-        'verifier checks your work before the user sees it, and so on); skip one only when it clearly has ' +
-        'nothing to add. Delegate with a short brief that says what is needed — do not restate the whole mail ' +
-        'you received. A consulted persona’s reply arrives as a later mail to you, and your current turn ends ' +
-        'after sending. To answer the USER after a consultation, call send_mail with to ["user"] and fold what ' +
-        'the consultations added into that one answer — never repeat a reply the user can already read. A plain ' +
-        'final message goes back to whoever mailed you, which mid-conversation may be a persona, not the user.'
+      ? // Calibrated between two observed failures: a soft "you may consult"
+        // was simply ignored and the verifier the user asked for never heard a
+        // word; a firm "involve them, they were put there for a reason" woke
+        // every persona for a two-word follow-up meant for one of them. The
+        // single-voice and don't-restate rules exist for a third failure: the
+        // first real fan-out thread answered one user question three times,
+        // twice near-verbatim.
+        `You drive this conversation: you alone answer the user, you alone may mail the other personas, and ` +
+        `each user mail deserves ONE reply, not an echo per consultation. The user also addressed it to: ` +
+        `${others.join(', ')} — specialists on call, not co-authors. Read each mail for whose role it needs: ` +
+        'when the task calls for one, bring it in with the send_mail tool (a verifier checks your work before ' +
+        'the user sees it, and so on), and leave the others out — a follow-up aimed at one persona involves ' +
+        'only that persona. Delegate with a short brief that says what is ' +
+        'needed — do not restate the whole mail you received. A consulted persona’s reply arrives as a later ' +
+        'mail to you, and your current turn ends after sending. To answer the USER after a consultation, call ' +
+        'send_mail with to ["user"] and fold what the consultations added into that one answer — never repeat ' +
+        'a reply the user can already read. A plain final message goes back to whoever mailed you, which ' +
+        'mid-conversation may be a persona, not the user.'
       : 'send_mail can also reach the user directly (to ["user"]) — useful for a progress note mid-work.'
-    : `You are a consulted participant here; the driver (${participants[0]}) alone answers the user, so a ` +
-      'send_mail to ["user"] is rerouted to the driver. Answer whoever mailed you — your plain final message ' +
-      'goes back to them' +
-      (others.length ? `. Other reachable participants: ${others.join(', ')}.` : '.');
+    : `You are a consulted participant here; the driver (${participants[0]}) alone answers the user and alone ` +
+      'coordinates the personas, so you cannot mail the others and a send_mail to ["user"] is rerouted to the ' +
+      'driver. Answer whoever mailed you — your plain final message goes back to them. If another persona ' +
+      'should be involved, say so in that reply so the driver can arrange it.';
   return [
     `<!--stem:mail from=${mail.from.split('>').join('')}-->`,
     `This is a mail delivery in the conversation "${mail.subject}", from ${

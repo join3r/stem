@@ -823,10 +823,10 @@ describe('fan-out joins', () => {
     expect(mail.conversations[0].status).toBe('awaiting-user');
   });
 
-  it('mail to a mid-fan-out sender from outside the wave is buffered, not delivered', async () => {
+  it('a spoke reaches only its initiator; a second mail to a mid-join sender is buffered', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);
-    const gossipSent = deferred();
+    const verifierDone = deferred();
     fake.scriptsByPersona.orchestrator = [
       {
         mode: 'ok',
@@ -835,31 +835,28 @@ describe('fan-out joins', () => {
           expect((await bridge.send({ to: ['verifier', 'secretary'], body: 'piece' }, ctx)).ok).toBe(true);
         }
       },
-      { mode: 'ok', reply: 'assembled with gossip' }
+      { mode: 'ok', reply: 'assembled without gossip' }
     ];
     fake.scriptsByPersona.verifier = [
       {
         mode: 'ok',
         reply: 'spoke already',
         bridge: async (bridge, ctx) => {
-          // Pulls a bystander in, then answers its own assignment.
-          expect((await bridge.send({ to: ['normal'], body: 'psst' }, ctx)).ok).toBe(true);
+          // Tries to pull a bystander in — hub and spoke refuses the detour.
+          const refused = await bridge.send({ to: ['normal'], body: 'psst' }, ctx);
+          expect(refused.ok).toBe(false);
+          if (!refused.ok) expect(refused.error).toContain('Only the driver');
+          // Its explicit reply settles the branch…
           expect((await bridge.send({ to: ['orchestrator'], body: 'v-done' }, ctx)).ok).toBe(true);
-        }
-      }
-    ];
-    fake.scriptsByPersona.normal = [
-      {
-        mode: 'ok',
-        reply: 'gossiped',
-        bridge: async (bridge, ctx) => {
-          expect((await bridge.send({ to: ['orchestrator'], body: 'gossip' }, ctx)).ok).toBe(true);
-          gossipSent.resolve();
+          // …so a SECOND mail to the still-joining sender rides the assembly
+          // as a labeled extra, never a turn of its own.
+          expect((await bridge.send({ to: ['orchestrator'], body: 'ps: extra note' }, ctx)).ok).toBe(true);
+          verifierDone.resolve();
         }
       }
     ];
     fake.scriptsByPersona.secretary = [
-      { mode: 'ok', reply: 's-reply', bridge: () => gossipSent.promise }
+      { mode: 'ok', reply: 's-reply', bridge: () => verifierDone.promise }
     ];
     await router.compose({
       to: ['orchestrator', 'verifier', 'secretary', 'normal'],
@@ -868,20 +865,22 @@ describe('fan-out joins', () => {
     });
     await vi.waitFor(async () => {
       const m = await readMail();
-      expect(m.items.some((i) => i.body === 'assembled with gossip' && i.to.includes('user'))).toBe(true);
+      expect(m.items.some((i) => i.body === 'assembled without gossip' && i.to.includes('user'))).toBe(true);
       expect(m.conversations[0].status).not.toBe('working');
     });
     const assembly = fake.starts.find(
       (s) => s.persona?.id === 'orchestrator' && s.input.includes('Replies to your delegations')
     )!;
     expect(assembly.input).toContain('v-done');
-    expect(assembly.input).toContain('gossip');
+    expect(assembly.input).toContain('ps: extra note');
     expect(assembly.input).toContain('not a delegation reply');
-    // The gossip never started an orchestrator turn of its own.
+    // The bystander was never mailed, and the extra note never started an
+    // orchestrator turn of its own.
+    expect((await readMail()).items.some((i) => i.from !== 'user' && i.to.includes('normal'))).toBe(false);
     expect(fake.starts.filter((s) => s.persona?.id === 'orchestrator')).toHaveLength(2);
   });
 
-  it('a branch that fans out itself assembles bottom-up', async () => {
+  it("a spoke's own fan-out is refused; the driver runs the sub-work it asks for", async () => {
     await savePersona({ id: 'w1', name: 'w1', prompt: '' });
     await savePersona({ id: 'w2', name: 'w2', prompt: '' });
     const fake = fakeBackend();
@@ -894,9 +893,8 @@ describe('fan-out joins', () => {
           expect((await bridge.send({ to: ['verifier', 'secretary'], body: 'piece' }, ctx)).ok).toBe(true);
         }
       },
-      { mode: 'ok', reply: 'top assembled' }
-    ];
-    fake.scriptsByPersona.verifier = [
+      // The assembly turn reads verifier's request and runs the wider fan-out
+      // itself — sub-work always briefed from ONE place, never twice.
       {
         mode: 'ok',
         reply: 'delegating down',
@@ -904,7 +902,18 @@ describe('fan-out joins', () => {
           expect((await bridge.send({ to: ['w1', 'w2'], body: 'subpiece' }, ctx)).ok).toBe(true);
         }
       },
-      { mode: 'ok', reply: 'verifier assembled' }
+      { mode: 'ok', reply: 'top assembled' }
+    ];
+    fake.scriptsByPersona.verifier = [
+      {
+        mode: 'ok',
+        reply: 'need w1 and w2 for this',
+        bridge: async (bridge, ctx) => {
+          const refused = await bridge.send({ to: ['w1', 'w2'], body: 'subpiece' }, ctx);
+          expect(refused.ok).toBe(false);
+          if (!refused.ok) expect(refused.error).toContain('Only the driver');
+        }
+      }
     ];
     fake.scriptsByPersona.secretary = [{ mode: 'ok', reply: 's-reply' }];
     fake.scriptsByPersona.w1 = [{ mode: 'ok', reply: 'w1-reply' }];
@@ -919,16 +928,16 @@ describe('fan-out joins', () => {
       expect(m.items.some((i) => i.body === 'top assembled' && i.to.includes('user'))).toBe(true);
       expect(m.conversations[0].status).toBe('idle');
     });
-    const inner = fake.starts.find(
-      (s) => s.persona?.id === 'verifier' && s.input.includes('Replies to your delegations')
-    )!;
-    expect(inner.input).toContain('w1-reply');
-    expect(inner.input).toContain('w2-reply');
-    const outer = fake.starts.find(
-      (s) => s.persona?.id === 'orchestrator' && s.input.includes('Replies to your delegations')
-    )!;
-    expect(outer.input).toContain('verifier assembled');
-    expect(outer.input).toContain('s-reply');
+    const assemblies = fake.starts.filter((s) => s.input.includes('Replies to your delegations'));
+    expect(assemblies.map((s) => s.persona?.id)).toEqual(['orchestrator', 'orchestrator']);
+    expect(assemblies[0].input).toContain('need w1 and w2 for this');
+    expect(assemblies[0].input).toContain('s-reply');
+    expect(assemblies[1].input).toContain('w1-reply');
+    expect(assemblies[1].input).toContain('w2-reply');
+    // Each worker was briefed exactly once, by the driver alone.
+    const mail = await readMail();
+    expect(mail.items.filter((i) => i.from !== 'user' && i.to.includes('w1'))).toHaveLength(1);
+    expect(mail.items.filter((i) => i.from !== 'user' && i.to.includes('w2'))).toHaveLength(1);
   });
 
   it('two fan-outs in one turn widen the same join into one assembly', async () => {
@@ -1051,6 +1060,63 @@ describe('single voice back', () => {
       from: 'orchestrator',
       to: ['user']
     });
+  });
+});
+
+describe('hub and spoke', () => {
+  it('a spoke may mail the user and its initiator, never a third persona', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.verifier = [
+      {
+        mode: 'ok',
+        reply: 'delegating',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['orchestrator'], body: 'check this' }, ctx)).ok).toBe(true);
+        }
+      },
+      // The rerouted user-detour and the explicit reply both land here; the
+      // driver closes on the user so nothing outlives the test.
+      {
+        mode: 'ok',
+        reply: 'closing',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['user'], body: 'done' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    fake.scriptsByPersona.orchestrator = [
+      {
+        mode: 'ok',
+        reply: 'worked',
+        bridge: async (bridge, ctx) => {
+          // A third participant is out of reach for a spoke…
+          const refused = await bridge.send({ to: ['secretary'], body: 'psst' }, ctx);
+          expect(refused.ok).toBe(false);
+          if (!refused.ok) {
+            expect(refused.error).toContain('Only the driver (verifier)');
+            expect(refused.error).toContain('secretary');
+          }
+          // …while its initiator is not (the user path is covered by the
+          // single-voice reroute tests).
+          expect((await bridge.send({ to: ['verifier'], body: 'for my initiator' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    await router.compose({
+      to: ['verifier', 'orchestrator', 'secretary'],
+      subject: 'spokes',
+      body: 'go'
+    });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'done' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+    expect(mail.items.some((i) => i.from !== 'user' && i.to.includes('secretary'))).toBe(false);
+    expect(mail.items.find((i) => i.body === 'for my initiator')).toMatchObject({ to: ['verifier'] });
+    expect(fake.starts.filter((s) => s.persona?.id === 'secretary')).toHaveLength(0);
   });
 });
 

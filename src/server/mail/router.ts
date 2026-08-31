@@ -64,6 +64,13 @@ import {
 // valve), and the router's own failure notices still reach the user directly:
 // a mail that silently went nowhere stays the one forbidden outcome.
 //
+// Hub and spoke: the driver is also the only persona that may MAIL the others.
+// A consulted persona can reply to whoever mailed it and nothing more — the
+// same thread later had two coordinators independently briefing one worker
+// with the same implementation task. Parallelism therefore only exists where
+// the driver deliberately fans out; a spoke needing another spoke's input says
+// so in its reply, and the driver arranges it.
+//
 // Stale replies: every delivery carries the userSentAt of the user mail its
 // wave answers (the epoch), inherited hop to hop. A reply landing on the user
 // after a NEWER user send is stamped stale — the user who has already moved on
@@ -306,11 +313,28 @@ export class MailRouter {
           `Recipients must be its participants (${conversation.participants.join(', ')}) or "user".`
       };
     }
-    // One voice back: only the driver (participants[0]) addresses the user.
-    // Another persona's user-mail is rerouted to the driver — material for THE
-    // answer — unless the extra hop would overflow the exchange cap, where the
-    // send falls through to the user (the existing runaway safety valve).
+    // Hub and spoke: only the driver (participants[0]) coordinates. A consulted
+    // persona may reply to whoever mailed it — nothing else — so one job can
+    // never be briefed twice by two coordinators, and parallel branches exist
+    // only where the driver deliberately fanned out.
     const driverId = conversation.participants[0];
+    const initiator = this.turnInitiators.get(ctx.turnId) ?? 'user';
+    if (ctx.personaId !== driverId) {
+      const disallowed = to.filter((t) => t !== 'user' && t !== initiator);
+      if (disallowed.length) {
+        return {
+          ok: false,
+          error:
+            `Only the driver (${driverId}) mails the personas in this conversation. You can reply to ` +
+            `${initiator === 'user' ? 'the user' : initiator} — send_mail, or just finish your turn — and if ` +
+            `${disallowed.join(', ')} should be involved, say so in that reply so the driver can arrange it.`
+        };
+      }
+    }
+    // One voice back: only the driver addresses the user. Another persona's
+    // user-mail is rerouted to the driver — material for THE answer — unless
+    // the extra hop would overflow the exchange cap, where the send falls
+    // through to the user (the existing runaway safety valve).
     const epoch = this.turnEpochs.get(ctx.turnId) ?? conversation.userSentAt;
     let finalTo = to;
     let rerouted = false;
@@ -367,7 +391,6 @@ export class MailRouter {
     if (finalTo.includes('user')) sent.user = true;
     this.turnMailSent.set(ctx.turnId, sent);
 
-    const initiator = this.turnInitiators.get(ctx.turnId) ?? 'user';
     // A user-only send from an awaited branch ends that branch: its turn gets
     // no implicit reply, so nothing later can settle it.
     if (!personaTo.length) {
