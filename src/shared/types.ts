@@ -379,7 +379,19 @@ export interface StartTurnInput {
    * `backend:startTurn` transport handler; only server-side callers (the mail
    * router) set it.
    */
-  persona?: { id: string; prompt: string; harness?: PersonaHarnessPin };
+  persona?: {
+    id: string;
+    prompt: string;
+    harness?: PersonaHarnessPin;
+    /**
+     * The persona's memory-note index (id + title, newest first), rendered
+     * into the mail preamble so the persona sees what it knows every turn and
+     * fetches bodies with read_notes. Present (possibly empty) exactly when
+     * the persona owns a memory — its presence is also what tells the
+     * preamble to mention remember_note.
+     */
+    notes?: { id: string; title: string }[];
+  };
   /**
    * Server-internal (stripped at the transport handler like `persona`): this
    * turn is a mail delivery. The backend prepends a fenced mail preamble — who
@@ -2012,6 +2024,25 @@ export interface Persona {
   builtin?: boolean;
 }
 
+/**
+ * One entry in a persona's private memory: a durable lesson from its past work
+ * (a procedure, a gotcha, a stable domain fact) — deliberately NOT facts about
+ * the user, which live in the one global recall. Only built-ins and
+ * editor-made personas keep notes; agent-created helpers (createdBy set) get
+ * none, and a persona's store dies with delete_persona.
+ */
+export interface PersonaNote {
+  /** Short id, unique within this persona's store — what read_notes fetches by. */
+  id: string;
+  /** One line; the face the note shows in the injected index and the editor. */
+  title: string;
+  body: string;
+  /** Epoch ms of the last write. */
+  at: number;
+  /** Who wrote it: the end-of-turn reflection pass, the remember_note tool, or the user. */
+  source: 'reflection' | 'tool' | 'user';
+}
+
 // ---- Mail (the email-like Inbox: conversations between the user and personas) ----
 //
 // Mail is the one primitive: the user's compose, a persona's reply, and (in a
@@ -3434,6 +3465,15 @@ export interface StemApi {
   savePersona(persona: Persona): Promise<Persona[]>;
   /** Delete a persona. Built-ins are refused. Returns the fresh list. */
   deletePersona(id: string): Promise<Persona[]>;
+  /** A persona's memory notes, newest first. Empty for personas without a store. */
+  listPersonaNotes(personaId: string): Promise<PersonaNote[]>;
+  /** Add or edit one memory note (source 'user'). Returns the fresh list. */
+  savePersonaNote(
+    personaId: string,
+    note: { id?: string; title?: string; body: string }
+  ): Promise<PersonaNote[]>;
+  /** Delete one memory note. Returns the fresh list. */
+  deletePersonaNote(personaId: string, noteId: string): Promise<PersonaNote[]>;
 
   // Mail. Mutations return the fresh MailListResult, like the inbox mutators.
   listMail(): Promise<MailListResult>;

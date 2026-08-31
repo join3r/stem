@@ -347,6 +347,11 @@ const api: StemApi = {
   listCodingAgents: () => ipcRenderer.invoke('personas:agents'),
   savePersona: (persona: Persona) => ipcRenderer.invoke('personas:save', persona),
   deletePersona: (id: string) => ipcRenderer.invoke('personas:delete', id),
+  listPersonaNotes: (personaId: string) => ipcRenderer.invoke('personas:notes:list', personaId),
+  savePersonaNote: (personaId: string, note: { id?: string; title?: string; body: string }) =>
+    ipcRenderer.invoke('personas:notes:save', personaId, note),
+  deletePersonaNote: (personaId: string, noteId: string) =>
+    ipcRenderer.invoke('personas:notes:delete', personaId, noteId),
 
   listMail: () => ipcRenderer.invoke('mail:list'),
   composeMail: (input: MailComposeInput) => ipcRenderer.invoke('mail:compose', input),

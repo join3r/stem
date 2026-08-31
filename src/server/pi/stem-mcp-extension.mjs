@@ -2335,6 +2335,50 @@ function registerMailTools(pi) {
       return taskOk(res.text || 'Persona deleted.');
     }
   });
+
+  pi.registerTool({
+    name: 'remember_note',
+    label: 'Remember a work note',
+    description:
+      'Save one durable lesson into YOUR OWN private memory: a procedure that worked, a gotcha you hit, a ' +
+      'stable fact about your domain or tools that would help you on a FUTURE task. Your saved notes are ' +
+      'listed (id + title) in every mail delivery you receive; fetch a full note with read_notes. ' +
+      'Do NOT save facts about the user (a separate memory owns those) or one-off task details with no ' +
+      'reuse value. Not available to temporary helper personas. Only works during a mail delivery.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'One line for the index (max 120 chars). Omit to use the body\'s first line.' },
+        body: { type: 'string', description: 'The lesson itself (max 4000 chars).' }
+      },
+      required: ['body']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const res = await mailBridge(ctx, { op: 'remember_note', title: params?.title, body: params?.body });
+      if (!res.ok) return taskErr(res.error || 'Could not save the note.');
+      return taskOk(res.text || 'Note saved.');
+    }
+  });
+
+  pi.registerTool({
+    name: 'read_notes',
+    label: 'Read your saved notes',
+    description:
+      'Fetch the full text of notes from YOUR OWN private memory, by the ids shown in the "Your private ' +
+      'notes" index of this delivery. Up to 10 ids per call. Only works during a mail delivery.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'string' }, description: 'Note ids from your index.' }
+      },
+      required: ['ids']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const res = await mailBridge(ctx, { op: 'read_notes', ids: params?.ids });
+      if (!res.ok) return taskErr(res.error || 'Could not read the notes.');
+      return taskOk(res.text || 'No notes.');
+    }
+  });
 }
 
 // ---- Command execution: run shell commands via the main-process executor ----

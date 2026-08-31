@@ -11,9 +11,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetActivity, snapshot } from '../../src/server/activity';
 import { MailRouter } from '../../src/server/mail/router';
 import { readMail } from '../../src/server/workspace/mail';
-import { listPersonas, savePersona } from '../../src/server/workspace/personas';
+import { listPersonas, savePersona, savePersonaFor } from '../../src/server/workspace/personas';
+import { listPersonaNotes, savePersonaNote } from '../../src/server/workspace/persona-memory';
 import { updateMailSettings } from '../../src/server/workspace/settings';
-import { mailStorePath, personasStorePath, settingsStorePath } from '../../src/server/workspace/paths';
+import {
+  mailStorePath,
+  personaMemoryDir,
+  personasStorePath,
+  settingsStorePath
+} from '../../src/server/workspace/paths';
 import type {
   ChatBackend,
   MailBridge,
@@ -139,7 +145,9 @@ function makeRouter(fake: FakeBackend, onChange: () => void = () => undefined): 
     send: (req, ctx) => router.bridgeSend(req, ctx),
     addPersona: (personaId, ctx) => router.bridgeAddPersona(personaId, ctx),
     savePersona: (req, ctx) => router.bridgeSavePersona(req, ctx),
-    deletePersona: (personaId, ctx) => router.bridgeDeletePersona(personaId, ctx)
+    deletePersona: (personaId, ctx) => router.bridgeDeletePersona(personaId, ctx),
+    rememberNote: (req, ctx) => router.bridgeRememberNote(req, ctx),
+    readNotes: (ids, ctx) => router.bridgeReadNotes(ids, ctx)
   });
   return router;
 }
@@ -1761,5 +1769,92 @@ describe('source-aware delegation', () => {
     });
     expect(spoke.attachments).toBeUndefined();
     expect(fake.starts[0].attachments).toEqual(atts);
+  });
+});
+
+describe('persona memory', () => {
+  beforeEach(() => {
+    rmSync(personaMemoryDir(), { recursive: true, force: true });
+  });
+  afterEach(() => {
+    rmSync(personaMemoryDir(), { recursive: true, force: true });
+  });
+
+  it('a delivery to a persona with a store carries its note index (empty store included)', async () => {
+    const saved = await savePersonaNote('verifier', { title: 'A lesson', body: 'the lesson' }, 'user');
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    await router.compose({ to: ['verifier'], subject: 's', body: 'q' });
+    await settledMail();
+    expect(fake.starts[0].persona?.notes).toEqual([{ id: saved.id, title: 'A lesson' }]);
+
+    // A store that exists but is empty still rides as [] — presence is what
+    // tells the preamble to pitch remember_note.
+    fake.starts.length = 0;
+    await router.compose({ to: ['secretary'], subject: 's2', body: 'q2' });
+    await vi.waitFor(async () => {
+      expect(fake.starts.length).toBeGreaterThan(0);
+    });
+    expect(fake.starts[0].persona?.notes).toEqual([]);
+  });
+
+  it('remember_note writes into the CALLER’s store with source tool', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.script = {
+      mode: 'ok',
+      reply: 'done',
+      bridge: async (bridge, ctx) => {
+        const res = await bridge.rememberNote({ title: 'Gotcha', body: 'clocks are UTC' }, ctx);
+        expect(res.ok).toBe(true);
+      }
+    };
+    await router.compose({ to: ['verifier'], subject: 's', body: 'q' });
+    await settledMail();
+    const notes = await listPersonaNotes('verifier');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ title: 'Gotcha', body: 'clocks are UTC', source: 'tool' });
+  });
+
+  it('an agent-created helper is refused remember_note and told where lessons go instead', async () => {
+    const helper = await savePersonaFor('orchestrator', { name: 'researcher-1', prompt: 'r' });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    const refusals: string[] = [];
+    fake.script = {
+      mode: 'ok',
+      reply: 'done',
+      bridge: async (bridge, ctx) => {
+        const res = await bridge.rememberNote({ body: 'a lesson' }, ctx);
+        if (!res.ok) refusals.push(res.error);
+      }
+    };
+    await router.compose({ to: [helper.id], subject: 's', body: 'q' });
+    await settledMail();
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toContain('temporary helper');
+    expect(await listPersonaNotes(helper.id)).toEqual([]);
+  });
+
+  it('read_notes fetches full bodies by id and names the ids it could not find', async () => {
+    const saved = await savePersonaNote('verifier', { title: 'T', body: 'the full body' }, 'user');
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    const results: string[] = [];
+    fake.script = {
+      mode: 'ok',
+      reply: 'done',
+      bridge: async (bridge, ctx) => {
+        const ok = await bridge.readNotes([saved.id, 'missing'], ctx);
+        if (ok.ok) results.push(ok.text);
+        const none = await bridge.readNotes(['missing'], ctx);
+        expect(none.ok).toBe(false);
+      }
+    };
+    await router.compose({ to: ['verifier'], subject: 's', body: 'q' });
+    await settledMail();
+    expect(results).toHaveLength(1);
+    expect(results[0]).toContain('the full body');
+    expect(results[0]).toContain('No such note: missing');
   });
 });

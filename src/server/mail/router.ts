@@ -18,6 +18,12 @@ import {
   updatePersonaFields,
   type BridgePersonaFields
 } from '../workspace/personas';
+import {
+  listPersonaNotes,
+  personaOwnsMemory,
+  savePersonaNote
+} from '../workspace/persona-memory';
+import { reflectOnDelivery } from './reflect';
 import { readSettings } from '../workspace/settings';
 import {
   addParticipant,
@@ -656,6 +662,64 @@ export class MailRouter {
     return { ok: true, text: `Deleted ${target.name}.` };
   }
 
+  /**
+   * remember_note: the calling persona saves one lesson into its OWN memory
+   * store — the payload names no persona, so nothing can write elsewhere.
+   * Refused for personas without a store (agent-created helpers): their whole
+   * point is to be disposable, and the refusal says where a lasting lesson
+   * should go instead.
+   */
+  async bridgeRememberNote(
+    req: { title?: string; body?: string },
+    ctx: MailBridgeContext
+  ): Promise<MailBridgeResult> {
+    const caller = await getPersona(ctx.personaId);
+    if (!caller) return { ok: false, error: 'Your persona no longer exists.' };
+    if (!personaOwnsMemory(caller)) {
+      return {
+        ok: false,
+        error:
+          'Your persona is a temporary helper and keeps no memory. If this lesson should outlive you, ' +
+          'put it in your reply so the persona that created you can remember it.'
+      };
+    }
+    const body = req.body?.trim();
+    if (!body) return { ok: false, error: 'Give remember_note a body.' };
+    try {
+      const note = await savePersonaNote(caller.id, { title: req.title, body }, 'tool');
+      return { ok: true, text: `Noted (${note.id}: ${note.title}). It will be in your index from your next mail.` };
+    } catch (error) {
+      // quiet: the tool result IS the error channel — the calling persona gets
+      // the store's refusal (full store, unreadable file) verbatim and reacts.
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** read_notes: full bodies from the calling persona's own store, by note id. */
+  async bridgeReadNotes(ids: string[], ctx: MailBridgeContext): Promise<MailBridgeResult> {
+    const caller = await getPersona(ctx.personaId);
+    if (!caller) return { ok: false, error: 'Your persona no longer exists.' };
+    if (!personaOwnsMemory(caller)) {
+      return { ok: false, error: 'Your persona is a temporary helper and keeps no memory.' };
+    }
+    const wanted = [...new Set(ids.map((id) => id.trim()).filter(Boolean))].slice(0, 10);
+    if (!wanted.length) return { ok: false, error: 'Give read_notes at least one note id from your index.' };
+    const notes = await listPersonaNotes(caller.id);
+    const sections: string[] = [];
+    const missing: string[] = [];
+    for (const id of wanted) {
+      const note = notes.find((n) => n.id === id);
+      if (note) sections.push(`--- ${note.id} · ${note.title} ---\n${note.body}`);
+      else missing.push(id);
+    }
+    if (!sections.length) return { ok: false, error: `No such note: ${missing.join(', ')}.` };
+    return {
+      ok: true,
+      text:
+        sections.join('\n\n') + (missing.length ? `\n\n(No such note: ${missing.join(', ')}.)` : '')
+    };
+  }
+
   /** Resolve by id first, then by (unique, case-insensitive) name. */
   private async resolvePersona(idOrName: string) {
     const personas = await listPersonas();
@@ -898,6 +962,14 @@ export class MailRouter {
               ...(sourceNames.length ? { attachmentNames: sourceNames } : {})
             }
           : undefined;
+      // The persona's memory index (id + title per note) rides the turn so the
+      // preamble can render "what you know" every delivery. Present (possibly
+      // empty) exactly when the persona owns a store — presence is also what
+      // makes the preamble mention remember_note.
+      // quiet: an unreadable store already degrades inside listPersonaNotes;
+      // the delivery proceeds with an empty index rather than failing.
+      const noteRows = personaOwnsMemory(persona) ? await listPersonaNotes(persona.id).catch(() => []) : undefined;
+      const notes = noteRows?.map((n) => ({ id: n.id, title: n.title }));
       const threadIdRef = { current: threadId ?? null };
       const settling = this.waitForSettle(turnId, threadIdRef);
       let started;
@@ -913,7 +985,8 @@ export class MailRouter {
           persona: {
             id: persona.id,
             prompt: persona.prompt,
-            ...(persona.harness ? { harness: persona.harness } : {})
+            ...(persona.harness ? { harness: persona.harness } : {}),
+            ...(notes ? { notes } : {})
           },
           mail: {
             conversationId,
@@ -975,6 +1048,15 @@ export class MailRouter {
         this.drainStatus.set(conversationId, 'awaiting-user');
       }
       // else: persona mail sent — the chain continues on the queued deliveries.
+
+      // The reflection pass: what did this turn teach the persona? Only for
+      // turns that settled ok (the failed branch above falls through to here),
+      // strictly after the reply has been routed, and strictly fire-and-forget
+      // — it never rejects (see reflect.ts) and a slow model must not hold the
+      // lane.
+      if (notes && settle.status === 'ok') {
+        void reflectOnDelivery(this.opts.runtime, { personaId, assignment: body, threadId: runThreadId });
+      }
     } catch (error) {
       // The reply IS the error channel: a mail that silently disappears is the
       // one outcome the Inbox must not produce.

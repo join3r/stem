@@ -309,6 +309,19 @@ export function personasStorePath(): string {
 }
 
 /**
+ * Per-persona memory: one JSON file of work-expertise notes per persona id
+ * (see workspace/persona-memory.ts). A directory of small files rather than a
+ * section of personas.json — notes are written from delivery turns (the
+ * reflection pass, remember_note) while the registry is written from the
+ * editor, and separate files mean neither write path can corrupt the other.
+ */
+export function personaMemoryDir(): string {
+  // STEM_PERSONA_MEMORY_DIR lets unit tests point at a throwaway directory,
+  // like the other store path helpers.
+  return process.env.STEM_PERSONA_MEMORY_DIR ?? join(userDataRoot(), 'persona-memory');
+}
+
+/**
  * Stem-owned mail store: the Inbox's conversations and items (user ↔ persona
  * mail), plus the per-conversation read/archive/snooze state. The persona work
  * behind each reply lives in hidden backend threads named by each

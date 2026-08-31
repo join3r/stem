@@ -709,7 +709,9 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     send: (req, ctx) => mailRouter!.bridgeSend(req, ctx),
     addPersona: (personaId, ctx) => mailRouter!.bridgeAddPersona(personaId, ctx),
     savePersona: (req, ctx) => mailRouter!.bridgeSavePersona(req, ctx),
-    deletePersona: (personaId, ctx) => mailRouter!.bridgeDeletePersona(personaId, ctx)
+    deletePersona: (personaId, ctx) => mailRouter!.bridgeDeletePersona(personaId, ctx),
+    rememberNote: (req, ctx) => mailRouter!.bridgeRememberNote(req, ctx),
+    readNotes: (ids, ctx) => mailRouter!.bridgeReadNotes(ids, ctx)
   });
 
   scheduler = initTaskScheduler({

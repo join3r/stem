@@ -197,7 +197,8 @@ export function mailPreamble(
     participants?: string[];
     source?: { itemId: string; body: string; attachmentNames?: string[] };
   },
-  self?: string
+  self?: string,
+  notes?: { id: string; title: string }[]
 ): string {
   // The other personas this conversation can reach — the To: list is the closed
   // participant set, and this line is how a persona learns who else is in it.
@@ -256,6 +257,24 @@ export function mailPreamble(
           'repeat the quoted text in your reply.'
       ]
     : [];
+  // The persona's private memory. Present (possibly empty) exactly when the
+  // persona owns a store — its presence is what earns the remember_note pitch,
+  // so a disposable helper is never told to save lessons it cannot keep. Titles
+  // are model/user-authored text landing inside our comment fence — strip any
+  // literal fence closer, like the quoted source body above.
+  const memory =
+    notes === undefined
+      ? []
+      : [
+          (notes.length
+            ? `Your private notes — lessons you saved from earlier work (newest first):\n${notes
+                .map((n) => `- ${n.id} · ${n.title.split(MAIL_CLOSE).join('')}`)
+                .join('\n')}\nFetch a note's full text with the read_notes tool when it looks relevant to this task.`
+            : 'Your private notebook is empty so far.') +
+            ' When this task teaches you something durable — a procedure, a gotcha, a stable fact about your ' +
+            'domain or tools that would help on a FUTURE task — save it with the remember_note tool. ' +
+            'Facts about the user do not belong there.'
+        ];
   return [
     `<!--stem:mail from=${mail.from.split('>').join('')}-->`,
     `This is a mail delivery in the conversation "${mail.subject}", from ${
@@ -263,6 +282,7 @@ export function mailPreamble(
     }. Nobody is reading live.`,
     'Work the task with your tools. Your final message is sent back to the sender as your reply mail — write it as the reply.',
     role,
+    ...memory,
     ...source,
     'If you are blocked, need a decision, or an approval was refused, say exactly what you need in your reply: it lands in the sender’s inbox and the conversation waits for their answer.',
     MAIL_CLOSE
@@ -2673,6 +2693,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           prompt?: string;
           model?: string;
           effort?: string;
+          title?: string;
+          ids?: unknown;
         };
         switch (req.op) {
           case 'send': {
@@ -2681,6 +2703,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           }
           case 'add_persona':
             return respond(await bridge.addPersona(req.personaId ?? '', ctx));
+          case 'remember_note':
+            return respond(await bridge.rememberNote({ title: req.title, body: req.body }, ctx));
+          case 'read_notes': {
+            const ids = Array.isArray(req.ids) ? req.ids.filter((t): t is string => typeof t === 'string') : [];
+            return respond(await bridge.readNotes(ids, ctx));
+          }
           case 'save_persona':
             return respond(
               await bridge.savePersona(
@@ -3842,7 +3870,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const message = input.scheduled
       ? `${scheduledPreamble(input.scheduled.at)}\n\n${body}`
       : input.mail
-        ? `${mailPreamble(input.mail, input.persona?.id)}\n\n${body}`
+        ? `${mailPreamble(input.mail, input.persona?.id, input.persona?.notes)}\n\n${body}`
         : body;
     return { message, images };
   }

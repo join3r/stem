@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import type { Persona, PersonaHarnessPin } from '../../shared/types';
 import { degrade } from '../degrade';
 import { personasStorePath } from './paths';
+import { deletePersonaMemory } from './persona-memory';
 
 // The Stem-owned persona registry. Same shape as the inbox store next door —
 // serialized read-modify-write, atomic temp+rename, and a corrupt file degrading
@@ -342,11 +343,18 @@ export async function updatePersonaFields(id: string, fields: BridgePersonaField
 }
 
 /** Delete a persona. Built-ins are refused (the seed would resurrect them blank). */
-export function deletePersona(id: string): Promise<Persona[]> {
-  return update((store) => {
+export async function deletePersona(id: string): Promise<Persona[]> {
+  const personas = await update((store) => {
     const persona = store.personas.find((p) => p.id === id);
     if (!persona) return;
     if (persona.builtin) throw new Error(`"${persona.name}" is built in and cannot be deleted.`);
     store.personas = store.personas.filter((p) => p.id !== id);
   });
+  // The persona's memory dies with it — deliberately, so a later persona that
+  // happens to reuse the name never inherits notes it did not earn. Both
+  // delete paths (editor IPC, delete_persona bridge) funnel through here.
+  await deletePersonaMemory(id).catch((err) =>
+    degrade('personas', 'left a deleted persona’s notes file behind', err)
+  );
+  return personas;
 }

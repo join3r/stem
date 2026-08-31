@@ -5,7 +5,8 @@ import type {
   DeviceInfo,
   ModelSummary,
   Persona,
-  PersonaHarnessPin
+  PersonaHarnessPin,
+  PersonaNote
 } from '../../../shared/types';
 import { ModelPicker } from '../../ui/ModelPicker';
 import { clampEffort, effortsOf, EffortSelect } from '../../ui/EffortSelect';
@@ -77,6 +78,183 @@ function sameEdit(a: Persona, b: Persona): boolean {
     (a.harness?.device ?? '') === (b.harness?.device ?? '') &&
     (a.canManagePersonas ?? false) === (b.canManagePersonas ?? false) &&
     (a.sendBudget ?? 0) === (b.sendBudget ?? 0)
+  );
+}
+
+/** How a note earned its place — shown as a chip beside the title. */
+const NOTE_SOURCE_LABELS: Record<PersonaNote['source'], string> = {
+  reflection: 'Learned',
+  tool: 'Saved by persona',
+  user: 'Added by you'
+};
+
+/**
+ * A persona's memory notes: the browse/edit/delete surface for the store its
+ * delivery turns read and write (workspace/persona-memory.ts). Deliberately
+ * OUTSIDE the row's draft/Save cycle — notes are a separate store the persona
+ * itself also writes, so each note saves explicitly on its own, and a Cancel
+ * of the persona form must not throw note edits away with it.
+ */
+function PersonaNotes({ personaId }: { personaId: string }) {
+  const [notes, setNotes] = useState<PersonaNote[] | null>(null);
+  // The note being edited (or the add form when id is ''), as a local draft.
+  const [editing, setEditing] = useState<{ id: string; title: string; body: string } | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let stale = false;
+    window.stem
+      .listPersonaNotes(personaId)
+      .then((list) => {
+        if (!stale) setNotes(list);
+      })
+      .catch(() => {
+        if (!stale) setNotes([]);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [personaId]);
+
+  function saveNote(draft: { id: string; title: string; body: string }) {
+    window.stem
+      .savePersonaNote(personaId, {
+        ...(draft.id ? { id: draft.id } : {}),
+        title: draft.title,
+        body: draft.body
+      })
+      .then((list) => {
+        setNotes(list);
+        setEditing(null);
+        setError(null);
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }
+
+  function removeNote(noteId: string) {
+    window.stem
+      .deletePersonaNote(personaId, noteId)
+      .then((list) => {
+        setNotes(list);
+        setError(null);
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }
+
+  return (
+    <div className="persona-notes">
+      <div className="grp-head">
+        Memory ({notes ? notes.length : '…'})
+      </div>
+      <p className="muted">
+        Lessons this persona keeps from its past work. It learns automatically after each mail it
+        handles and can save notes itself; everything here is injected as its note index on every
+        delivery.
+      </p>
+      {error && <p className="task-failed">{error}</p>}
+      {notes?.map((n) =>
+        editing?.id === n.id ? (
+          <div key={n.id} className="persona-note-editor">
+            <input
+              className="vfield"
+              aria-label="Note title"
+              value={editing.title}
+              onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+            />
+            <textarea
+              className="ci-textarea"
+              aria-label="Note body"
+              rows={4}
+              value={editing.body}
+              onChange={(e) => setEditing({ ...editing, body: e.target.value })}
+            />
+            <div className="push-row">
+              <button className="link-btn" onClick={() => setEditing(null)}>
+                Cancel
+              </button>
+              <button
+                className="primary"
+                onClick={() => saveNote(editing)}
+                disabled={!editing.body.trim()}
+              >
+                Save note
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div key={n.id} className="task-item">
+            <div className="task-head">
+              <span className="row-main">
+                <strong
+                  className="task-title"
+                  onClick={() => setOpenId(openId === n.id ? null : n.id)}
+                  title={openId === n.id ? 'Collapse' : 'Show this note'}
+                >
+                  {n.title}
+                </strong>
+                <em>
+                  {NOTE_SOURCE_LABELS[n.source]} · {new Date(n.at).toLocaleDateString()}
+                </em>
+              </span>
+              <button
+                className="icon-action sm"
+                onClick={() => removeNote(n.id)}
+                title="Delete this note"
+                aria-label="Delete note"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+            {openId === n.id && (
+              <p
+                className="muted"
+                style={{ whiteSpace: 'pre-wrap', cursor: 'pointer' }}
+                onClick={() => setEditing({ id: n.id, title: n.title, body: n.body })}
+                title="Edit this note"
+              >
+                {n.body}
+              </p>
+            )}
+          </div>
+        )
+      )}
+      {editing && !editing.id ? (
+        <div className="persona-note-editor">
+          <input
+            className="vfield"
+            aria-label="Note title"
+            placeholder="Title (optional — the body’s first line otherwise)"
+            value={editing.title}
+            onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+          />
+          <textarea
+            className="ci-textarea"
+            aria-label="Note body"
+            rows={4}
+            placeholder="The lesson this persona should keep."
+            value={editing.body}
+            onChange={(e) => setEditing({ ...editing, body: e.target.value })}
+          />
+          <div className="push-row">
+            <button className="link-btn" onClick={() => setEditing(null)}>
+              Cancel
+            </button>
+            <button
+              className="primary"
+              onClick={() => saveNote(editing)}
+              disabled={!editing.body.trim()}
+            >
+              Save note
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="link-btn" onClick={() => setEditing({ id: '', title: '', body: '' })}>
+          <Plus size={14} /> Add note
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -472,6 +650,9 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       {savingId === p.id ? 'Saving…' : 'Save'}
                     </button>
                   </div>
+                  {/* Only SAVED personas with a store: agent-created helpers keep no
+                      memory, and a never-saved draft has no id on the server yet. */}
+                  {saved && !p.createdBy && <PersonaNotes personaId={p.id} />}
                 </div>
               )}
             </div>

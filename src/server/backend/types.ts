@@ -156,6 +156,15 @@ export interface MailBridge {
   addPersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult>;
   savePersona(req: SavePersonaRequest, ctx: MailBridgeContext): Promise<MailBridgeResult>;
   deletePersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult>;
+  /**
+   * remember_note: the calling persona saves one lesson into its own memory
+   * store (workspace/persona-memory.ts). Refused for personas without a store
+   * (agent-created helpers). The store written is always the CALLER's — the
+   * payload carries no persona id to write elsewhere.
+   */
+  rememberNote(req: { title?: string; body?: string }, ctx: MailBridgeContext): Promise<MailBridgeResult>;
+  /** read_notes: fetch full bodies from the calling persona's own store by note id. */
+  readNotes(ids: string[], ctx: MailBridgeContext): Promise<MailBridgeResult>;
 }
 
 export interface TaskBridge {
