@@ -12,6 +12,7 @@ import {
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { installAppMenu } from './app-menu';
+import { installContextMenu } from './context-menu';
 import { electronHost } from './host';
 import { setHost } from '../server/host';
 import { startServer, type ServerHandle } from '../server';
@@ -174,6 +175,9 @@ function installNavigationGuards(win: BrowserWindow): void {
     event.preventDefault();
     openExternalUrl(url);
   });
+  // Ride along with the guards: every window that gets one gets the other
+  // (main, Quick Chat overlay, HUD).
+  installContextMenu(win.webContents, openExternalUrl);
 }
 
 // ---- the main window ----
