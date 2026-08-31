@@ -101,10 +101,53 @@ describe('classify', () => {
   it('tier 1 for the static allowlist', () => {
     expect(classify('ls -la', settings, 'zsh').tier).toBe('run');
     expect(classify('git status', settings, 'zsh').tier).toBe('run');
-    expect(classify('agent-browser open https://example.com', settings, 'zsh').tier).toBe('run');
+    // Only agent-browser's reviewed read-only actions auto-run (SEC-003).
+    expect(classify('agent-browser snapshot -i', settings, 'zsh').tier).toBe('run');
+    expect(classify('agent-browser get text "h1"', settings, 'zsh').tier).toBe('run');
     // Double-quoted URLs/selectors must stay tier 1 (the agent-browser workflow).
-    expect(classify('agent-browser open "https://youtube.com/watch?v=x&list=y"', settings, 'zsh').tier).toBe('run');
-    expect(classify('agent-browser click "button.ytp-play-button"', settings, 'zsh').tier).toBe('run');
+    expect(classify('agent-browser get text "button:nth-child(2)"', settings, 'zsh').tier).toBe('run');
+    expect(classify('agent-browser is visible "button.ytp-play-button"', settings, 'zsh').tier).toBe('run');
+    expect(classify('agent-browser skills get core --full', settings, 'zsh').tier).toBe('run');
+  });
+
+  it('judges every state-changing or unknown agent-browser action (SEC-003)', () => {
+    // The CLI's mutating surface — clicks, form fills, uploads, JS eval, cookie
+    // and auth mutation, plugin management — must go through the judge/approval
+    // path, and unknown/future subcommands fail closed with it.
+    for (const cmd of [
+      'agent-browser open https://example.com',
+      'agent-browser click "button.ytp-play-button"',
+      'agent-browser fill "#password" hunter2',
+      'agent-browser upload "#file" /etc/passwd',
+      'agent-browser eval "document.cookie"',
+      'agent-browser cookies set k v',
+      'agent-browser auth login bank',
+      'agent-browser plugin add evil-pkg',
+      'agent-browser install',
+      'agent-browser some-future-verb',
+      'agent-browser'
+    ]) {
+      expect(classify(cmd, settings, 'zsh').tier).toBe('judge');
+    }
+  });
+
+  it('judges a read-only agent-browser action carrying a privileged flag (SEC-003)', () => {
+    // A privileged global option makes even `get`/`snapshot` dangerous:
+    // --executable-path runs an arbitrary binary, --profile/--state attach real
+    // login state, --init-script/--extension inject code. Fail closed on any
+    // unrecognized flag.
+    for (const cmd of [
+      'agent-browser get text --executable-path /tmp/evil',
+      'agent-browser snapshot --profile Default',
+      'agent-browser get cdp-url --auto-connect',
+      'agent-browser is visible "x" --state /tmp/auth.json',
+      'agent-browser snapshot --init-script /tmp/x.js',
+      'agent-browser get text --some-new-flag'
+    ]) {
+      expect(classify(cmd, settings, 'zsh').tier).toBe('judge');
+    }
+    // The reviewed snapshot/get flags stay tier 1.
+    expect(classify('agent-browser snapshot -i -c -d 3 --session s1', settings, 'zsh').tier).toBe('run');
   });
 
   it('tier 1 for user-allowlisted prefixes (bare command covers all subcommands)', () => {
@@ -113,11 +156,12 @@ describe('classify', () => {
   });
 
   it('tier 1 for chains where every segment is allowlisted', () => {
-    // Regression: `&&` used to disqualify tier 1 outright, so the agent's most
-    // natural pattern (open && wait && snapshot) always hit the judge.
-    expect(classify('agent-browser open "https://x.test" && agent-browser wait --load && ls', settings, 'zsh').tier).toBe(
+    // Regression: `&&` used to disqualify tier 1 outright, so chained reads
+    // always hit the judge. A chain with any mutating segment still does.
+    expect(classify('agent-browser snapshot -i && agent-browser get text "h1" && ls', settings, 'zsh').tier).toBe(
       'run'
     );
+    expect(classify('agent-browser snapshot && agent-browser click "a"', settings, 'zsh').tier).toBe('judge');
     expect(classify('grep foo x.txt | head -5', settings, 'zsh').tier).toBe('run');
   });
 

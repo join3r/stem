@@ -31,7 +31,50 @@ function toHostShell(shell: ShellArg = hostShellFromPlatform()): HostShell {
 // the shell will happily split. See WINDOWS_HARD_META below. Git Bash is POSIX.
 
 /** Read-only probes that mean the same thing on both host shells. */
-const SHARED_ALLOWLIST = ['rg', 'git status', 'git log', 'git diff', 'git show', 'git branch', 'agent-browser'];
+// agent-browser is deliberately NOT here as a bare prefix (SEC-003): the CLI is
+// mostly state-changing (click, fill, upload, eval, cookie mutation, auth and
+// plugin management), so only the reviewed read-only actions below are tier 1
+// — and even those fall to the judge when a privileged flag rides along (see
+// AGENT_BROWSER_SAFE_FLAGS). Unknown/future subcommands fail closed to the judge.
+const SHARED_ALLOWLIST = [
+  'rg',
+  'git status',
+  'git log',
+  'git diff',
+  'git show',
+  'git branch',
+  'agent-browser snapshot',
+  'agent-browser get',
+  'agent-browser is',
+  'agent-browser skills'
+];
+
+/**
+ * Flags a tier-1 `agent-browser` read may carry. Everything else — notably
+ * --profile / --state / --auto-connect (attach to real login state),
+ * --executable-path (run an arbitrary binary), --extension / --init-script /
+ * --args / --enable (inject code), --allow-file-access, --proxy, --headers —
+ * is privileged even next to a read-only action, so the segment is judged.
+ * Fail closed: an unrecognized flag never auto-runs.
+ */
+const AGENT_BROWSER_SAFE_FLAGS = new Set([
+  '-i',
+  '--interactive',
+  '-c',
+  '--compact',
+  '-d',
+  '--depth',
+  '-s',
+  '--selector',
+  '--session',
+  '--json',
+  '--full'
+]);
+
+/** True when an allowlisted agent-browser segment carries no privileged flag. */
+function agentBrowserFlagsSafe(tokens: string[]): boolean {
+  return tokens.every((t) => !t.startsWith('-') || AGENT_BROWSER_SAFE_FLAGS.has(t));
+}
 
 /** POSIX (zsh) read-only probes. */
 const POSIX_ALLOWLIST = [
@@ -69,6 +112,8 @@ export interface ParsedSegment {
   prefix: string;
   /** The candidate prefixes to match against an allowlist, shortest first. */
   candidates: string[];
+  /** Every token of the segment, for per-command flag screening. */
+  tokens: string[];
 }
 
 export interface ParsedCommand {
@@ -115,7 +160,7 @@ function makeSegment(tokens: string[]): ParsedSegment {
   // Candidates are matched by exact string only, so `/usr/local/bin/foo` or `./git`
   // can be user-allowlisted verbatim but can never match an allowlisted bare `git`.
   const candidates = word ? (sub ? [word, `${word} ${sub}`] : [word]) : [];
-  return { prefix: candidates[candidates.length - 1] ?? '', candidates };
+  return { prefix: candidates[candidates.length - 1] ?? '', candidates, tokens };
 }
 
 /**
@@ -243,7 +288,12 @@ export function classify(
   // is only its learned allowlist, never ls/dir/git status from this host.
   const allowed = opts.includeBuiltins === false ? new Set<string>() : staticAllowlist(host);
   const uncovered = parsed.segments.filter(
-    (seg) => !seg.candidates.some((c) => allowed.has(c) || user.has(c))
+    (seg) =>
+      !seg.candidates.some((c) => allowed.has(c) || user.has(c)) ||
+      // Even an allowlisted (or user-learned) agent-browser action falls to the
+      // judge when a privileged flag rides along — --executable-path next to
+      // `get text` is arbitrary code, not a read (SEC-003).
+      (seg.tokens[0] === 'agent-browser' && !agentBrowserFlagsSafe(seg.tokens))
   );
   const prefixes = [...new Set(uncovered.map((seg) => seg.prefix).filter(Boolean))];
   return { tier: uncovered.length ? 'judge' : 'run', prefixes, hasShellMeta: false };
