@@ -124,14 +124,16 @@ describe('save', () => {
     expect((await getPersona('secretary'))?.canManagePersonas).toBe(true);
   });
 
-  it('a v1 file grants the Orchestrator the flag once; unticking sticks on v2', async () => {
+  it('a v1 file grants Secretary and Orchestrator the flag once; unticking sticks on v2', async () => {
     await listPersonas(); // seed
     const raw = onDisk();
     raw.version = 1;
     for (const p of raw.personas) delete p.canManagePersonas;
     writeFileSync(path, JSON.stringify(raw), 'utf8');
-    // v1 read: the stored Orchestrator row gains the flag the P3 seed carries.
+    // v1 read: the stored rows gain the flag the seeds carry — appending-only
+    // seeding never fixes an existing row, so the migration must.
     expect((await getPersona('orchestrator'))?.canManagePersonas).toBe(true);
+    expect((await getPersona('secretary'))?.canManagePersonas).toBe(true);
     // The user unticks it — the write lands as v2 and the choice sticks.
     const orchestrator = (await getPersona('orchestrator'))!;
     await savePersona({ ...orchestrator, canManagePersonas: undefined });

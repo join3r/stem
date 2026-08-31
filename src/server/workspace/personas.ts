@@ -137,13 +137,17 @@ function coerce(parsed: unknown): PersonasFile {
     seen.add(persona.id);
     personas.push(persona);
   }
-  // v1 files predate canManagePersonas: grant it to the stored Orchestrator
-  // row, whose whole job needs it — seeding only appends missing ids, so the
-  // row would otherwise never gain the flag. Version-gated (not granted on
-  // every read) so unticking the box sticks once the file is written as v2.
+  // v1 files predate canManagePersonas: grant it to the stored Secretary and
+  // Orchestrator rows, whose whole job needs it — seeding only appends missing
+  // ids, so an existing row never gains a flag a later phase seeds (deployed
+  // v1 files even show Secretary without the P2-era canAddPersonas for this
+  // exact reason). Version-gated (not granted on every read) so unticking the
+  // box sticks once the file is written as v2.
   if (raw.version !== 2) {
-    const orchestrator = personas.find((p) => p.id === 'orchestrator');
-    if (orchestrator) orchestrator.canManagePersonas = true;
+    for (const id of ['secretary', 'orchestrator']) {
+      const row = personas.find((p) => p.id === id);
+      if (row) row.canManagePersonas = true;
+    }
   }
   for (const builtin of BUILTINS) {
     if (!seen.has(builtin.id)) personas.push({ ...builtin });
