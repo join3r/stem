@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatBackend, MailBridgeContext, MailBridgeResult, SavePersonaRequest } from '../backend/types';
-import type { BackendEventEnvelope, MailComposeInput, MailListResult } from '../../shared/types';
+import type {
+  BackendEventEnvelope,
+  MailComposeInput,
+  MailListResult,
+  TurnAttachment
+} from '../../shared/types';
+import { attachmentPreviews } from '../pi/attachments';
 import * as activity from '../activity';
 import { degrade } from '../degrade';
 import { noteTurnStart } from '../live-turns';
@@ -65,6 +71,11 @@ interface DeliveryTask {
   personaId: string;
   body: string;
   from: string;
+  /**
+   * Files riding this delivery's turn. Only user sends carry them — the
+   * synthetic bodies (implicit-reply hops, join assemblies) never do.
+   */
+  attachments?: TurnAttachment[];
 }
 
 /**
@@ -153,18 +164,30 @@ export class MailRouter {
     const missing = to.filter((_, i) => !personas[i]);
     if (missing.length) throw new Error(`No such persona: ${missing.join(', ')}.`);
     const body = input.body.trim();
-    if (!body) throw new Error('Write the mail before sending it.');
+    const attachments = input.attachments?.length ? input.attachments : undefined;
+    if (!body && !attachments) throw new Error('Write the mail before sending it.');
 
     const conversation = await createConversation(input.subject, to);
-    const result = await appendMailItem({ conversationId: conversation.id, from: 'user', to, body });
-    this.enqueueDelivery(conversation.id, to[0], body, 'user');
+    const result = await appendMailItem({
+      conversationId: conversation.id,
+      from: 'user',
+      to,
+      body,
+      ...(attachments ? { attachments: await attachmentPreviews(attachments) } : {})
+    });
+    this.enqueueDelivery(conversation.id, to[0], body, 'user', attachments);
     return result;
   }
 
   /** Reply into a conversation: appends the user's item, resumes the driver. */
-  async reply(conversationId: string, body: string): Promise<MailListResult> {
+  async reply(
+    conversationId: string,
+    body: string,
+    attachments?: TurnAttachment[]
+  ): Promise<MailListResult> {
     const trimmed = body.trim();
-    if (!trimmed) throw new Error('Write the reply before sending it.');
+    const files = attachments?.length ? attachments : undefined;
+    if (!trimmed && !files) throw new Error('Write the reply before sending it.');
     const { conversations } = await readMail();
     const conversation = conversations.find((c) => c.id === conversationId);
     if (!conversation) throw new Error('That mail conversation no longer exists.');
@@ -173,9 +196,10 @@ export class MailRouter {
       conversationId,
       from: 'user',
       to: conversation.participants,
-      body: trimmed
+      body: trimmed,
+      ...(files ? { attachments: await attachmentPreviews(files) } : {})
     });
-    this.enqueueDelivery(conversationId, driver, trimmed, 'user');
+    this.enqueueDelivery(conversationId, driver, trimmed, 'user', files);
     return result;
   }
 
@@ -486,11 +510,17 @@ export class MailRouter {
   }
 
   /** Queue one delivery on the conversation's lane and run what fits. */
-  private enqueueDelivery(conversationId: string, personaId: string, body: string, from: string): void {
+  private enqueueDelivery(
+    conversationId: string,
+    personaId: string,
+    body: string,
+    from: string,
+    attachments?: TurnAttachment[]
+  ): void {
     this.pending.set(conversationId, (this.pending.get(conversationId) ?? 0) + 1);
     const lane: Lane = this.lanes.get(conversationId) ?? { active: new Map(), queue: [] };
     this.lanes.set(conversationId, lane);
-    lane.queue.push({ personaId, body, from });
+    lane.queue.push({ personaId, body, from, ...(attachments?.length ? { attachments } : {}) });
     this.pump(conversationId);
   }
 
@@ -506,7 +536,7 @@ export class MailRouter {
       if (at < 0) break;
       const [task] = lane.queue.splice(at, 1);
       lane.active.set(task.personaId, '');
-      void this.deliver(conversationId, task.personaId, task.body, task.from)
+      void this.deliver(conversationId, task.personaId, task.body, task.from, task.attachments)
         // quiet: deliver() reports every failure as a mail the user sees; a
         // rejection reaching here has already been told.
         .catch(() => undefined)
@@ -622,7 +652,13 @@ export class MailRouter {
    * Failures surface to the USER whoever initiated: every exit path produces a
    * mail somebody sees.
    */
-  private async deliver(conversationId: string, personaId: string, body: string, from: string): Promise<void> {
+  private async deliver(
+    conversationId: string,
+    personaId: string,
+    body: string,
+    from: string,
+    attachments?: TurnAttachment[]
+  ): Promise<void> {
     // Minted out here so the finally below can clear the turn's bookkeeping on
     // every exit path.
     const turnId = randomUUID();
@@ -670,6 +706,7 @@ export class MailRouter {
           ...(threadId ? { threadId } : {}),
           ...(persona.model ? { model: persona.model } : {}),
           ...(persona.effort ? { effort: persona.effort } : {}),
+          ...(attachments?.length ? { attachments } : {}),
           webSearch: true,
           persona: {
             id: persona.id,

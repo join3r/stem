@@ -2015,6 +2015,12 @@ export interface MailItem {
   at: number;
   /** Present when a scheduled task's run produced this mail. */
   taskId?: string;
+  /**
+   * What the sender attached, for DISPLAY: image thumbnails as data URLs,
+   * everything else a named chip. The attachment bytes themselves ride only
+   * the delivery turn — they are never persisted here.
+   */
+  attachments?: MessageAttachment[];
 }
 
 export interface MailConversation {
@@ -2075,6 +2081,8 @@ export interface MailComposeInput {
   to: string[];
   subject: string;
   body: string;
+  /** Files riding the first delivery turn, same shape as a chat turn's. */
+  attachments?: TurnAttachment[];
 }
 
 // ---- Chats (backend-backed) + Folders (Stem-owned organization) ----
@@ -3401,7 +3409,11 @@ export interface StemApi {
   /** Compose a new mail conversation and deliver it to its driver persona. */
   composeMail(input: MailComposeInput): Promise<MailListResult>;
   /** Reply into a conversation (resumes the driver persona with full context). */
-  replyMail(conversationId: string, body: string): Promise<MailListResult>;
+  replyMail(
+    conversationId: string,
+    body: string,
+    attachments?: TurnAttachment[]
+  ): Promise<MailListResult>;
   /** Pull another persona into an existing conversation's participant set. */
   addMailParticipant(conversationId: string, personaId: string): Promise<MailListResult>;
   setMailRead(conversationIds: string[], read: boolean): Promise<MailListResult>;

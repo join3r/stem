@@ -106,6 +106,30 @@ describe('conversations and items', () => {
     expect((await readMail()).conversations[0].participants).toEqual(['secretary', 'verifier']);
   });
 
+  it('display attachments survive the reload coerce; junk entries are dropped', async () => {
+    const c = await createConversation('att', ['normal']);
+    await appendMailItem({
+      conversationId: c.id,
+      from: 'user',
+      to: ['normal'],
+      body: 'see attached',
+      attachments: [
+        { kind: 'image', name: 'a.png', mime: 'image/png', dataUrl: 'data:image/png;base64,xxxx' },
+        { kind: 'file', name: 'b.txt' }
+      ]
+    });
+    expect((await readMail()).items[0].attachments).toEqual([
+      { kind: 'image', name: 'a.png', mime: 'image/png', dataUrl: 'data:image/png;base64,xxxx' },
+      { kind: 'file', name: 'b.txt' }
+    ]);
+
+    // Hand-edited junk in the store must not survive the read.
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw.items[0].attachments = [{ kind: 'nope' }, 'garbage', { kind: 'file', name: 'ok.md' }];
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    expect((await readMail()).items[0].attachments).toEqual([{ kind: 'file', name: 'ok.md' }]);
+  });
+
   it('records sessions and lists their thread ids for the chat-list filter', async () => {
     const c = await createConversation('s', ['normal']);
     await setConversationSession(c.id, 'normal', 'thread-9');

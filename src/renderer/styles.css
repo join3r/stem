@@ -2829,7 +2829,9 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-item-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .mail-item-at { font-size: var(--fs-11); color: var(--muted); }
 .mail-item-body-plain { margin: 0; white-space: pre-wrap; }
-.mail-reply { display: flex; gap: 8px; align-items: flex-end; padding: 10px 20px 14px; border-top: 0.5px solid var(--hair); }
+.mail-reply { display: flex; flex-direction: column; gap: 6px; padding: 10px 20px 14px; border-top: 0.5px solid var(--hair); }
+.mail-reply-row { display: flex; gap: 8px; align-items: flex-end; }
+.mail-attachments-draft { padding: 0; }
 .mail-reply textarea { flex: 1; resize: vertical; border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 8px 10px; font: inherit; background: transparent; color: inherit; }
 .mail-reply textarea:focus { outline: none; border-color: var(--accent); }
 .mail-send { display: inline-flex; align-items: center; gap: 6px; border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 7px 14px; background: var(--accent); color: var(--accent-ink, #fff); cursor: pointer; }
@@ -2842,7 +2844,7 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-field input, .mail-field select { flex: 1; border: 0.5px solid var(--hair); border-radius: var(--radius-sm); padding: 6px 8px; font: inherit; background: transparent; color: inherit; }
 .mail-compose-body { resize: vertical; border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 8px 10px; font: inherit; background: transparent; color: inherit; }
 .mail-compose-body:focus, .mail-field input:focus { outline: none; border-color: var(--accent); }
-.mail-compose-actions { display: flex; justify-content: flex-end; }
+.mail-compose-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .mail-to-chips { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; }
 .mail-to-chip { display: inline-flex; align-items: center; gap: 5px; border: 0.5px solid var(--hair); border-radius: 999px; padding: 4px 10px; background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-12, 12px); cursor: pointer; }
 .mail-to-chip.on { border-color: var(--accent); color: inherit; background: color-mix(in srgb, var(--accent) 10%, transparent); }

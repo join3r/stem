@@ -61,6 +61,7 @@ import type {
   TaskPersonaPatch,
   TaskSchedulePatch,
   TasksSettings,
+  TurnAttachment,
   MailSettings,
   ThemeSettings,
   ThemeState,
@@ -349,7 +350,13 @@ const api: StemApi = {
 
   listMail: () => ipcRenderer.invoke('mail:list'),
   composeMail: (input: MailComposeInput) => ipcRenderer.invoke('mail:compose', input),
-  replyMail: (conversationId: string, body: string) => ipcRenderer.invoke('mail:reply', conversationId, body),
+  // The third argument rides only when there is something in it: a server
+  // predating it rejects a 3-arg call outright, and a plain reply must keep
+  // working across that skew.
+  replyMail: (conversationId: string, body: string, attachments?: TurnAttachment[]) =>
+    attachments?.length
+      ? ipcRenderer.invoke('mail:reply', conversationId, body, attachments)
+      : ipcRenderer.invoke('mail:reply', conversationId, body),
   addMailParticipant: (conversationId: string, personaId: string) =>
     ipcRenderer.invoke('mail:addParticipant', conversationId, personaId),
   setMailRead: (conversationIds: string[], read: boolean) =>

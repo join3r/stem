@@ -1,6 +1,7 @@
-import { registerServer } from './guard';
+import { registerServer, type CallerContext } from './guard';
 import type { MailRouter } from '../mail/router';
-import type { MailComposeInput } from '../../shared/types';
+import type { MailComposeInput, TurnAttachment } from '../../shared/types';
+import { transportedRawPath } from '../files/staging';
 import {
   deleteConversation,
   readMail,
@@ -21,10 +22,27 @@ export function registerMailIpc(deps: { router(): MailRouter | null; runtime(): 
     if (!r) throw new Error('Mail is not ready yet — the backend is still starting.');
     return r;
   };
+  // SEC-002, same rule as backend:startTurn: a transported client's attachment
+  // names an upload handle or inline bytes, never a path on this server.
+  const refuseRawPaths = async (e: CallerContext, attachments: TurnAttachment[] | undefined) => {
+    const raw = await transportedRawPath(e, (attachments ?? []).map((att) => att.path));
+    if (raw) {
+      throw new Error(
+        'Attachments over the transport carry upload handles or inline bytes, never server paths — POST the file to /upload first.'
+      );
+    }
+  };
   registerServer('mail:list', () => readMail());
-  registerServer('mail:compose', (_e, input: MailComposeInput) => router().compose(input));
-  registerServer('mail:reply', (_e, conversationId: string, body: string) =>
-    router().reply(conversationId, body)
+  registerServer('mail:compose', async (e, input: MailComposeInput) => {
+    await refuseRawPaths(e, input.attachments);
+    return router().compose(input);
+  });
+  registerServer(
+    'mail:reply',
+    async (e, conversationId: string, body: string, attachments?: TurnAttachment[]) => {
+      await refuseRawPaths(e, attachments);
+      return router().reply(conversationId, body, attachments);
+    }
   );
   registerServer('mail:addParticipant', (_e, conversationId: string, personaId: string) =>
     router().addParticipant(conversationId, personaId)

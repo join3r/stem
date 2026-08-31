@@ -1578,7 +1578,9 @@ export default function App() {
                   conversation={conversation}
                   items={mail.items}
                   personas={mailApi.personas}
-                  onReply={(body) => void mailApi.reply(conversation.id, body)}
+                  onReply={(body, attachments) =>
+                    void mailApi.reply(conversation.id, body, attachments)
+                  }
                   onAddParticipant={(personaId) =>
                     mailApi.addParticipant(conversation.id, personaId)
                   }

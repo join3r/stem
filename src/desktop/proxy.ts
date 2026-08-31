@@ -15,6 +15,7 @@ import {
   type DeviceMcpRequest,
   type ExecApprovalRequest,
   type HarnessApprovalRequest,
+  type MailComposeInput,
   type QuickChatSettings,
   type StartTurnInput,
   type TurnAttachment
@@ -424,6 +425,20 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         if (!Array.isArray(list) || list.length === 0) return;
         const creds = { url: base, token: deps.token };
         return [await Promise.all(list.map((path) => uploadFile(creds, path))), subdir];
+      }
+    },
+    'mail:compose': {
+      before: async ([input]) => {
+        const mail = input as MailComposeInput;
+        if (!mail?.attachments?.length) return;
+        return [{ ...mail, attachments: await attachmentsForServer(mail.attachments) }];
+      }
+    },
+    'mail:reply': {
+      before: async ([conversationId, body, attachments]) => {
+        const list = attachments as TurnAttachment[] | undefined;
+        if (!list?.length) return;
+        return [conversationId, body, await attachmentsForServer(list)];
       }
     }
   };

@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InboxState } from '../../shared/inbox';
 import { withArchived, withRead, withSnooze } from '../../shared/inbox';
-import type { MailComposeInput, MailConversation, MailListResult, Persona } from '../../shared/types';
+import type {
+  MailComposeInput,
+  MailConversation,
+  MailListResult,
+  Persona,
+  TurnAttachment
+} from '../../shared/types';
 
 // The renderer's one copy of the mail state: list + personas, refreshed on the
 // server's mail:changed push, with the same optimistic-triage treatment the
@@ -22,7 +28,7 @@ export interface MailApi {
   refresh: () => void;
   /** Resolves with the fresh list so the caller can open the new conversation. */
   compose: (input: MailComposeInput) => Promise<MailListResult>;
-  reply: (conversationId: string, body: string) => Promise<void>;
+  reply: (conversationId: string, body: string, attachments?: TurnAttachment[]) => Promise<void>;
   addParticipant: (conversationId: string, personaId: string) => Promise<void>;
   archive: (ids: string[], archived: boolean) => void;
   snooze: (ids: string[], until: number | null) => void;
@@ -129,8 +135,8 @@ export function useMail(ready: boolean): MailApi {
     [applyServer]
   );
   const reply = useCallback(
-    async (conversationId: string, body: string) => {
-      applyServer(await window.stem.replyMail(conversationId, body));
+    async (conversationId: string, body: string, attachments?: TurnAttachment[]) => {
+      applyServer(await window.stem.replyMail(conversationId, body, attachments));
     },
     [applyServer]
   );

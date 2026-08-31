@@ -1,6 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Send, X } from 'lucide-react';
-import type { MailComposeInput, MailConversation, MailItem, Persona } from '../../shared/types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { File, Paperclip, Plus, Send, X } from 'lucide-react';
+import type {
+  MailComposeInput,
+  MailConversation,
+  MailItem,
+  Persona,
+  TurnAttachment
+} from '../../shared/types';
 import { MdxView } from '../chat/MdxView';
 import { groupMailTimeline } from './grouping';
 import { personaName } from './useMail';
@@ -12,6 +18,94 @@ import { personaName } from './useMail';
 // the row spinner in the list is the only "in progress" signal. Persona↔persona
 // exchanges collapse behind per-gap "N mails exchanged" dividers: the user's
 // conversation reads clean, the work is inspectable in place.
+
+/** Path-less bytes (a pasted screenshot) become base64, same as the chat composer. */
+function fileToAttachment(file: globalThis.File): Promise<TurnAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      resolve({ name: file.name, dataBase64: result.split(',')[1] ?? '', mime: file.type });
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * The chat composer's attachment handling, distilled for the mail surfaces:
+ * paperclip picker, image paste, drag-drop — chips rendered by AttachmentChips.
+ */
+function useAttachmentDraft() {
+  const [attachments, setAttachments] = useState<TurnAttachment[]>([]);
+
+  const addFiles = useCallback(async (files: globalThis.File[]) => {
+    if (!files.length) return;
+    const next = await Promise.all(
+      files.map(async (f) => {
+        const path = window.stem.getPathForFile(f);
+        return path ? { name: f.name, path } : await fileToAttachment(f);
+      })
+    );
+    setAttachments((prev) => [...prev, ...next]);
+  }, []);
+
+  const pickFiles = useCallback(async () => {
+    const paths = await window.stem.openFiles();
+    if (!paths.length) return;
+    setAttachments((prev) => [
+      ...prev,
+      ...paths.map((p) => ({ name: p.split('/').pop() || p, path: p }))
+    ]);
+  }, []);
+
+  const onPaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const images = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'));
+    if (!images.length) return; // let plain-text paste through untouched
+    e.preventDefault();
+    const next = await Promise.all(images.map(fileToAttachment));
+    setAttachments((prev) => [...prev, ...next]);
+  }, []);
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      void addFiles(Array.from(e.dataTransfer.files));
+    },
+    [addFiles]
+  );
+
+  const remove = useCallback((idx: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
+  const clear = useCallback(() => setAttachments([]), []);
+
+  return { attachments, pickFiles, onPaste, onDrop, remove, clear };
+}
+
+function AttachmentChips({
+  attachments,
+  onRemove
+}: {
+  attachments: TurnAttachment[];
+  onRemove: (idx: number) => void;
+}) {
+  if (!attachments.length) return null;
+  return (
+    <div className="composer-attachments mail-attachments-draft">
+      {attachments.map((att, i) => (
+        <span className="attachment-chip" key={`${att.name}-${i}`}>
+          <File size={13} />
+          <span className="attachment-name">{att.name}</span>
+          <button type="button" className="attachment-remove" title="Remove" onClick={() => onRemove(i)}>
+            <X size={13} />
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
 
 function formatAt(at: number, now: number): string {
   const d = new Date(at);
@@ -32,11 +126,12 @@ export function MailConversationView({
   conversation: MailConversation;
   items: MailItem[];
   personas: Persona[];
-  onReply: (body: string) => void;
+  onReply: (body: string, attachments?: TurnAttachment[]) => void;
   /** Resolves once the persona is in; rejection shows its message inline. */
   onAddParticipant: (personaId: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState('');
+  const files = useAttachmentDraft();
   const [addingTo, setAddingTo] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   // Expanded exchange groups, keyed by their first item's id (stable across refreshes).
@@ -59,9 +154,10 @@ export function MailConversationView({
 
   const send = () => {
     const body = draft.trim();
-    if (!body) return;
-    onReply(body);
+    if (!body && !files.attachments.length) return;
+    onReply(body, files.attachments.length ? files.attachments : undefined);
     setDraft('');
+    files.clear();
   };
 
   const toggleExchange = (key: string) => {
@@ -81,6 +177,20 @@ export function MailConversationView({
         <span className="mail-item-at">{formatAt(m.at, now)}</span>
       </div>
       {m.from === 'user' ? <p className="mail-item-body-plain">{m.body}</p> : <MdxView text={m.body} />}
+      {m.attachments && m.attachments.length > 0 && (
+        <div className="message-attachments">
+          {m.attachments.map((att, i) =>
+            att.kind === 'image' && att.dataUrl ? (
+              <img key={i} className="message-image" src={att.dataUrl} alt={att.name ?? 'attachment'} />
+            ) : (
+              <span className="attachment-chip" key={i}>
+                <File size={13} />
+                <span className="attachment-name">{att.name ?? 'file'}</span>
+              </span>
+            )
+          )}
+        </div>
+      )}
     </article>
   );
 
@@ -144,22 +254,39 @@ export function MailConversationView({
           <p className="muted">This conversation has no mail yet.</p>
         )}
       </div>
-      <div className="mail-reply">
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={`Reply to ${conversation.participants.map((p) => personaName(personas, p)).join(', ')}…`}
-          rows={3}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              send();
-            }
-          }}
-        />
-        <button className="mail-send" onClick={send} disabled={!draft.trim()} title="Send reply (⌘↵)">
-          <Send size={14} /> Send
-        </button>
+      <div className="mail-reply" onDragOver={(e) => e.preventDefault()} onDrop={files.onDrop}>
+        <AttachmentChips attachments={files.attachments} onRemove={files.remove} />
+        <div className="mail-reply-row">
+          <button
+            type="button"
+            className="composer-attach"
+            title="Attach"
+            onClick={() => void files.pickFiles()}
+          >
+            <Paperclip size={15} />
+          </button>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={`Reply to ${conversation.participants.map((p) => personaName(personas, p)).join(', ')}…`}
+            rows={3}
+            onPaste={(e) => void files.onPaste(e)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <button
+            className="mail-send"
+            onClick={send}
+            disabled={!draft.trim() && !files.attachments.length}
+            title="Send reply (⌘↵)"
+          >
+            <Send size={14} /> Send
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -181,6 +308,7 @@ export function MailComposeView({
   const [to, setTo] = useState<string[]>(['normal']);
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
+  const files = useAttachmentDraft();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -189,11 +317,16 @@ export function MailComposeView({
   };
 
   const send = async () => {
-    if (sending || !body.trim()) return;
+    if (sending || (!body.trim() && !files.attachments.length)) return;
     setSending(true);
     setError(null);
     try {
-      await onCompose({ to, subject, body });
+      await onCompose({
+        to,
+        subject,
+        body,
+        ...(files.attachments.length ? { attachments: files.attachments } : {})
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSending(false);
@@ -245,6 +378,9 @@ export function MailComposeView({
           placeholder="Write the task. The personas work it unattended and the reply lands in your Inbox."
           rows={10}
           autoFocus
+          onPaste={(e) => void files.onPaste(e)}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={files.onDrop}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
@@ -252,12 +388,21 @@ export function MailComposeView({
             }
           }}
         />
+        <AttachmentChips attachments={files.attachments} onRemove={files.remove} />
         {error && <p className="task-failed">{error}</p>}
         <div className="mail-compose-actions">
           <button
+            type="button"
+            className="composer-attach"
+            title="Attach"
+            onClick={() => void files.pickFiles()}
+          >
+            <Paperclip size={15} />
+          </button>
+          <button
             className="mail-send"
             onClick={() => void send()}
-            disabled={sending || !body.trim() || to.length === 0}
+            disabled={sending || (!body.trim() && !files.attachments.length) || to.length === 0}
           >
             <Send size={14} /> {sending ? 'Sending…' : 'Send'}
           </button>

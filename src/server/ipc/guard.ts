@@ -35,6 +35,11 @@ export const a = {
   /** A plain object payload (StartTurnInput, settings patches, …); shallow check. */
   object: spec('an object', (v) => !!v && typeof v === 'object' && !Array.isArray(v)),
   stringArray: spec('an array of strings', (v) => Array.isArray(v) && v.every((x) => typeof x === 'string')),
+  /** An array of plain objects (attachment lists, …); shallow check like `object`. */
+  objectArray: spec(
+    'an array of objects',
+    (v) => Array.isArray(v) && v.every((x) => !!x && typeof x === 'object' && !Array.isArray(x))
+  ),
   /** Approval ids arrive as the bridge's string id or a numeric card id. */
   id: spec('a string or number id', (v) => typeof v === 'string' || typeof v === 'number'),
   oneOf: (values: readonly string[]): ArgSpec =>
@@ -166,7 +171,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   // mutators take conversation-id lists, the inbox-mutator shape.
   // ('mail:list' takes no arguments, so it is absent.)
   'mail:compose': [a.object],
-  'mail:reply': [a.string, a.string],
+  'mail:reply': [a.string, a.string, a.optional(a.nullish(a.objectArray))],
   'mail:addParticipant': [a.string, a.string],
   'mail:setRead': [a.stringArray, a.boolean],
   'mail:setArchived': [a.stringArray, a.boolean],

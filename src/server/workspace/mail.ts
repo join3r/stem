@@ -44,6 +44,23 @@ function coerceItem(raw: unknown): MailItem | null {
     at: num(r.at) ?? 0
   };
   if (typeof r.taskId === 'string' && r.taskId) item.taskId = r.taskId;
+  if (Array.isArray(r.attachments)) {
+    const attachments = r.attachments.flatMap((a) => {
+      if (!a || typeof a !== 'object') return [];
+      const att = a as Record<string, unknown>;
+      const kind = att.kind === 'image' ? ('image' as const) : att.kind === 'file' ? ('file' as const) : null;
+      if (!kind) return [];
+      return [
+        {
+          kind,
+          ...(typeof att.name === 'string' ? { name: att.name } : {}),
+          ...(typeof att.mime === 'string' ? { mime: att.mime } : {}),
+          ...(typeof att.dataUrl === 'string' ? { dataUrl: att.dataUrl } : {})
+        }
+      ];
+    });
+    if (attachments.length) item.attachments = attachments;
+  }
   return item;
 }
 

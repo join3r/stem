@@ -17,7 +17,7 @@ import { extname } from 'node:path';
 import { isUploadHandle, resolveUploadHandle } from '../files/staging';
 import { extractPdfText } from '../folder-index/pdf';
 import { heicToJpeg, isHeicAttachment, isHeicNameOrMime } from './heic';
-import type { TurnAttachment } from '../../shared/types';
+import type { MessageAttachment, TurnAttachment } from '../../shared/types';
 
 /** pi `ImageContent` — the shape of each entry in the prompt's `images` array. */
 export interface PiImageContent {
@@ -175,6 +175,36 @@ export async function imagePreviewDataUrl(path: string): Promise<string | null> 
     // reports.
     return null;
   }
+}
+
+// Images larger than this get a name chip instead of an inline preview — the
+// preview is PERSISTED by callers (mail items live in one JSON file rewritten
+// on every append), where a full-size photo would be paid for forever.
+const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Display shapes for a send's attachments: images become data-URL thumbnails
+ * (HEIC decoded, oversized ones downgraded to chips), everything else a named
+ * chip. Never throws — an unreadable attachment is a chip; the delivery turn's
+ * own read is the one that reports it to the user.
+ */
+export async function attachmentPreviews(atts: TurnAttachment[]): Promise<MessageAttachment[]> {
+  return Promise.all(
+    atts.map(async (att): Promise<MessageAttachment> => {
+      const ext = extname(att.name || att.path || '').toLowerCase();
+      const image = !!imageMimeFor(att, ext) || isHeicNameOrMime(att);
+      const base: MessageAttachment = {
+        kind: image ? 'image' : 'file',
+        name: att.name,
+        ...(att.mime ? { mime: att.mime } : {})
+      };
+      if (!image) return base;
+      const bytes = await bytesOf(att);
+      if (!bytes || bytes.length > MAX_PREVIEW_BYTES) return base;
+      const dataUrl = await imagePreviewFromBytes(bytes.toString('base64'), att.mime, att.name);
+      return dataUrl ? { ...base, dataUrl } : base;
+    })
+  );
 }
 
 export async function resolveAttachments(atts: TurnAttachment[]): Promise<ResolvedAttachments> {

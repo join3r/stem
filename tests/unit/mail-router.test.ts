@@ -439,6 +439,65 @@ describe('mail router', () => {
     expect(fake2.starts[0].effort).toBeUndefined();
   });
 
+  it("attachments ride the user's delivery turn; chain hops carry none", async () => {
+    // 1x1 transparent PNG.
+    const png =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const atts = [
+      { name: 'shot.png', dataBase64: png, mime: 'image/png' },
+      { name: 'notes.txt', dataBase64: Buffer.from('hello').toString('base64'), mime: 'text/plain' }
+    ];
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scripts = [
+      {
+        mode: 'ok',
+        reply: 'passing along',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['orchestrator'], body: 'look' }, ctx)).ok).toBe(true);
+        }
+      },
+      // Orchestrator ends the chain ON THE USER so no delivery outlives the test.
+      {
+        mode: 'ok',
+        reply: 'seen',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['user'], body: 'done' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    await router.compose({ to: ['verifier', 'orchestrator'], subject: 's', body: 'see attached', attachments: atts });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.to.includes('user') && i.body === 'done')).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+
+    // The delivery turn carried the real attachments…
+    expect(fake.starts[0].attachments).toEqual(atts);
+    // …the chain hop to orchestrator did not…
+    expect(fake.starts[1].persona?.id).toBe('orchestrator');
+    expect(fake.starts[1].attachments).toBeUndefined();
+    // …and the stored item shows them for display: an image preview + a chip.
+    expect(mail.items[0].attachments).toEqual([
+      { kind: 'image', name: 'shot.png', mime: 'image/png', dataUrl: `data:image/png;base64,${png}` },
+      { kind: 'file', name: 'notes.txt', mime: 'text/plain' }
+    ]);
+
+    // A reply's attachments reach the driver's resumed turn too.
+    fake.scripts = [{ mode: 'ok', reply: 'got the second file' }];
+    await router.reply(mail.conversations[0].id, '', [atts[1]]);
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'got the second file')).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+    });
+    const replyStart = fake.starts[fake.starts.length - 1];
+    expect(replyStart.persona?.id).toBe('verifier');
+    expect(replyStart.attachments).toEqual([atts[1]]);
+  });
+
   it('the user can pull a persona into an existing conversation', async () => {
     const fake = fakeBackend();
     const changed = vi.fn();
