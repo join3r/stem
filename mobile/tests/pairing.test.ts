@@ -22,9 +22,20 @@ describe('normalizePairingCode', () => {
 describe('serverUrlProblem', () => {
   it('accepts an address with a scheme and refuses one without', () => {
     expect(serverUrlProblem('https://stem.example.com')).toBeNull();
-    expect(serverUrlProblem('http://192.168.1.4:8080')).toBeNull();
     expect(serverUrlProblem('stem.example.com')).toContain('http://');
     expect(serverUrlProblem('   ')).toContain('address');
+  });
+
+  it('refuses cleartext HTTP for anything but loopback (SEC-004)', () => {
+    // Plain http would hand the pairing code and the returned bearer to anyone
+    // on the network path. Loopback stays usable (simulator → same machine);
+    // a development build (__DEV__) may reach a LAN dev server, but the test
+    // runner has no __DEV__, which is exactly the release posture.
+    expect(serverUrlProblem('http://192.168.1.4:8080')).toContain('http');
+    expect(serverUrlProblem('http://stem.example.com')).toContain('https');
+    expect(serverUrlProblem('http://localhost:7070')).toBeNull();
+    expect(serverUrlProblem('http://127.0.0.1:7070')).toBeNull();
+    expect(serverUrlProblem('http://[::1]:7070')).toBeNull();
   });
 
   it('normalizes trailing slashes away, so one server is one address', () => {
@@ -49,10 +60,14 @@ describe('parsePairPayload', () => {
   });
 
   it('accepts serverUrl as a spelling of url', () => {
-    expect(parsePairPayload('stem://pair?serverUrl=http%3A%2F%2F10.0.0.2%3A7070&code=23456789')).toEqual({
-      serverUrl: 'http://10.0.0.2:7070',
+    expect(parsePairPayload('stem://pair?serverUrl=https%3A%2F%2F10.0.0.2%3A7070&code=23456789')).toEqual({
+      serverUrl: 'https://10.0.0.2:7070',
       code: '23456789'
     });
+  });
+
+  it('drops an http QR target before any code is transmitted (SEC-004)', () => {
+    expect(parsePairPayload('stem://pair?url=http%3A%2F%2F10.0.0.2%3A7070&code=23456789')).toBeNull();
   });
 
   it('refuses anything that is not a Stem pairing link', () => {

@@ -52,6 +52,27 @@ function normalizeUrl(url: string): string {
   return url.trim().replace(/\/+$/, '');
 }
 
+/** True for http(s)://localhost, 127.x.x.x, or [::1] — this machine's own host. */
+function isLoopbackUrl(url: string): boolean {
+  const match = /^https?:\/\/(\[[^\]]+\]|[^/:?#]+)/i.exec(url);
+  if (!match) return false;
+  const host = match[1].toLowerCase();
+  return host === 'localhost' || host === '[::1]' || /^127(\.\d{1,3}){3}$/.test(host);
+}
+
+/**
+ * Why pairing with `url` would hand the exchange to the network, or null when
+ * it wouldn't (SEC-004). Cleartext HTTP exposes the one-time code and the
+ * long-lived bearer that comes back to any on-path attacker, so it is allowed
+ * only for loopback — an embedded server, or `stem-server` on this machine —
+ * or behind the explicit STEM_ALLOW_INSECURE_HTTP=1 development override.
+ */
+export function insecurePairingProblem(url: string): string | null {
+  if (!/^http:\/\//i.test(url) || isLoopbackUrl(url)) return null;
+  if (process.env.STEM_ALLOW_INSECURE_HTTP === '1') return null;
+  return `"${url}" is plain http://, which would let anyone on the network read the pairing exchange and the credential it returns. Use the https:// address the server shows (the documented Caddy setup provides one).`;
+}
+
 /**
  * The server to connect to this launch, or null for the one we start ourselves.
  * `pinnedByEnv` is what Settings → Server reads to explain why its form is inert.
@@ -95,6 +116,11 @@ export async function pairWithServer(
   if (!/^https?:\/\/[^/]+/i.test(url)) {
     throw new Error(`"${rawUrl.trim()}" is not a server address — it needs to start with http:// or https://.`);
   }
+  // Refused BEFORE the code leaves this machine: the code is one-use and the
+  // token that would come back is long-lived, so a cleartext exchange is
+  // already the compromise (SEC-004).
+  const insecure = insecurePairingProblem(url);
+  if (insecure) throw new Error(insecure);
   let res: Response;
   try {
     res = await fetch(`${url}/pair`, {

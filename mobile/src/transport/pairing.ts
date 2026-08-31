@@ -43,7 +43,30 @@ export function serverUrlProblem(raw: string): string | null {
   if (!/^https?:\/\/[^/]+/i.test(url)) {
     return `"${raw.trim()}" is not a server address — it needs to start with http:// or https://.`;
   }
+  // Cleartext HTTP hands the pairing code and the bearer that comes back to
+  // anyone on the network path (SEC-004). Loopback stays allowed (a simulator
+  // talking to the Mac it runs on), and development builds may reach a dev
+  // server over plain HTTP; a release build refuses anything else.
+  if (/^http:\/\//i.test(url) && !isLoopbackUrl(url) && !isDevBuild()) {
+    return 'That address is plain http://, which would let anyone on the network read the pairing exchange. Use the https:// address your server shows.';
+  }
   return null;
+}
+
+/**
+ * React Native's __DEV__, read defensively: absent under the unit-test runner
+ * (plain node), where the strict production rule is the one worth testing.
+ */
+function isDevBuild(): boolean {
+  return typeof __DEV__ !== 'undefined' && __DEV__ === true;
+}
+
+/** True for http(s)://localhost, 127.x.x.x, or [::1] — this device's own host. */
+export function isLoopbackUrl(url: string): boolean {
+  const match = /^https?:\/\/(\[[^\]]+\]|[^/:?#]+)/i.exec(url.trim());
+  if (!match) return false;
+  const host = match[1].toLowerCase();
+  return host === 'localhost' || host === '[::1]' || /^127(\.\d{1,3}){3}$/.test(host);
 }
 
 /** Why this code cannot be spent, phrased for a person, or null when it can. */

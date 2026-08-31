@@ -115,6 +115,33 @@ describe('pairing', () => {
       /needs to start with http:\/\/ or https:\/\//
     );
   });
+
+  it('refuses cleartext HTTP off-loopback before the code leaves this machine (SEC-004)', async () => {
+    // The code is one-use and the returned bearer is long-lived, so a cleartext
+    // exchange is already the compromise. No fetch is stubbed: reaching the
+    // network would make this test flake, and the guard must fire before it.
+    await expect(pairWithServer('http://stem.example.com', 'ABCD-EFGH')).rejects.toThrow(/https/);
+    await expect(pairWithServer('http://192.168.1.4:8080', 'ABCD-EFGH')).rejects.toThrow(/https/);
+    // The explicit development override still works.
+    vi.stubEnv('STEM_ALLOW_INSECURE_HTTP', '1');
+    try {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: false, error: 'nope' }))));
+      await expect(pairWithServer('http://192.168.1.4:8080', 'ABCD-EFGH')).rejects.toThrow(/nope/);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('still pairs over loopback HTTP — the embedded server has no certificate', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: false, error: 'bad code' }))));
+    try {
+      // Passing the scheme guard and reaching the (stubbed) network is the claim.
+      await expect(pairWithServer('http://127.0.0.1:52413', 'ABCD-EFGH')).rejects.toThrow(/bad code/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 // A stored address is the difference between "my server is unreachable" (visible,
