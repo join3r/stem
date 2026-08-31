@@ -265,6 +265,94 @@ describe('non-blocking MCP connect', () => {
   });
 });
 
+describe('McpHttpClient auth healing', () => {
+  it('retries a 401 with whatever token the refresh callback hands back', async () => {
+    // No refreshToken on the client's own grant: the old guard skipped the
+    // retry entirely, so a worker that outlived a re-login kept failing until
+    // it was respawned. The coordinator can hand back the login's token.
+    const sent: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: { headers: Record<string, string> }) => {
+        sent.push(init.headers.Authorization);
+        if (sent.length === 1) {
+          return { ok: false, status: 401, headers: new Headers(), text: async (): Promise<string> => 'expired' };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ jsonrpc: '2.0', id: 1, result: { healed: true } }),
+          text: async (): Promise<string> => ''
+        };
+      })
+    );
+    const client = new McpHttpClient(
+      'remote',
+      { url: 'https://mcp.test' },
+      { accessToken: 'stale-access' },
+      async () => ({ accessToken: 'relogin-access' })
+    );
+    const result = (await client.rpc('tools/list', {})) as { healed?: boolean };
+    expect(sent).toEqual(['Bearer stale-access', 'Bearer relogin-access']);
+    expect(result.healed).toBe(true);
+  });
+});
+
+describe('set_custom_instructions in unattended turns', () => {
+  async function instructionsTool(root: string) {
+    const configPath = join(root, 'mcp.json');
+    await writeFile(configPath, JSON.stringify({ servers: {} }));
+    process.env.STEM_MCP_CONFIG = configPath;
+    type RegisteredTool = {
+      name?: string;
+      execute?: (...args: unknown[]) => Promise<{ content: Array<{ text?: string }>; isError?: boolean }>;
+    };
+    const registered: RegisteredTool[] = [];
+    await stemMcpBridge({
+      registerTool: (tool: RegisteredTool) => registered.push(tool),
+      on: () => {},
+      getActiveTools: () => [] as string[],
+      setActiveTools: () => {}
+    });
+    return registered.find((tool) => tool.name === 'set_custom_instructions')!;
+  }
+
+  it('proposes by reply in a mail turn instead of raising a card that expires', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stem-instr-mail-'));
+    cleanup.push(root);
+    const tool = await instructionsTool(root);
+    await writeFile(join(root, 'turn-context.json'), JSON.stringify({ mail: true, scheduled: true }));
+    const confirm = vi.fn(async () => true);
+    const res = await tool.execute!(
+      'i-1',
+      { action: 'append', text: 'Always check #war-room.' },
+      undefined,
+      undefined,
+      { ui: { confirm } }
+    );
+    expect(confirm).not.toHaveBeenCalled();
+    expect(String(res.content[0]?.text)).toContain('reply mail');
+  });
+
+  it('still raises the card in a live chat (missing or live-chat gate)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stem-instr-live-'));
+    cleanup.push(root);
+    const tool = await instructionsTool(root);
+    const confirm = vi.fn(async () => false);
+    // No turn-context.json at all — the reading must default to a live chat.
+    const res = await tool.execute!(
+      'i-2',
+      { action: 'append', text: 'Always check #war-room.' },
+      undefined,
+      undefined,
+      { ui: { confirm } }
+    );
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(String(res.content[0]?.text)).toContain('declined');
+  });
+});
+
 describe('assistant MCP administration', () => {
   it('says which machine each server runs on, so a failure is diagnosed on the right one', async () => {
     // The listing used to give the command and nothing else, and an assistant

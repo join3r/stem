@@ -90,12 +90,21 @@ const OFF_REFUSAL =
 const SCHEDULED_REFUSAL =
   'This is an autonomous scheduled run with nobody watching, so a skill you propose here cannot be approved. Do not retry the tool.';
 
+// Mail gets its own sentence because, unlike a scheduled run, the conversation
+// HAS a human on the other end — just not live at a card. The working path is
+// the reply: describe the skill, and a sender's "yes, save it" comes back as a
+// user-initiated save, which needs no card at all.
+const MAIL_REFUSAL =
+  'This is a mail conversation — an approval card would sit unanswered, so a skill you propose cannot be approved ' +
+  'here. Do not retry the tool now. Instead, describe the skill briefly in your reply mail and offer to save it; ' +
+  'if the user replies agreeing, call this tool again with initiated_by "user".';
+
 export class SkillBridge {
   constructor(private readonly deps: SkillBridgeDeps) {}
 
   async handleRequest(
     req: SkillBridgeRequest,
-    ctx: { isScheduled: boolean; threadId?: string }
+    ctx: { isScheduled: boolean; isMail?: boolean; threadId?: string }
   ): Promise<SkillBridgeResult> {
     if (req.op === 'remove') return this.handleRemove(req);
     return this.handleSave(req, ctx);
@@ -114,7 +123,7 @@ export class SkillBridge {
 
   private async handleSave(
     req: SkillSaveRequest,
-    ctx: { isScheduled: boolean; threadId?: string }
+    ctx: { isScheduled: boolean; isMail?: boolean; threadId?: string }
   ): Promise<SkillBridgeResult> {
     const draft: SkillDraft = {
       name: String(req.name ?? '').trim(),
@@ -143,6 +152,7 @@ export class SkillBridge {
     // request that is not going to be written either way. A user-requested save
     // skips both — the mode is not about them.
     const assistantIdea = req.initiatedBy !== 'user';
+    if (assistantIdea && ctx.isMail) return { ok: false, text: MAIL_REFUSAL };
     if (assistantIdea && ctx.isScheduled) return { ok: false, text: SCHEDULED_REFUSAL };
     const mode = assistantIdea ? await this.deps.mode() : null;
     if (mode === 'off') return { ok: false, text: OFF_REFUSAL };

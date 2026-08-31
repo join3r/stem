@@ -100,6 +100,12 @@ export const SKILL_BRIDGE_TITLE = 'stem-skill-bridge';
 export const NATIVE_SEARCH_GATE_FILE = 'native-search.json';
 /** `{ tier: string | null }` — OpenAI service_tier for the next request. */
 export const SERVICE_TIER_GATE_FILE = 'service-tier.json';
+/**
+ * `{ mail: boolean, scheduled: boolean }` — is this turn a mail delivery or an
+ * autonomous scheduled run? The bridge's approval-raising tools read it to
+ * propose by reply instead of raising a card nobody is watching.
+ */
+export const TURN_CONTEXT_GATE_FILE = 'turn-context.json';
 /** `{ roots: string[] }` — absolute roots of read-only connected folders. */
 export const PROTECTED_ROOTS_FILE = 'protected-roots.json';
 /** OAuth tokens for remote MCP servers, keyed by server name. */

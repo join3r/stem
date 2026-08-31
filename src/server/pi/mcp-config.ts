@@ -25,7 +25,8 @@ import {
   MCP_OAUTH_FILE,
   NATIVE_SEARCH_GATE_FILE,
   SECRET_ENVELOPE_KEY,
-  SERVICE_TIER_GATE_FILE
+  SERVICE_TIER_GATE_FILE,
+  TURN_CONTEXT_GATE_FILE
 } from './protocol';
 import { decryptSecretValue, encryptSecretValue, secretKeyAvailable } from './secrets';
 import { degrade } from '../degrade';
@@ -328,6 +329,30 @@ export function piServiceTierPath(gateDir?: string): string {
 export async function writeServiceTierGate(tier: string | null, gateDir?: string): Promise<void> {
   await mkdir(gateDir ?? piHome(), { recursive: true });
   await writeFile(piServiceTierPath(gateDir), JSON.stringify({ tier }, null, 2), 'utf8');
+}
+
+/**
+ * Per-turn gate carrying what kind of turn this is: a mail delivery, an
+ * autonomous scheduled run, or a live chat (both false). The bridge's
+ * card-raising tools (set_custom_instructions) read it so that in a turn nobody
+ * is watching they answer "propose it in your reply" instead of raising an
+ * approval card that expires unanswered. Same per-worker `gateDir` contract as
+ * the gates above; a missing file reads as a live chat.
+ */
+export function piTurnContextPath(gateDir?: string): string {
+  return join(gateDir ?? piHome(), TURN_CONTEXT_GATE_FILE);
+}
+
+export async function writeTurnContextGate(
+  ctx: { mail: boolean; scheduled: boolean },
+  gateDir?: string
+): Promise<void> {
+  await mkdir(gateDir ?? piHome(), { recursive: true });
+  await writeFile(
+    piTurnContextPath(gateDir),
+    JSON.stringify({ mail: ctx.mail, scheduled: ctx.scheduled }, null, 2),
+    'utf8'
+  );
 }
 
 /**

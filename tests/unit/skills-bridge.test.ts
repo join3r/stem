@@ -150,6 +150,28 @@ describe('a save Stem thought of itself', () => {
     expect(seen.changed).toBe(0);
   });
 
+  it('is refused in a mail turn with the propose-by-reply path, without consulting the mode', async () => {
+    // Mail differs from a scheduled run in that a human IS on the other end —
+    // just not live at a card. The refusal must hand the model the reply path,
+    // and a sender's later "yes" comes back as a user-initiated save (below).
+    const { bridge, seen } = harness({ mode: 'ask' });
+    const res = await bridge.handleRequest(SAVE, { isScheduled: true, isMail: true });
+    expect(res.ok).toBe(false);
+    expect(res.text).toContain('reply mail');
+    expect(res.text).toContain('initiated_by "user"');
+    expect(seen.modeReads).toBe(0);
+    expect(seen.approvals).toHaveLength(0);
+    expect(onDisk('extract-video-captions')).toBe(false);
+  });
+
+  it('writes a user-requested save during a mail turn without a card', async () => {
+    const { bridge, seen } = harness({ mode: 'ask' });
+    const res = await bridge.handleRequest({ ...SAVE, initiatedBy: 'user' }, { isScheduled: true, isMail: true });
+    expect(res.ok).toBe(true);
+    expect(seen.approvals).toHaveLength(0);
+    expect(onDisk('extract-video-captions')).toBe(true);
+  });
+
   it('is refused on a scheduled run without ever consulting the mode', async () => {
     // A card with nobody in front of the screen is a dead card, and in auto a
     // silent write out of an unattended run is worse. Neither answer the mode can

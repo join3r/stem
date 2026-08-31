@@ -70,7 +70,8 @@ import {
   readMcpConfig,
   saveOAuthTokenIfServerMatches,
   writeNativeSearchGate,
-  writeServiceTierGate
+  writeServiceTierGate,
+  writeTurnContextGate
 } from './mcp-config';
 import { authorizeMcp } from './oauth';
 import { runDeviceMcpBridgeOp } from '../mcp-device/pi-bridge';
@@ -1218,6 +1219,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           degrade('pi.gates', 'refused the turn rather than run it on the previous service tier', e);
           throw new Error(`Could not set this turn's service tier: ${e instanceof Error ? e.message : String(e)}`);
         });
+        // Same strictness for the turn-context gate: running a mail delivery on
+        // a stale "live chat" value raises approval cards nobody is watching,
+        // and the inverse silently muzzles the instructions tool in a real chat.
+        await writeTurnContextGate({ mail: turn.isMail === true, scheduled: turn.isScheduled === true }, w.gateDir).catch(
+          (e) => {
+            degrade('pi.gates', "refused the turn rather than run it on the previous turn's context kind", e);
+            throw new Error(`Could not set this turn's context: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        );
 
         const buildStart = Date.now();
         const { message, images } = await this.buildMessage(input, threadId, turn, turnId);
@@ -2483,6 +2493,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
     };
     const isScheduled = worker.currentTurn?.isScheduled === true;
+    const isMail = worker.currentTurn?.isMail === true;
     const threadId = worker.currentTurn?.threadId;
     void (async () => {
       try {
@@ -2504,7 +2515,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                 body: String(req.content ?? req.body ?? ''),
                 expectExisting: req.expect_existing === true
               },
-          { isScheduled, threadId }
+          { isScheduled, isMail, threadId }
         );
         respond(result);
       } catch (e) {
