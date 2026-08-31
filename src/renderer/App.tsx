@@ -31,7 +31,7 @@ import { ExecApprovalCard } from './manage/ExecApprovalCard';
 import { HarnessApprovalCard } from './manage/HarnessApprovalCard';
 import { DeleteThreadDialog } from './DeleteThreadDialog';
 import { SnoozeMenu } from './chats/SnoozeMenu';
-import { useMail } from './mail/useMail';
+import { hasMailWaiting, useMail } from './mail/useMail';
 import { MailComposeView, MailConversationView } from './mail/MailView';
 import { ActivityIndicator } from './ui/ActivityIndicator';
 import { TaskAlertModal } from './TaskAlertModal';
@@ -249,7 +249,9 @@ export default function App() {
       mail.conversations.filter((c) => {
         const subject = { threadId: c.id, updatedAt: c.userUpdatedAt };
         return (
-          placement(subject, mail.inbox, Date.now()) === 'inbox' && isUnread(subject, mail.inbox)
+          hasMailWaiting(c) &&
+          placement(subject, mail.inbox, Date.now()) === 'inbox' &&
+          isUnread(subject, mail.inbox)
         );
       }).length,
     [mail]
@@ -1115,7 +1117,11 @@ export default function App() {
   const onMailMarkAllRead = useCallback(() => {
     const now = Date.now();
     const ids = mail.conversations
-      .filter((c) => placement({ threadId: c.id, updatedAt: c.userUpdatedAt }, mail.inbox, now) === 'inbox')
+      .filter(
+        (c) =>
+          hasMailWaiting(c) &&
+          placement({ threadId: c.id, updatedAt: c.userUpdatedAt }, mail.inbox, now) === 'inbox'
+      )
       .map((c) => c.id);
     if (ids.length) mailApi.setRead(ids, true);
   }, [mail, mailApi]);

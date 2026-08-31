@@ -2048,6 +2048,12 @@ export interface MailConversation {
    * so persona-internal traffic can never resurrect an archived conversation.
    */
   userUpdatedAt: number;
+  /**
+   * ms of the USER's latest send. A conversation whose last user-relevant
+   * event is the user's own send (userSentAt >= userUpdatedAt) has been dealt
+   * with — the turn is on the personas — so it waits under Sent, not Inbox.
+   */
+  userSentAt: number;
   createdAt: number;
 }
 

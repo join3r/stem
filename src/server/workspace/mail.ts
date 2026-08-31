@@ -82,6 +82,7 @@ function coerceConversation(raw: unknown): MailConversation | null {
     sendCounts,
     updatedAt: num(r.updatedAt) ?? 0,
     userUpdatedAt: num(r.userUpdatedAt) ?? 0,
+    userSentAt: num(r.userSentAt) ?? 0,
     createdAt: num(r.createdAt) ?? 0
   };
 }
@@ -114,9 +115,18 @@ function coerce(parsed: unknown): MailFile {
     }
   }
   const items: MailItem[] = [];
+  const byId = new Map(conversations.map((c) => [c.id, c] as const));
   for (const entry of Array.isArray(raw.items) ? raw.items : []) {
     const item = coerceItem(entry);
-    if (item && seen.has(item.conversationId)) items.push(item);
+    if (item && seen.has(item.conversationId)) {
+      items.push(item);
+      // Backfill userSentAt for stores written before the field existed — the
+      // items are the full history, so the derivation is exact.
+      if (item.from === 'user') {
+        const c = byId.get(item.conversationId);
+        if (c && item.at > c.userSentAt) c.userSentAt = item.at;
+      }
+    }
   }
   const inboxRaw = (raw.inbox && typeof raw.inbox === 'object' ? raw.inbox : {}) as Record<string, unknown>;
   const entries: Record<string, InboxEntry> = {};
@@ -221,6 +231,7 @@ export function createConversation(subject: string, participants: string[]): Pro
     sendCounts: {},
     updatedAt: Date.now(),
     userUpdatedAt: 0,
+    userSentAt: 0,
     createdAt: Date.now()
   };
   return update((store) => {
@@ -281,6 +292,7 @@ export function appendMailItem(
     if (item.from === 'user') {
       conversation.exchangeCount = 0;
       conversation.sendCounts = {};
+      conversation.userSentAt = item.at;
     }
     if (item.to.includes('user')) conversation.userUpdatedAt = item.at;
     if (hops > 0) {

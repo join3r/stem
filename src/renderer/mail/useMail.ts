@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InboxState } from '../../shared/inbox';
 import { withArchived, withRead, withSnooze } from '../../shared/inbox';
-import type { MailComposeInput, MailListResult, Persona } from '../../shared/types';
+import type { MailComposeInput, MailConversation, MailListResult, Persona } from '../../shared/types';
 
 // The renderer's one copy of the mail state: list + personas, refreshed on the
 // server's mail:changed push, with the same optimistic-triage treatment the
@@ -150,6 +150,15 @@ export function useMail(ready: boolean): MailApi {
   );
 
   return { mail, personas, refresh, compose, reply, archive, snooze, setRead, remove };
+}
+
+/**
+ * True when the latest user-relevant event is mail TO the user, not the user's
+ * own send. A replied-to conversation has been dealt with — the turn is on the
+ * personas — so it waits under Sent until new mail for the user lands.
+ */
+export function hasMailWaiting(c: MailConversation): boolean {
+  return c.userUpdatedAt > c.userSentAt;
 }
 
 /** The persona's display name for a mail address ('user' handled by callers). */

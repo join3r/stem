@@ -66,6 +66,39 @@ describe('conversations and items', () => {
     expect((await readMail()).conversations[0].exchangeCount).toBe(0);
   });
 
+  it('stamps userSentAt on user sends — a replied-to conversation is dealt with', async () => {
+    const c = await createConversation('s', ['normal']);
+    await appendMailItem({ conversationId: c.id, from: 'normal', to: ['user'], body: 'question' });
+    let row = (await readMail()).conversations[0];
+    // Mail for the user is the latest event: Inbox.
+    expect(row.userUpdatedAt).toBeGreaterThan(row.userSentAt);
+
+    await appendMailItem({ conversationId: c.id, from: 'user', to: ['normal'], body: 'answer', at: Date.now() + 10 });
+    row = (await readMail()).conversations[0];
+    // The user's reply is the latest event: the turn is on the personas.
+    expect(row.userSentAt).toBeGreaterThan(row.userUpdatedAt);
+
+    // Persona-internal traffic while working does not hand the turn back…
+    await appendMailItem({ conversationId: c.id, from: 'normal', to: ['verifier'], body: 'psst', at: Date.now() + 20 });
+    row = (await readMail()).conversations[0];
+    expect(row.userSentAt).toBeGreaterThan(row.userUpdatedAt);
+
+    // …but new mail for the user does.
+    await appendMailItem({ conversationId: c.id, from: 'normal', to: ['user'], body: 'done', at: Date.now() + 30 });
+    row = (await readMail()).conversations[0];
+    expect(row.userUpdatedAt).toBeGreaterThan(row.userSentAt);
+  });
+
+  it('backfills userSentAt from the items for stores written before the field', async () => {
+    const c = await createConversation('s', ['normal']);
+    await appendMailItem({ conversationId: c.id, from: 'user', to: ['normal'], body: 'x' });
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    for (const conversation of raw.conversations) delete conversation.userSentAt;
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    const { conversations, items } = await readMail();
+    expect(conversations[0].userSentAt).toBe(items[0].at);
+  });
+
   it('addParticipant grows the To: set idempotently', async () => {
     const c = await createConversation('grow', ['secretary']);
     await addParticipant(c.id, 'verifier');

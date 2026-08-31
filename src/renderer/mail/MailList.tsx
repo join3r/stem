@@ -13,7 +13,7 @@ import {
 import type { MailConversation, MailListResult, Persona } from '../../shared/types';
 import { formatWake, isUnread, nextWakeAt, placement, type InboxSubject } from '../../shared/inbox';
 import { SnoozeMenu } from '../chats/SnoozeMenu';
-import { personaName } from './useMail';
+import { hasMailWaiting, personaName } from './useMail';
 
 // The Inbox tab's list: mail conversations, email-style. The waiting mail sits
 // on top (unread bold), with what you've dealt with collapsed underneath —
@@ -77,10 +77,11 @@ export function MailList(props: MailListProps) {
       const where = placement(subjectOf(c), mail.inbox, now);
       if (where === 'snoozed') snoozed.push(c);
       else if (where === 'archived') archived.push(c);
-      // The Inbox holds mail you RECEIVED. A conversation nothing has been
-      // mailed back on yet (userUpdatedAt 0) is just your own send — it lives
-      // under Sent (spinner included) until a reply lands, like email.
-      else if (c.userUpdatedAt > 0) inbox.push(c);
+      // The Inbox holds mail WAITING ON the user. A conversation whose latest
+      // user-relevant event is the user's own send — a fresh compose, or a
+      // reply into it — is dealt with: it lives under Sent (spinner included)
+      // until new mail addressed to the user lands, like email.
+      else if (hasMailWaiting(c)) inbox.push(c);
     }
     inbox.sort((a, b) => b.updatedAt - a.updatedAt);
     snoozed.sort(
