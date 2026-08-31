@@ -47,6 +47,7 @@ export function registerMailIpc(deps: { router(): MailRouter | null; runtime(): 
   registerServer('mail:addParticipant', (_e, conversationId: string, personaId: string) =>
     router().addParticipant(conversationId, personaId)
   );
+  registerServer('mail:stop', (_e, conversationId: string) => router().stopConversation(conversationId));
   registerServer('mail:setRead', (_e, ids: string[], read: boolean) => setMailRead(ids, read));
   registerServer('mail:setArchived', (_e, ids: string[], archived: boolean) =>
     setMailArchived(ids, archived)

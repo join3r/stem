@@ -173,6 +173,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'mail:compose': [a.object],
   'mail:reply': [a.string, a.string, a.optional(a.nullish(a.objectArray))],
   'mail:addParticipant': [a.string, a.string],
+  'mail:stop': [a.string],
   'mail:setRead': [a.stringArray, a.boolean],
   'mail:setArchived': [a.stringArray, a.boolean],
   'mail:snooze': [a.stringArray, a.nullish(a.number)],

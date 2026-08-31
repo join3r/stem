@@ -136,11 +136,24 @@ describe('conversations and items', () => {
     expect(await mailSessionThreadIds()).toEqual(new Set(['thread-9']));
   });
 
-  it('never persists a working status across a reload', async () => {
+  it('a live working status survives reads and unrelated writes; a stale one reads idle', async () => {
     const c = await createConversation('s', ['normal']);
     await setConversationStatus(c.id, 'working');
-    const { conversations } = await readMail();
-    expect(conversations[0].status).toBe('idle');
+    // Reads and unrelated writes re-serialize every conversation — neither may
+    // erase a working flag this process still holds (the runaway-thread bug:
+    // the store said idle while deliveries ran).
+    expect((await readMail()).conversations[0].status).toBe('working');
+    await setMailRead([c.id], true);
+    expect((await readMail()).conversations[0].status).toBe('working');
+    await setConversationStatus(c.id, 'idle');
+    expect((await readMail()).conversations[0].status).toBe('idle');
+
+    // A working flag NOT set by this process (a crashed predecessor's leftover)
+    // must not spin the row forever: it reads idle.
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw.conversations[0].status = 'working';
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    expect((await readMail()).conversations[0].status).toBe('idle');
   });
 
   it('deletes a conversation with its items and triage state, returning its threads', async () => {

@@ -3422,6 +3422,8 @@ export interface StemApi {
   ): Promise<MailListResult>;
   /** Pull another persona into an existing conversation's participant set. */
   addMailParticipant(conversationId: string, personaId: string): Promise<MailListResult>;
+  /** Stop a conversation's in-flight deliveries (queued dropped, turns interrupted). */
+  stopMail(conversationId: string): Promise<{ stopped: boolean }>;
   setMailRead(conversationIds: string[], read: boolean): Promise<MailListResult>;
   setMailArchived(conversationIds: string[], archived: boolean): Promise<MailListResult>;
   snoozeMail(conversationIds: string[], until: number | null): Promise<MailListResult>;

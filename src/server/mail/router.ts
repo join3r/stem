@@ -175,6 +175,14 @@ export class MailRouter {
    * popover exists to show. Closed when the conversation's deliveries drain.
    */
   private readonly activityRows = new Map<string, { handle: activity.ActivityHandle; turns: number }>();
+  /** Turns currently delivering, by turn id — what stopConversation interrupts. */
+  private readonly activeTurns = new Map<string, { conversationId: string }>();
+  /**
+   * Conversations mid-stop: their aborted turns settle without failure notices
+   * (the user who pressed Stop is the one reader a "run failed" mail would
+   * tell nothing). Cleared when the last delivery drains.
+   */
+  private readonly stopping = new Set<string>();
 
   constructor(private readonly opts: MailRouterOptions) {}
 
@@ -252,6 +260,60 @@ export class MailRouter {
     const result = await addParticipant(conversationId, persona.id);
     this.opts.onChange();
     return result;
+  }
+
+  /**
+   * The user's Stop control: drop this conversation's queued deliveries,
+   * interrupt its running turns, and tear down its open joins so no assembly
+   * fires later. The interrupted turns settle as aborted and drain the status
+   * as usual — without failure notices, because the stop IS the outcome the
+   * user asked for. Answers `stopped: false` when nothing was in flight.
+   */
+  async stopConversation(conversationId: string): Promise<{ stopped: boolean }> {
+    const lane = this.lanes.get(conversationId);
+    const active = [...this.activeTurns].filter(([, t]) => t.conversationId === conversationId);
+    const queued = lane?.queue.length ?? 0;
+    if (!active.length && !queued) return { stopped: false };
+    this.stopping.add(conversationId);
+    if (lane && queued) {
+      // Dropped tasks never reach deliver(), so their pending counts settle here.
+      lane.queue.length = 0;
+      const left = (this.pending.get(conversationId) ?? queued) - queued;
+      if (left > 0) this.pending.set(conversationId, left);
+      else this.pending.delete(conversationId);
+    }
+    for (const [key, join] of this.joins) {
+      if (key.startsWith(`${conversationId}\n`)) {
+        clearTimeout(join.timer);
+        this.joins.delete(key);
+      }
+    }
+    await Promise.all(
+      active.map(([turnId]) =>
+        this.opts.runtime.interruptTurn(turnId).catch((err) => {
+          degrade('mail', 'left a stopped delivery running', err);
+        })
+      )
+    );
+    if (!active.length) {
+      // Nothing running to settle later (queued-only, a shape restarts can
+      // leave): drain here so the status and the activity row never wedge.
+      this.pending.delete(conversationId);
+      this.stopping.delete(conversationId);
+      const row = this.activityRows.get(conversationId);
+      if (row) {
+        this.activityRows.delete(conversationId);
+        activity.end(row.handle, { worked: true, detail: `${row.turns} turn${row.turns === 1 ? '' : 's'}` });
+      }
+      const status = this.drainStatus.get(conversationId) ?? 'idle';
+      this.drainStatus.delete(conversationId);
+      await setConversationStatus(conversationId, status).catch(() => {
+        // quiet: a deleted conversation has no row left for a status to show on.
+      });
+    }
+    this.updateActivityDetail(conversationId);
+    this.opts.onChange();
+    return { stopped: true };
   }
 
   /**
@@ -741,6 +803,7 @@ export class MailRouter {
     // Minted out here so the finally below can clear the turn's bookkeeping on
     // every exit path.
     const turnId = randomUUID();
+    this.activeTurns.set(turnId, { conversationId });
     try {
       const persona = await getPersona(personaId);
       if (!persona) {
@@ -827,6 +890,9 @@ export class MailRouter {
       const sent = this.turnMailSent.get(turnId);
       this.turnMailSent.delete(turnId);
       if (settle.status !== 'ok') {
+        // A user-requested stop aborts the turn on purpose — the abort is the
+        // expected outcome, not news to deliver.
+        if (this.stopping.has(conversationId)) return;
         this.settleBranchFailure(
           conversationId,
           from,
@@ -861,6 +927,7 @@ export class MailRouter {
         // cannot be written has nothing left to say it in.
       });
     } finally {
+      this.activeTurns.delete(turnId);
       this.turnInitiators.delete(turnId);
       this.turnEpochs.delete(turnId);
       const left = (this.pending.get(conversationId) ?? 1) - 1;
@@ -868,6 +935,7 @@ export class MailRouter {
       else {
         // The conversation's last delivery drained: settle its status.
         this.pending.delete(conversationId);
+        this.stopping.delete(conversationId);
         const row = this.activityRows.get(conversationId);
         if (row) {
           this.activityRows.delete(conversationId);

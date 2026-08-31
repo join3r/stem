@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { File, Paperclip, Plus, Send, X } from 'lucide-react';
+import { File, Paperclip, Plus, Send, Square, X } from 'lucide-react';
 import type {
   MailComposeInput,
   MailConversation,
@@ -121,7 +121,8 @@ export function MailConversationView({
   items,
   personas,
   onReply,
-  onAddParticipant
+  onAddParticipant,
+  onStop
 }: {
   conversation: MailConversation;
   items: MailItem[];
@@ -129,6 +130,8 @@ export function MailConversationView({
   onReply: (body: string, attachments?: TurnAttachment[]) => void;
   /** Resolves once the persona is in; rejection shows its message inline. */
   onAddParticipant: (personaId: string) => Promise<void>;
+  /** Stop the working personas: queued deliveries dropped, running turns interrupted. */
+  onStop: () => void;
 }) {
   const [draft, setDraft] = useState('');
   const files = useAttachmentDraft();
@@ -219,7 +222,19 @@ export function MailConversationView({
               <Plus size={12} />
             </button>
           )}
-          {conversation.status === 'working' && <em> · working…</em>}
+          {conversation.status === 'working' && (
+            <>
+              <em> · working…</em>
+              <button
+                className="icon-action sm mail-stop"
+                onClick={onStop}
+                title="Stop — drop queued deliveries and interrupt the running personas"
+                aria-label="Stop the personas working this conversation"
+              >
+                <Square size={11} />
+              </button>
+            </>
+          )}
           {conversation.status === 'awaiting-user' && <em> · waiting on your reply</em>}
         </span>
         {addingTo && addable.length > 0 && (

@@ -1659,6 +1659,7 @@ export default function App() {
                   onAddParticipant={(personaId) =>
                     mailApi.addParticipant(conversation.id, personaId)
                   }
+                  onStop={() => void mailApi.stop(conversation.id)}
                 />
               );
             })()}

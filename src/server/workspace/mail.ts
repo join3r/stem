@@ -65,6 +65,14 @@ function coerceItem(raw: unknown): MailItem | null {
   return item;
 }
 
+/**
+ * Conversation ids THIS process marked working. The set — not the file — is
+ * the authority on "a delivery is in flight": ids enter on
+ * setConversationStatus(id, 'working') and leave on any other status (or the
+ * conversation's deletion), so a restart empties it naturally.
+ */
+const liveWorking = new Set<string>();
+
 function coerceConversation(raw: unknown): MailConversation | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
@@ -79,7 +87,15 @@ function coerceConversation(raw: unknown): MailConversation | null {
       if (typeof threadId === 'string' && threadId) sessions[personaId] = threadId;
     }
   }
-  const status = r.status === 'working' || r.status === 'awaiting-user' ? r.status : 'idle';
+  // A 'working' status is in-memory truth about a delivery in flight: it
+  // survives the file round-trip only while THIS process holds the flag (see
+  // liveWorking). After a restart nothing is in flight, and a stale flag from
+  // a previous process must not spin the row forever — and, just as important,
+  // an unrelated write (marking a mail read) re-serializes every conversation,
+  // so an unconditional flip here would silently erase a LIVE working status:
+  // exactly the bug where a runaway thread showed idle while its turns ran.
+  const rawStatus = r.status === 'working' || r.status === 'awaiting-user' ? r.status : 'idle';
+  const status = rawStatus === 'working' && !liveWorking.has(r.id) ? 'idle' : rawStatus;
   const sendCounts: Record<string, number> = {};
   if (r.sendCounts && typeof r.sendCounts === 'object') {
     for (const [personaId, count] of Object.entries(r.sendCounts as Record<string, unknown>)) {
@@ -92,10 +108,7 @@ function coerceConversation(raw: unknown): MailConversation | null {
     subject: typeof r.subject === 'string' ? r.subject : '',
     participants,
     sessions,
-    // A 'working' status is in-memory truth about a delivery in flight; after a
-    // restart nothing is in flight, so it must not survive the file round-trip
-    // (the row would spin forever).
-    status: status === 'working' ? 'idle' : status,
+    status,
     exchangeCount: num(r.exchangeCount) ?? 0,
     sendCounts,
     updatedAt: num(r.updatedAt) ?? 0,
@@ -348,6 +361,8 @@ export function setConversationStatus(
   id: string,
   status: MailConversation['status']
 ): Promise<MailListResult> {
+  if (status === 'working') liveWorking.add(id);
+  else liveWorking.delete(id);
   return update((store) => {
     conversationOf(store, id).status = status;
   });
@@ -375,6 +390,7 @@ export async function mailSessionThreadIds(): Promise<Set<string>> {
 /** Delete a conversation + its items + triage state. Returns the orphaned thread ids. */
 export async function deleteConversation(id: string): Promise<{ result: MailListResult; threadIds: string[] }> {
   let threadIds: string[] = [];
+  liveWorking.delete(id);
   const result = await update((store) => {
     const conversation = store.conversations.find((c) => c.id === id);
     threadIds = conversation ? Object.values(conversation.sessions) : [];

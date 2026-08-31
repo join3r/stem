@@ -30,6 +30,8 @@ export interface MailApi {
   compose: (input: MailComposeInput) => Promise<MailListResult>;
   reply: (conversationId: string, body: string, attachments?: TurnAttachment[]) => Promise<void>;
   addParticipant: (conversationId: string, personaId: string) => Promise<void>;
+  /** Stop the conversation's in-flight work; resolves once the interrupts are sent. */
+  stop: (conversationId: string) => Promise<void>;
   archive: (ids: string[], archived: boolean) => void;
   snooze: (ids: string[], until: number | null) => void;
   setRead: (ids: string[], read: boolean) => void;
@@ -146,6 +148,15 @@ export function useMail(ready: boolean): MailApi {
     },
     [applyServer]
   );
+  const stop = useCallback(
+    async (conversationId: string) => {
+      await window.stem.stopMail(conversationId);
+      // The drain lands moments later as mail:changed; this refresh just picks
+      // up whatever already settled.
+      refresh();
+    },
+    [refresh]
+  );
   const remove = useCallback(
     (conversationId: string) => {
       // Optimistic: the row disappears now; the answer reconciles.
@@ -162,7 +173,7 @@ export function useMail(ready: boolean): MailApi {
     [applyServer, refresh]
   );
 
-  return { mail, personas, refresh, compose, reply, addParticipant, archive, snooze, setRead, remove };
+  return { mail, personas, refresh, compose, reply, addParticipant, stop, archive, snooze, setRead, remove };
 }
 
 /**

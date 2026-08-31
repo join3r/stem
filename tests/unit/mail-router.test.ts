@@ -119,7 +119,15 @@ function fakeBackend(): FakeBackend {
       title: 't',
       messages: (transcripts.get(threadId) ?? []).map((m, i) => ({ id: String(i), ...m }))
     }),
-    interruptTurn: async () => undefined
+    interruptTurn: async (turnId: string) => {
+      // Mirrors the real backend closely enough for stop/timeout tests: the
+      // interrupted turn settles as aborted.
+      emitter.emit('event', {
+        method: 'turn/aborted',
+        params: { turn: { id: turnId } },
+        receivedAt: Date.now()
+      });
+    }
   });
   return fake;
 }
@@ -1143,6 +1151,52 @@ describe('stale replies', () => {
     });
     expect(mail.items.find((i) => i.body === 'slow answer')?.stale).toBe(true);
     expect(mail.items.find((i) => i.body === 'fresh answer')?.stale).toBeUndefined();
+  });
+});
+
+describe('stop control', () => {
+  it('stops a working conversation: queued dropped, turns aborted, no failure notice', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    const hold = deferred();
+    fake.scriptsByPersona.verifier = [
+      { mode: 'ok', reply: 'never lands', bridge: () => hold.promise },
+      { mode: 'ok', reply: 'must never run' }
+    ];
+    const { conversations } = await router.compose({ to: ['verifier'], subject: 's', body: 'go' });
+    const id = conversations[0].id;
+    await vi.waitFor(async () => {
+      expect(fake.starts).toHaveLength(1);
+      // The live working status is visible while the delivery runs (the store
+      // no longer erases it on unrelated round-trips).
+      expect((await readMail()).conversations[0].status).toBe('working');
+    });
+    // A second user mail queues behind the held turn (same-persona serial)…
+    await router.reply(id, 'and this');
+    // …and the stop drops it before it ever runs, aborting the held turn.
+    expect(await router.stopConversation(id)).toEqual({ stopped: true });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.conversations[0].status).toBe('idle');
+      return m;
+    });
+    // Only the two user mails are on the record: the aborted turn produced no
+    // "run failed" notice — the stop IS the outcome the user asked for.
+    expect(mail.items.map((i) => ({ from: i.from, body: i.body }))).toEqual([
+      { from: 'user', body: 'go' },
+      { from: 'user', body: 'and this' }
+    ]);
+    expect(fake.starts).toHaveLength(1);
+    hold.resolve();
+  });
+
+  it('answers stopped: false when nothing is in flight', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scripts = [{ mode: 'ok', reply: 'done' }];
+    const { conversations } = await router.compose({ to: ['verifier'], subject: 's', body: 'q' });
+    await settledMail();
+    expect(await router.stopConversation(conversations[0].id)).toEqual({ stopped: false });
   });
 });
 
