@@ -1580,7 +1580,7 @@ export default function App() {
                   personas={mailApi.personas}
                   onReply={(body) => void mailApi.reply(conversation.id, body)}
                   onAddParticipant={(personaId) =>
-                    void mailApi.addParticipant(conversation.id, personaId)
+                    mailApi.addParticipant(conversation.id, personaId)
                   }
                 />
               );

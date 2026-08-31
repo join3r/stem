@@ -33,10 +33,12 @@ export function MailConversationView({
   items: MailItem[];
   personas: Persona[];
   onReply: (body: string) => void;
-  onAddParticipant: (personaId: string) => void;
+  /** Resolves once the persona is in; rejection shows its message inline. */
+  onAddParticipant: (personaId: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState('');
   const [addingTo, setAddingTo] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
   // Expanded exchange groups, keyed by their first item's id (stable across refreshes).
   const [openExchanges, setOpenExchanges] = useState<Set<string>>(new Set());
   const now = Date.now();
@@ -109,8 +111,10 @@ export function MailConversationView({
                 key={p.id}
                 className="mail-to-chip"
                 onClick={() => {
-                  onAddParticipant(p.id);
-                  setAddingTo(false);
+                  setAddError(null);
+                  onAddParticipant(p.id)
+                    .then(() => setAddingTo(false))
+                    .catch((err) => setAddError(err instanceof Error ? err.message : String(err)));
                 }}
                 title={`Add ${p.name} — the personas here can then mail it, and your replies reach it too`}
               >
@@ -119,6 +123,7 @@ export function MailConversationView({
             ))}
           </div>
         )}
+        {addingTo && addError && <p className="task-failed">{addError}</p>}
       </header>
       <div className="mail-items" ref={scrollRef}>
         {groups.map((group) => {
