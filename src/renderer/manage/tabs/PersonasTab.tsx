@@ -10,6 +10,7 @@ import type {
 import { ModelPicker } from '../../ui/ModelPicker';
 import { clampEffort, effortsOf, EffortSelect } from '../../ui/EffortSelect';
 import { EFFORT_LABELS } from '../../modelLabels';
+import { appDefaultModel } from '../../../shared/modelRoles';
 import { ServerFolderPicker } from '../ServerFolderPicker';
 
 // ---- Personas tab: the named agent configurations mail addresses ----
@@ -308,6 +309,7 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       }
                       emptyLabel="App default"
                       ariaLabel="Model this persona runs on"
+                      resolvedDefault={appDefaultModel(models)}
                     />
                     <EffortSelect
                       label="Effort this persona runs at"

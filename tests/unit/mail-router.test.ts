@@ -419,6 +419,52 @@ describe('mail router', () => {
     expect((await readMail()).items.some((i) => i.to.includes('secretary'))).toBe(false);
   });
 
+  it("a persona's model and effort pins ride its delivery turns", async () => {
+    const fake = fakeBackend();
+    await savePersona({ id: 'pinned', name: 'Pinned', prompt: 'p', model: 'acme/fast-1', effort: 'high' });
+    const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined });
+    await router.compose({ to: ['pinned'], subject: 's', body: 'q' });
+    await settledMail();
+    expect(fake.starts[0].model).toBe('acme/fast-1');
+    expect(fake.starts[0].effort).toBe('high');
+    // An unpinned persona leaves both unset — the app default decides.
+    const fake2 = fakeBackend();
+    const router2 = new MailRouter({ runtime: fake2.backend, onChange: () => undefined });
+    await router2.compose({ to: ['verifier'], subject: 's2', body: 'q' });
+    await vi.waitFor(async () => {
+      expect(fake2.starts).toHaveLength(1);
+      expect((await readMail()).conversations.every((c) => c.status !== 'working')).toBe(true);
+    });
+    expect(fake2.starts[0].model).toBeUndefined();
+    expect(fake2.starts[0].effort).toBeUndefined();
+  });
+
+  it('the user can pull a persona into an existing conversation', async () => {
+    const fake = fakeBackend();
+    const changed = vi.fn();
+    const router = makeRouter(fake, changed);
+    const { conversations } = await router.compose({ to: ['verifier'], subject: 's', body: 'q' });
+    await settledMail();
+
+    await expect(router.addParticipant(conversations[0].id, 'ghost')).rejects.toThrow(/ghost/);
+    changed.mockClear();
+    await router.addParticipant(conversations[0].id, 'secretary');
+    expect(changed).toHaveBeenCalled();
+    expect((await readMail()).conversations[0].participants).toEqual(['verifier', 'secretary']);
+
+    // The next reply addresses the grown set but still wakes only the driver.
+    fake.script = { mode: 'ok', reply: 'noted' };
+    await router.reply(conversations[0].id, 'both of you');
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items).toHaveLength(4);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+    expect(mail.items[2]).toMatchObject({ from: 'user', to: ['verifier', 'secretary'] });
+    expect(fake.starts.map((s) => s.persona?.id)).toEqual(['verifier', 'verifier']);
+  });
+
   it('add_persona is gated by the capability flag and grows the participant set', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);
