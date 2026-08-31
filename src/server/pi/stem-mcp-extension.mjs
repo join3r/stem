@@ -1817,6 +1817,16 @@ function registerAdminTools(pi, cfgPath) {
       } catch (e) {
         return { content: [{ type: 'text', text: `Cannot read MCP config: ${e.message}` }], details: {}, isError: true };
       }
+      // The live connection outcomes, written by publish() as each connect
+      // settles. Without them this list showed a failed server as configured
+      // and nothing more — the Vacation-thread Fastmail 401 read as "no email
+      // tools" with no way to tell the user their sign-in had expired.
+      let statuses = {};
+      try {
+        statuses = JSON.parse(readFileSync(join(dirname(cfgPath), 'mcp-status.json'), 'utf8')) || {};
+      } catch {
+        // No status yet (fresh profile) — the list still stands on its own.
+      }
       const lines = Object.entries(servers)
         .filter(([n]) => !ADMIN_RESERVED.has(n))
         .map(([n, def]) => {
@@ -1827,7 +1837,17 @@ function registerAdminTools(pi, cfgPath) {
           const where = def.location
             ? `runs on the user's computer ${label ? `“${label}”` : '(the one it is pinned to)'}`
             : 'runs where Stem itself runs';
-          return `- ${n} ${how} — ${where}${def.disabled ? ', switched off in Settings' : ''}`;
+          const report = statuses[n];
+          // 'elsewhere' is not a failure (the row already names the machine),
+          // and 'ready' needs no caption. Only the states the model must relay
+          // get one — a failure with its error, or a connect still in flight.
+          const state =
+            report && report.status === 'failed'
+              ? ` — currently FAILING: ${String(report.error || 'no error recorded').trim()}. If this reads like an expired or rejected login, the user must reconnect it themselves in Settings → Tools → MCP servers; tell them that instead of retrying its tools.`
+              : report && report.status === 'starting'
+                ? ' — still connecting; its tools may appear shortly'
+                : '';
+          return `- ${n} ${how} — ${where}${def.disabled ? ', switched off in Settings' : ''}${state}`;
         });
       // The placement rules travel with the list, not in a doc page the model may
       // not read: a server failing on the wrong machine is the one question this

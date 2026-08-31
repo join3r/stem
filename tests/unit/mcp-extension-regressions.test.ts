@@ -284,7 +284,8 @@ describe('assistant MCP administration', () => {
             trusted: true,
             disabled: true,
             location: { deviceId: 'dev-1', label: "Vlado's MacBook" }
-          }
+          },
+          fastmail: { url: 'https://api.fastmail.com/mcp', trusted: true, disabled: true }
         }
       })
     );
@@ -302,12 +303,30 @@ describe('assistant MCP administration', () => {
       setActiveTools: () => {}
     });
     const list = registered.find((tool) => tool.name === 'list_mcp_servers');
+    // The live connection outcome rides along: a server whose OAuth token
+    // expired used to list as merely "configured", and the assistant could only
+    // report "no email tools" instead of "your sign-in expired". Written after
+    // the bridge is up because startup publishes (and would overwrite) a status
+    // snapshot of its own.
+    await mcpConnectionsSettledForTests();
+    await writeFile(
+      join(root, 'mcp-status.json'),
+      JSON.stringify({
+        fastmail: { status: 'failed', error: 'HTTP 401 Invalid Authorization bearer token, token has expired' },
+        grafana: { status: 'ready' }
+      })
+    );
     const text = String((await list!.execute!('list-1', {})).content[0]?.text);
 
     expect(text).toContain('- grafana (stdio): uvx mcp-grafana — runs where Stem itself runs');
     expect(text).toContain("- notes (stdio): npx -y notes-mcp — runs on the user's computer “Vlado's MacBook”");
     // Switched off is the other reason a server "does not work" with no error.
     expect(text).toContain('switched off in Settings');
+    // A failed connect names its error so the assistant can tell the user WHY
+    // (an expired login, not a missing server) — and a healthy one stays quiet.
+    expect(text).toContain('currently FAILING: HTTP 401 Invalid Authorization bearer token, token has expired');
+    expect(text).toContain('reconnect it themselves in Settings');
+    expect(text).not.toContain('grafana (stdio): uvx mcp-grafana — runs where Stem itself runs, switched off in Settings —');
     // And the rule that makes the placement actionable travels with the list.
     expect(text).toContain('must exist there');
   });
