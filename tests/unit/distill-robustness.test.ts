@@ -166,3 +166,17 @@ describe('distill: uncited-claim backfill across threads', () => {
     expect(evidence.map((e) => e.threadId)).toEqual(['f-1']);
   });
 });
+
+describe('distill prompt scope', () => {
+  it('keeps task-procedure preferences in scope while excluding only response style', async () => {
+    // The Vacation-thread regression: "you didn't check #war-room; I want to be
+    // informed in the future" was processed and dropped, because the old rule
+    // excluded ALL standing directives as custom-instructions material. Only
+    // response-STYLE rules belong there; how a task should be done for the user
+    // is a durable preference fact.
+    const { DISTILL_INSTRUCTIONS } = await import('../../src/server/recall/distill');
+    expect(DISTILL_INSTRUCTIONS).toMatch(/DO record the user's standing preferences about how a kind of TASK/);
+    expect(DISTILL_INSTRUCTIONS).toMatch(/response-STYLE directives/);
+    expect(DISTILL_INSTRUCTIONS).not.toMatch(/standing behavioral directives/);
+  });
+});
