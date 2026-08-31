@@ -926,7 +926,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const proc = worker.proc;
         worker.proc = null;
         worker.activeThreadId = null;
-        worker.currentTurn = null;
+        // currentTurn is left for the exit handler: it is what attributes the
+        // process/exit event to the dying turn's thread, so a delivery or
+        // scheduled run waiting on it fails promptly instead of timing out.
         worker.gate.reset();
         if (proc) await proc.dispose();
       })
@@ -2853,7 +2855,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       this.settleWorkerApprovals(proc, deadThread);
       worker.gate.finishTurn();
       this.pumpCapacityWaiters();
-      this.emitEvent('process/exit', info);
+      // Attributed: `threadId` names the turn THIS child was carrying (null when
+      // it sat idle — a reaped extra worker). Consumers scope their reaction to
+      // it; before the pool, a bare process/exit meant "everything died", and an
+      // idle worker's retirement was failing every in-flight mail delivery and
+      // scheduled run on the other workers.
+      this.emitEvent('process/exit', { ...info, threadId: deadThread });
       const uptimeMs = Date.now() - spawnedAt;
       log('pi', unexpected ? 'backend exited unexpectedly' : 'backend stopped', {
         ...info,

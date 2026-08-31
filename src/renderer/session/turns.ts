@@ -107,7 +107,8 @@ export interface TurnEventHost {
   /** Map an event's thread id to the state key it applies to; null drops it.
    * Hosts do their filtering here (deleted threads in main, the ignore set and
    * thread-id adoption in the overlay). `threadId` is undefined for thread-less
-   * events (process/exit is handled before routing and never reaches this). */
+   * events (an unattributed process/exit is handled before routing and never
+   * reaches this; an attributed one routes by the thread its worker carried). */
   routeEvent(threadId: string | undefined, event: BackendEventEnvelope): string | null;
   /** Status the slice settles into (drives the chat row's dot). */
   settledStatus(method: TurnSettledMethod, threadId: string): ThreadStatus;
@@ -144,9 +145,25 @@ export function attachBackendEvents(
 
   const applyEvent = (event: BackendEventEnvelope): void => {
     if (event.method === 'process/exit') {
-      // The backend died: every in-flight turn is gone. Reset all slices, drop
-      // pending sends (their start promises reject, or their turns will never
-      // settle), and let the host classify a possible auth-death.
+      const attributedParams = event.params as { threadId?: string | null } | undefined;
+      if (attributedParams && 'threadId' in attributedParams) {
+        // Attributed (pool backend): only the thread the dying worker carried is
+        // gone — a background persona worker's exit must not reset the chat
+        // streaming here. A null thread means the worker sat idle: nothing died.
+        const dead = attributedParams.threadId;
+        if (!dead) return;
+        const key = host.routeEvent(dead, event);
+        if (!key || !store.snapshot()[key]) return;
+        const wasRunning = store.snapshot()[key].running;
+        store.update((prev) => (prev[key] ? { ...prev, [key]: applyProcessExitToThread(prev[key]) } : prev));
+        core.pendingSends.delete(key);
+        host.onProcessExit?.(wasRunning);
+        return;
+      }
+      // Unattributed (an older backend): the whole backend died and every
+      // in-flight turn is gone. Reset all slices, drop pending sends (their
+      // start promises reject, or their turns will never settle), and let the
+      // host classify a possible auth-death.
       const wasRunning = Object.values(store.snapshot()).some((s) => s.running);
       store.update((prev) => {
         const next: Record<string, ThreadState> = {};

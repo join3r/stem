@@ -25,11 +25,20 @@ interface LiveTurn {
 const live = new Map<string, LiveTurn>();
 
 /**
- * Fold one backend event into the set. A `threadId` of undefined means a
- * process-level event (process/exit): the backend is gone and no turn survived
+ * Fold one backend event into the set. A process/exit is attributed to the one
+ * thread the dying worker was carrying; a thread-less one (an older backend, or
+ * any other process-level event) means the backend is gone and no turn survived
  * it, so everything clears.
  */
 export function noteTurnEvent(method: string, threadId: string | undefined, turnId?: string): void {
+  if (method === 'process/exit') {
+    // Attributed (pool): the threadId names the one turn the dying worker was
+    // carrying — turns streaming on other workers keep their marks. Unattributed
+    // (an older backend): the whole backend died and no turn survived it.
+    if (threadId) live.delete(threadId);
+    else live.clear();
+    return;
+  }
   if (!threadId) {
     live.clear();
     return;

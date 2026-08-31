@@ -878,7 +878,17 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
       emit('mcp:status', event.params);
       return;
     }
-    const threadId = (event.params as { threadId?: string } | undefined)?.threadId;
+    // An attributed process exit whose worker sat idle (threadId null) killed no
+    // turn: fold nothing — folding it thread-less would clear every live mark —
+    // but still forward it, since clients scope their reaction by the same field.
+    if (event.method === 'process/exit') {
+      const p = event.params as { threadId?: string | null } | undefined;
+      if (p && 'threadId' in p && p.threadId == null) {
+        emit('backend:event', event);
+        return;
+      }
+    }
+    const threadId = (event.params as { threadId?: string } | undefined)?.threadId ?? undefined;
     // Hidden internal threads (distillation) are neither shown nor captured.
     if (threadId && runtime!.isInternalThread(threadId)) return;
     // Folding and measuring in one call: the fold is what forgets the turn, so

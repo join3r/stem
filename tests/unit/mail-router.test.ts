@@ -512,3 +512,67 @@ describe('mail router', () => {
     expect(fake.starts).toHaveLength(0);
   });
 });
+
+// With the worker pool, process/exit events are attributed: their params carry
+// the threadId of the turn the dying child held (null when it sat idle). The
+// regression this pins: an idle extra worker's routine retirement mid-delivery
+// used to fail the delivery — the user got "run failed: the backend process
+// exited" while the real reply, completed minutes later, was silently dropped.
+describe('mail delivery vs pool worker exits', () => {
+  const exitEvent = (params: Record<string, unknown>) => ({
+    method: 'process/exit',
+    params,
+    receivedAt: Date.now()
+  });
+
+  it("survives another worker's exit and an idle worker's retirement mid-turn", async () => {
+    const fake = fakeBackend();
+    fake.script = {
+      mode: 'ok',
+      reply: 'the real reply',
+      bridge: async () => {
+        // Mid-turn: a DIFFERENT worker dies carrying its own thread, and an
+        // idle extra worker is reaped (attributed, null thread).
+        fake.backend.emit('event', exitEvent({ code: 1, signal: null, threadId: 'someone-elses-thread' }));
+        fake.backend.emit('event', exitEvent({ code: 0, signal: null, threadId: null }));
+      }
+    };
+    const router = makeRouter(fake);
+    await router.compose({ to: ['verifier'], subject: 's', body: 'q' });
+    const mail = await settledMail();
+    expect(mail.items[1].body).toBe('the real reply');
+    expect(mail.conversations[0].status).toBe('idle');
+  });
+
+  it('fails promptly when the worker carrying THIS delivery dies', async () => {
+    const fake = fakeBackend();
+    fake.script = {
+      mode: 'ok',
+      reply: 'never mailed',
+      bridge: async () => {
+        // thread-1 is the thread this delivery's turn runs on (first startTurn).
+        fake.backend.emit('event', exitEvent({ code: 1, signal: null, threadId: 'thread-1' }));
+      }
+    };
+    const router = makeRouter(fake);
+    await router.compose({ to: ['verifier'], subject: 's', body: 'q' });
+    const mail = await settledMail();
+    expect(mail.items[1].body).toBe("The persona's run failed: the backend process exited");
+    expect(mail.conversations[0].status).toBe('awaiting-user');
+  });
+
+  it('an unattributed exit (older backend) still fails conservatively', async () => {
+    const fake = fakeBackend();
+    fake.script = {
+      mode: 'ok',
+      reply: 'never mailed',
+      bridge: async () => {
+        fake.backend.emit('event', exitEvent({ code: 1, signal: null }));
+      }
+    };
+    const router = makeRouter(fake);
+    await router.compose({ to: ['verifier'], subject: 's', body: 'q' });
+    const mail = await settledMail();
+    expect(mail.items[1].body).toBe("The persona's run failed: the backend process exited");
+  });
+});

@@ -648,11 +648,15 @@ export class TaskScheduler {
         resolve({ status, ...(error ? { error } : {}) });
       };
       const onEvent = (event: BackendEventEnvelope) => {
-        // Process exits are runtime-wide and intentionally carry no thread/turn
-        // identifiers. Handle them before the scoped match below or this branch
-        // is unreachable and the scheduler queue stays wedged until the 15m cap.
+        // A process exit is attributed: its threadId names the turn the dying
+        // worker was carrying (null when it sat idle). Only OUR thread's death
+        // fails this run — an idle pool worker's retirement must not fail a run
+        // streaming on another worker. An unattributed exit (an older backend)
+        // still fails conservatively, or the queue stays wedged until the 15m cap.
         if (event.method === 'process/exit') {
-          finish('failed');
+          const p = event.params as { threadId?: string | null } | undefined;
+          const attributed = !!p && 'threadId' in p;
+          if (!attributed || (p.threadId != null && p.threadId === threadId)) finish('failed');
           return;
         }
         const p = event.params as { threadId?: string; turn?: { id?: string }; error?: string } | undefined;

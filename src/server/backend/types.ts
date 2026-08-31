@@ -171,7 +171,10 @@ export interface TaskBridge {
  *     ({ method, params, receivedAt }). The set of `method` strings the UI
  *     consumes is Stem's canonical internal protocol:
  *     `item/agentMessage/delta`, `item/started`, `item/completed`,
- *     `turn/completed`, `turn/failed`, `turn/aborted`, `process/exit`,
+ *     `turn/completed`, `turn/failed`, `turn/aborted`, `process/exit`
+ *     (attributed: its params carry `threadId`, the thread of the turn the
+ *     dying worker process held, null when it sat idle — consumers scope
+ *     their reaction to it and treat a missing key as a whole-backend death),
  *     plus the side channels `mcp/login/url`, `mcp/changed`, `mcp/status`,
  *     `mcp/admin/approvalRequest`, `skills/changed`. Deltas and the completed item for one turn
  *     share a `turnId` (the renderer keys bubbles `assistant-${turnId}`).

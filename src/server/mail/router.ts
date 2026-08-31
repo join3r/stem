@@ -486,12 +486,20 @@ export class MailRouter {
         resolve({ status, ...(error ? { error } : {}) });
       };
       const onEvent = (event: BackendEventEnvelope) => {
-        // Process exits carry no thread/turn identifiers (and with the pool the
-        // exiting child may not even be this delivery's). Fail conservatively,
-        // as the scheduler does: a false failure costs a "run failed" mail; a
-        // missed real one wedges the conversation for the whole timeout.
+        // A process exit is attributed: its threadId names the turn the dying
+        // worker was carrying (null when it sat idle — a reaped extra worker).
+        // Only OUR thread's death fails this delivery; before the attribution,
+        // an idle worker's routine retirement was failing every in-flight
+        // delivery, and the real reply (which completed minutes later) was
+        // silently dropped. An unattributed exit (an older backend) still fails
+        // conservatively: a false failure costs a "run failed" mail; a missed
+        // real one wedges the conversation for the whole timeout.
         if (event.method === 'process/exit') {
-          finish('failed', 'the backend process exited');
+          const p = event.params as { threadId?: string | null } | undefined;
+          const attributed = !!p && 'threadId' in p;
+          if (!attributed || (p.threadId != null && p.threadId === threadIdRef.current)) {
+            finish('failed', 'the backend process exited');
+          }
           return;
         }
         const p = event.params as { threadId?: string; turn?: { id?: string }; error?: string } | undefined;

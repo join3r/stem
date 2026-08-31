@@ -309,11 +309,18 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     if (method === 'item/started' || method === 'item/agentMessage/delta') {
       runningMainThreads.add(threadId);
       syncMainHud(); // handles a thread that starts while you're already away
-    } else if (method === 'turn/completed' || method === 'turn/failed' || method === 'turn/aborted') {
+    } else if (
+      method === 'turn/completed' ||
+      method === 'turn/failed' ||
+      method === 'turn/aborted' ||
+      // An attributed process/exit routes with the dead turn's threadId: that
+      // thread's run is over exactly as if it had failed.
+      method === 'process/exit'
+    ) {
       runningMainThreads.delete(threadId);
       if (hud.owner === 'main' && runningMainThreads.size === 0) {
         const label =
-          method === 'turn/completed' ? 'Answer ready' : method === 'turn/failed' ? 'Request failed' : 'Stopped';
+          method === 'turn/completed' ? 'Answer ready' : method === 'turn/aborted' ? 'Stopped' : 'Request failed';
         showHud({ phase: 'finished', label, reveal: 'main' }, 'main');
       }
     }
@@ -478,11 +485,29 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       return true;
     }
     if (overlayOwned) {
+      // The overlay's own worker died mid-turn (attributed process/exit routes
+      // with the dead turn's threadId): restore the input exactly as an
+      // unattributed backend death always has.
+      if (event.method === 'process/exit' && (overlay.turnRunning || overlayResetBarrier.pending)) {
+        overlay.restore(failQuickChatProcess(Date.now(), overlay.threadId));
+        if (hud.owner === 'quickchat') showHud({ phase: 'finished', label: 'Request failed' }, 'quickchat');
+        if (overlayResetBarrier.pending) finishOverlayReset();
+      }
       sendToOverlay('backend:event', event);
       driveHud(event);
       return true;
     }
     if (!threadId) {
+      // An attributed process/exit with a null thread is an idle pool worker
+      // retiring: no turn died anywhere, so nothing here may clear. Forward it
+      // and stop — the destructive branch below is for the unattributed death
+      // of a whole (older) backend.
+      const exitParams = event.params as { threadId?: string | null } | undefined;
+      if (event.method === 'process/exit' && exitParams && 'threadId' in exitParams) {
+        deps.sendToMain('backend:event', event);
+        sendToOverlay('backend:event', event);
+        return false;
+      }
       // Process-level events (e.g. process/exit) carry no threadId — let both
       // windows clear their run state, and clear the follow-me pill so a backend
       // crash never leaves a stuck "Working…" pill.

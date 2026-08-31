@@ -154,6 +154,38 @@ describe('backend event pipeline', () => {
     expect(core.pendingSends.size).toBe(0);
     expect(core.store.getThread('a')).toMatchObject({ running: false, activeTurnId: null, status: 'idle' });
   });
+
+  it("an attributed process/exit resets only the dying worker's thread", () => {
+    const core = createSessionCore();
+    core.store.patch('a', () => ({ running: true, status: 'running', activeTurnId: 't1' }));
+    core.store.patch('b', () => ({ running: true, status: 'running', activeTurnId: 't2' }));
+    const pending = (threadId: string) => ({
+      promise: Promise.resolve({} as StartTurnResult),
+      turnId: threadId,
+      threadId,
+      isNewChat: false,
+      text: 'x',
+      attachments: []
+    });
+    core.pendingSends.set('a', pending('a'));
+    core.pendingSends.set('b', pending('b'));
+    let sawRunning: boolean | null = null;
+    const emit = attach(core, { onProcessExit: (wasRunning) => (sawRunning = wasRunning) });
+
+    // A pool worker dies carrying thread b: only b resets; a keeps streaming.
+    emit('process/exit', { code: 1, signal: null, threadId: 'b' });
+    expect(core.store.getThread('b')).toMatchObject({ running: false, activeTurnId: null, status: 'idle' });
+    expect(core.store.getThread('a')).toMatchObject({ running: true, activeTurnId: 't1' });
+    expect(core.pendingSends.has('a')).toBe(true);
+    expect(core.pendingSends.has('b')).toBe(false);
+    expect(sawRunning).toBe(true);
+
+    // An idle worker's retirement (attributed, null thread) resets nothing.
+    sawRunning = null;
+    emit('process/exit', { code: 0, signal: null, threadId: null });
+    expect(core.store.getThread('a')).toMatchObject({ running: true });
+    expect(sawRunning).toBeNull();
+  });
 });
 
 // What the window does with the live-turn snapshot it is handed the moment its

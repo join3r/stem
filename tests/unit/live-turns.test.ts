@@ -74,10 +74,20 @@ describe('the backend going away', () => {
   it('clears every mark on a process-level event', () => {
     noteTurnEvent('item/started', 'thread-1');
     noteTurnEvent('item/started', 'thread-2');
-    // process/exit carries no threadId: no turn survived it, so a stuck mark here
-    // would defer every scheduled task for the life of the process.
+    // An unattributed process/exit (older backend): no turn survived it, so a
+    // stuck mark here would defer every scheduled task for the life of the process.
     noteTurnEvent('process/exit', undefined);
     expect(liveTurnCount()).toBe(0);
+  });
+
+  it("an attributed exit clears only the dying worker's own thread", () => {
+    noteTurnEvent('item/started', 'thread-1');
+    noteTurnEvent('item/started', 'thread-2');
+    // A pool worker dies carrying thread-2; the turn streaming on thread-1's
+    // worker keeps its mark.
+    noteTurnEvent('process/exit', 'thread-2');
+    expect(liveTurnCount()).toBe(1);
+    expect(liveTurnAgeMs('thread-1')).not.toBeNull();
   });
 
   it('ignores anything that is neither a start nor a settle', () => {

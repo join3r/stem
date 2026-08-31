@@ -503,6 +503,27 @@ describe('TaskScheduler backend exit handling', () => {
     scheduler.stop();
   });
 
+  it("ignores attributed exits of OTHER pool workers, fails on its own thread's", async () => {
+    const runtime = new HangingRuntime();
+    const { scheduler } = makeScheduler(runtime);
+    const res = await scheduler.create({ prompt: 'p', cron: '0 8 * * *' }, 't1');
+    if (!res.ok) throw new Error('create failed');
+    scheduler.runNow(res.task.id);
+    await until(() => runtime.listenerCount('event') > 0, 'the run to await its settle');
+
+    // A different worker dies carrying its own thread; an idle extra worker is
+    // reaped (attributed, null thread). Neither is this run's death.
+    runtime.emit('event', { method: 'process/exit', params: { code: 1, signal: null, threadId: 'other-thread' } });
+    runtime.emit('event', { method: 'process/exit', params: { code: 0, signal: null, threadId: null } });
+    // The settle listener is still attached: the run was not failed.
+    expect(runtime.listenerCount('event')).toBeGreaterThan(0);
+    expect(await storedStatus()).not.toBe('failed');
+
+    runtime.emit('event', { method: 'process/exit', params: { code: 1, signal: null, threadId: 't1' } });
+    await until(async () => (await storedStatus()) === 'failed', 'the run to settle as failed');
+    scheduler.stop();
+  });
+
   it('interrupts the backend turn when the run timeout expires', async () => {
     vi.useFakeTimers();
     const runtime = new HangingRuntime();
