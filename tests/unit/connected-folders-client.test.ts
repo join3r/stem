@@ -114,6 +114,31 @@ describe('the mirror is protected whatever the mode', () => {
   });
 });
 
+describe('published filesystem grants (SEC-001)', () => {
+  it('grants reads for every folder, writes only server-local read-write ones, scratch for both', async () => {
+    const folders = await addClientFolder({ deviceId: macId, clientPath: '/a/notes' });
+    const f = folders[0]!;
+    await updateConnectedFolder(f.id, { mode: 'readwrite' });
+    const { readFileSync, realpathSync } = await import('node:fs');
+    const { protectedRootsPath } = await import('../../src/server/workspace/paths');
+    const gate = JSON.parse(readFileSync(protectedRootsPath(), 'utf8')) as {
+      roots: string[];
+      read: string[];
+      write: string[];
+    };
+    const mirror = realpathSync(f.path);
+    // The mirror is readable but NEVER writable, whatever its mode — readwrite
+    // on a client folder means writes on the device, not on the mirror.
+    expect(gate.read).toContain(mirror);
+    expect(gate.write).not.toContain(mirror);
+    expect(gate.roots).toContain(mirror);
+    // The exec scratch root rides along in both lists: command output hands the
+    // model absolute paths in there.
+    expect(gate.read.some((p) => p.endsWith('exec-workspace'))).toBe(true);
+    expect(gate.write.some((p) => p.endsWith('exec-workspace'))).toBe(true);
+  });
+});
+
 describe('disconnecting a client folder', () => {
   it('deletes the mirror directory', async () => {
     const folders = await addClientFolder({ deviceId: macId, clientPath: '/a/notes' });

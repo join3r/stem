@@ -979,34 +979,68 @@ function makeNativeSearchGate(nsPath) {
 }
 
 /**
- * Returns `roots()` reading the absolute paths of read-only connected folders from
- * protected-roots.json (mtime-cached). The main process rewrites this whenever the
- * Folders registry changes. A file that was never readable means "nothing
- * protected" (a fresh install genuinely has no roots yet) — but once roots have
- * been read successfully, a later missing/corrupt file KEEPS the last-known-good
- * set rather than failing open: unprotecting a folder is a deliberate act that
- * arrives as a valid rewrite, never as a disappearing or half-written file.
+ * Returns `gate()` reading the filesystem-policy roots from protected-roots.json
+ * (mtime-cached), as `{ roots, read, write }`:
+ *
+ *   - `roots` — read-only connected folders (writes/edits inside them are blocked);
+ *   - `read`  — folders the built-in read/grep/find/ls tools may reach BEYOND
+ *               pi's own cwd (every connected folder + the exec scratch root);
+ *   - `write` — folders write/edit may reach beyond the cwd (read-write
+ *               server-local connected folders + the exec scratch root).
+ *
+ * The main process rewrites the file whenever the Folders registry changes. A
+ * file that was never readable means "nothing protected, nothing granted" (a
+ * fresh install genuinely has no roots yet, and the cwd is always reachable) —
+ * but once read successfully, a later missing/corrupt file KEEPS the
+ * last-known-good set rather than failing open: changing the grants is a
+ * deliberate act that arrives as a valid rewrite, never as a disappearing or
+ * half-written file.
  */
-export function makeProtectedRootsGate(prPath) {
-  let cache = { mtime: -1, roots: [] };
+export function makeFsRootsGate(prPath) {
+  const strings = (v) => (Array.isArray(v) ? v.filter((r) => typeof r === 'string') : []);
+  let cache = { mtime: -1, roots: [], read: [], write: [] };
   return () => {
     try {
       const mtime = statSync(prPath).mtimeMs;
       if (mtime !== cache.mtime) {
         const data = JSON.parse(readFileSync(prPath, 'utf8'));
-        cache = { mtime, roots: Array.isArray(data && data.roots) ? data.roots.filter((r) => typeof r === 'string') : [] };
+        cache = {
+          mtime,
+          roots: strings(data && data.roots),
+          read: strings(data && data.read),
+          write: strings(data && data.write)
+        };
       }
     } catch {
-      cache = { mtime: -1, roots: cache.roots };
+      cache = { ...cache, mtime: -1 };
     }
-    return cache.roots;
+    return cache;
   };
+}
+
+/** Back-compat view of {@link makeFsRootsGate}: just the read-only roots array. */
+export function makeProtectedRootsGate(prPath) {
+  const gate = makeFsRootsGate(prPath);
+  return () => gate().roots;
 }
 
 // String args that even look like filesystem paths: absolute, home-relative,
 // @-prefixed (pi's read syntax), file URLs, or Windows drive paths. Everything
 // else (prose, queries, URLs) is skipped without touching the filesystem.
 const PATHISH_RE = /^@?(?:[~/]|file:\/\/)|^[A-Za-z]:[\\/]/;
+
+// pi's built-in filesystem tools, by what they do to the target path. The
+// tool_call policy hook (below, in the factory) confines each side to its
+// granted roots; a tool absent here (bash is excluded at spawn) is not a
+// filesystem tool and passes through.
+const FS_TOOL_KIND = {
+  read: 'read',
+  grep: 'read',
+  find: 'read',
+  ls: 'read',
+  write: 'write',
+  edit: 'write'
+};
 
 /**
  * Deep-scan an MCP tool-call's args for a path-shaped string inside one of the
@@ -1105,8 +1139,16 @@ export function canonicalPolicyPath(target, cwd = process.cwd()) {
 // Exported for scripts/cfolders-verify.mjs; pi only consumes the default export,
 // so these named exports are inert at load time.
 export function isInside(target, root) {
-  const r = canonicalPolicyPath(root);
-  const t = canonicalPolicyPath(target);
+  let r = canonicalPolicyPath(root);
+  let t = canonicalPolicyPath(target);
+  // The default filesystems on macOS and Windows are case-insensitive, so
+  // /Vault/x and /vault/x are one folder — compare accordingly, or a re-cased
+  // spelling walks straight past the policy. (A case-SENSITIVE volume on those
+  // platforms over-matches a same-name sibling; that errs toward blocking.)
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    r = r.toLowerCase();
+    t = t.toLowerCase();
+  }
   return t === r || t.startsWith(r + sep);
 }
 
@@ -1576,10 +1618,11 @@ export default async function stemMcpBridge(pi) {
   await sharedConn.recallReady;
   const { clients, recall } = sharedConn;
 
-  // Read-only connected folders (paths from the main process via
-  // protected-roots.json). One gate instance serves both the MCP guards below
-  // and the write/edit tool_call hook further down.
-  const protectedRoots = makeProtectedRootsGate(join(dirname(cfgPath), 'protected-roots.json'));
+  // Filesystem policy roots (paths from the main process via
+  // protected-roots.json). One gate instance serves the MCP guards below and
+  // the filesystem tool_call hook further down.
+  const fsRoots = makeFsRootsGate(join(dirname(cfgPath), 'protected-roots.json'));
+  const protectedRoots = () => fsRoots().roots;
 
   // Register tools on THIS session's pi (cheap, no network). Recall stays eager
   // (native tools, used every turn); everything else is behind the router.
@@ -1695,21 +1738,45 @@ export default async function stemMcpBridge(pi) {
       pi.on('turn_start', enableBrowseTools);
     }
 
-    // Enforce read-only connected folders: block any write/edit whose target path
-    // falls inside a folder the user connected read-only. Relative paths resolve
-    // against pi's cwd (Stem's workspace), which is never inside a connected
-    // folder, so only an absolute write into a protected root trips this. Reads
-    // through the built-ins are never blocked; MCP tool calls are guarded
-    // separately in the router (findProtectedPath), and `bash` is excluded from
-    // pi's tool set entirely (runtime.ts) — together those close the paths around
-    // this hook, which only sees pi's own write/edit tools.
+    // Confine pi's built-in filesystem tools to the roots the user actually
+    // granted (SEC-001). Two rules, in order:
+    //
+    //   1. write/edit inside a read-only connected folder is blocked (the
+    //      original protected-roots rule);
+    //   2. ANY filesystem tool whose target falls outside pi's cwd (Stem's
+    //      workspace, which contains the Files place) plus the granted roots in
+    //      protected-roots.json is blocked — reads included. Without this,
+    //      prompt injection or a model mistake turns the built-ins into
+    //      host-wide file access (~/.ssh, auth.json, ...).
+    //
+    // Relative paths resolve against pi's cwd, so they stay confined by
+    // construction; only an absolute (or ~/@/file://) target can leave. The
+    // browse tools' omitted `path` defaults to the cwd. MCP tool calls are
+    // guarded separately in the router (findProtectedPath), and `bash` is
+    // excluded from pi's tool set entirely (runtime.ts) — together those close
+    // the paths around this hook, which only sees pi's own filesystem tools.
+    // Escape hatch that stays: run_command reaches other paths through the
+    // tiered approval policy, where the user can see and refuse it.
     pi.on('tool_call', (event) => {
-      if (!event || (event.toolName !== 'write' && event.toolName !== 'edit')) return undefined;
+      const kind = event ? FS_TOOL_KIND[event.toolName] : undefined;
+      if (!kind) return undefined;
       const p = event.input && typeof event.input.path === 'string' ? event.input.path : null;
       if (!p) return undefined;
-      const roots = protectedRoots();
-      if (roots.some((root) => isInside(p, root))) {
+      const { roots, read, write } = fsRoots();
+      if (kind === 'write' && roots.some((root) => isInside(p, root))) {
         return { block: true, reason: 'This folder is connected to Stem read-only — editing it is not allowed. Ask the user to switch it to read & write in the Folders tab.' };
+      }
+      // Read-only roots are readable by definition — they matter when the gate
+      // file predates the read/write lists (an old main mid-upgrade).
+      const granted = kind === 'write' ? write : [...read, ...roots];
+      if (!isInside(p, process.cwd()) && !granted.some((root) => isInside(p, root))) {
+        return {
+          block: true,
+          reason:
+            kind === 'write'
+              ? `"${p}" is outside the folders granted to Stem, so the file tools may not modify it. Work in the Files place instead, or ask the user to connect that folder read & write in the Folders tab. A shell command via run_command can reach it, subject to the user's approval policy.`
+              : `"${p}" is outside the folders granted to Stem, so the file tools may not read it. Ask the user to connect that folder in the Folders tab or drop the file into the Files place. A shell command via run_command can reach it, subject to the user's approval policy.`
+        };
       }
       return undefined;
     });

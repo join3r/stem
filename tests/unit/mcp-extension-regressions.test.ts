@@ -7,6 +7,7 @@ import stemMcpBridge, {
   bridgeOAuthTokenForServer,
   findProtectedPath,
   isInside,
+  makeFsRootsGate,
   makeProtectedRootsGate,
   McpHttpClient,
   MCP_HTTP_REQUEST_TIMEOUT_MS,
@@ -115,6 +116,96 @@ describe('remote MCP request timeout', () => {
 
     await vi.advanceTimersByTimeAsync(MCP_HTTP_REQUEST_TIMEOUT_MS + 1);
     await rejected;
+  });
+});
+
+describe('built-in filesystem tool confinement (SEC-001)', () => {
+  it('reads the three root lists, tolerating the old roots-only format', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stem-fs-roots-'));
+    cleanup.push(root);
+    const prPath = join(root, 'protected-roots.json');
+    const gate = makeFsRootsGate(prPath);
+
+    expect(gate()).toMatchObject({ roots: [], read: [], write: [] });
+
+    await writeFile(prPath, JSON.stringify({ roots: ['/vault'], read: ['/scratch', '/vault'], write: ['/scratch'] }));
+    expect(gate()).toMatchObject({ roots: ['/vault'], read: ['/scratch', '/vault'], write: ['/scratch'] });
+
+    // Corrupt rewrite must NOT fail open — last-known-good stands.
+    await writeFile(prPath, '{"roots": [tr');
+    expect(gate()).toMatchObject({ roots: ['/vault'], read: ['/scratch', '/vault'], write: ['/scratch'] });
+
+    // A file from an older main (roots only) reads as empty grants, not a crash.
+    await writeFile(prPath, JSON.stringify({ roots: ['/vault'] }));
+    expect(gate()).toMatchObject({ roots: ['/vault'], read: [], write: [] });
+  });
+
+  it('blocks every filesystem tool outside the granted roots, reads included', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stem-fs-confine-'));
+    cleanup.push(root);
+    const vaultRO = join(root, 'vault-ro');
+    const vaultRW = join(root, 'vault-rw');
+    const scratch = join(root, 'scratch');
+    const outside = join(root, 'outside');
+    await Promise.all([mkdir(vaultRO), mkdir(vaultRW), mkdir(scratch), mkdir(outside)]);
+    const configPath = join(root, 'mcp.json');
+    await writeFile(configPath, JSON.stringify({ servers: {} }));
+    await writeFile(
+      join(root, 'protected-roots.json'),
+      JSON.stringify({ roots: [vaultRO], read: [scratch, vaultRO, vaultRW], write: [scratch, vaultRW] })
+    );
+    process.env.STEM_MCP_CONFIG = configPath;
+
+    const toolCallHandlers: Array<(event: unknown) => { block?: boolean; reason?: string } | undefined> = [];
+    const fakePi = {
+      registerTool: (_tool: unknown) => {},
+      on: (name: string, handler: (...args: unknown[]) => unknown) => {
+        if (name === 'tool_call') toolCallHandlers.push(handler as (typeof toolCallHandlers)[number]);
+      },
+      getActiveTools: () => [] as string[],
+      setActiveTools: (_tools: string[]) => {}
+    };
+    await stemMcpBridge(fakePi);
+    await mcpConnectionsSettledForTests();
+    expect(toolCallHandlers.length).toBeGreaterThan(0);
+
+    const verdict = (toolName: string, path?: string) => {
+      for (const handler of toolCallHandlers) {
+        const res = handler({ toolName, input: path === undefined ? {} : { path } });
+        if (res && res.block) return res;
+      }
+      return undefined;
+    };
+
+    // Reads outside every granted root are blocked — the SEC-001 exfiltration path.
+    expect(verdict('read', join(outside, 'secrets.txt'))?.reason).toContain('outside the folders granted');
+    expect(verdict('grep', join(outside, 'dir'))?.reason).toContain('outside the folders granted');
+    expect(verdict('ls', outside)?.reason).toContain('outside the folders granted');
+    expect(verdict('find', outside)?.reason).toContain('outside the folders granted');
+    expect(verdict('read', '/etc/passwd')?.block).toBe(true);
+    expect(verdict('read', '~/.ssh/id_rsa')?.block).toBe(true);
+
+    // Writes outside every granted root are blocked, and read-only folders keep
+    // their dedicated refusal.
+    expect(verdict('write', join(outside, 'drop.txt'))?.reason).toContain('outside the folders granted');
+    expect(verdict('edit', join(outside, 'drop.txt'))?.block).toBe(true);
+    expect(verdict('write', join(vaultRO, 'note.md'))?.reason).toContain('read-only');
+
+    // Granted roots, the workspace (pi's cwd), and default-path browsing all pass.
+    expect(verdict('read', join(vaultRO, 'note.md'))).toBeUndefined();
+    expect(verdict('read', join(vaultRW, 'note.md'))).toBeUndefined();
+    expect(verdict('write', join(vaultRW, 'note.md'))).toBeUndefined();
+    expect(verdict('write', join(scratch, 'script.sh'))).toBeUndefined();
+    expect(verdict('read', join(process.cwd(), 'package.json'))).toBeUndefined();
+    expect(verdict('write', 'relative/inside-workspace.md')).toBeUndefined();
+    expect(verdict('ls')).toBeUndefined();
+
+    // A relative path that traverses out of the workspace is still confined.
+    const depth = process.cwd().split('/').filter(Boolean).length + 1;
+    expect(verdict('read', `${'../'.repeat(depth)}etc/passwd`)?.block).toBe(true);
+
+    // Non-filesystem tools pass through untouched.
+    expect(verdict('run_command', join(outside, 'x'))).toBeUndefined();
   });
 });
 

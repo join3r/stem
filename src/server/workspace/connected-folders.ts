@@ -4,7 +4,7 @@ import { basename } from 'node:path';
 import type { ConnectedFolder, ConnectedFolderPatch } from '../../shared/types';
 import { degrade } from '../degrade';
 import { deviceKind, readDevices } from '../transport/auth';
-import { connectedFoldersStorePath, mirrorManifestPath, mirrorRoot, piHome, protectedRootsPath } from './paths';
+import { connectedFoldersStorePath, execWorkspaceDir, mirrorManifestPath, mirrorRoot, piHome, protectedRootsPath } from './paths';
 
 // The Stem-owned registry of external "connected folders" the assistant may read
 // in place (an Obsidian vault, a financials folder, …). The folders themselves
@@ -369,9 +369,23 @@ export async function getPrivateRoots(): Promise<string[]> {
 }
 
 /**
- * Write the protected-roots gate (read-only folders' absolute paths) the bridge
- * extension reads to block writes/edits inside them. Called on every registry
- * mutation and once at startup (see publishProtectedRootsNow).
+ * Write the filesystem-policy gate the bridge extension reads
+ * (protected-roots.json). Three lists:
+ *
+ *   - `roots` — read-only folders' absolute paths (writes/edits inside them are
+ *     blocked; also read by exec/protected.ts to screen commands);
+ *   - `read`  — everything the built-in read/grep/find/ls tools may reach BEYOND
+ *     pi's cwd: every connected folder (mirrors included) plus the exec scratch
+ *     root, whose paths command output hands the model;
+ *   - `write` — everything write/edit may reach beyond the cwd: server-local
+ *     read-write folders plus the exec scratch root.
+ *
+ * Anything not in the lists (and not under pi's cwd) is refused at the tool
+ * boundary — the confinement that keeps prompt injection from turning the
+ * built-ins into host-wide file access (SEC-001).
+ *
+ * Called on every registry mutation and once at startup (see
+ * publishProtectedRootsNow).
  */
 async function publishProtectedRoots(store: ConnectedFoldersStore): Promise<void> {
   // A client folder's mirror is in the gate UNCONDITIONALLY, whatever its mode:
@@ -382,13 +396,21 @@ async function publishProtectedRoots(store: ConnectedFoldersStore): Promise<void
   const roots = await Promise.all(
     store.folders.filter((f) => f.mode === 'read' || f.origin).map((f) => canonical(f.path))
   );
+  const scratch = await canonical(execWorkspaceDir());
+  const read = [scratch, ...(await Promise.all(store.folders.map((f) => canonical(f.path))))];
+  const write = [
+    scratch,
+    ...(await Promise.all(
+      store.folders.filter((f) => f.mode === 'readwrite' && !f.origin).map((f) => canonical(f.path))
+    ))
+  ];
   await mkdir(piHome(), { recursive: true });
   // Atomic: the bridge reads this mid-turn, and a half-written file must never
   // exist — its gate fails closed (keeps the previous roots) on a corrupt read,
   // so a torn write here would freeze protection on a stale set.
   const path = protectedRootsPath();
   const tmp = `${path}.${randomUUID()}.tmp`;
-  await writeFile(tmp, JSON.stringify({ roots }, null, 2), 'utf8');
+  await writeFile(tmp, JSON.stringify({ roots, read, write }, null, 2), 'utf8');
   await rename(tmp, path);
 }
 
