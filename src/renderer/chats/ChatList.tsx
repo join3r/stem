@@ -3,6 +3,7 @@ import {
   CheckCheck,
   ChevronRight,
   Clock,
+  CornerUpLeft,
   Folder as FolderIcon,
   FolderOpen,
   FolderPlus,
@@ -22,14 +23,24 @@ import type {
 } from '../../shared/types';
 import { isUnread } from '../../shared/inbox';
 import { useOffline } from '../hooks/useServerReachable';
-import { useRememberedTab } from '../hooks/useRememberedTab';
 import { stripCiteMarkers } from '../../shared/citations';
 import { glyphsFor, useShortcut, type ShortcutId } from '../shortcuts';
 import { MailList } from '../mail/MailList';
+import type { ReturnChatRow } from './return-chat';
 
 export interface ChatListProps {
   data: ChatListResult;
   activeThreadId: string | null;
+  /**
+   * Which sub-tab (Inbox mail vs Chats tree) is showing. Owned by App, not
+   * remembered here: the open-a-chat handlers up there need to know whether the
+   * Inbox was selected at that moment (it pins the Return-to-chat row below).
+   */
+  chatsTab: ChatsTab;
+  onChatsTabChange: (tab: ChatsTab) => void;
+  /** The pinned Return-to-chat utility row above the Inbox mail list (null = hidden). */
+  inboxReturn: ReturnChatRow | null;
+  onDismissInboxReturn: () => void;
   /** Per-thread run state → drives the status dot on each row. */
   statuses: Record<string, ThreadStatus>;
   /** Thread ids that own at least one scheduled task → show a clock badge. */
@@ -77,17 +88,17 @@ const FOLDER_MIME = 'application/x-stem-folder';
  * in the Inbox, and a mail conversation never appears in the tree (its persona
  * work lives on hidden threads the server filters out of chats:list).
  */
-type Tab = 'inbox' | 'chats';
+export type ChatsTab = 'inbox' | 'chats';
 
-const TABS: { id: Tab; label: string }[] = [
+const TABS: { id: ChatsTab; label: string }[] = [
   { id: 'inbox', label: 'Inbox' },
   { id: 'chats', label: 'Chats' }
 ];
 
 // Which tab you were last on — the same remembered-tab treatment every panel in
-// the manage rail gets.
-const TAB_KEY = 'stem.chats.tab';
-const TAB_IDS = TABS.map((t) => t.id);
+// the manage rail gets. App owns the remembering (see ChatListProps.chatsTab).
+export const CHATS_TAB_KEY = 'stem.chats.tab';
+export const CHATS_TAB_IDS = TABS.map((t) => t.id);
 
 // Normalize Unix-seconds (real chats) vs ms (optimistic pending rows), then bucket
 // by updatedAt the way ChatGPT/Claude group their sidebars.
@@ -157,14 +168,17 @@ type Menu =
   | { kind: 'folder'; id: string; x: number; y: number };
 
 export function ChatList(props: ChatListProps) {
-  const { data, activeThreadId, onOpen } = props;
-  const [tab, setTab] = useRememberedTab<Tab>(TAB_KEY, TAB_IDS, 'inbox');
+  const { data, activeThreadId, onOpen, chatsTab: tab, onChatsTabChange: setTab, inboxReturn } = props;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<Editing | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Dismissing the Return-to-chat row removes the control that holds focus, so
+  // focus is handed to the Inbox segment button — always present, and the thing
+  // that names the section the row belonged to.
+  const inboxSegRef = useRef<HTMLButtonElement>(null);
   const [dropTarget, setDropTarget] = useState<string | 'root' | null>(null);
 
   // ---- search ----
@@ -552,7 +566,12 @@ export function ChatList(props: ChatListProps) {
           segment share a name, so the group is what tells them apart. */}
       <div className="seg-ctl chats-modes" role="group" aria-label="Chat list mode">
         {TABS.map((t) => (
-          <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>
+          <button
+            key={t.id}
+            ref={t.id === 'inbox' ? inboxSegRef : undefined}
+            className={tab === t.id ? 'active' : ''}
+            onClick={() => setTab(t.id)}
+          >
             {t.label}
             {t.id === 'inbox' && props.mailUnreadCount > 0 && (
               <span className="seg-count">{props.mailUnreadCount}</span>
@@ -638,6 +657,38 @@ export function ChatList(props: ChatListProps) {
               <X size={13} />
             </button>
           )}
+        </div>
+      )}
+      {/* The pinned Return-to-chat utility row — Inbox chrome above the mail list,
+          never a mail item (no unread/preview/triage anatomy). While its chat is
+          the centre pane it degrades to a same-height non-actionable "Currently
+          viewing" label; the dismiss stays either way. */}
+      {tab === 'inbox' && !showingSearch && inboxReturn && (
+        <div className={`inbox-return${inboxReturn.current ? ' current' : ''}`}>
+          {inboxReturn.current ? (
+            <span className="inbox-return-main" aria-current="page">
+              <MessageSquare size={13} className="inbox-return-icon" />
+              <span className="inbox-return-label">Currently viewing</span>
+              <strong title={inboxReturn.title}>{inboxReturn.title}</strong>
+            </span>
+          ) : (
+            <button className="inbox-return-main" onClick={() => onOpen(inboxReturn.threadId)}>
+              <CornerUpLeft size={13} className="inbox-return-icon" />
+              <span className="inbox-return-label">Return to chat</span>
+              <strong title={inboxReturn.title}>{inboxReturn.title}</strong>
+            </button>
+          )}
+          <button
+            className="inbox-return-dismiss"
+            title="Dismiss"
+            aria-label="Dismiss return to chat"
+            onClick={() => {
+              props.onDismissInboxReturn();
+              inboxSegRef.current?.focus();
+            }}
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
       <div

@@ -217,3 +217,94 @@ test('deleting a conversation removes it and its hidden thread stays gone', asyn
   await tab(mainWindow, 'Chats').click();
   await expect(mainWindow.locator('.chat-row')).toHaveCount(0);
 });
+
+// ---- the pinned Return-to-chat row ----
+const returnRow = (win: Page) => win.locator('.inbox-return');
+
+test('a chat opened while the Inbox is selected pins a Return-to-chat row, and returning stays on the Inbox', async ({ mainWindow }) => {
+  // The app starts on the Inbox tab, so sending the draft creates a chat while
+  // the Inbox is selected — that is what pins the row.
+  await sendChat(mainWindow, 'route my day');
+  await tab(mainWindow, 'Inbox').click();
+
+  // The chat IS the centre pane, so the row is the non-actionable current state.
+  await expect(returnRow(mainWindow)).toContainText('Currently viewing');
+  await expect(returnRow(mainWindow)).toContainText('route my day');
+  await expect(returnRow(mainWindow).locator('[aria-current="page"]')).toBeVisible();
+  await expect(returnRow(mainWindow).getByRole('button', { name: /Return to chat/ })).toHaveCount(0);
+  // Chrome, not mail: none of a mail row's triage anatomy.
+  await expect(returnRow(mainWindow).getByRole('button', { name: 'Archive' })).toHaveCount(0);
+  await expect(returnRow(mainWindow).getByRole('button', { name: 'Snooze' })).toHaveCount(0);
+
+  // A trip through the mail makes it actionable; it survives open/read/reply chrome.
+  await compose(mainWindow, 'Mail errand', 'do the thing');
+  const back = returnRow(mainWindow).getByRole('button', { name: /Return to chat/ });
+  await expect(back).toBeVisible();
+  await back.click();
+
+  // The chat is back in the centre pane and the sidebar never left the Inbox.
+  await expect(
+    mainWindow.locator('.message-assistant:not(.activity-row) .message-body').last()
+  ).toContainText('Echo: route my day');
+  await expect(mainWindow.locator('.mail-view')).toHaveCount(0);
+  await expect(tab(mainWindow, 'Inbox')).toHaveClass(/active/);
+  await expect(mainWindow.locator('.mail-row')).toBeVisible();
+  await expect(returnRow(mainWindow)).toContainText('Currently viewing');
+});
+
+test('dismissing the Return-to-chat row clears it for good and hands focus to the Inbox segment', async ({ mainWindow }) => {
+  await sendChat(mainWindow, 'short-lived target');
+  await tab(mainWindow, 'Inbox').click();
+  await expect(returnRow(mainWindow)).toBeVisible();
+
+  await returnRow(mainWindow).getByRole('button', { name: 'Dismiss return to chat' }).click();
+  await expect(returnRow(mainWindow)).toHaveCount(0);
+  await expect(tab(mainWindow, 'Inbox')).toBeFocused();
+
+  // Not merely hidden: tab away and back, still gone.
+  await tab(mainWindow, 'Chats').click();
+  await tab(mainWindow, 'Inbox').click();
+  await expect(returnRow(mainWindow)).toHaveCount(0);
+});
+
+test('only an Inbox-selected open replaces the target, and deleting the target clears the row', async ({ mainWindow }) => {
+  await sendChat(mainWindow, 'first chat');
+  await tab(mainWindow, 'Inbox').click();
+  await expect(returnRow(mainWindow)).toContainText('first chat');
+
+  // A chat created from the CHATS tab must not steal the target.
+  await tab(mainWindow, 'Chats').click();
+  await mainWindow.getByTitle(/New thread/).click();
+  await sendChat(mainWindow, 'second chat');
+  await tab(mainWindow, 'Inbox').click();
+  await expect(returnRow(mainWindow)).toContainText('first chat');
+  // The centre pane shows the second chat, so the row is actionable now.
+  await expect(returnRow(mainWindow).getByRole('button', { name: /Return to chat/ })).toBeVisible();
+
+  // Deleting the target chat clears the row (nothing left to return to).
+  await tab(mainWindow, 'Chats').click();
+  await mainWindow.locator('.chat-row').filter({ hasText: 'first chat' }).click({ button: 'right' });
+  await mainWindow.locator('.ctx-menu').getByRole('button', { name: /^Delete/ }).click();
+  await tab(mainWindow, 'Inbox').click();
+  await expect(returnRow(mainWindow)).toHaveCount(0);
+});
+
+test('the Return-to-chat target survives a reload', async ({ mainWindow }) => {
+  await sendChat(mainWindow, 'durable target');
+  await tab(mainWindow, 'Inbox').click();
+  await expect(returnRow(mainWindow)).toContainText('durable target');
+
+  await mainWindow.reload();
+  await mainWindow.waitForLoadState('domcontentloaded');
+
+  // A fresh window opens on a blank draft, so the persisted target resolves as
+  // the actionable state — and it still opens the chat.
+  await tab(mainWindow, 'Inbox').click();
+  const back = returnRow(mainWindow).getByRole('button', { name: /Return to chat/ });
+  await expect(back).toContainText('durable target');
+  await back.click();
+  await expect(
+    mainWindow.locator('.message-assistant:not(.activity-row) .message-body').last()
+  ).toContainText('Echo: durable target');
+  await expect(returnRow(mainWindow)).toContainText('Currently viewing');
+});

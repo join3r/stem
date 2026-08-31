@@ -1631,6 +1631,22 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
    the Inbox. The Archived one doubles as the drag-to-archive drop target. */
 .inbox-snoozed-toggle { margin: 10px 12px 4px; font-size: var(--fs-11); }
 .inbox-snoozed-toggle.drop-target { color: var(--ink); }
+/* The pinned Return-to-chat utility row above the Inbox's mail list. Chrome,
+   not mail: one compact fixed-height line with none of a mail row's anatomy
+   (no unread dot, timestamp, preview or triage actions), so it can never read
+   as a message. The current-target state swaps the button for a same-height
+   static "Currently viewing" label; the dismiss square stays either way. */
+.inbox-return { display: flex; align-items: center; margin: 0 12px 6px; border: 0.5px solid var(--hair); border-radius: var(--radius-sm); padding-right: 1px; }
+.inbox-return.current { background: var(--sel); }
+.inbox-return-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-3); height: 28px; padding: 0 4px 0 8px; border: none; background: none; color: var(--muted); font: inherit; font-size: var(--fs-12); text-align: left; }
+button.inbox-return-main { cursor: pointer; border-radius: var(--radius-sm); }
+button.inbox-return-main:hover { color: var(--ink); }
+button.inbox-return-main:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.inbox-return-icon, .inbox-return-label { flex: none; }
+.inbox-return-main strong { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-return-dismiss { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; color: var(--muted); cursor: pointer; border-radius: var(--radius-sm); }
+.inbox-return-dismiss:hover { color: var(--ink); }
+.inbox-return-dismiss:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 /* An Inbox row reads like mail: subject over an excerpt of the newest message,
    clamped to the chosen number of lines. The tree keeps one line per thread. */
 .chats-panel .group-row.chat-row.has-preview { align-items: flex-start; }

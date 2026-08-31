@@ -30,6 +30,14 @@ import { SkillsResetDialog } from './manage/SkillsResetDialog';
 import { ExecApprovalCard } from './manage/ExecApprovalCard';
 import { HarnessApprovalCard } from './manage/HarnessApprovalCard';
 import { DeleteThreadDialog } from './DeleteThreadDialog';
+import { CHATS_TAB_IDS, CHATS_TAB_KEY, type ChatsTab } from './chats/ChatList';
+import {
+  persistReturnChatId,
+  readReturnChatId,
+  resolveReturnChat,
+  returnChatIdOnDelete,
+  returnChatIdOnOpen
+} from './chats/return-chat';
 import { SnoozeMenu } from './chats/SnoozeMenu';
 import { hasMailWaiting, useMail } from './mail/useMail';
 import { MailComposeView, MailConversationView } from './mail/MailView';
@@ -40,6 +48,7 @@ import { DropOverlay } from './files/DropOverlay';
 import { useWebSearch } from './webSearch';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
 import { useOffline } from './hooks/useServerReachable';
+import { useRememberedTab } from './hooks/useRememberedTab';
 import { useShallowStable } from './hooks/useShallowStable';
 import {
   EMPTY_STATE,
@@ -112,6 +121,19 @@ export default function App() {
   const [mailView, setMailView] = useState<{ kind: 'conversation'; id: string } | { kind: 'compose' } | null>(
     null
   );
+  // The sidebar's Inbox | Chats sub-tab. Owned here (not remembered inside
+  // ChatList) because the open-a-chat handlers below need to know whether the
+  // Inbox was selected at that moment — that is what pins the Return-to-chat row.
+  const [chatsTab, setChatsTab] = useRememberedTab<ChatsTab>(CHATS_TAB_KEY, CHATS_TAB_IDS, 'inbox');
+  const chatsTabRef = useRef(chatsTab);
+  chatsTabRef.current = chatsTab;
+  // The Return-to-chat target: the ordinary chat last opened (or created) while
+  // the Inbox was selected. Explicit and persisted — never inferred from recency,
+  // never expiring; see return-chat.ts for the full contract.
+  const [returnChatId, setReturnChatIdState] = useState<string | null>(() => readReturnChatId());
+  // True once a server list has arrived — before that, the target can't be judged
+  // orphaned against a list that is merely still empty at startup.
+  const [chatsLoaded, setChatsLoaded] = useState(false);
   // The active thread queued for deletion behind the ⌃X confirm popup (null = closed).
   const [pendingDelete, setPendingDelete] = useState<{ threadId: string; title: string } | null>(null);
   // The snooze picker opened by ⌘⇧S, and the threads it will apply to. The chat
@@ -280,6 +302,39 @@ export default function App() {
   // Thread ids that own at least one scheduled task → a clock badge on those chat rows.
   const scheduledThreadIds = useMemo(() => new Set(tasks.map((t) => t.threadId)), [tasks]);
 
+  // ---- the Inbox's Return-to-chat row ----
+  /** An ordinary chat became the centre pane. Sets/replaces the target only if
+   *  the Inbox was the selected sidebar section at that moment. */
+  const noteChatOpened = useCallback((threadId: string) => {
+    setReturnChatIdState((prev) => {
+      const next = returnChatIdOnOpen(prev, threadId, chatsTabRef.current === 'inbox');
+      if (next !== prev) persistReturnChatId(next);
+      return next;
+    });
+  }, []);
+  const dismissInboxReturn = useCallback(() => {
+    persistReturnChatId(null);
+    setReturnChatIdState(null);
+  }, []);
+  // Resolved against the live sidebar data — optimistic rows included, so a chat
+  // created seconds ago (not yet in the backend's list) still counts as present.
+  const inboxReturn = useMemo(
+    () =>
+      resolveReturnChat({
+        returnChatId,
+        chats: displayList.chats,
+        chatsLoaded,
+        activeThreadId,
+        mailPaneOpen: mailView !== null
+      }),
+    [returnChatId, displayList.chats, chatsLoaded, activeThreadId, mailView]
+  );
+  // A target the loaded list no longer contains can't be returned to (deleted
+  // here or on another device) — drop it rather than keep a dead pointer.
+  useEffect(() => {
+    if (inboxReturn.orphaned) dismissInboxReturn();
+  }, [inboxReturn.orphaned, dismissInboxReturn]);
+
   // Folder name shown on the new-chat welcome screen — only while a fresh draft is
   // current (activeThreadId === null) and it targets a folder.
   const draftFolderName = useMemo(
@@ -400,6 +455,7 @@ export default function App() {
 
   /** Adopt a server-fresh list, keeping any optimistic inbox patches in flight. */
   const applyServerList = useCallback((list: ChatListResult) => {
+    setChatsLoaded(true);
     setChatList(() => {
       let inbox = list.inbox;
       for (const patch of pendingInboxPatches.current.values()) inbox = patch(inbox);
@@ -743,6 +799,9 @@ export default function App() {
               // the brief gap before React commits this state transition.
               activeThreadIdRef.current = realId;
               setActiveThreadId(realId);
+              // A chat CREATED while the Inbox is selected pins the Return-to-chat
+              // row, same as opening one — judged now, when its real id exists.
+              noteChatOpened(realId);
               pendingDraftFolderRef.current = null;
             }
             // Show a sidebar row immediately — the backend won't list this thread until its
@@ -776,7 +835,7 @@ export default function App() {
         }
       });
     },
-    [core, refreshChats, applyServerList, modelId, effort, serviceTier, format, setThread]
+    [core, refreshChats, applyServerList, modelId, effort, serviceTier, format, setThread, noteChatOpened]
   );
 
   // Quick Chat hand-off → main window: adopt the overlay's conversation as the
@@ -819,6 +878,9 @@ export default function App() {
         }
       }
       setActiveThreadId(threadId);
+      // A hand-off is an ordinary chat becoming the centre pane too — with the
+      // Inbox selected, it pins the Return-to-chat row like any other open.
+      noteChatOpened(threadId);
       setPendingChats((p) => ({
         ...p,
         [threadId]: {
@@ -831,7 +893,7 @@ export default function App() {
       }));
       refreshChats();
     });
-  }, [core, refreshChats]);
+  }, [core, refreshChats, noteChatOpened]);
 
   // Quick Chat session started → show the thread in the sidebar immediately
   // (the backend won't list it until its first turn persists), reusing the optimistic
@@ -928,7 +990,11 @@ export default function App() {
   useShortcut('toggle-inspector', () => setShowInspector((v) => !v));
 
   const openChat = useCallback(
-    async (threadId: string) => {
+    // `userNavigation` separates the user opening a chat (clicks, alerts, forks —
+    // which may pin the Inbox's Return-to-chat row) from the system re-opening
+    // the active thread to refresh its content (resync, offline recovery), which
+    // must never retarget the row.
+    async (threadId: string, userNavigation = true) => {
       // Record navigation intent immediately, before the history IPC settles. A
       // pending first-turn response must not consider the old DRAFT still visible.
       draftSeqRef.current += 1;
@@ -963,6 +1029,7 @@ export default function App() {
       if (!forceReload && existing?.hydrated && (existing.running || existing.messages.length > 0)) {
         if (!openGateRef.current.isCurrent(request)) return;
         setActiveThreadId(threadId);
+        if (userNavigation) noteChatOpened(threadId);
         setThread(threadId, (s) => ({ status: s.status === 'done' ? 'idle' : s.status }));
         return;
       }
@@ -977,8 +1044,9 @@ export default function App() {
       }));
       if (forceReload) forceReloadRef.current.delete(threadId);
       setActiveThreadId(history.threadId);
+      if (userNavigation) noteChatOpened(history.threadId);
     },
-    [core, setThread, mutateInbox, updatedAtMap]
+    [core, setThread, mutateInbox, updatedAtMap, noteChatOpened]
   );
 
   // Reading is what marks a thread read, and "reading" means the thread is on
@@ -1038,7 +1106,7 @@ export default function App() {
         const open = activeThreadIdRef.current;
         if (!open) return;
         forceReloadRef.current.add(open);
-        void openChat(open);
+        void openChat(open, false);
       }),
     [refreshChats, openChat]
   );
@@ -1060,7 +1128,7 @@ export default function App() {
     const open = activeThreadIdRef.current;
     if (!open) return;
     forceReloadRef.current.add(open);
-    void openChat(open);
+    void openChat(open, false);
   }, [offline, refreshChats, openChat]);
 
   // Folder mutations return the fresh list; apply it (through the guard that
@@ -1174,6 +1242,13 @@ export default function App() {
       return next;
     });
     if (threadId === activeThreadIdRef.current) setActiveThreadId(null);
+    // A deleted chat can't be returned to — clear the Inbox's pinned row if it
+    // pointed here (any other delete leaves the target alone).
+    setReturnChatIdState((prev) => {
+      const next = returnChatIdOnDelete(prev, threadId);
+      if (next !== prev) persistReturnChatId(next);
+      return next;
+    });
     // Prune the one row locally instead of re-scanning every session file on
     // disk (folders are untouched by a chat delete).
     setChatList((prev) => ({
@@ -1641,6 +1716,10 @@ export default function App() {
           <ManagePanel
             data={displayList}
             activeThreadId={activeThreadId}
+            chatsTab={chatsTab}
+            onChatsTabChange={setChatsTab}
+            inboxReturn={inboxReturn.row}
+            onDismissInboxReturn={dismissInboxReturn}
             statuses={threadStatuses}
             scheduledThreadIds={scheduledThreadIds}
             models={models}
