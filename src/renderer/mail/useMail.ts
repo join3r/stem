@@ -156,9 +156,13 @@ export function useMail(ready: boolean): MailApi {
  * True when the latest user-relevant event is mail TO the user, not the user's
  * own send. A replied-to conversation has been dealt with — the turn is on the
  * personas — so it waits under Sent until new mail for the user lands.
+ *
+ * A server predating the field omits userSentAt; `undefined > x` and
+ * `x > undefined` are both false, which would file EVERY conversation under
+ * Sent. Fall back to 0 so version skew degrades to the old inbox behavior.
  */
 export function hasMailWaiting(c: MailConversation): boolean {
-  return c.userUpdatedAt > c.userSentAt;
+  return c.userUpdatedAt > (c.userSentAt ?? 0);
 }
 
 /** The persona's display name for a mail address ('user' handled by callers). */
