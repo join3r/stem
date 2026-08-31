@@ -387,7 +387,21 @@ export interface StartTurnInput {
    * the turn under nobody-is-watching exec semantics, except that coding_agent
    * stays available (the assisted approval tiers answer its cards).
    */
-  mail?: { conversationId: string; subject: string; from: string; participants: string[] };
+  mail?: {
+    conversationId: string;
+    subject: string;
+    from: string;
+    participants: string[];
+    /**
+     * The user mail that began the current wave, riding non-driver deliveries
+     * so a consulted persona reads the original request verbatim instead of a
+     * driver paraphrase. Rendered by the mail preamble as quoted context —
+     * never persisted into the internal MailItem bodies. `attachmentNames`
+     * names the source mail's attachments for display; the bytes themselves
+     * ride only the original user delivery.
+     */
+    source?: { itemId: string; body: string; attachmentNames?: string[] };
+  };
 }
 
 // ---- Models (backend catalog) ----

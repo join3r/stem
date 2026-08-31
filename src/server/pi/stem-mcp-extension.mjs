@@ -2233,7 +2233,9 @@ function registerMailTools(pi) {
     description:
       'Send a mail within the CURRENT mail conversation. Recipients are the conversation\'s other personas ' +
       'and/or "user". Mailing a persona is asynchronous: finish your turn after sending — its reply arrives ' +
-      'as a later mail to you. To delegate pieces of a task to SEVERAL personas, list them all in ONE call: ' +
+      'as a later mail to you. A persona you mail automatically sees the user\'s current request quoted as ' +
+      'context, so do not restate it: the body should carry only that persona\'s specific assignment. ' +
+      'To delegate pieces of a task to SEVERAL personas, list them all in ONE call: ' +
       'their work runs in parallel and every reply comes back to you together, as a single assembly mail. ' +
       'Mailing ["user"] is how you answer the user after consulting personas; a plain ' +
       'final message (no send_mail) instead replies to whoever mailed you. Only works during a mail delivery — ' +

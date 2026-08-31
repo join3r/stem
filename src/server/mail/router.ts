@@ -77,6 +77,16 @@ import {
 // sees "answers your earlier message" instead of mistaking a slow branch's
 // reply for the answer to their latest one. In-flight work is never aborted:
 // a new user mail supersedes the old wave's replies, it does not kill them.
+//
+// Source context: alongside the epoch, every delivery carries the ID of the
+// user mail that began its wave (sourceItemId — the item whose `at` the epoch
+// is). A delivery to a NON-driver persona gets that mail's body injected into
+// its preamble as quoted context, so the driver's send_mail body stays the
+// short assignment and the spoke still reads the user's exact words — no
+// restating, no paraphrase drift. The driver never gets the injection: its
+// wave always began with the user mail delivered to it verbatim, and repeating
+// it on every hop back (implicit replies, assemblies) would stack the same
+// text into its thread once per hop.
 
 /** A delivery that never settles must not wedge its conversation forever. */
 const DELIVERY_TIMEOUT_MS = 30 * 60 * 1000; // 30m — mail is async; be generous.
@@ -99,6 +109,14 @@ interface DeliveryTask {
    * against this and is stamped stale.
    */
   epoch: number;
+  /**
+   * The id of the user MailItem that began this delivery's wave, inherited hop
+   * to hop like the epoch (whose value is that item's `at`). A delivery to a
+   * non-driver persona quotes the item's body in its preamble as source
+   * context (see deliver()); the item ID, not the timestamp, is the wave's
+   * unambiguous source reference.
+   */
+  sourceItemId: string;
   /**
    * Files riding this delivery's turn. Only user sends carry them — the
    * synthetic bodies (implicit-reply hops, join assemblies) never do.
@@ -130,6 +148,8 @@ interface JoinState {
   initiator: string;
   /** The wave's epoch (see DeliveryTask.epoch) — the assembly turn inherits it. */
   epoch: number;
+  /** The wave's source user item (see DeliveryTask.sourceItemId) — inherited by the assembly. */
+  sourceItemId: string;
   /** Branch persona id -> display name, removed as each branch settles. */
   awaiting: Map<string, string>;
   buffered: { name: string; body: string; note?: string }[];
@@ -156,6 +176,8 @@ export class MailRouter {
   private readonly turnInitiators = new Map<string, string>();
   /** Each live delivery turn's epoch (see DeliveryTask.epoch), keyed by turn id. */
   private readonly turnEpochs = new Map<string, number>();
+  /** Each live delivery turn's wave-source item id (see DeliveryTask.sourceItemId), keyed by turn id. */
+  private readonly turnSources = new Map<string, string>();
   /** Threads with a delivery in flight — the mail-turn suppressions read this. */
   private readonly liveThreads = new Set<string>();
   /**
@@ -215,10 +237,10 @@ export class MailRouter {
       body,
       ...(attachments ? { attachments: await attachmentPreviews(attachments) } : {})
     });
-    // The appended user item's timestamp IS the conversation's new userSentAt —
-    // the epoch every delivery of this wave inherits.
-    const epoch = result.items[result.items.length - 1].at;
-    this.enqueueDelivery(conversation.id, to[0], body, 'user', epoch, attachments);
+    // The appended user item IS the wave: its timestamp is the epoch every
+    // delivery inherits, its id the wave's source reference.
+    const source = result.items[result.items.length - 1];
+    this.enqueueDelivery(conversation.id, to[0], body, 'user', source.at, source.id, attachments);
     return result;
   }
 
@@ -242,8 +264,8 @@ export class MailRouter {
       body: trimmed,
       ...(files ? { attachments: await attachmentPreviews(files) } : {})
     });
-    const epoch = result.items[result.items.length - 1].at;
-    this.enqueueDelivery(conversationId, driver, trimmed, 'user', epoch, files);
+    const source = result.items[result.items.length - 1];
+    this.enqueueDelivery(conversationId, driver, trimmed, 'user', source.at, source.id, files);
     return result;
   }
 
@@ -364,7 +386,7 @@ export class MailRouter {
     if (!to.length) return { ok: false, error: 'Give send_mail at least one recipient.' };
     const body = req.body.trim();
     if (!body) return { ok: false, error: 'Give send_mail a body.' };
-    const { conversations } = await readMail();
+    const { conversations, items } = await readMail();
     const conversation = conversations.find((c) => c.id === ctx.conversationId);
     if (!conversation) return { ok: false, error: 'This mail conversation no longer exists.' };
     if (to.includes(ctx.personaId)) return { ok: false, error: 'You cannot mail yourself.' };
@@ -401,6 +423,13 @@ export class MailRouter {
     // the extra hop would overflow the exchange cap, where the send falls
     // through to the user (the existing runaway safety valve).
     const epoch = this.turnEpochs.get(ctx.turnId) ?? conversation.userSentAt;
+    // Belt-and-braces like the epoch fallback above: a live bridge call always
+    // finds its turn's entry, but if it ever doesn't, the newest user item is
+    // the least-wrong source — never an empty identity that drops injection.
+    const sourceItemId =
+      this.turnSources.get(ctx.turnId) ??
+      [...items].reverse().find((i) => i.conversationId === ctx.conversationId && i.from === 'user')?.id ??
+      '';
     let finalTo = to;
     let rerouted = false;
     if (to.includes('user') && ctx.personaId !== driverId) {
@@ -489,12 +518,12 @@ export class MailRouter {
         continue;
       }
       delivered.push(recipient);
-      this.enqueueDelivery(ctx.conversationId, recipient, body, ctx.personaId, epoch);
+      this.enqueueDelivery(ctx.conversationId, recipient, body, ctx.personaId, epoch, sourceItemId);
     }
     // Fanning out — two or more deliveries from one send — opens (or widens)
     // this sender's join: the replies come back as one assembly turn.
     if (delivered.length >= 2 || (delivered.length >= 1 && this.joinFor(ctx.conversationId, ctx.personaId))) {
-      await this.openJoin(ctx.conversationId, ctx.personaId, initiator, epoch, delivered);
+      await this.openJoin(ctx.conversationId, ctx.personaId, initiator, epoch, sourceItemId, delivered);
     }
     this.updateActivityDetail(ctx.conversationId);
     this.opts.onChange();
@@ -656,12 +685,13 @@ export class MailRouter {
     body: string,
     from: string,
     epoch: number,
+    sourceItemId: string,
     attachments?: TurnAttachment[]
   ): void {
     this.pending.set(conversationId, (this.pending.get(conversationId) ?? 0) + 1);
     const lane: Lane = this.lanes.get(conversationId) ?? { active: new Map(), queue: [] };
     this.lanes.set(conversationId, lane);
-    lane.queue.push({ personaId, body, from, epoch, ...(attachments?.length ? { attachments } : {}) });
+    lane.queue.push({ personaId, body, from, epoch, sourceItemId, ...(attachments?.length ? { attachments } : {}) });
     this.pump(conversationId);
   }
 
@@ -677,7 +707,7 @@ export class MailRouter {
       if (at < 0) break;
       const [task] = lane.queue.splice(at, 1);
       lane.active.set(task.personaId, '');
-      void this.deliver(conversationId, task.personaId, task.body, task.from, task.epoch, task.attachments)
+      void this.deliver(conversationId, task.personaId, task.body, task.from, task.epoch, task.sourceItemId, task.attachments)
         // quiet: deliver() reports every failure as a mail the user sees; a
         // rejection reaching here has already been told.
         .catch(() => undefined)
@@ -723,6 +753,7 @@ export class MailRouter {
     senderId: string,
     initiator: string,
     epoch: number,
+    sourceItemId: string,
     branchIds: string[]
   ): Promise<void> {
     const personas = await listPersonas();
@@ -736,6 +767,7 @@ export class MailRouter {
       senderId,
       initiator,
       epoch,
+      sourceItemId,
       awaiting: new Map(branchIds.map((id) => [id, nameOf(id)])),
       buffered: [],
       notes: [],
@@ -783,7 +815,7 @@ export class MailRouter {
     );
     const parts = ['Replies to your delegations:', ...sections];
     if (join.notes.length) parts.push(`Notes:\n${join.notes.map((n) => `- ${n}`).join('\n')}`);
-    this.enqueueDelivery(conversationId, join.senderId, parts.join('\n\n'), join.initiator, join.epoch);
+    this.enqueueDelivery(conversationId, join.senderId, parts.join('\n\n'), join.initiator, join.epoch, join.sourceItemId);
   }
 
   /**
@@ -801,6 +833,7 @@ export class MailRouter {
     body: string,
     from: string,
     epoch: number,
+    sourceItemId: string,
     attachments?: TurnAttachment[]
   ): Promise<void> {
     // Minted out here so the finally below can clear the turn's bookkeeping on
@@ -822,7 +855,7 @@ export class MailRouter {
       }
       await setConversationStatus(conversationId, 'working');
       this.opts.onChange();
-      const { conversations } = await readMail();
+      const { conversations, items } = await readMail();
       const conversation = conversations.find((c) => c.id === conversationId);
       if (!conversation) return; // deleted while queued
       const row = this.activityRows.get(conversationId) ?? {
@@ -845,6 +878,26 @@ export class MailRouter {
       // settle wedges the conversation for the whole timeout.
       this.turnInitiators.set(turnId, from);
       this.turnEpochs.set(turnId, epoch);
+      this.turnSources.set(turnId, sourceItemId);
+      // Source context rides only NON-driver deliveries: a wave always begins
+      // with the user mail delivered to the driver verbatim, so injecting it
+      // again for the driver (implicit-reply hops, assemblies) would stack the
+      // same text into its thread once per hop. A missing item (deleted, or a
+      // fallback that found nothing) just skips the injection.
+      const sourceItem =
+        conversation.participants[0] !== personaId
+          ? items.find((i) => i.id === sourceItemId && i.from === 'user')
+          : undefined;
+      const sourceNames =
+        sourceItem?.attachments?.map((a) => a.name).filter((n): n is string => !!n) ?? [];
+      const source =
+        sourceItem && (sourceItem.body || sourceNames.length)
+          ? {
+              itemId: sourceItem.id,
+              body: sourceItem.body,
+              ...(sourceNames.length ? { attachmentNames: sourceNames } : {})
+            }
+          : undefined;
       const threadIdRef = { current: threadId ?? null };
       const settling = this.waitForSettle(turnId, threadIdRef);
       let started;
@@ -866,7 +919,8 @@ export class MailRouter {
             conversationId,
             subject: conversation.subject,
             from,
-            participants: conversation.participants
+            participants: conversation.participants,
+            ...(source ? { source } : {})
           }
         });
       } catch (error) {
@@ -914,7 +968,7 @@ export class MailRouter {
       } else if (!sent) {
         const reply =
           (await this.lastAssistantText(runThreadId)) || '(The persona finished without writing a reply.)';
-        await this.routeImplicitReply(conversationId, personaId, from, reply, epoch);
+        await this.routeImplicitReply(conversationId, personaId, from, reply, epoch, sourceItemId);
       } else if (sent.user && !sent.persona) {
         // The turn ended after mailing only the user: the chain has stopped on
         // them (a blocked ask, or an explicit final answer) — say so at drain.
@@ -935,6 +989,7 @@ export class MailRouter {
       this.activeTurns.delete(turnId);
       this.turnInitiators.delete(turnId);
       this.turnEpochs.delete(turnId);
+      this.turnSources.delete(turnId);
       const left = (this.pending.get(conversationId) ?? 1) - 1;
       if (left > 0) this.pending.set(conversationId, left);
       else {
@@ -971,7 +1026,8 @@ export class MailRouter {
     personaId: string,
     initiator: string,
     reply: string,
-    epoch: number
+    epoch: number,
+    sourceItemId: string
   ): Promise<void> {
     if (initiator !== 'user') {
       const { conversations } = await readMail();
@@ -1012,7 +1068,7 @@ export class MailRouter {
           this.opts.onChange();
           return;
         }
-        this.enqueueDelivery(conversationId, initiator, reply, personaId, epoch);
+        this.enqueueDelivery(conversationId, initiator, reply, personaId, epoch, sourceItemId);
         this.opts.onChange();
         return;
       }

@@ -1430,3 +1430,304 @@ describe('mail delivery vs pool worker exits', () => {
     expect(mail.items[1].body).toBe("The persona's run failed: the backend process exited");
   });
 });
+
+// Source-aware delegation: every delivery inherits the ID of the user mail
+// that began its wave, and a delivery to a NON-driver persona carries that
+// mail's exact body as `mail.source` — model context, never a MailItem. The
+// driver never gets the injection (its wave began with the user mail itself),
+// and the stored internal mail stays the short assignment.
+describe('source-aware delegation', () => {
+  it('a spoke delivery quotes the exact user mail as source; the stored item stays the short assignment', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.verifier = [
+      {
+        mode: 'ok',
+        reply: 'consulting',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['orchestrator'], body: 'check the facts' }, ctx)).ok).toBe(true);
+        }
+      },
+      // The hop back at the driver: close ON THE USER so nothing outlives the test.
+      {
+        mode: 'ok',
+        reply: 'closing',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['user'], body: 'answered' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    fake.scriptsByPersona.orchestrator = [{ mode: 'ok', reply: 'facts hold' }];
+    await router.compose({
+      to: ['verifier', 'orchestrator'],
+      subject: 'src',
+      body: 'is the sky green today?'
+    });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'answered' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+    // The driver's initial delivery IS the user mail: no source injection, and
+    // the body arrives exactly once.
+    expect(fake.starts[0].persona?.id).toBe('verifier');
+    expect(fake.starts[0].mail?.source).toBeUndefined();
+    expect(fake.starts[0].input).toBe('is the sky green today?');
+    // The spoke's turn carries the exact user item as source, and ONLY the
+    // short assignment as its input — the driver never restated anything.
+    const spoke = fake.starts[1];
+    expect(spoke.persona?.id).toBe('orchestrator');
+    expect(spoke.mail?.source).toEqual({ itemId: mail.items[0].id, body: 'is the sky green today?' });
+    expect(spoke.input).toBe('check the facts');
+    // …and the stored internal mail is exactly the assignment: the source body
+    // was never appended to the persisted correspondence.
+    expect(mail.items[1]).toMatchObject({ from: 'verifier', to: ['orchestrator'], body: 'check the facts' });
+  });
+
+  it('every fan-out branch carries the same source; the assembly (to the driver) carries none', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.orchestrator = [
+      {
+        mode: 'ok',
+        reply: 'delegating',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['verifier', 'secretary'], body: 'your piece' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'assembled' }
+    ];
+    fake.scriptsByPersona.verifier = [{ mode: 'ok', reply: 'v-reply' }];
+    fake.scriptsByPersona.secretary = [{ mode: 'ok', reply: 's-reply' }];
+    await router.compose({
+      to: ['orchestrator', 'verifier', 'secretary'],
+      subject: 'fan',
+      body: 'the question'
+    });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'assembled' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations[0].status).toBe('idle');
+      return m;
+    });
+    const branches = fake.starts.filter((s) => s.persona?.id !== 'orchestrator');
+    expect(branches).toHaveLength(2);
+    for (const branch of branches) {
+      expect(branch.mail?.source).toEqual({ itemId: mail.items[0].id, body: 'the question' });
+      expect(branch.input).toBe('your piece');
+    }
+    // Still exactly one assembly, back at the driver — which already read the
+    // user mail as its own first delivery, so no source rides it.
+    const assemblies = fake.starts.filter((s) => s.input.includes('Replies to your delegations'));
+    expect(assemblies).toHaveLength(1);
+    expect(assemblies[0].persona?.id).toBe('orchestrator');
+    expect(assemblies[0].mail?.source).toBeUndefined();
+  });
+
+  it('a user reply starts a new wave: its deliveries carry the new item, not the history', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    const consult: TurnScript = {
+      mode: 'ok',
+      reply: 'consulting',
+      bridge: async (bridge, ctx) => {
+        expect((await bridge.send({ to: ['orchestrator'], body: 'verify' }, ctx)).ok).toBe(true);
+      }
+    };
+    const close: TurnScript = {
+      mode: 'ok',
+      reply: 'closing',
+      bridge: async (bridge, ctx) => {
+        expect((await bridge.send({ to: ['user'], body: 'done' }, ctx)).ok).toBe(true);
+      }
+    };
+    fake.scriptsByPersona.verifier = [consult, close, consult, close];
+    fake.scriptsByPersona.orchestrator = [
+      { mode: 'ok', reply: 'ok one' },
+      { mode: 'ok', reply: 'ok two' }
+    ];
+    const { conversations } = await router.compose({
+      to: ['verifier', 'orchestrator'],
+      subject: 'waves',
+      body: 'first question'
+    });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.filter((i) => i.body === 'done')).toHaveLength(1);
+      expect(m.conversations[0].status).not.toBe('working');
+    });
+    await router.reply(conversations[0].id, 'second question');
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.filter((i) => i.body === 'done')).toHaveLength(2);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+    const second = mail.items.find((i) => i.from === 'user' && i.body === 'second question')!;
+    const spokes = fake.starts.filter((s) => s.persona?.id === 'orchestrator');
+    expect(spokes).toHaveLength(2);
+    // The second wave's delegation quotes the second user mail — bounded
+    // context, never the conversation's history.
+    expect(spokes[1].mail?.source).toEqual({ itemId: second.id, body: 'second question' });
+    expect(spokes[1].input).toBe('verify');
+  });
+
+  it('a late send from a superseded wave keeps ITS user item, not the newest one', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    const userReplied = deferred();
+    fake.scriptsByPersona.verifier = [
+      // Wave 1's driver turn, held open until the user has already moved on —
+      // its delegation must still carry wave 1's source item.
+      {
+        mode: 'ok',
+        reply: 'slow delegating',
+        bridge: async (bridge, ctx) => {
+          await userReplied.promise;
+          expect((await bridge.send({ to: ['orchestrator'], body: 'late piece' }, ctx)).ok).toBe(true);
+        }
+      },
+      // Wave 2's user delivery (queued behind the held turn, same-persona serial).
+      {
+        mode: 'ok',
+        reply: 'closing two',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['user'], body: 'second answered' }, ctx)).ok).toBe(true);
+        }
+      },
+      // The late hop back from wave 1: end it on the user.
+      {
+        mode: 'ok',
+        reply: 'closing one',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['user'], body: 'late done' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    fake.scriptsByPersona.orchestrator = [{ mode: 'ok', reply: 'late reply' }];
+    const { conversations } = await router.compose({
+      to: ['verifier', 'orchestrator'],
+      subject: 'supersede',
+      body: 'first question'
+    });
+    await vi.waitFor(() => expect(fake.starts.length).toBe(1));
+    await router.reply(conversations[0].id, 'second question');
+    userReplied.resolve();
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'second answered')).toBe(true);
+      expect(m.items.some((i) => i.body === 'late done')).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+    const first = mail.items.find((i) => i.from === 'user' && i.body === 'first question')!;
+    // The held turn's live entry won over the newest-user-item fallback.
+    const spoke = fake.starts.find((s) => s.persona?.id === 'orchestrator')!;
+    expect(spoke.mail?.source).toEqual({ itemId: first.id, body: 'first question' });
+    // And the wave identities kept their stale semantics: wave 1's late answer
+    // is stamped, wave 2's fresh one is not.
+    expect(mail.items.find((i) => i.body === 'late done')?.stale).toBe(true);
+    expect(mail.items.find((i) => i.body === 'second answered')?.stale).toBeUndefined();
+  });
+
+  it('chained hops retain the source; the hop back to the driver re-injects nothing', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.verifier = [
+      {
+        mode: 'ok',
+        reply: 'first consult',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['orchestrator'], body: 'piece one' }, ctx)).ok).toBe(true);
+        }
+      },
+      // The hop back (from orchestrator) delegates onward in the same wave.
+      {
+        mode: 'ok',
+        reply: 'second consult',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['secretary'], body: 'piece two' }, ctx)).ok).toBe(true);
+        }
+      },
+      {
+        mode: 'ok',
+        reply: 'closing',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['user'], body: 'all done' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    fake.scriptsByPersona.orchestrator = [{ mode: 'ok', reply: 'o-result' }];
+    fake.scriptsByPersona.secretary = [{ mode: 'ok', reply: 's-result' }];
+    await router.compose({
+      to: ['verifier', 'orchestrator', 'secretary'],
+      subject: 'chained',
+      body: 'the original ask'
+    });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'all done' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+    // A delegation two hops into the wave still quotes the original user item.
+    const late = fake.starts.find((s) => s.persona?.id === 'secretary')!;
+    expect(late.mail?.source).toEqual({ itemId: mail.items[0].id, body: 'the original ask' });
+    // The driver's hop-back delivery (the implicit reply landing on it) gets no
+    // injection: its thread already opened with the user mail.
+    const hopBack = fake.starts.find((s) => s.persona?.id === 'verifier' && s.input === 'o-result')!;
+    expect(hopBack.mail?.source).toBeUndefined();
+  });
+
+  it('a source mail with attachments delegates cleanly: names ride as metadata, bytes do not', async () => {
+    // 1x1 transparent PNG.
+    const png =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const atts = [
+      { name: 'shot.png', dataBase64: png, mime: 'image/png' },
+      { name: 'notes.txt', dataBase64: Buffer.from('hello').toString('base64'), mime: 'text/plain' }
+    ];
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.verifier = [
+      {
+        mode: 'ok',
+        reply: 'delegating',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['orchestrator'], body: 'inspect' }, ctx)).ok).toBe(true);
+        }
+      },
+      {
+        mode: 'ok',
+        reply: 'closing',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['user'], body: 'inspected' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    fake.scriptsByPersona.orchestrator = [{ mode: 'ok', reply: 'looks fine' }];
+    await router.compose({
+      to: ['verifier', 'orchestrator'],
+      subject: 'attached',
+      body: 'see attached',
+      attachments: atts
+    });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'inspected' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+    // The spoke learns the source mail HAD attachments by name — the bytes
+    // themselves still ride only the original user delivery.
+    const spoke = fake.starts.find((s) => s.persona?.id === 'orchestrator')!;
+    expect(spoke.mail?.source).toEqual({
+      itemId: mail.items[0].id,
+      body: 'see attached',
+      attachmentNames: ['shot.png', 'notes.txt']
+    });
+    expect(spoke.attachments).toBeUndefined();
+    expect(fake.starts[0].attachments).toEqual(atts);
+  });
+});
