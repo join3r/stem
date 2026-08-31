@@ -236,6 +236,7 @@ export function MailConversationView({
             </>
           )}
           {conversation.status === 'awaiting-user' && <em> · waiting on your reply</em>}
+          {conversation.status === 'aborted' && <em> · stopped — reply to pick it back up</em>}
         </span>
         {addingTo && addable.length > 0 && (
           <div className="mail-to-chips mail-add-chips" role="group" aria-label="Personas to add">

@@ -335,10 +335,12 @@ describe('mail router', () => {
       expect(m.items).toHaveLength(4);
       expect(m.conversations[0].status).not.toBe('working');
     });
-    // Mid-wave: one running row, named by the conversation's subject.
+    // Mid-wave: one running row, named by the conversation's subject and
+    // carrying the conversation id — the popover's open/stop controls need it.
     const running = midRun!.running.find((e) => e.kind === 'mail.deliver');
     expect(running?.label).toBe('Mail: Shoes');
     expect(running?.detail).toContain('Verifier working · turn 1');
+    expect(running?.conversationId).toBe((await readMail()).conversations[0].id);
     // Drained: the row moved to history carrying the wave's turn count.
     expect(snapshot().running).toHaveLength(0);
     const done = snapshot().history.find((e) => e.kind === 'mail.deliver');
@@ -1175,11 +1177,16 @@ describe('stop control', () => {
     await router.reply(id, 'and this');
     // …and the stop drops it before it ever runs, aborting the held turn.
     expect(await router.stopConversation(id)).toEqual({ stopped: true });
+    // The stop settles as 'aborted' — the Inbox row is where the stop shows,
+    // since no failure mail is written to say it.
     const mail = await vi.waitFor(async () => {
       const m = await readMail();
-      expect(m.conversations[0].status).toBe('idle');
+      expect(m.conversations[0].status).toBe('aborted');
       return m;
     });
+    // …and the activity row's history entry says so too.
+    const done = snapshot().history.find((e) => e.kind === 'mail.deliver');
+    expect(done?.detail).toBe('stopped after 1 turn');
     // Only the two user mails are on the record: the aborted turn produced no
     // "run failed" notice — the stop IS the outcome the user asked for.
     expect(mail.items.map((i) => ({ from: i.from, body: i.body }))).toEqual([

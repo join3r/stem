@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Activity } from 'lucide-react';
+import { Activity, Square } from 'lucide-react';
 import type { ActivityEntry, ActivitySnapshot } from '../../shared/types';
 
 // Toolbar background-activity indicator. Always mounted — that is the whole
@@ -9,8 +9,11 @@ import type { ActivityEntry, ActivitySnapshot } from '../../shared/types';
 // job from registering as a single-frame twitch.
 //
 // Motion means work is in flight; colour is reserved for health, so a failure
-// can never be mistaken for activity. Read-only by design: pausing and
-// retrying live next to the thing being paused, not here.
+// can never be mistaken for activity. Mostly read-only: pausing and retrying
+// live next to the thing being paused, not here. The one exception is mail —
+// its work happens entirely out of sight, so a mail row is the natural place
+// to reach it: clicking opens the conversation, and a running row carries the
+// same Stop control as the conversation header.
 
 const EMPTY: ActivitySnapshot = { running: [], history: [], unseenFailure: false };
 
@@ -37,12 +40,41 @@ function formatAgo(at: number): string {
   return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
 }
 
-function RunningRow({ entry }: { entry: ActivityEntry }) {
+/** Row-level open handler: only mail rows carry a conversation to open. */
+function openProps(
+  entry: ActivityEntry,
+  onOpenMail?: (conversationId: string) => void
+): Partial<React.LiHTMLAttributes<HTMLLIElement>> {
+  const id = entry.conversationId;
+  if (!id || !onOpenMail) return {};
+  return {
+    className: ' activity-row-openable',
+    onClick: () => onOpenMail(id),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onOpenMail(id);
+      }
+    },
+    role: 'button',
+    tabIndex: 0,
+    title: 'Open this mail conversation'
+  };
+}
+
+function RunningRow({
+  entry,
+  onOpenMail
+}: {
+  entry: ActivityEntry;
+  onOpenMail?: (conversationId: string) => void;
+}) {
   const pct = entry.progress && entry.progress.total > 0
     ? Math.min(100, Math.round((entry.progress.done / entry.progress.total) * 100))
     : null;
+  const open = openProps(entry, onOpenMail);
   return (
-    <li className="activity-row activity-row-running">
+    <li {...open} className={`activity-row activity-row-running${open.className ?? ''}`}>
       <span className="activity-row-dot" aria-hidden="true" />
       <span className="activity-row-body">
         <span className="activity-row-label">{entry.label}</span>
@@ -59,14 +91,38 @@ function RunningRow({ entry }: { entry: ActivityEntry }) {
           <span className="activity-bar-fill" style={{ width: `${pct}%` }} />
         </span>
       )}
+      {entry.conversationId && (
+        <button
+          className="icon-action sm mail-stop activity-row-stop"
+          title="Stop — drop queued deliveries and interrupt the running personas"
+          aria-label="Stop this mail conversation"
+          onClick={(e) => {
+            // The row itself opens the conversation; stopping must not.
+            e.stopPropagation();
+            void window.stem.stopMail(entry.conversationId!).catch(() => {
+              // quiet: a conversation that finished in the meantime has
+              // nothing left to stop — the next snapshot removes the row.
+            });
+          }}
+        >
+          <Square size={11} />
+        </button>
+      )}
     </li>
   );
 }
 
-function HistoryRow({ entry }: { entry: ActivityEntry }) {
+function HistoryRow({
+  entry,
+  onOpenMail
+}: {
+  entry: ActivityEntry;
+  onOpenMail?: (conversationId: string) => void;
+}) {
   const failed = entry.state === 'failed';
+  const open = openProps(entry, onOpenMail);
   return (
-    <li className={`activity-row${failed ? ' activity-row-failed' : ''}`}>
+    <li {...open} className={`activity-row${failed ? ' activity-row-failed' : ''}${open.className ?? ''}`}>
       <span className="activity-row-body">
         <span className="activity-row-label">{entry.label}</span>
         {(failed || entry.detail) && (
@@ -80,7 +136,12 @@ function HistoryRow({ entry }: { entry: ActivityEntry }) {
   );
 }
 
-export function ActivityIndicator() {
+export function ActivityIndicator({
+  onOpenMail
+}: {
+  /** Open a mail conversation in the centre pane (mail rows are doorways). */
+  onOpenMail?: (conversationId: string) => void;
+}) {
   const [snapshot, setSnapshot] = useState<ActivitySnapshot>(EMPTY);
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -135,6 +196,15 @@ export function ActivityIndicator() {
     });
   };
 
+  // Opening a mail conversation dismisses the popover — the centre pane now
+  // shows the thing the row pointed at.
+  const openMail = onOpenMail
+    ? (conversationId: string) => {
+        setOpen(false);
+        onOpenMail(conversationId);
+      }
+    : undefined;
+
   const shown = expanded ? snapshot.history : snapshot.history.slice(0, COLLAPSED_ROWS);
   const hidden = snapshot.history.length - shown.length;
   const summary = running
@@ -168,7 +238,7 @@ export function ActivityIndicator() {
           {running && (
             <ul className="activity-list">
               {snapshot.running.map((e) => (
-                <RunningRow key={e.id} entry={e} />
+                <RunningRow key={e.id} entry={e} onOpenMail={openMail} />
               ))}
             </ul>
           )}
@@ -183,7 +253,7 @@ export function ActivityIndicator() {
               {running && <div className="activity-pop-sub">Recent</div>}
               <ul className="activity-list">
                 {shown.map((e) => (
-                  <HistoryRow key={e.id} entry={e} />
+                  <HistoryRow key={e.id} entry={e} onOpenMail={openMail} />
                 ))}
               </ul>
               {hidden > 0 && (

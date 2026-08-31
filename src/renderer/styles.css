@@ -247,6 +247,12 @@ button, input, textarea, a, label, .switch, .insp-seg, .seg-ctl { -webkit-app-re
 .activity-row-detail { color: var(--muted); overflow-wrap: anywhere; }
 .activity-row-meta { color: var(--muted); white-space: nowrap; }
 .activity-row-failed .activity-row-detail { color: var(--warn); }
+/* Mail rows are doorways: clicking opens the conversation, so they read as rows
+   of a list you can enter — the inbox rows' hover treatment, not a button's. */
+.activity-row-openable { cursor: pointer; }
+.activity-row-openable:hover,
+.activity-row-openable:focus-visible { background: var(--sel); }
+.activity-row-stop { align-self: center; flex: 0 0 auto; }
 .activity-row-running .activity-row-dot {
   width: 5px;
   height: 5px;
@@ -2828,6 +2834,7 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-row .mail-from { display: block; font-size: var(--fs-11); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mail-row.unread .mail-from { color: var(--ink); }
 .mail-needs-you { color: var(--accent); font-style: normal; }
+.mail-aborted { color: var(--muted); font-style: normal; }
 .mail-sent-icon { margin-right: 2px; opacity: 0.7; }
 
 /* The centre pane: header, a scrolling stack of mail cards, a reply box. */

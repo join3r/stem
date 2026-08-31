@@ -46,8 +46,8 @@ export function setActivityEmitter(fn: ((snapshot: ActivitySnapshot) => void) | 
 }
 
 function publicEntry(e: OpenEntry | ActivityEntry): ActivityEntry {
-  const { id, kind, label, detail, startedAt, activeMs, state, progress, error } = e;
-  return { id, kind, label, detail, startedAt, activeMs, state, progress, error };
+  const { id, kind, label, detail, startedAt, activeMs, state, progress, error, conversationId } = e;
+  return { id, kind, label, detail, startedAt, activeMs, state, progress, error, conversationId };
 }
 
 export function snapshot(): ActivitySnapshot {
@@ -86,7 +86,7 @@ function remember(entry: ActivityEntry): void {
 export function begin(
   kind: ActivityKind,
   label: string,
-  opts: { stepped?: boolean; detail?: string } = {}
+  opts: { stepped?: boolean; detail?: string; conversationId?: string } = {}
 ): ActivityHandle {
   const now = Date.now();
   if (opts.stepped) {
@@ -109,6 +109,7 @@ export function begin(
     startedAt: now,
     activeMs: 0,
     state: 'running',
+    ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
     stepped: !!opts.stepped,
     stepStartedAt: now
   };

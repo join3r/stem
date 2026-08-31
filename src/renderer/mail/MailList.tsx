@@ -80,8 +80,10 @@ export function MailList(props: MailListProps) {
       // The Inbox holds mail WAITING ON the user. A conversation whose latest
       // user-relevant event is the user's own send — a fresh compose, or a
       // reply into it — is dealt with: it lives under Sent (spinner included)
-      // until new mail addressed to the user lands, like email.
-      else if (hasMailWaiting(c)) inbox.push(c);
+      // until new mail addressed to the user lands, like email. A stopped
+      // conversation surfaces here too: no reply ever lands to pull it in, and
+      // the Inbox row is where the abort shows.
+      else if (hasMailWaiting(c) || c.status === 'aborted') inbox.push(c);
     }
     inbox.sort((a, b) => b.updatedAt - a.updatedAt);
     snoozed.sort(
@@ -152,6 +154,7 @@ export function MailList(props: MailListProps) {
           <span className="mail-from">
             {fromLabel(c)}
             {c.status === 'awaiting-user' && <em className="mail-needs-you"> · needs you</em>}
+            {c.status === 'aborted' && <em className="mail-aborted"> · stopped</em>}
           </span>
           <strong title={c.subject}>{c.subject}</strong>
           <span className="chat-preview">{previewOf(c)}</span>

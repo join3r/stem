@@ -265,9 +265,10 @@ export class MailRouter {
   /**
    * The user's Stop control: drop this conversation's queued deliveries,
    * interrupt its running turns, and tear down its open joins so no assembly
-   * fires later. The interrupted turns settle as aborted and drain the status
-   * as usual — without failure notices, because the stop IS the outcome the
-   * user asked for. Answers `stopped: false` when nothing was in flight.
+   * fires later. The interrupted turns settle as aborted and drain into the
+   * 'aborted' status — visible in the Inbox, but without failure notices,
+   * because the stop IS the outcome the user asked for. Answers
+   * `stopped: false` when nothing was in flight.
    */
   async stopConversation(conversationId: string): Promise<{ stopped: boolean }> {
     const lane = this.lanes.get(conversationId);
@@ -303,11 +304,13 @@ export class MailRouter {
       const row = this.activityRows.get(conversationId);
       if (row) {
         this.activityRows.delete(conversationId);
-        activity.end(row.handle, { worked: true, detail: `${row.turns} turn${row.turns === 1 ? '' : 's'}` });
+        activity.end(row.handle, {
+          worked: true,
+          detail: `stopped after ${row.turns} turn${row.turns === 1 ? '' : 's'}`
+        });
       }
-      const status = this.drainStatus.get(conversationId) ?? 'idle';
       this.drainStatus.delete(conversationId);
-      await setConversationStatus(conversationId, status).catch(() => {
+      await setConversationStatus(conversationId, 'aborted').catch(() => {
         // quiet: a deleted conversation has no row left for a status to show on.
       });
     }
@@ -823,7 +826,9 @@ export class MailRouter {
       const conversation = conversations.find((c) => c.id === conversationId);
       if (!conversation) return; // deleted while queued
       const row = this.activityRows.get(conversationId) ?? {
-        handle: activity.begin('mail.deliver', `Mail: ${conversation.subject || '(no subject)'}`),
+        handle: activity.begin('mail.deliver', `Mail: ${conversation.subject || '(no subject)'}`, {
+          conversationId
+        }),
         turns: 0
       };
       row.turns += 1;
@@ -933,15 +938,18 @@ export class MailRouter {
       const left = (this.pending.get(conversationId) ?? 1) - 1;
       if (left > 0) this.pending.set(conversationId, left);
       else {
-        // The conversation's last delivery drained: settle its status.
+        // The conversation's last delivery drained: settle its status. A
+        // user-stopped wave settles as 'aborted' — the Inbox row is where the
+        // stop shows, since no failure mail was written to say it.
         this.pending.delete(conversationId);
-        this.stopping.delete(conversationId);
+        const stopped = this.stopping.delete(conversationId);
         const row = this.activityRows.get(conversationId);
         if (row) {
           this.activityRows.delete(conversationId);
-          activity.end(row.handle, { worked: true, detail: `${row.turns} turn${row.turns === 1 ? '' : 's'}` });
+          const turns = `${row.turns} turn${row.turns === 1 ? '' : 's'}`;
+          activity.end(row.handle, { worked: true, detail: stopped ? `stopped after ${turns}` : turns });
         }
-        const status = this.drainStatus.get(conversationId) ?? 'idle';
+        const status = stopped ? 'aborted' : this.drainStatus.get(conversationId) ?? 'idle';
         this.drainStatus.delete(conversationId);
         await setConversationStatus(conversationId, status).catch(() => {
           // quiet: the conversation was deleted while its deliveries ran — there

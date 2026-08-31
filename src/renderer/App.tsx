@@ -1859,7 +1859,7 @@ export default function App() {
         )}
       </div>
       <div className="toolbar-spacer" />
-      <ActivityIndicator />
+      <ActivityIndicator onOpenMail={openMail} />
       <button
         className={`tbtn${showInspector ? ' active' : ''}`}
         title={`Toggle inspector (${glyphsFor('toggle-inspector')})`}

@@ -1874,6 +1874,11 @@ export interface ActivityEntry {
   /** Stepped passes only — oneshot runs are too short for a bar to mean anything. */
   progress?: { done: number; total: number };
   error?: string;
+  /**
+   * Mail rows only: the conversation this run works. Makes the row a doorway —
+   * clicking opens the conversation, and a running row carries a Stop control.
+   */
+  conversationId?: string;
 }
 
 /** Everything the activity popover renders, pushed on `activity:changed`. */
@@ -2043,9 +2048,11 @@ export interface MailConversation {
   /**
    * 'working' while a delivery is in flight; 'awaiting-user' once a persona's
    * reply asked for the user's input/decision (set when a delivery fails or is
-   * blocked); 'idle' otherwise.
+   * blocked); 'aborted' after the user stopped the conversation mid-wave (it
+   * surfaces in the Inbox so the stop is visible, and clears on the next
+   * delivery); 'idle' otherwise.
    */
-  status: 'idle' | 'working' | 'awaiting-user';
+  status: 'idle' | 'working' | 'awaiting-user' | 'aborted';
   /** Inter-persona mails spent, against the global cap (later phase). */
   exchangeCount: number;
   /**
