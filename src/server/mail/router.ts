@@ -1,14 +1,22 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatBackend, MailBridgeContext, MailBridgeResult } from '../backend/types';
+import type { ChatBackend, MailBridgeContext, MailBridgeResult, SavePersonaRequest } from '../backend/types';
 import type { BackendEventEnvelope, MailComposeInput, MailListResult } from '../../shared/types';
 import * as activity from '../activity';
 import { degrade } from '../degrade';
 import { noteTurnStart } from '../live-turns';
-import { getPersona, listPersonas } from '../workspace/personas';
+import {
+  deletePersona,
+  getPersona,
+  listPersonas,
+  savePersonaFor,
+  updatePersonaFields,
+  type BridgePersonaFields
+} from '../workspace/personas';
 import { readSettings } from '../workspace/settings';
 import {
   addParticipant,
   appendMailItem,
+  CapError,
   createConversation,
   readMail,
   setConversationSession,
@@ -31,9 +39,63 @@ import {
 // send_mail (implicit reply to whoever mailed it) or mails only the user. The
 // exchange cap bounds one wave: each user send resets the counter (see
 // workspace/mail.ts), and at the cap the next hop is forced back to the user.
+//
+// Fan-out: a turn that send_mails SEVERAL personas at once opens a join — the
+// branches' deliveries run in parallel (up to WAVE_CONCURRENCY per
+// conversation, same-persona deliveries kept serial), and their replies are
+// buffered rather than each starting a sender turn: the sender's next turn is
+// the assembly, one turn carrying every branch's reply, started when the last
+// branch settles (replied, failed, answered the user directly, or timed out).
+// The assembly's implicit reply routes to whoever initiated the fanning-out
+// turn — typically the user — so an orchestrating persona splits, waits once,
+// and answers once.
 
 /** A delivery that never settles must not wedge its conversation forever. */
 const DELIVERY_TIMEOUT_MS = 30 * 60 * 1000; // 30m — mail is async; be generous.
+
+/**
+ * Parallel deliveries per conversation. Bounds how much of the worker pool one
+ * conversation's fan-out can occupy — the pool itself (bound 6) still serves
+ * interactive chats and scheduled runs first-come.
+ */
+const WAVE_CONCURRENCY = 3;
+
+/** One queued delivery: a mail waiting for its persona's turn. */
+interface DeliveryTask {
+  personaId: string;
+  body: string;
+  from: string;
+}
+
+/**
+ * A conversation's delivery lane: up to WAVE_CONCURRENCY deliveries run at
+ * once, but never two for the same persona — a persona's hidden thread is one
+ * session, and two concurrent turns on it would race the session bookkeeping.
+ * `active` maps the running deliveries' persona ids to display names (blank
+ * until the delivery resolves its persona) for the activity row.
+ */
+interface Lane {
+  active: Map<string, string>;
+  queue: DeliveryTask[];
+}
+
+/**
+ * One open fan-out: the sender's branches and what they have answered so far.
+ * In-memory like the delivery queue itself — a restart kills the wave, the
+ * already-buffered replies survive as ordinary items, and the user nudges the
+ * conversation with a reply.
+ */
+interface JoinState {
+  senderId: string;
+  /** Who initiated the fanning-out turn — where the assembly's reply routes. */
+  initiator: string;
+  /** Branch persona id -> display name, removed as each branch settles. */
+  awaiting: Map<string, string>;
+  buffered: { name: string; body: string; note?: string }[];
+  /** Failures/timeouts/detours, appended to the assembly mail. */
+  notes: string[];
+  timer: NodeJS.Timeout;
+}
 
 export interface MailRouterOptions {
   runtime: ChatBackend;
@@ -42,8 +104,15 @@ export interface MailRouterOptions {
 }
 
 export class MailRouter {
-  /** Serializes deliveries per conversation, so a reply can't overtake its turn. */
-  private readonly queues = new Map<string, Promise<unknown>>();
+  /** Per-conversation delivery lanes: bounded parallelism, same-persona serial. */
+  private readonly lanes = new Map<string, Lane>();
+  /** Open fan-outs, keyed `${conversationId}\n${senderId}`. */
+  private readonly joins = new Map<string, JoinState>();
+  /**
+   * Who initiated each live delivery turn, keyed by turn id — the bridge reads
+   * it to key a send_mail fan-out's join to the right initiator.
+   */
+  private readonly turnInitiators = new Map<string, string>();
   /** Threads with a delivery in flight — the mail-turn suppressions read this. */
   private readonly liveThreads = new Set<string>();
   /**
@@ -170,23 +239,88 @@ export class MailRouter {
       };
     }
     const personaTo = to.filter((t) => t !== 'user');
+    const capRefusal =
+      'The inter-persona exchange cap for this conversation is used up. Write your result for the ' +
+      'user instead — send_mail to ["user"], or just finish your reply.';
+    const budgetRefusal =
+      'Your persona’s send budget for this wave is used up. Finish your assignment — your final ' +
+      'reply goes to whoever mailed you — or send_mail to ["user"].';
+    const caller = await getPersona(ctx.personaId);
     if (personaTo.length) {
       const cap = await this.exchangeCap();
-      if (conversation.exchangeCount + personaTo.length > cap) {
-        return {
-          ok: false,
-          error:
-            'The inter-persona exchange cap for this conversation is used up. Write your result for the ' +
-            'user instead — send_mail to ["user"], or just finish your reply.'
-        };
+      if (conversation.exchangeCount + personaTo.length > cap) return { ok: false, error: capRefusal };
+      const budget = caller?.sendBudget;
+      if (budget !== undefined) {
+        const spent = conversation.sendCounts[ctx.personaId] ?? 0;
+        if (spent + personaTo.length > budget) return { ok: false, error: budgetRefusal };
       }
     }
-    await appendMailItem({ conversationId: ctx.conversationId, from: ctx.personaId, to, body });
+    try {
+      await appendMailItem({
+        conversationId: ctx.conversationId,
+        from: ctx.personaId,
+        to,
+        body,
+        guard: {
+          exchangeCap: await this.exchangeCap(),
+          ...(caller?.sendBudget !== undefined ? { senderBudget: caller.sendBudget } : {})
+        }
+      });
+    } catch (error) {
+      // With deliveries running in parallel, a racing send can pass the
+      // pre-check above and lose here — the store's guard is the authority.
+      if (error instanceof CapError) {
+        return { ok: false, error: error.kind === 'budget' ? budgetRefusal : capRefusal };
+      }
+      throw error;
+    }
     const sent = this.turnMailSent.get(ctx.turnId) ?? { persona: false, user: false };
     if (personaTo.length) sent.persona = true;
     if (to.includes('user')) sent.user = true;
     this.turnMailSent.set(ctx.turnId, sent);
-    for (const recipient of personaTo) this.enqueueDelivery(ctx.conversationId, recipient, body, ctx.personaId);
+
+    const initiator = this.turnInitiators.get(ctx.turnId) ?? 'user';
+    // A user-only send from an awaited branch ends that branch: its turn gets
+    // no implicit reply, so nothing later can settle it.
+    if (!personaTo.length) {
+      const join = initiator !== 'user' ? this.joinFor(ctx.conversationId, initiator) : undefined;
+      const name = join?.awaiting.get(ctx.personaId);
+      if (join && name !== undefined) {
+        join.awaiting.delete(ctx.personaId);
+        join.notes.push(`${name} answered you nothing and mailed the user directly.`);
+        this.maybeAssemble(ctx.conversationId, join);
+      }
+    }
+    // Persona recipients: a recipient mid-fan-out must not get a turn before
+    // its assembly, so mail addressed to an open join's sender is buffered into
+    // that join instead of delivered — a branch's explicit reply settles its
+    // branch, anything else rides along labeled for what it is.
+    const delivered: string[] = [];
+    for (const recipient of personaTo) {
+      const join = this.joinFor(ctx.conversationId, recipient);
+      if (join) {
+        const name = join.awaiting.get(ctx.personaId);
+        const senderName = name ?? (await this.personaName(ctx.personaId));
+        join.buffered.push({
+          name: senderName,
+          body,
+          ...(name === undefined ? { note: 'not a delegation reply' } : {})
+        });
+        if (name !== undefined) {
+          join.awaiting.delete(ctx.personaId);
+          this.maybeAssemble(ctx.conversationId, join);
+        }
+        continue;
+      }
+      delivered.push(recipient);
+      this.enqueueDelivery(ctx.conversationId, recipient, body, ctx.personaId);
+    }
+    // Fanning out — two or more deliveries from one send — opens (or widens)
+    // this sender's join: the replies come back as one assembly turn.
+    if (delivered.length >= 2 || (delivered.length >= 1 && this.joinFor(ctx.conversationId, ctx.personaId))) {
+      await this.openJoin(ctx.conversationId, ctx.personaId, initiator, delivered);
+    }
+    this.updateActivityDetail(ctx.conversationId);
     this.opts.onChange();
     return {
       ok: true,
@@ -203,11 +337,11 @@ export class MailRouter {
    */
   async bridgeAddPersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult> {
     const caller = await getPersona(ctx.personaId);
-    if (!caller?.canAddPersonas) {
+    if (!caller?.canManagePersonas) {
       return {
         ok: false,
         error:
-          'Your persona does not have the add-personas capability. Tell the user who should be added instead ' +
+          'Your persona does not have the manage-personas capability. Tell the user who should be added instead ' +
           '(they can add the persona, or grant the capability in the Personas tab).'
       };
     }
@@ -231,6 +365,102 @@ export class MailRouter {
     return { ok: true, text: `Added ${target.name} (${target.id}). Mail it with send_mail to bring it in.` };
   }
 
+  /**
+   * save_persona: a persona creating (or editing) its own helper personas.
+   * Gated like add_persona; only the plain fields land (name/prompt/model/
+   * effort — never a harness pin or a capability flag), and edits are limited
+   * to personas the caller itself created.
+   */
+  async bridgeSavePersona(req: SavePersonaRequest, ctx: MailBridgeContext): Promise<MailBridgeResult> {
+    const caller = await getPersona(ctx.personaId);
+    if (!caller?.canManagePersonas) {
+      return {
+        ok: false,
+        error:
+          'Your persona does not have the manage-personas capability. Describe the persona to the user ' +
+          'instead (they can create it, or grant the capability in the Personas tab).'
+      };
+    }
+    const fields: BridgePersonaFields = {
+      ...(typeof req.name === 'string' ? { name: req.name } : {}),
+      ...(typeof req.prompt === 'string' ? { prompt: req.prompt } : {}),
+      ...(typeof req.model === 'string' ? { model: req.model } : {}),
+      ...(typeof req.effort === 'string' ? { effort: req.effort } : {})
+    };
+    try {
+      if (!req.id?.trim()) {
+        const persona = await savePersonaFor(ctx.personaId, fields);
+        return {
+          ok: true,
+          text:
+            `Created ${persona.name} (${persona.id}). Bring it into this conversation with ` +
+            'add_persona before mailing it.'
+        };
+      }
+      const target = await this.resolvePersona(req.id);
+      if (!target) return { ok: false, error: `No persona "${req.id}" exists.` };
+      if (target.createdBy !== ctx.personaId) {
+        return { ok: false, error: `You may only edit personas you created; "${target.name}" is not one.` };
+      }
+      const updated = await updatePersonaFields(target.id, fields);
+      return { ok: true, text: `Updated ${updated.name} (${updated.id}). Changes apply from its next mail.` };
+    } catch (error) {
+      // quiet: the tool result IS the error channel — the calling persona gets
+      // the store's refusal (name clash, unwritable file) verbatim and reacts.
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * delete_persona: a persona cleaning up helpers it created. Refused while
+   * the target still has mail in flight anywhere — a queued delivery to a
+   * deleted persona could only fail.
+   */
+  async bridgeDeletePersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult> {
+    const caller = await getPersona(ctx.personaId);
+    if (!caller?.canManagePersonas) {
+      return { ok: false, error: 'Your persona does not have the manage-personas capability.' };
+    }
+    const wanted = personaId.trim();
+    if (!wanted) return { ok: false, error: 'Give delete_persona a persona id.' };
+    const target = await this.resolvePersona(wanted);
+    if (!target) return { ok: false, error: `No persona "${wanted}" exists.` };
+    if (target.createdBy !== ctx.personaId) {
+      return { ok: false, error: `You may only delete personas you created; "${target.name}" is not one.` };
+    }
+    for (const lane of this.lanes.values()) {
+      if (lane.active.has(target.id) || lane.queue.some((t) => t.personaId === target.id)) {
+        return { ok: false, error: `${target.name} still has mail in flight; wait for it to finish.` };
+      }
+    }
+    for (const join of this.joins.values()) {
+      if (join.awaiting.has(target.id) || join.senderId === target.id) {
+        return { ok: false, error: `${target.name} is still part of an open fan-out; wait for it to finish.` };
+      }
+    }
+    try {
+      await deletePersona(target.id);
+    } catch (error) {
+      // quiet: the tool result IS the error channel — the calling persona gets
+      // the store's refusal verbatim and reacts.
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    return { ok: true, text: `Deleted ${target.name}.` };
+  }
+
+  /** Resolve by id first, then by (unique, case-insensitive) name. */
+  private async resolvePersona(idOrName: string) {
+    const personas = await listPersonas();
+    return (
+      personas.find((p) => p.id === idOrName) ??
+      personas.find((p) => p.name.toLowerCase() === idOrName.toLowerCase())
+    );
+  }
+
+  private async personaName(personaId: string): Promise<string> {
+    return (await getPersona(personaId))?.name ?? personaId;
+  }
+
   // ---- delivery internals ----
 
   /** The cap, read fresh per decision — a settings change applies to the very next hop. */
@@ -240,21 +470,132 @@ export class MailRouter {
     return (await readSettings().catch(() => null))?.mail.exchangeCap ?? 10;
   }
 
-  /** Queue one delivery behind the conversation's previous one. */
+  /** Queue one delivery on the conversation's lane and run what fits. */
   private enqueueDelivery(conversationId: string, personaId: string, body: string, from: string): void {
     this.pending.set(conversationId, (this.pending.get(conversationId) ?? 0) + 1);
-    const prev = this.queues.get(conversationId) ?? Promise.resolve();
-    const run = prev.then(
-      () => this.deliver(conversationId, personaId, body, from),
-      () => this.deliver(conversationId, personaId, body, from)
+    const lane: Lane = this.lanes.get(conversationId) ?? { active: new Map(), queue: [] };
+    this.lanes.set(conversationId, lane);
+    lane.queue.push({ personaId, body, from });
+    this.pump(conversationId);
+  }
+
+  /**
+   * Start queued deliveries up to the wave limit, skipping (not reordering)
+   * any whose persona is already mid-delivery — same-persona stays serial.
+   */
+  private pump(conversationId: string): void {
+    const lane = this.lanes.get(conversationId);
+    if (!lane) return;
+    while (lane.active.size < WAVE_CONCURRENCY) {
+      const at = lane.queue.findIndex((task) => !lane.active.has(task.personaId));
+      if (at < 0) break;
+      const [task] = lane.queue.splice(at, 1);
+      lane.active.set(task.personaId, '');
+      void this.deliver(conversationId, task.personaId, task.body, task.from)
+        // quiet: deliver() reports every failure as a mail the user sees; a
+        // rejection reaching here has already been told.
+        .catch(() => undefined)
+        .finally(() => {
+          lane.active.delete(task.personaId);
+          if (!lane.active.size && !lane.queue.length) this.lanes.delete(conversationId);
+          else this.pump(conversationId);
+        });
+    }
+  }
+
+  /**
+   * The activity row's live detail: who is working, how deep the wave is, and
+   * which fan-out branches the conversation is still waiting on.
+   */
+  private updateActivityDetail(conversationId: string): void {
+    const row = this.activityRows.get(conversationId);
+    if (!row) return;
+    const lane = this.lanes.get(conversationId);
+    const working = lane ? [...lane.active.values()].filter(Boolean) : [];
+    const queued = (this.pending.get(conversationId) ?? 0) - (lane?.active.size ?? 0);
+    const waiting: string[] = [];
+    for (const [key, join] of this.joins) {
+      if (key.startsWith(`${conversationId}\n`)) waiting.push(...join.awaiting.values());
+    }
+    const parts = [
+      `${working.length ? `${working.join(', ')} working` : 'working'} · turn ${row.turns}`,
+      ...(queued > 0 ? [`${queued} queued`] : []),
+      ...(waiting.length ? [`waiting on ${waiting.join(', ')}`] : [])
+    ];
+    activity.setDetail(row.handle, parts.join(' · '));
+  }
+
+  // ---- fan-out joins ----
+
+  private joinFor(conversationId: string, senderId: string): JoinState | undefined {
+    return this.joins.get(`${conversationId}\n${senderId}`);
+  }
+
+  /** Open the sender's join over these branches, or widen the one already open. */
+  private async openJoin(
+    conversationId: string,
+    senderId: string,
+    initiator: string,
+    branchIds: string[]
+  ): Promise<void> {
+    const personas = await listPersonas();
+    const nameOf = (id: string) => personas.find((p) => p.id === id)?.name ?? id;
+    const existing = this.joinFor(conversationId, senderId);
+    if (existing) {
+      for (const id of branchIds) existing.awaiting.set(id, nameOf(id));
+      return;
+    }
+    const join: JoinState = {
+      senderId,
+      initiator,
+      awaiting: new Map(branchIds.map((id) => [id, nameOf(id)])),
+      buffered: [],
+      notes: [],
+      // The backstop for a branch that wanders off (delegates onward and never
+      // reports back): individual deliveries already time out on their own.
+      timer: setTimeout(() => {
+        for (const name of join.awaiting.values()) {
+          join.notes.push(`${name} never replied before the wave timed out.`);
+        }
+        join.awaiting.clear();
+        this.maybeAssemble(conversationId, join);
+      }, DELIVERY_TIMEOUT_MS)
+    };
+    // A backstop must never be what keeps the process alive.
+    join.timer.unref?.();
+    this.joins.set(`${conversationId}\n${senderId}`, join);
+  }
+
+  /**
+   * A branch of `from`'s join failed before it could answer — settle it with a
+   * note so the wave doesn't hang on a branch that can no longer speak.
+   */
+  private settleBranchFailure(conversationId: string, from: string, personaId: string, note: string): void {
+    const join = from !== 'user' ? this.joinFor(conversationId, from) : undefined;
+    const name = join?.awaiting.get(personaId);
+    if (!join || name === undefined) return;
+    join.awaiting.delete(personaId);
+    join.notes.push(`${name}: ${note}`);
+    this.maybeAssemble(conversationId, join);
+  }
+
+  /**
+   * Assemble when the last branch settles: one delivery to the sender carrying
+   * every buffered reply. No new MailItem — the replies already are items — so
+   * assembly spends nothing against the caps; `from` is the wave's initiator,
+   * so the assembly turn's implicit reply routes back to them.
+   */
+  private maybeAssemble(conversationId: string, join: JoinState): void {
+    this.updateActivityDetail(conversationId);
+    if (join.awaiting.size) return;
+    clearTimeout(join.timer);
+    this.joins.delete(`${conversationId}\n${join.senderId}`);
+    const sections = join.buffered.map(
+      (b) => `--- from ${b.name}${b.note ? ` (${b.note})` : ''} ---\n${b.body}`
     );
-    this.queues.set(
-      conversationId,
-      run.then(
-        () => undefined,
-        () => undefined
-      )
-    );
+    const parts = ['Replies to your delegations:', ...sections];
+    if (join.notes.length) parts.push(`Notes:\n${join.notes.map((n) => `- ${n}`).join('\n')}`);
+    this.enqueueDelivery(conversationId, join.senderId, parts.join('\n\n'), join.initiator);
   }
 
   /**
@@ -267,9 +608,13 @@ export class MailRouter {
    * mail somebody sees.
    */
   private async deliver(conversationId: string, personaId: string, body: string, from: string): Promise<void> {
+    // Minted out here so the finally below can clear the turn's bookkeeping on
+    // every exit path.
+    const turnId = randomUUID();
     try {
       const persona = await getPersona(personaId);
       if (!persona) {
+        this.settleBranchFailure(conversationId, from, personaId, 'no longer exists.');
         await this.appendReply(
           conversationId,
           personaId,
@@ -289,20 +634,17 @@ export class MailRouter {
       };
       row.turns += 1;
       this.activityRows.set(conversationId, row);
-      // Deliveries serialize per conversation, so one persona works at a time;
-      // the rest of the wave sits queued behind it.
-      const queued = (this.pending.get(conversationId) ?? 1) - 1;
-      activity.setDetail(
-        row.handle,
-        `${persona.name} working · turn ${row.turns}${queued > 0 ? ` · ${queued} queued` : ''}`
-      );
+      // Up to WAVE_CONCURRENCY personas work this conversation at once; the
+      // lane holds their names for the activity row.
+      this.lanes.get(conversationId)?.active.set(personaId, persona.name);
+      this.updateActivityDetail(conversationId);
       const threadId = conversation.sessions[personaId];
 
-      // Mint the turn id and subscribe for its settle BEFORE starting the turn:
-      // an instantly-failing turn can settle in the gap between startTurn
-      // resolving and a later subscription, and a missed settle wedges the
-      // conversation for the whole timeout.
-      const turnId = randomUUID();
+      // The turn id is minted up front and the settle subscription opens
+      // BEFORE starting the turn: an instantly-failing turn can settle in the
+      // gap between startTurn resolving and a later subscription, and a missed
+      // settle wedges the conversation for the whole timeout.
+      this.turnInitiators.set(turnId, from);
       const threadIdRef = { current: threadId ?? null };
       const settling = this.waitForSettle(turnId, threadIdRef);
       let started;
@@ -333,6 +675,7 @@ export class MailRouter {
       const runThreadId = started.threadId ?? threadId;
       if (!runThreadId || !started.turnId) {
         settling.abandon();
+        this.settleBranchFailure(conversationId, from, personaId, 'its delivery never started a turn.');
         await this.appendReply(conversationId, personaId, 'The delivery never started a turn — nothing ran.', 'awaiting-user');
         return;
       }
@@ -345,6 +688,12 @@ export class MailRouter {
       const sent = this.turnMailSent.get(turnId);
       this.turnMailSent.delete(turnId);
       if (settle.status !== 'ok') {
+        this.settleBranchFailure(
+          conversationId,
+          from,
+          personaId,
+          `its run failed (${settle.error ?? 'the turn did not finish'}).`
+        );
         await this.appendReply(
           conversationId,
           personaId,
@@ -366,11 +715,13 @@ export class MailRouter {
       // one outcome the Inbox must not produce.
       const message = error instanceof Error ? error.message : String(error);
       degrade('mail', 'delivered a failure notice instead of a reply', error);
+      this.settleBranchFailure(conversationId, from, personaId, `its delivery failed (${message}).`);
       await this.appendReply(conversationId, personaId, `The delivery failed: ${message}`, 'awaiting-user').catch(() => {
         // quiet: the degrade above already recorded the failure; a store that
         // cannot be written has nothing left to say it in.
       });
     } finally {
+      this.turnInitiators.delete(turnId);
       const left = (this.pending.get(conversationId) ?? 1) - 1;
       if (left > 0) this.pending.set(conversationId, left);
       else {
@@ -408,18 +759,60 @@ export class MailRouter {
       const { conversations } = await readMail();
       const conversation = conversations.find((c) => c.id === conversationId);
       if (!conversation) return;
+      const join = this.joinFor(conversationId, initiator);
       const cap = await this.exchangeCap();
       if (conversation.exchangeCount + 1 <= cap) {
-        await appendMailItem({ conversationId, from: personaId, to: [initiator], body: reply });
+        try {
+          // Exempt from the sender's budget: finishing an assignment must
+          // always be possible, however capped the persona's own sends are.
+          await appendMailItem({
+            conversationId,
+            from: personaId,
+            to: [initiator],
+            body: reply,
+            guard: { exchangeCap: cap, budgetExempt: true }
+          });
+        } catch (error) {
+          // A racing parallel send spent the cap between the check and the
+          // append: fall through to the cap-spent path below.
+          if (!(error instanceof CapError)) throw error;
+          this.settleCappedBranch(conversationId, join, personaId);
+          await this.appendReply(conversationId, personaId, reply, 'awaiting-user');
+          return;
+        }
+        if (join) {
+          // The initiator is mid-fan-out: buffer the reply for its assembly
+          // turn instead of starting a turn per branch.
+          const name = join.awaiting.get(personaId);
+          join.buffered.push({
+            name: name ?? (await this.personaName(personaId)),
+            body: reply,
+            ...(name === undefined ? { note: 'not a delegation reply' } : {})
+          });
+          if (name !== undefined) join.awaiting.delete(personaId);
+          this.maybeAssemble(conversationId, join);
+          this.opts.onChange();
+          return;
+        }
         this.enqueueDelivery(conversationId, initiator, reply, personaId);
         this.opts.onChange();
         return;
       }
       // Cap spent: the reply lands on the user instead of looping on.
+      this.settleCappedBranch(conversationId, join, personaId);
       await this.appendReply(conversationId, personaId, reply, 'awaiting-user');
       return;
     }
     await this.appendReply(conversationId, personaId, reply, 'idle');
+  }
+
+  /** A branch whose reply was forced to the user by the cap must still settle. */
+  private settleCappedBranch(conversationId: string, join: JoinState | undefined, personaId: string): void {
+    const name = join?.awaiting.get(personaId);
+    if (!join || name === undefined) return;
+    join.awaiting.delete(personaId);
+    join.notes.push(`${name}'s reply landed on the user — the exchange cap was spent.`);
+    this.maybeAssemble(conversationId, join);
   }
 
   /** Append a persona→user item and record the status to write once the queue drains. */

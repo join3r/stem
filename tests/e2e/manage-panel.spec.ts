@@ -99,3 +99,27 @@ test('the Files sub-tab lists a seeded Files folder and deletes through to disk'
     removeUserData(filesDir);
   }
 });
+
+test('the Personas editor round-trips the manage flag and the send budget', async ({ mainWindow }) => {
+  await mainWindow.getByRole('button', { name: 'Personas', exact: true }).click();
+
+  // Orchestrator ships with the manage-personas capability on; expanding its
+  // row shows the checkbox already ticked.
+  await mainWindow.getByText('Orchestrator', { exact: true }).click();
+  const manageBox = mainWindow.locator('label.persona-cap input[type="checkbox"]');
+  await expect(manageBox).toBeChecked();
+
+  // Set a send budget and save — the value must land in the store.
+  const budget = mainWindow.locator('label.persona-cap input[type="number"]');
+  await budget.fill('5');
+  await mainWindow.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect
+    .poll(() =>
+      mainWindow.evaluate(() =>
+        (window as any).stem
+          .listPersonas()
+          .then((list: any[]) => list.find((p: any) => p.id === 'orchestrator'))
+      )
+    )
+    .toMatchObject({ sendBudget: 5, canManagePersonas: true });
+});

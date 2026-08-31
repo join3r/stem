@@ -25,7 +25,12 @@ import { ServerFolderPicker } from '../ServerFolderPicker';
 // Built-ins can be edited but not deleted; "duplicate" is how variants start.
 
 /** "Fable · High · claude on MacBook in ~/src/stem" — the collapsed face of a persona row. */
-function summaryLabel(p: Persona, models: ModelSummary[], devices: DeviceInfo[]): string {
+function summaryLabel(
+  p: Persona,
+  models: ModelSummary[],
+  devices: DeviceInfo[],
+  personas: Persona[]
+): string {
   const parts: string[] = [];
   if (p.model) {
     const m = models.find((x) => x.id === p.model);
@@ -43,6 +48,9 @@ function summaryLabel(p: Persona, models: ModelSummary[], devices: DeviceInfo[])
         ? `${p.harness.agent}${where} in ${p.harness.cwd}`
         : `${p.harness.agent}${where}`
     );
+  }
+  if (p.createdBy) {
+    parts.push(`created by ${personas.find((x) => x.id === p.createdBy)?.name ?? p.createdBy}`);
   }
   return parts.join(' · ');
 }
@@ -66,7 +74,8 @@ function sameEdit(a: Persona, b: Persona): boolean {
     (a.harness?.agent ?? '') === (b.harness?.agent ?? '') &&
     (a.harness?.cwd ?? '') === (b.harness?.cwd ?? '') &&
     (a.harness?.device ?? '') === (b.harness?.device ?? '') &&
-    (a.canAddPersonas ?? false) === (b.canAddPersonas ?? false)
+    (a.canManagePersonas ?? false) === (b.canManagePersonas ?? false) &&
+    (a.sendBudget ?? 0) === (b.sendBudget ?? 0)
   );
 }
 
@@ -196,6 +205,7 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
       prompt: from?.prompt ?? ''
     };
     delete draft.builtin;
+    delete draft.createdBy;
     setDraft(draft);
     setRowExpanded(draft.id, true);
   }
@@ -246,7 +256,7 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                     {p.name}
                   </strong>
                   <em>
-                    {summaryLabel(p, models, devices)}
+                    {summaryLabel(p, models, devices, personas)}
                     {dirty && !expanded.has(p.id) ? ' · unsaved' : ''}
                   </em>
                 </span>
@@ -413,14 +423,39 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                   <label className="persona-cap">
                     <input
                       type="checkbox"
-                      checked={p.canAddPersonas === true}
+                      checked={p.canManagePersonas === true}
                       onChange={(e) =>
-                        setDraft({ ...p, canAddPersonas: e.target.checked || undefined })
+                        setDraft({ ...p, canManagePersonas: e.target.checked || undefined })
                       }
                     />
                     <span>
-                      Can add personas to conversations — lets this persona widen a mail
-                      conversation’s To: list with the add_persona tool.
+                      Can manage personas — lets this persona widen a mail conversation’s To:
+                      list (add_persona) and create, edit, and delete its own helper personas
+                      (save_persona / delete_persona).
+                    </span>
+                  </label>
+                  <label className="persona-cap">
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={p.sendBudget ?? ''}
+                      placeholder="∞"
+                      style={{ width: '4.5em' }}
+                      onChange={(e) => {
+                        const n = Number.parseInt(e.target.value, 10);
+                        setDraft({
+                          ...p,
+                          sendBudget: Number.isFinite(n)
+                            ? Math.min(100, Math.max(1, n))
+                            : undefined
+                        });
+                      }}
+                    />
+                    <span>
+                      Send budget per wave — the most mails this persona may start between your
+                      sends in one conversation. Its reply to whoever mailed it is always allowed.
+                      Blank = unlimited (the global exchange cap still applies).
                     </span>
                   </label>
                   <div className="push-row">

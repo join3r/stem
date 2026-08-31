@@ -5,7 +5,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { deletePersona, getPersona, listPersonas, savePersona } from '../../src/server/workspace/personas';
+import {
+  deletePersona,
+  getPersona,
+  listPersonas,
+  onPersonasChanged,
+  savePersona,
+  savePersonaFor,
+  updatePersonaFields
+} from '../../src/server/workspace/personas';
 import { personasStorePath } from '../../src/server/workspace/paths';
 import type { Persona } from '../../src/shared/types';
 
@@ -33,7 +41,7 @@ describe('first read', () => {
     const personas = await listPersonas();
     expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'orchestrator']);
     expect(personas.every((p) => p.builtin)).toBe(true);
-    expect(onDisk().version).toBe(1);
+    expect(onDisk().version).toBe(2);
   });
 
   it('degrades a corrupt file to the built-ins rather than throwing', async () => {
@@ -94,13 +102,63 @@ describe('save', () => {
     expect(verifier?.prompt).toBe('stricter');
   });
 
-  it('round-trips the add-personas capability; Secretary is seeded with it on', async () => {
-    expect((await getPersona('secretary'))?.canAddPersonas).toBe(true);
-    expect((await getPersona('verifier'))?.canAddPersonas).toBeUndefined();
-    await savePersona(persona({ canAddPersonas: true }));
-    expect((await getPersona('p1'))?.canAddPersonas).toBe(true);
-    await savePersona(persona({ canAddPersonas: false }));
-    expect((await getPersona('p1'))?.canAddPersonas).toBeUndefined();
+  it('round-trips the manage-personas capability; Secretary and Orchestrator seed with it on', async () => {
+    expect((await getPersona('secretary'))?.canManagePersonas).toBe(true);
+    expect((await getPersona('orchestrator'))?.canManagePersonas).toBe(true);
+    expect((await getPersona('verifier'))?.canManagePersonas).toBeUndefined();
+    await savePersona(persona({ canManagePersonas: true }));
+    expect((await getPersona('p1'))?.canManagePersonas).toBe(true);
+    await savePersona(persona({ canManagePersonas: false }));
+    expect((await getPersona('p1'))?.canManagePersonas).toBeUndefined();
+  });
+
+  it('migrates the pre-rename canAddPersonas flag on read', async () => {
+    await listPersonas(); // seed
+    const raw = onDisk();
+    raw.version = 1;
+    for (const p of raw.personas) {
+      delete p.canManagePersonas;
+      if (p.id === 'secretary') p.canAddPersonas = true;
+    }
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    expect((await getPersona('secretary'))?.canManagePersonas).toBe(true);
+  });
+
+  it('a v1 file grants the Orchestrator the flag once; unticking sticks on v2', async () => {
+    await listPersonas(); // seed
+    const raw = onDisk();
+    raw.version = 1;
+    for (const p of raw.personas) delete p.canManagePersonas;
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    // v1 read: the stored Orchestrator row gains the flag the P3 seed carries.
+    expect((await getPersona('orchestrator'))?.canManagePersonas).toBe(true);
+    // The user unticks it — the write lands as v2 and the choice sticks.
+    const orchestrator = (await getPersona('orchestrator'))!;
+    await savePersona({ ...orchestrator, canManagePersonas: undefined });
+    expect(onDisk().version).toBe(2);
+    expect((await getPersona('orchestrator'))?.canManagePersonas).toBeUndefined();
+  });
+
+  it('never lets a caller set createdBy; it survives from the stored row', async () => {
+    await savePersona(persona({ createdBy: 'orchestrator' } as Partial<Persona>));
+    expect((await getPersona('p1'))?.createdBy).toBeUndefined();
+    // A row that HAS createdBy on disk keeps it across an editor save.
+    const raw = onDisk();
+    raw.personas.find((p: Persona) => p.id === 'p1').createdBy = 'orchestrator';
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    await savePersona(persona({ prompt: 'edited' }));
+    expect((await getPersona('p1'))?.createdBy).toBe('orchestrator');
+  });
+
+  it('clamps sendBudget to 1..100 and drops junk', async () => {
+    await savePersona(persona({ sendBudget: 700 }));
+    expect((await getPersona('p1'))?.sendBudget).toBe(100);
+    await savePersona(persona({ sendBudget: 0 }));
+    expect((await getPersona('p1'))?.sendBudget).toBe(1);
+    await savePersona(persona({ sendBudget: 5.4 }));
+    expect((await getPersona('p1'))?.sendBudget).toBe(5);
+    await savePersona(persona({ sendBudget: undefined }));
+    expect((await getPersona('p1'))?.sendBudget).toBeUndefined();
   });
 
   it('keeps a harness pin with a blank cwd (mid-edit save) but drops one without an agent', async () => {
@@ -137,6 +195,59 @@ describe('delete', () => {
     const before = await listPersonas();
     const after = await deletePersona('ghost');
     expect(after).toEqual(before);
+  });
+});
+
+describe('bridge mutators', () => {
+  it('savePersonaFor stamps createdBy and only the plain fields', async () => {
+    const created = await savePersonaFor('orchestrator', {
+      name: 'researcher-1',
+      prompt: 'dig',
+      model: 'anthropic/claude-fable-5',
+      effort: 'high'
+    });
+    const stored = await getPersona(created.id);
+    expect(stored).toMatchObject({
+      name: 'researcher-1',
+      prompt: 'dig',
+      createdBy: 'orchestrator'
+    });
+    expect(stored?.harness).toBeUndefined();
+    expect(stored?.canManagePersonas).toBeUndefined();
+  });
+
+  it('savePersonaFor enforces name uniqueness', async () => {
+    await savePersonaFor('orchestrator', { name: 'researcher-1', prompt: '' });
+    await expect(savePersonaFor('orchestrator', { name: 'RESEARCHER-1', prompt: '' })).rejects.toThrow(
+      /already exists/
+    );
+  });
+
+  it('updatePersonaFields merges only the plain fields, keeping pins and flags', async () => {
+    await savePersona(
+      persona({ harness: { agent: 'claude', cwd: '/src' }, canManagePersonas: true, sendBudget: 3 })
+    );
+    const updated = await updatePersonaFields('p1', { prompt: 'sharper' });
+    expect(updated.prompt).toBe('sharper');
+    const stored = await getPersona('p1');
+    expect(stored?.harness).toEqual({ agent: 'claude', cwd: '/src' });
+    expect(stored?.canManagePersonas).toBe(true);
+    expect(stored?.sendBudget).toBe(3);
+  });
+
+  it('the store-level change hook fires once per successful write', async () => {
+    let fired = 0;
+    onPersonasChanged(() => fired++);
+    try {
+      await savePersona(persona());
+      expect(fired).toBe(1);
+      await savePersonaFor('orchestrator', { name: 'helper', prompt: '' });
+      expect(fired).toBe(2);
+      await expect(savePersona(persona({ id: 'p2', name: 'code — stem' }))).rejects.toThrow();
+      expect(fired).toBe(2); // a refused write announces nothing
+    } finally {
+      onPersonasChanged(null);
+    }
   });
 });
 

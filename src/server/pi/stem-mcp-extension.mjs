@@ -2166,7 +2166,9 @@ function registerMailTools(pi) {
     description:
       'Send a mail within the CURRENT mail conversation. Recipients are the conversation\'s other personas ' +
       'and/or "user". Mailing a persona is asynchronous: finish your turn after sending — its reply arrives ' +
-      'as a later mail to you. Mailing ["user"] is how you answer the user after consulting personas; a plain ' +
+      'as a later mail to you. To delegate pieces of a task to SEVERAL personas, list them all in ONE call: ' +
+      'their work runs in parallel and every reply comes back to you together, as a single assembly mail. ' +
+      'Mailing ["user"] is how you answer the user after consulting personas; a plain ' +
       'final message (no send_mail) instead replies to whoever mailed you. Only works during a mail delivery — ' +
       'in an ordinary chat, just reply normally.',
     parameters: {
@@ -2193,7 +2195,7 @@ function registerMailTools(pi) {
     label: 'Add persona to conversation',
     description:
       'Add an existing persona to the CURRENT mail conversation\'s participant list so it becomes reachable ' +
-      'with send_mail. Only personas whose configuration grants the add-personas capability may call this. ' +
+      'with send_mail. Only personas whose configuration grants the manage-personas capability may call this. ' +
       'The persona is added silently — mail it to bring it in.',
     parameters: {
       type: 'object',
@@ -2206,6 +2208,62 @@ function registerMailTools(pi) {
       const res = await mailBridge(ctx, { op: 'add_persona', personaId: params?.personaId });
       if (!res.ok) return taskErr(res.error || 'Could not add the persona.');
       return taskOk(res.text || 'Persona added.');
+    }
+  });
+
+  pi.registerTool({
+    name: 'save_persona',
+    label: 'Create or edit a persona',
+    description:
+      'Create a helper persona (omit id), or edit one YOU created (pass its id). Only these fields can be ' +
+      'set: name, prompt, model, effort - a persona created here has no coding-agent pin and no special ' +
+      'capabilities; the user grants those in the Personas tab. Only personas whose configuration grants ' +
+      'the manage-personas capability may call this. A new persona is registry-wide but NOT yet in this ' +
+      'conversation - bring it in with add_persona before mailing it. Use copies of one role prompt ' +
+      '(researcher-1, researcher-2, ...) to work pieces of a task in parallel.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id of a persona you created, to edit it. Omit to create a new one.' },
+        name: { type: 'string', description: 'Unique display name - this is what the To: field addresses.' },
+        prompt: { type: 'string', description: 'The persona\'s role prompt.' },
+        model: { type: 'string', description: 'Optional model pin (provider/modelId). Omit for the app default.' },
+        effort: { type: 'string', description: 'Optional reasoning-effort pin.' }
+      },
+      required: []
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const res = await mailBridge(ctx, {
+        op: 'save_persona',
+        id: params?.id,
+        name: params?.name,
+        prompt: params?.prompt,
+        model: params?.model,
+        effort: params?.effort
+      });
+      if (!res.ok) return taskErr(res.error || 'Could not save the persona.');
+      return taskOk(res.text || 'Persona saved.');
+    }
+  });
+
+  pi.registerTool({
+    name: 'delete_persona',
+    label: 'Delete a persona',
+    description:
+      'Delete a persona YOU created (clean up your helpers when a task is done). Refused for personas ' +
+      'you did not create, and while the target still has mail in flight. Only personas whose ' +
+      'configuration grants the manage-personas capability may call this.',
+    parameters: {
+      type: 'object',
+      properties: {
+        personaId: { type: 'string', description: 'Id (or unique name) of the persona to delete.' }
+      },
+      required: ['personaId']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const res = await mailBridge(ctx, { op: 'delete_persona', personaId: params?.personaId });
+      if (!res.ok) return taskErr(res.error || 'Could not delete the persona.');
+      return taskOk(res.text || 'Persona deleted.');
     }
   });
 }

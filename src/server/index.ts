@@ -21,6 +21,7 @@ import { publishProtectedRootsNow } from './workspace/connected-folders';
 import { piHome } from './workspace/paths';
 import type { TaskScheduler } from './scheduler';
 import { MailRouter } from './mail/router';
+import { onPersonasChanged } from './workspace/personas';
 import { initTaskScheduler } from './startup/scheduler';
 import type { ExecService } from './exec/service';
 import { detectGitBash } from './exec/git-bash';
@@ -329,7 +330,11 @@ function registerIpc(): void {
   registerMcpIpc(deps);
   registerMemoryIpc(deps);
   registerChatsIpc(deps);
-  registerPersonasIpc(() => emit('personas:changed', undefined));
+  registerPersonasIpc();
+  // Fired by the store on every registry write — editor saves and the mail
+  // bridge's save_persona/delete_persona alike — so every connected client's
+  // persona list (the composer's To: field included) stays current.
+  onPersonasChanged(() => emit('personas:changed', undefined));
   registerMailIpc({ router: () => mailRouter, runtime: () => runtime! });
   registerDevicesIpc();
   registerHarnessIpc();
@@ -685,11 +690,14 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   // into reply mail. Created with the runtime; the IPC layer reaches it through
   // the late-bound getter registerIpc wires.
   mailRouter = new MailRouter({ runtime, onChange: () => emit('mail:changed', undefined) });
-  // The send_mail/add_persona tools inside a persona's delivery turn route here;
-  // the runtime supplies the conversation + sender off the live turn.
+  // The send_mail/add_persona/save_persona/delete_persona tools inside a
+  // persona's delivery turn route here; the runtime supplies the conversation
+  // + sender off the live turn.
   runtime.setMailBridge({
     send: (req, ctx) => mailRouter!.bridgeSend(req, ctx),
-    addPersona: (personaId, ctx) => mailRouter!.bridgeAddPersona(personaId, ctx)
+    addPersona: (personaId, ctx) => mailRouter!.bridgeAddPersona(personaId, ctx),
+    savePersona: (req, ctx) => mailRouter!.bridgeSavePersona(req, ctx),
+    deletePersona: (personaId, ctx) => mailRouter!.bridgeDeletePersona(personaId, ctx)
   });
 
   scheduler = initTaskScheduler({

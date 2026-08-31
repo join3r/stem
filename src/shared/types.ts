@@ -1967,12 +1967,28 @@ export interface Persona {
    */
   lightweight?: boolean;
   /**
-   * May grow a mail conversation's participant set (the add_persona tool).
-   * Off by default because the To: list is the conversation's reachability
-   * boundary — widening it is the user's call per persona. Secretary ships
-   * with it on.
+   * May manage personas: grow a mail conversation's participant set
+   * (add_persona) and create, edit, and delete its own helper personas
+   * (save_persona / delete_persona). Off by default because the To: list is
+   * the conversation's reachability boundary and the registry is the user's —
+   * widening either is the user's call per persona. Secretary and Orchestrator
+   * ship with it on. (Stored `canAddPersonas` from before the rename migrates
+   * to this flag on read.)
    */
-  canAddPersonas?: boolean;
+  canManagePersonas?: boolean;
+  /**
+   * Creator persona id, present only on agent-created personas. Round-trips
+   * from the store like `builtin` — never taken from an editor/bridge caller —
+   * and gates which personas a persona may edit or delete (only its own).
+   */
+  createdBy?: string;
+  /**
+   * Max persona-addressed mails this persona may INITIATE per wave (per
+   * conversation, reset on each user send), 1..100. Unset = unlimited.
+   * Implicit replies to the turn's initiator are exempt, so a capped persona
+   * can always finish its assignment; the global exchange cap applies on top.
+   */
+  sendBudget?: number;
   /** Seeded by Stem. Editable like any persona, but cannot be deleted. */
   builtin?: boolean;
 }
@@ -2020,6 +2036,11 @@ export interface MailConversation {
   status: 'idle' | 'working' | 'awaiting-user';
   /** Inter-persona mails spent, against the global cap (later phase). */
   exchangeCount: number;
+  /**
+   * Per-persona mails initiated this wave (persona id -> count), against that
+   * persona's optional sendBudget. Reset with exchangeCount on each user send.
+   */
+  sendCounts: Record<string, number>;
   /** ms of the latest item, whoever it addressed (sort key). */
   updatedAt: number;
   /**

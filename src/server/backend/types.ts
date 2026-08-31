@@ -134,15 +134,28 @@ export interface MailBridgeContext {
 /** What a mail-bridge op answers the tool with. */
 export type MailBridgeResult = { ok: true; text: string } | { ok: false; error: string };
 
+/** save_persona's payload: the only fields an agent may set on a persona. */
+export interface SavePersonaRequest {
+  /** Present = edit a persona the caller created; absent = create. */
+  id?: string;
+  name?: string;
+  prompt?: string;
+  model?: string;
+  effort?: string;
+}
+
 /**
  * The seam the backend uses to reach the mail router from inside a mail
  * delivery turn: send_mail (persona→persona hops and mid-chain mail to the
- * user) and add_persona (growing the conversation's participant set, gated by
- * the calling persona's capability flag).
+ * user), add_persona (growing the conversation's participant set), and
+ * save_persona/delete_persona (a persona managing its own helper personas).
+ * All but send are gated by the calling persona's canManagePersonas flag.
  */
 export interface MailBridge {
   send(req: { to: string[]; body: string }, ctx: MailBridgeContext): Promise<MailBridgeResult>;
   addPersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult>;
+  savePersona(req: SavePersonaRequest, ctx: MailBridgeContext): Promise<MailBridgeResult>;
+  deletePersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult>;
 }
 
 export interface TaskBridge {

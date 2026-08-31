@@ -62,6 +62,13 @@ function coerceConversation(raw: unknown): MailConversation | null {
     }
   }
   const status = r.status === 'working' || r.status === 'awaiting-user' ? r.status : 'idle';
+  const sendCounts: Record<string, number> = {};
+  if (r.sendCounts && typeof r.sendCounts === 'object') {
+    for (const [personaId, count] of Object.entries(r.sendCounts as Record<string, unknown>)) {
+      const n = num(count);
+      if (n !== undefined && n > 0) sendCounts[personaId] = n;
+    }
+  }
   return {
     id: r.id,
     subject: typeof r.subject === 'string' ? r.subject : '',
@@ -72,6 +79,7 @@ function coerceConversation(raw: unknown): MailConversation | null {
     // (the row would spin forever).
     status: status === 'working' ? 'idle' : status,
     exchangeCount: num(r.exchangeCount) ?? 0,
+    sendCounts,
     updatedAt: num(r.updatedAt) ?? 0,
     userUpdatedAt: num(r.userUpdatedAt) ?? 0,
     createdAt: num(r.createdAt) ?? 0
@@ -210,6 +218,7 @@ export function createConversation(subject: string, participants: string[]): Pro
     sessions: {},
     status: 'idle',
     exchangeCount: 0,
+    sendCounts: {},
     updatedAt: Date.now(),
     userUpdatedAt: 0,
     createdAt: Date.now()
@@ -220,27 +229,66 @@ export function createConversation(subject: string, participants: string[]): Pro
 }
 
 /**
+ * A cap refused an append. Typed so the router can answer the racing sender
+ * with the same friendly copy its pre-check would have used — with deliveries
+ * running in parallel, two sends can both pass the router's read-then-refuse
+ * check, and only this in-store check is authoritative.
+ */
+export class CapError extends Error {
+  constructor(readonly kind: 'exchange' | 'budget') {
+    super(kind === 'exchange' ? 'The exchange cap is used up.' : 'The send budget is used up.');
+    this.name = 'CapError';
+  }
+}
+
+/**
  * Append one item, stamping the conversation's activity clocks: `updatedAt`
  * always, `userUpdatedAt` only when the item addresses the user (that is the
- * unread/placement input), `exchangeCount` only for persona→persona mail — and
- * a mail FROM the user resets the count: each user send buys the personas a
- * fresh window of exchanges (the cap guards one runaway wave, not the
- * conversation's lifetime).
+ * unread/placement input), `exchangeCount`/`sendCounts` only for
+ * persona→persona mail — and a mail FROM the user resets both: each user send
+ * buys the personas a fresh window of exchanges (the caps guard one runaway
+ * wave, not the conversation's lifetime).
+ *
+ * `guard` makes the caps part of the same atomic read-modify-write: the append
+ * throws CapError instead of landing when the wave's global cap (or the
+ * sender's own budget) would overflow. `budgetExempt` marks an implicit reply
+ * to the turn's initiator — exempt from the sender's budget (a capped persona
+ * can always finish its assignment) but still spending the global cap.
  */
 export function appendMailItem(
-  input: Omit<MailItem, 'id' | 'at'> & { at?: number }
+  input: Omit<MailItem, 'id' | 'at'> & {
+    at?: number;
+    guard?: { exchangeCap: number; senderBudget?: number; budgetExempt?: boolean };
+  }
 ): Promise<MailListResult> {
+  const { guard, ...fields } = input;
   return update((store) => {
-    const conversation = conversationOf(store, input.conversationId);
-    const item: MailItem = { ...input, id: randomUUID(), at: input.at ?? Date.now() };
-    store.items.push(item);
-    conversation.updatedAt = item.at;
-    if (item.from === 'user') conversation.exchangeCount = 0;
-    if (item.to.includes('user')) conversation.userUpdatedAt = item.at;
+    const conversation = conversationOf(store, fields.conversationId);
+    const item: MailItem = { ...fields, id: randomUUID(), at: fields.at ?? Date.now() };
     // Every persona recipient of a persona's mail spends cap budget — counting
     // only pure persona→persona items would let a CC to the user launder the
     // hop past the runaway guard.
-    if (item.from !== 'user') conversation.exchangeCount += item.to.filter((t) => t !== 'user').length;
+    const hops = item.from === 'user' ? 0 : item.to.filter((t) => t !== 'user').length;
+    if (guard && hops > 0) {
+      if (conversation.exchangeCount + hops > guard.exchangeCap) throw new CapError('exchange');
+      if (guard.senderBudget !== undefined && !guard.budgetExempt) {
+        const spent = conversation.sendCounts[item.from] ?? 0;
+        if (spent + hops > guard.senderBudget) throw new CapError('budget');
+      }
+    }
+    store.items.push(item);
+    conversation.updatedAt = item.at;
+    if (item.from === 'user') {
+      conversation.exchangeCount = 0;
+      conversation.sendCounts = {};
+    }
+    if (item.to.includes('user')) conversation.userUpdatedAt = item.at;
+    if (hops > 0) {
+      conversation.exchangeCount += hops;
+      if (!guard?.budgetExempt) {
+        conversation.sendCounts[item.from] = (conversation.sendCounts[item.from] ?? 0) + hops;
+      }
+    }
   });
 }
 

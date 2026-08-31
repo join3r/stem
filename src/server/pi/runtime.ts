@@ -689,17 +689,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /**
    * The pool bound. Each worker is a whole pi child (with its own MCP bridge),
-   * so this is a memory/CPU dial, not a free concurrency knob: 4 covers "a chat
-   * streaming, a Quick Chat, a scheduled run, and a persona working a mail"
-   * without letting a burst of turns spawn a process apiece. Overridable for
-   * constrained hosts (a small VPS wants 1–2). Personas share this bound rather
-   * than getting their own (an idle persona worker is evicted before any turn
-   * queues — see acquireWorkerNow), so persona traffic borrows slots instead of
-   * reserving them.
+   * so this is a memory/CPU dial, not a free concurrency knob: 6 covers "a chat
+   * streaming, a Quick Chat, a scheduled run, and a mail fan-out three personas
+   * wide" without letting a burst of turns spawn a process apiece. Overridable
+   * for constrained hosts (a small VPS wants 1–2). Personas share this bound
+   * rather than getting their own (an idle persona worker is evicted before any
+   * turn queues — see acquireWorkerNow), so persona traffic borrows slots
+   * instead of reserving them.
    */
   private readonly maxWorkers = (() => {
     const raw = Number.parseInt(process.env.STEM_PI_MAX_WORKERS ?? '', 10);
-    return Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 8) : 4;
+    return Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 8) : 6;
   })();
 
   /** Where a worker's per-turn gate files live (STEM_GATE_DIR for its child). */
@@ -2603,7 +2603,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           personaId: turn.personaId,
           turnId: turn.turnId
         };
-        const req = JSON.parse(payload ?? '{}') as { op?: string; to?: unknown; body?: string; personaId?: string };
+        const req = JSON.parse(payload ?? '{}') as {
+          op?: string;
+          to?: unknown;
+          body?: string;
+          personaId?: string;
+          id?: string;
+          name?: string;
+          prompt?: string;
+          model?: string;
+          effort?: string;
+        };
         switch (req.op) {
           case 'send': {
             const to = Array.isArray(req.to) ? req.to.filter((t): t is string => typeof t === 'string') : [];
@@ -2611,6 +2621,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           }
           case 'add_persona':
             return respond(await bridge.addPersona(req.personaId ?? '', ctx));
+          case 'save_persona':
+            return respond(
+              await bridge.savePersona(
+                { id: req.id, name: req.name, prompt: req.prompt, model: req.model, effort: req.effort },
+                ctx
+              )
+            );
+          case 'delete_persona':
+            return respond(await bridge.deletePersona(req.personaId ?? '', ctx));
           default:
             return respond({ ok: false, error: `Unknown mail op "${req.op}".` });
         }

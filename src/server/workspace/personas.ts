@@ -18,7 +18,7 @@ import { personasStorePath } from './paths';
 // persona would come back blank.
 
 interface PersonasFile {
-  version: 1;
+  version: 2;
   personas: Persona[];
 }
 
@@ -53,18 +53,25 @@ const BUILTINS: Persona[] = [
       'You are Secretary. You triage requests: decide what a task needs and delegate rather ' +
       'than doing the work yourself. Bring the right personas into the conversation with ' +
       'add_persona, hand them their piece with send_mail, and schedule follow-ups with ' +
-      'schedule_task (set its personaId so the run happens as the right persona). Keep the ' +
-      'inbox quiet: mail the user only decisions and results, not process.',
-    canAddPersonas: true,
+      'schedule_task (set its personaId so the run happens as the right persona). When no ' +
+      'existing persona fits, create one with save_persona and clean it up with delete_persona ' +
+      'when its job is done. Keep the inbox quiet: mail the user only decisions and results, ' +
+      'not process.',
+    canManagePersonas: true,
     builtin: true
   },
   {
     id: 'orchestrator',
     name: 'Orchestrator',
     prompt:
-      'You are Orchestrator. Split large tasks into independent pieces, delegate each piece, and ' +
-      'assemble the results into one coherent answer. When a task cannot be split, or the ' +
-      'delegation tools are not available yet, do the work directly and say so.',
+      'You are Orchestrator. Split large tasks into independent pieces and delegate each piece. ' +
+      'Create workers with save_persona (for example researcher-1, researcher-2 as copies of a ' +
+      'role prompt), bring them into the conversation with add_persona, then send ALL the ' +
+      'delegations in ONE send_mail call — their replies come back to you together as a single ' +
+      'assembly mail, which is when you combine the results. Delete your workers with ' +
+      'delete_persona when the task is done. Report one assembled answer to the user. When a ' +
+      'task cannot be split, do the work directly and say so.',
+    canManagePersonas: true,
     builtin: true
   }
 ];
@@ -98,7 +105,13 @@ function coercePersona(raw: unknown): Persona | null {
   const harness = coerceHarness(r.harness);
   if (harness) persona.harness = harness;
   if (r.lightweight === true) persona.lightweight = true;
-  if (r.canAddPersonas === true) persona.canAddPersonas = true;
+  // `canAddPersonas` is the flag's pre-rename spelling — files written before
+  // the rename migrate here, on read.
+  if (r.canManagePersonas === true || r.canAddPersonas === true) persona.canManagePersonas = true;
+  if (typeof r.createdBy === 'string' && r.createdBy.trim()) persona.createdBy = r.createdBy.trim();
+  if (typeof r.sendBudget === 'number' && Number.isFinite(r.sendBudget)) {
+    persona.sendBudget = Math.min(100, Math.max(1, Math.round(r.sendBudget)));
+  }
   if (r.builtin === true) persona.builtin = true;
   return persona;
 }
@@ -124,10 +137,28 @@ function coerce(parsed: unknown): PersonasFile {
     seen.add(persona.id);
     personas.push(persona);
   }
+  // v1 files predate canManagePersonas: grant it to the stored Orchestrator
+  // row, whose whole job needs it — seeding only appends missing ids, so the
+  // row would otherwise never gain the flag. Version-gated (not granted on
+  // every read) so unticking the box sticks once the file is written as v2.
+  if (raw.version !== 2) {
+    const orchestrator = personas.find((p) => p.id === 'orchestrator');
+    if (orchestrator) orchestrator.canManagePersonas = true;
+  }
   for (const builtin of BUILTINS) {
     if (!seen.has(builtin.id)) personas.push({ ...builtin });
   }
-  return { version: 1, personas };
+  return { version: 2, personas };
+}
+
+// The registry can change from two directions — the editor's IPC and the mail
+// bridge (save_persona/delete_persona) — so the changed-notification lives
+// here, at the store, where every successful write passes.
+let changed: (() => void) | null = null;
+
+/** Register the (single) listener told after every successful registry write. */
+export function onPersonasChanged(cb: (() => void) | null): void {
+  changed = cb;
 }
 
 // Serialize writes through a promise chain so concurrent IPC calls can't
@@ -197,6 +228,7 @@ function update(mutate: (store: PersonasFile) => void): Promise<Persona[]> {
     }
     mutate(store);
     await writeFileAtomic(store);
+    changed?.();
     return store.personas;
   });
 }
@@ -227,15 +259,82 @@ export function savePersona(input: unknown): Promise<Persona[]> {
     if (clash) throw new Error(`A persona named "${clash.name}" already exists.`);
     const at = store.personas.findIndex((p) => p.id === persona.id);
     if (at >= 0) {
-      // `builtin` survives the round-trip from the store, never from the caller.
+      // `builtin` and `createdBy` survive the round-trip from the store, never
+      // from the caller — an editor save can't launder either.
       if (store.personas[at].builtin) persona.builtin = true;
       else delete persona.builtin;
+      if (store.personas[at].createdBy) persona.createdBy = store.personas[at].createdBy;
+      else delete persona.createdBy;
       store.personas[at] = persona;
     } else {
       delete persona.builtin;
+      delete persona.createdBy;
       store.personas.push(persona);
     }
   });
+}
+
+/** What the mail bridge may set on a persona — never pins, flags, or budgets. */
+export interface BridgePersonaFields {
+  name?: string;
+  prompt?: string;
+  model?: string;
+  effort?: string;
+}
+
+function requireUniqueName(store: PersonasFile, name: string, exceptId: string): void {
+  const clash = store.personas.find(
+    (p) => p.id !== exceptId && p.name.toLowerCase() === name.toLowerCase()
+  );
+  if (clash) throw new Error(`A persona named "${clash.name}" already exists.`);
+}
+
+/**
+ * Create a persona on an agent's behalf (the save_persona bridge op). Only the
+ * bridge fields land, `createdBy` is stamped from the caller, and everything
+ * privileged (harness, flags, budget) starts absent.
+ */
+export async function savePersonaFor(creatorId: string, fields: BridgePersonaFields): Promise<Persona> {
+  const name = fields.name?.trim();
+  if (!name) throw new Error('A persona needs at least a name.');
+  const persona: Persona = {
+    id: randomUUID(),
+    name,
+    prompt: typeof fields.prompt === 'string' ? fields.prompt : '',
+    createdBy: creatorId
+  };
+  if (fields.model?.trim()) persona.model = fields.model.trim();
+  if (fields.effort?.trim()) persona.effort = fields.effort.trim();
+  await update((store) => {
+    requireUniqueName(store, persona.name, persona.id);
+    store.personas.push(persona);
+  });
+  return persona;
+}
+
+/**
+ * Merge only the bridge fields onto a stored persona (the save_persona edit
+ * path). Everything else on the row — harness pin, flags, budget, createdBy —
+ * is untouched, so an agent edit can never widen a persona's powers.
+ */
+export async function updatePersonaFields(id: string, fields: BridgePersonaFields): Promise<Persona> {
+  let updated: Persona | undefined;
+  await update((store) => {
+    const at = store.personas.findIndex((p) => p.id === id);
+    if (at < 0) throw new Error(`No persona "${id}" exists.`);
+    const row = { ...store.personas[at] };
+    if (fields.name?.trim()) {
+      requireUniqueName(store, fields.name.trim(), id);
+      row.name = fields.name.trim();
+    }
+    if (typeof fields.prompt === 'string') row.prompt = fields.prompt;
+    if (fields.model?.trim()) row.model = fields.model.trim();
+    if (fields.effort?.trim()) row.effort = fields.effort.trim();
+    store.personas[at] = row;
+    updated = row;
+  });
+  if (!updated) throw new Error(`No persona "${id}" exists.`);
+  return updated;
 }
 
 /** Delete a persona. Built-ins are refused (the seed would resurrect them blank). */
