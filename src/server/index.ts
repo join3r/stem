@@ -18,6 +18,7 @@ import { degrade } from './degrade';
 import { log } from './log';
 import { ensureWorkspace } from './workspace/bootstrap';
 import { publishProtectedRootsNow } from './workspace/connected-folders';
+import { transportedRawPath } from './files/staging';
 import { piHome } from './workspace/paths';
 import type { TaskScheduler } from './scheduler';
 import { MailRouter } from './mail/router';
@@ -339,7 +340,18 @@ function registerIpc(): void {
   registerDevicesIpc();
   registerHarnessIpc();
 
-  registerServer('backend:startTurn', async (_e, input: StartTurnInput) => {
+  registerServer('backend:startTurn', async (e, input: StartTurnInput) => {
+    // From a transported device, an attachment path can only name a file on
+    // the SERVER — the remote clients upload first and pass staging handles
+    // (desktop/proxy.ts), so a bare path from one is a request to read
+    // server-local files into the model's context (SEC-002). Only a device
+    // marked local (shares this server's disk) may keep passing paths.
+    const rawAttachment = await transportedRawPath(e, (input.attachments ?? []).map((att) => att.path));
+    if (rawAttachment) {
+      throw new Error(
+        'Attachments over the transport carry upload handles or inline bytes, never server paths — POST the file to /upload first.'
+      );
+    }
     // The user is actively chatting: yield any scheduler-owned turn (frees the
     // foreground gate) and hold scheduled runs off for a while.
     lastInteractiveAt = Date.now();

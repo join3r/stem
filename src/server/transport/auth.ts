@@ -94,6 +94,17 @@ export interface DeviceRecord {
    * and nothing can.
    */
   kind?: DeviceKind;
+  /**
+   * True only for the client that shares this server's disk — the embedded
+   * desktop renderer (or a `stem-server` client on the same machine), whose
+   * record was minted or marked IN-PROCESS. Never settable over the transport:
+   * /pair does not write it, and no RPC channel may. It is the capability that
+   * lets path-taking channels (files:add, startTurn attachments) accept raw
+   * filesystem paths — for every other device a path can only name a file on
+   * the SERVER, which is the SEC-002 exfiltration shape, so they must send
+   * upload handles instead.
+   */
+  local?: true;
 }
 
 /** What a record claims to be, with the pre-field default applied. */
@@ -213,7 +224,10 @@ function parseDevices(raw: string): DeviceRecord[] | null {
         // Carried through rather than defaulted here, for the same reason as
         // apnsToken: a record from before the field existed must round-trip to
         // the bytes it arrived as. Read it through deviceKind(), never directly.
-        ...(record.kind === 'desktop' || record.kind === 'mobile' ? { kind: record.kind } : {})
+        ...(record.kind === 'desktop' || record.kind === 'mobile' ? { kind: record.kind } : {}),
+        // Only the literal true survives the round trip — the flag is a
+        // capability (see DeviceRecord.local), and anything else is noise.
+        ...((record as DeviceRecord).local === true ? { local: true as const } : {})
       }
     ];
   });
@@ -252,7 +266,18 @@ export function readDevices(): Promise<readonly DeviceRecord[]> {
  * (src/desktop/client-store.ts) or deliver it over the pairing response; there is
  * no second chance, by design.
  */
-export function mintDevice(label: string, kind: DeviceKind = 'desktop'): Promise<MintedDevice> {
+export function mintDevice(
+  label: string,
+  kind: DeviceKind = 'desktop',
+  opts?: {
+    /**
+     * Mark the record as sharing this server's disk (see DeviceRecord.local).
+     * Only an IN-PROCESS caller can pass this — /pair mints without it, and no
+     * RPC channel reaches mintDevice at all.
+     */
+    local?: boolean;
+  }
+): Promise<MintedDevice> {
   return enqueue(async () => {
     const devices = await loadDevices();
     const token = randomBytes(TOKEN_BYTES).toString('hex');
@@ -266,11 +291,35 @@ export function mintDevice(label: string, kind: DeviceKind = 'desktop'): Promise
       // Written out even for the default, because a record minted from here
       // KNOWS what it is — absence is reserved for records that predate the
       // question and can only be guessed at.
-      kind
+      kind,
+      ...(opts?.local ? { local: true as const } : {})
     };
     await writeDevices([...devices, device]);
     return { device, token };
   });
+}
+
+/**
+ * Mark an existing record as sharing this server's disk (see
+ * DeviceRecord.local). In-process callers only — the migration path for an
+ * embedded desktop whose record predates the flag. Returns whether a record was
+ * touched; an unknown id is a no-op, not an error.
+ */
+export function markDeviceLocal(id: string): Promise<boolean> {
+  return enqueue(async () => {
+    const devices = await loadDevices();
+    const device = devices.find((d) => d.id === id);
+    if (!device) return false;
+    if (device.local === true) return true;
+    await writeDevices(devices.map((d) => (d.id === id ? { ...d, local: true as const } : d)));
+    return true;
+  });
+}
+
+/** Whether `id` names a record marked local (may pass raw server paths). */
+export async function deviceIsLocal(id: string): Promise<boolean> {
+  const devices = await readDevices();
+  return devices.find((d) => d.id === id)?.local === true;
 }
 
 /**
@@ -310,7 +359,8 @@ function withoutPushToken(d: DeviceRecord): DeviceRecord {
     // Rebuilt field by field, so anything that is not a push field has to be
     // listed here or dropping a token would quietly demote a phone to a desktop
     // — and desktops are what get offered as MCP hosts.
-    ...(d.kind ? { kind: d.kind } : {})
+    ...(d.kind ? { kind: d.kind } : {}),
+    ...(d.local ? { local: true as const } : {})
   };
 }
 

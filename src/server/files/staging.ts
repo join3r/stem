@@ -75,6 +75,28 @@ export function isUploadHandle(value: string): boolean {
 }
 
 /**
+ * The SEC-002 boundary rule, shared by every path-taking channel: a transported
+ * device may only pass upload handles, because a raw path from it can only name
+ * a file on THIS machine — the deterministic read-anything shape. Exceptions:
+ * an in-process caller (no caller identity) and a device marked local (shares
+ * this server's disk; see DeviceRecord.local), whose paths are the server's own.
+ *
+ * Returns the offending value, or null when the call is fine.
+ */
+export async function transportedRawPath(
+  caller: { deviceId: string } | undefined,
+  values: Iterable<string | undefined>
+): Promise<string | null> {
+  const raw = [...values].find((v) => typeof v === 'string' && v.length > 0 && !isUploadHandle(v));
+  if (raw === undefined) return null;
+  if (!caller) return null;
+  // Imported lazily: auth pulls in the device registry machinery, which most
+  // staging callers (the upload endpoint itself) never need.
+  const { deviceIsLocal } = await import('../transport/auth');
+  return (await deviceIsLocal(caller.deviceId)) ? null : raw!;
+}
+
+/**
  * Write `body` into the staging area and return the handle for it. Any failure
  * (including the transport cutting an over-long body off) takes the half-written
  * directory with it, so a failed upload leaves nothing behind for the sweep to

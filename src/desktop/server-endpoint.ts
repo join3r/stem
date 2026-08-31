@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 import { access } from 'node:fs/promises';
-import { mintDevice } from '../server/transport/auth';
+import { markDeviceLocal, mintDevice } from '../server/transport/auth';
 import { serverEndpointPath } from '../server/workspace/paths';
 import { log } from '../server/log';
 import {
@@ -154,14 +154,33 @@ export async function clientCredentials(
     log('client', 'the stored credential belongs to another server', { stored: storedFor, wanted: url });
   } else {
     const stored = await readClientIdentity();
-    if (stored) return { url, token: stored.token };
+    if (stored) {
+      // Migration for a record minted before the `local` flag existed: an
+      // embedded (or same-machine stem-server) client's stored identity lives
+      // in the server's own devices.json (shared state root), so marking it
+      // here is the same in-process proof of shared disk as minting with the
+      // flag would have been. A genuinely remote server keeps its registry
+      // elsewhere — the id is absent from the local file and the mark no-ops.
+      if (await sharesStateRoot()) {
+        await markDeviceLocal(stored.deviceId).catch((e) =>
+          // quiet-ish: without the mark, file drops and path attachments are
+          // refused as if this client were remote — visible, not dangerous.
+          log('client', 'could not mark this machine\'s device record local', { error: String(e) })
+        );
+      }
+      return { url, token: stored.token };
+    }
   }
 
   const code = process.env.STEM_PAIRING_CODE?.trim();
   if (code) return pairWithServer(url, code, external);
 
   if (await sharesStateRoot()) {
-    const minted = await mintDevice(deviceLabel());
+    // `local: true` because minting straight into the server's own devices.json
+    // proves the two halves share a disk — the one client whose filesystem
+    // paths mean the same thing on both ends, which is what lets it keep
+    // passing raw paths where every transported device must upload (SEC-002).
+    const minted = await mintDevice(deviceLabel(), 'desktop', { local: true });
     await writeClientIdentity({ deviceId: minted.device.id, token: minted.token }, external ? url : null);
     log('client', 'minted this machine a device record', { deviceId: minted.device.id });
     return { url, token: minted.token };

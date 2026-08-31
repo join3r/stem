@@ -225,3 +225,61 @@ describe('the Files download guard', () => {
     for (const file of listing.files) expect(await readableFilePath(file.rel)).toBeTruthy();
   });
 });
+
+describe('transported raw paths (SEC-002)', () => {
+  const devicesFile = join(dirname(filesDir), `devices-${process.pid}.json`);
+
+  beforeEach(() => {
+    process.env.STEM_DEVICES_FILE = devicesFile;
+    rmSync(devicesFile, { force: true });
+  });
+
+  afterEach(() => {
+    rmSync(devicesFile, { force: true });
+    delete process.env.STEM_DEVICES_FILE;
+  });
+
+  it('refuses a raw path from a transported device, allows handles and in-process callers', async () => {
+    const { forgetCachedDevices, mintDevice } = await import('../../src/server/transport/auth');
+    const { transportedRawPath } = await import('../../src/server/files/staging');
+    forgetCachedDevices();
+    const remote = (await mintDevice('Phone', 'mobile')).device;
+
+    const serverPath = join(outside, 'secret.txt');
+    // The deterministic SEC-002 shape: an authenticated device names a file on
+    // the server. Refused whatever else rides along.
+    expect(await transportedRawPath({ deviceId: remote.id }, [serverPath])).toBe(serverPath);
+    expect(await transportedRawPath({ deviceId: remote.id }, ['stem-upload:x', serverPath])).toBe(serverPath);
+    // Handles and empty/absent values are the sanctioned forms.
+    expect(await transportedRawPath({ deviceId: remote.id }, ['stem-upload:whatever'])).toBeNull();
+    expect(await transportedRawPath({ deviceId: remote.id }, [undefined, ''])).toBeNull();
+    // No caller identity = an in-process call; paths are the server's own.
+    expect(await transportedRawPath(undefined, [serverPath])).toBeNull();
+  });
+
+  it('lets a device marked local pass paths — and only the in-process mint can mark one', async () => {
+    const { forgetCachedDevices, mintDevice, markDeviceLocal, readDevices } = await import(
+      '../../src/server/transport/auth'
+    );
+    const { transportedRawPath } = await import('../../src/server/files/staging');
+    forgetCachedDevices();
+    const embedded = (await mintDevice('This Mac', 'desktop', { local: true })).device;
+    const paired = (await mintDevice('Laptop', 'desktop')).device;
+
+    const serverPath = join(outside, 'secret.txt');
+    expect(await transportedRawPath({ deviceId: embedded.id }, [serverPath])).toBeNull();
+    expect(await transportedRawPath({ deviceId: paired.id }, [serverPath])).toBe(serverPath);
+
+    // The migration mark for pre-flag embedded records, and its persistence
+    // through a reload of the registry file.
+    expect(await markDeviceLocal(paired.id)).toBe(true);
+    expect(await transportedRawPath({ deviceId: paired.id }, [serverPath])).toBeNull();
+    forgetCachedDevices();
+    const reloaded = await readDevices();
+    expect(reloaded.find((d) => d.id === embedded.id)?.local).toBe(true);
+    expect(reloaded.find((d) => d.id === paired.id)?.local).toBe(true);
+
+    // An unknown id is a no-op, not an error.
+    expect(await markDeviceLocal('nope')).toBe(false);
+  });
+});

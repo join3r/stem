@@ -3,6 +3,7 @@ import type { IpcDeps } from './deps';
 import * as activity from '../activity';
 import { listSkills, setSkillEnabled } from '../workspace/skills';
 import { addFiles, createSubdir, listFiles, removeFile, removeSubdir } from '../files/store';
+import { transportedRawPath } from '../files/staging';
 import {
   addClientFolder,
   addConnectedFolders,
@@ -116,7 +117,17 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   // are now written at the end of the turn that earned them (skills/settle.ts).
 
   registerServer('files:list', () => listFiles());
-  registerServer('files:add', (_e, paths: string[], subdir?: string) => addFiles(paths, subdir));
+  registerServer('files:add', async (e, paths: string[], subdir?: string) => {
+    // From a transported device, a raw path can only name a file on the SERVER
+    // — the remote clients upload first and pass staging handles
+    // (desktop/proxy.ts), so a bare path from one is a request to copy
+    // server-local files into the readable Files area (SEC-002). Only a device
+    // marked local (shares this server's disk) may keep passing paths.
+    if (await transportedRawPath(e, paths)) {
+      throw new Error('files:add over the transport takes upload handles only — POST the bytes to /upload first.');
+    }
+    return addFiles(paths, subdir);
+  });
   registerServer('files:remove', (_e, rel: string) => removeFile(rel));
   registerServer('files:mkdir', (_e, name: string) => createSubdir(name));
   registerServer('files:rmdir', (_e, name: string) => removeSubdir(name));
