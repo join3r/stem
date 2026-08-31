@@ -414,6 +414,67 @@ async function refreshOAuth(auth, signal) {
 }
 
 /**
+ * One coordinated OAuth refresh, safe across the whole pi worker pool.
+ *
+ * Refresh tokens rotate (Fastmail does): every refresh invalidates the token it
+ * spent. Each worker process holds its own in-memory copy of the stored grant,
+ * so two workers refreshing "the same" token race — the loser burns a rotated
+ * refresh token the provider no longer honors, the persist guard (rightly)
+ * refuses its result, and depending on who wrote last the FILE can end up
+ * holding a refresh token that is already dead. That is exactly how a freshly
+ * signed-in server decays into `HTTP 401 token has expired` hours later with
+ * the Reconnect button back on.
+ *
+ * So: take the cross-process refresh lock, re-read the file, and if someone
+ * else — another worker's refresh, or a new browser login — already left a
+ * DIFFERENT token there, adopt that one instead of spending ours. Only the
+ * holder of the currently stored token ever talks to the token endpoint, and
+ * its rotated result is persisted before the lock is released. This is also
+ * what lets a live worker heal after the user reconnects in Settings: its next
+ * 401 walks in here and comes out with the new login's token, no respawn needed.
+ */
+export async function refreshBridgeOAuthToken(oauthPath, configPath, name, spec, auth, signal) {
+  return withOwnedFileLock(
+    `${oauthPath}.refresh.lock`,
+    'Timed out waiting for another MCP token refresh.',
+    async () => {
+      const readStored = () => {
+        try {
+          return bridgeOAuthTokenForServer(spec, decodeOAuthTokens(readFileSync(oauthPath, 'utf8'))[name]);
+        } catch {
+          return null;
+        }
+      };
+      const stored = readStored();
+      if (stored && (stored.accessToken !== auth.accessToken || stored.refreshToken !== auth.refreshToken)) {
+        return { ...stored };
+      }
+      if (!auth.refreshToken) throw new Error(`${name}: the login expired and there is no refresh token to renew it`);
+      const next = { ...auth };
+      await refreshOAuth(next, signal);
+      // The persist guard still arbitrates against a concurrent browser login or
+      // server removal; under the refresh lock no OTHER refresh can trip it.
+      const persisted = await persistBridgeOAuthToken(
+        oauthPath,
+        configPath,
+        name,
+        stored ?? auth,
+        serverAuthIdentity(spec),
+        next
+      );
+      if (!persisted) {
+        // A login landed mid-refresh (or the server was removed). The file is
+        // the authority: use the newer login if there is one, else our result
+        // serves this one call without being written back.
+        const relogged = readStored();
+        if (relogged) return { ...relogged };
+      }
+      return next;
+    }
+  );
+}
+
+/**
  * Minimal MCP Streamable-HTTP client: JSON-RPC over HTTP POST. Auth is either a
  * static header (`spec.headers`, e.g. `Authorization: Bearer …`) or an OAuth
  * token (`auth`) obtained via Stem's browser sign-in — which this client injects
@@ -424,12 +485,15 @@ async function refreshOAuth(auth, signal) {
 export const MCP_HTTP_REQUEST_TIMEOUT_MS = 30_000;
 
 export class McpHttpClient {
-  constructor(name, spec, auth, persist) {
+  constructor(name, spec, auth, refresh) {
     this.name = name;
     this.url = spec.url;
     this.headers = spec.headers || {};
     this.auth = auth || null;
-    this.persist = persist || (() => {});
+    // Coordinated refresh: (authSnapshot, signal) → the auth to use next (a
+    // newer stored token, or the refreshed one), or null/undefined for "nothing
+    // to do". See refreshBridgeOAuthToken — never refresh in place here.
+    this.refresh = refresh || (async () => null);
     this.sessionId = null;
     this.nextId = 1;
     this.tools = [];
@@ -450,12 +514,11 @@ export class McpHttpClient {
 
   async authHeaders(signal) {
     if (!this.auth) return {};
-    // Proactively refresh if we know the token is within a minute of expiring.
-    if (this.auth.refreshToken && this.auth.expiresAt && Date.now() > this.auth.expiresAt - 60000) {
+    // Proactively renew if we know the token is within a minute of expiring.
+    if (this.auth.expiresAt && Date.now() > this.auth.expiresAt - 60000) {
       try {
-        const expectedAuth = { ...this.auth };
-        await refreshOAuth(this.auth, signal);
-        await this.persist(this.auth, expectedAuth);
+        const next = await this.refresh({ ...this.auth }, signal);
+        if (next) this.auth = next;
       } catch {
         // fall through with the (possibly stale) token; a 401 retry may recover
       }
@@ -488,13 +551,17 @@ export class McpHttpClient {
       });
       const sid = res.headers.get('mcp-session-id');
       if (sid) this.sessionId = sid;
-      // A rejected token → refresh once and retry before surfacing the failure.
-      if (res.status === 401 && this.auth && this.auth.refreshToken && !retried) {
+      // A rejected token → one coordinated renew and retry before surfacing the
+      // failure. No refreshToken required here: the coordinator can also hand
+      // back a NEWER stored token (the user reconnected in Settings, or another
+      // worker already refreshed) — the case a live worker must heal from.
+      if (res.status === 401 && this.auth && !retried) {
         try {
-          const expectedAuth = { ...this.auth };
-          await refreshOAuth(this.auth, controller.signal);
-          await this.persist(this.auth, expectedAuth);
-          return this.rpc(method, params, notify, true);
+          const next = await this.refresh({ ...this.auth }, controller.signal);
+          if (next) {
+            this.auth = next;
+            return this.rpc(method, params, notify, true);
+          }
         } catch {
           if (controller.signal.aborted) throw controller.signal.reason;
           // fall through to the error below
@@ -1273,12 +1340,12 @@ function buildCatalogText(clients) {
 let sharedConn = null; // { key, clients: Map, recall: [...], failed: [...], status, stale, recallReady, settled }
 
 /** Connect one configured server (remote HTTP/OAuth or local stdio). Never throws. */
-async function connectOneServer(name, spec, oauthTokens, persistAuth) {
+async function connectOneServer(name, spec, oauthTokens, refreshAuth) {
   // Remote (Streamable HTTP — static header or OAuth) or local (stdio); both
   // expose the same handshake()/callTool() surface.
   const client = spec.url
-    ? new McpHttpClient(name, spec, bridgeOAuthTokenForServer(spec, oauthTokens[name]), (auth, expectedAuth) =>
-        persistAuth(name, spec, auth, expectedAuth))
+    ? new McpHttpClient(name, spec, bridgeOAuthTokenForServer(spec, oauthTokens[name]), (auth, signal) =>
+        refreshAuth(name, spec, auth, signal))
     : new McpStdioClient(name, spec);
   try {
     client.start();
@@ -1311,7 +1378,7 @@ async function connectOneServer(name, spec, oauthTokens, persistAuth) {
  * connected from here" is about the socket, not about whether the assistant can
  * use it: its calls travel to the machine it belongs to.
  */
-function startConnections(servers, oauthTokens, persistAuth, publish, deviceReport) {
+function startConnections(servers, oauthTokens, refreshAuth, publish, deviceReport) {
   const conn = {
     key: JSON.stringify(servers),
     clients: new Map(), // name -> { client, spec, tools } (routed via meta-tools)
@@ -1373,7 +1440,7 @@ function startConnections(servers, oauthTokens, persistAuth, publish, deviceRepo
       continue;
     }
     conn.status[name] = { status: 'starting', error: null };
-    const job = connectOneServer(name, spec, oauthTokens, persistAuth).then((res) => {
+    const job = connectOneServer(name, spec, oauthTokens, refreshAuth).then((res) => {
       if (conn.stale) {
         // A rebuild replaced this entry while we were handshaking — don't leak the child.
         try {
@@ -1459,21 +1526,11 @@ export default async function stemMcpBridge(pi) {
   // a machine that is currently asleep gets its tool list from this file.
   const deviceReport = makeDeviceCatalogGate(join(dirname(cfgPath), MCP_DEVICE_CATALOG_FILE));
 
-  const persistAuth = async (name, spec, auth, expectedAuth) => {
-    try {
-      return await persistBridgeOAuthToken(
-        oauthPath,
-        cfgPath,
-        name,
-        expectedAuth,
-        serverAuthIdentity(spec),
-        auth
-      );
-    } catch {
-      // best-effort
-      return false;
-    }
-  };
+  // Every worker's refreshes funnel through the coordinated helper: the file is
+  // re-read under a cross-process lock so rotating providers (Fastmail) never
+  // see the same refresh token spent twice — see refreshBridgeOAuthToken.
+  const refreshAuth = (name, spec, auth, signal) =>
+    refreshBridgeOAuthToken(oauthPath, cfgPath, name, spec, auth, signal);
 
   // Publish connection status (getMcpStatus) and the names+signatures catalog the
   // main process injects each turn (cheap discovery; full schemas come from
@@ -1510,7 +1567,7 @@ export default async function stemMcpBridge(pi) {
         }
       }
     }
-    sharedConn = startConnections(servers, oauthTokens, persistAuth, publish, deviceReport);
+    sharedConn = startConnections(servers, oauthTokens, refreshAuth, publish, deviceReport);
     publish(sharedConn); // 'starting' placeholders + cleared catalog, visible immediately
   }
   // Recall's native tools are needed from the very first turn, and its handshake is
@@ -1539,7 +1596,9 @@ export default async function stemMcpBridge(pi) {
   // Self-editable standing custom instructions. The tool only PROPOSES; the user
   // approves in a card (editing the text + choosing the surface) and the MAIN process
   // writes settings.json — the extension never touches it. Applies on the next turn.
-  registerInstructionsTool(pi);
+  // The turn-context gate tells it when a card would sit unanswered (a mail
+  // delivery, a scheduled run) so it can say "propose it in your reply" instead.
+  registerInstructionsTool(pi, makeTurnContextGate(join(process.env[ENV_GATE_DIR] || dirname(cfgPath), TURN_CONTEXT_GATE_FILE)));
 
   // Scheduled tasks: let the assistant schedule a prompt to re-run autonomously, and
   // surface a run's result prominently (notify_user). All routed to the main process
@@ -1701,7 +1760,36 @@ async function requestAdminApproval(ctx, proposal) {
 // InstructionsApprovalCard (and MAIN writes settings.json on accept).
 const INSTRUCTIONS_APPROVAL_TITLE = 'stem-instructions-approval';
 
-function registerInstructionsTool(pi) {
+/** Name of the per-turn `{ mail, scheduled }` gate file (protocol.ts). */
+const TURN_CONTEXT_GATE_FILE = 'turn-context.json';
+
+/**
+ * Reader for the per-turn context gate: what kind of turn is running on THIS
+ * worker. Main rewrites the file before every prompt; a missing or unreadable
+ * file reads as a live chat, which is also what an older main produces.
+ */
+function makeTurnContextGate(path) {
+  return () => {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8'));
+      return { mail: parsed.mail === true, scheduled: parsed.scheduled === true };
+    } catch {
+      return { mail: false, scheduled: false };
+    }
+  };
+}
+
+const INSTRUCTIONS_MAIL_REFUSAL =
+  'This turn is a mail delivery — an approval card would sit unanswered, so the change was not proposed. Do not ' +
+  'retry the tool here. Instead, state the standing instruction you have in mind in your reply mail and ask the ' +
+  'sender to confirm; the user can then add it themselves (Settings → Personalization → Custom instructions) or ' +
+  'ask for it in a live chat, where the approval card works.';
+
+const INSTRUCTIONS_SCHEDULED_REFUSAL =
+  'This is an autonomous scheduled run with nobody watching, so a custom-instructions change cannot be approved. ' +
+  'Do not retry the tool; mention the suggestion in your report instead.';
+
+function registerInstructionsTool(pi, turnContext) {
   pi.registerTool({
     name: 'set_custom_instructions',
     label: 'Set custom instructions',
@@ -1736,6 +1824,11 @@ function registerInstructionsTool(pi) {
       if (!ctx || !ctx.ui || typeof ctx.ui.confirm !== 'function') {
         return { content: [{ type: 'text', text: 'Cannot request approval in this context.' }], details: {}, isError: true };
       }
+      // A turn nobody is watching live: proposing means writing it into the
+      // reply (mail) or the report (scheduled run), never a card that expires.
+      const kind = turnContext ? turnContext() : { mail: false, scheduled: false };
+      if (kind.mail) return { content: [{ type: 'text', text: INSTRUCTIONS_MAIL_REFUSAL }], details: {} };
+      if (kind.scheduled) return { content: [{ type: 'text', text: INSTRUCTIONS_SCHEDULED_REFUSAL }], details: {} };
       const surface = params && (params.surface === 'main' || params.surface === 'quickChat') ? params.surface : undefined;
       const proposal = { action, incomingText: action === 'clear' ? '' : text, surface };
       // PiRuntime parses this JSON, shows the card, and (on accept) MAIN writes settings.

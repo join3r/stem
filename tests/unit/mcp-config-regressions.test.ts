@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { addMcpServer, removeMcpServer } from '../../src/server/pi/mcp';
-import { persistBridgeOAuthToken } from '../../src/server/pi/stem-mcp-extension.mjs';
+import { persistBridgeOAuthToken, refreshBridgeOAuthToken } from '../../src/server/pi/stem-mcp-extension.mjs';
 import {
   piMcpOAuthPath,
   deleteOAuthTokenIfMatches,
@@ -29,6 +29,11 @@ beforeEach(() => {
   rmSync(`${piMcpOAuthPath()}.lock.reaper`, { force: true });
   rmSync(`${piMcpConfigPath()}.state.lock`, { force: true });
   rmSync(`${piMcpConfigPath()}.state.lock.reaper`, { force: true });
+  rmSync(`${piMcpOAuthPath()}.refresh.lock`, { force: true });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('a credential that no longer decrypts', () => {
@@ -351,5 +356,92 @@ describe('MCP configuration mutations', () => {
     await saveOAuthToken('remote', newToken);
     expect(await deleteOAuthTokenIfMatches('remote', oldToken)).toBe(false);
     expect((await readOAuthTokens()).remote?.accessToken).toBe('new-token');
+  });
+});
+
+describe('coordinated bridge token refresh', () => {
+  // The pool makes this race routine: every pi worker holds its own in-memory
+  // copy of the stored grant, and providers that ROTATE refresh tokens
+  // (Fastmail) invalidate a token the moment it is spent. Before the
+  // coordinator, the worker that lost the race burned a dead refresh token and
+  // the persist guard threw its result away — which is how a freshly signed-in
+  // server decayed into "HTTP 401 token has expired" hours later.
+  const baseToken = {
+    resource: 'https://remote.example/mcp',
+    tokenEndpoint: 'https://remote.example/token',
+    clientId: 'client',
+    scope: 'tools',
+    accessToken: 'access-1',
+    refreshToken: 'refresh-1',
+    expiresAt: 1
+  };
+
+  async function serverFixture() {
+    await addMcpServer({ name: 'remote', transport: 'http', url: 'https://remote.example/mcp' });
+    const spec = (await readMcpConfig()).servers.remote;
+    return { spec, identity: mcpServerAuthIdentity(spec)! };
+  }
+
+  it('adopts a newer stored token instead of spending a stale refresh token', async () => {
+    const { spec, identity } = await serverFixture();
+    // Another worker (or a fresh browser login) already rotated the grant.
+    await saveOAuthTokenIfServerMatches('remote', identity, {
+      ...baseToken,
+      accessToken: 'access-2',
+      refreshToken: 'refresh-2'
+    });
+    const fetchSpy = vi.fn(async () => {
+      throw new Error('the token endpoint must not see the stale refresh token');
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const next = await refreshBridgeOAuthToken(piMcpOAuthPath(), piMcpConfigPath(), 'remote', spec, {
+      ...baseToken
+    });
+    expect(next.accessToken).toBe('access-2');
+    expect(next.refreshToken).toBe('refresh-2');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('refreshes as the stored-token holder and persists the rotated result', async () => {
+    const { spec, identity } = await serverFixture();
+    await saveOAuthTokenIfServerMatches('remote', identity, { ...baseToken });
+    const stored = (await readOAuthTokens()).remote!;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ access_token: 'access-2', refresh_token: 'refresh-2', expires_in: 3600 })
+      }))
+    );
+
+    const next = await refreshBridgeOAuthToken(piMcpOAuthPath(), piMcpConfigPath(), 'remote', spec, {
+      ...stored
+    });
+    expect(next.accessToken).toBe('access-2');
+    // The rotation reached the FILE before the lock released — the part whose
+    // loss used to strand a dead refresh token for every later worker.
+    const persisted = (await readOAuthTokens()).remote!;
+    expect(persisted.accessToken).toBe('access-2');
+    expect(persisted.refreshToken).toBe('refresh-2');
+  });
+
+  it('hands a re-login token to a worker whose grant has no refresh token at all', async () => {
+    const { spec, identity } = await serverFixture();
+    const noRefresh = { ...baseToken, refreshToken: undefined };
+    await saveOAuthTokenIfServerMatches('remote', identity, {
+      ...noRefresh,
+      accessToken: 'relogin-access'
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 400 })));
+
+    // The worker still holds the pre-login token: it must come back with the
+    // login's token, not an error — this is how a live worker heals without a
+    // respawn after the user reconnects in Settings.
+    const next = await refreshBridgeOAuthToken(piMcpOAuthPath(), piMcpConfigPath(), 'remote', spec, {
+      ...noRefresh,
+      accessToken: 'stale-access'
+    });
+    expect(next.accessToken).toBe('relogin-access');
   });
 });
