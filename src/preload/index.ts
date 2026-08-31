@@ -350,6 +350,8 @@ const api: StemApi = {
   listMail: () => ipcRenderer.invoke('mail:list'),
   composeMail: (input: MailComposeInput) => ipcRenderer.invoke('mail:compose', input),
   replyMail: (conversationId: string, body: string) => ipcRenderer.invoke('mail:reply', conversationId, body),
+  addMailParticipant: (conversationId: string, personaId: string) =>
+    ipcRenderer.invoke('mail:addParticipant', conversationId, personaId),
   setMailRead: (conversationIds: string[], read: boolean) =>
     ipcRenderer.invoke('mail:setRead', conversationIds, read),
   setMailArchived: (conversationIds: string[], archived: boolean) =>

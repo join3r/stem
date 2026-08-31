@@ -167,6 +167,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   // ('mail:list' takes no arguments, so it is absent.)
   'mail:compose': [a.object],
   'mail:reply': [a.string, a.string],
+  'mail:addParticipant': [a.string, a.string],
   'mail:setRead': [a.stringArray, a.boolean],
   'mail:setArchived': [a.stringArray, a.boolean],
   'mail:snooze': [a.stringArray, a.nullish(a.number)],

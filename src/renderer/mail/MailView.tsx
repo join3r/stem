@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Send, X } from 'lucide-react';
+import { Plus, Send, X } from 'lucide-react';
 import type { MailComposeInput, MailConversation, MailItem, Persona } from '../../shared/types';
 import { MdxView } from '../chat/MdxView';
 import { groupMailTimeline } from './grouping';
@@ -26,14 +26,17 @@ export function MailConversationView({
   conversation,
   items,
   personas,
-  onReply
+  onReply,
+  onAddParticipant
 }: {
   conversation: MailConversation;
   items: MailItem[];
   personas: Persona[];
   onReply: (body: string) => void;
+  onAddParticipant: (personaId: string) => void;
 }) {
   const [draft, setDraft] = useState('');
+  const [addingTo, setAddingTo] = useState(false);
   // Expanded exchange groups, keyed by their first item's id (stable across refreshes).
   const [openExchanges, setOpenExchanges] = useState<Set<string>>(new Set());
   const now = Date.now();
@@ -43,6 +46,10 @@ export function MailConversationView({
     [items, conversation.id]
   );
   const groups = useMemo(() => groupMailTimeline(mails), [mails]);
+  const addable = useMemo(
+    () => personas.filter((p) => !conversation.participants.includes(p.id)),
+    [personas, conversation.participants]
+  );
   // Land at the newest mail on open and when one arrives — email reads bottom-up here.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -81,9 +88,37 @@ export function MailConversationView({
         <h1 title={conversation.subject}>{conversation.subject}</h1>
         <span className="mail-head-to">
           To: {conversation.participants.map((p) => personaName(personas, p)).join(', ')}
+          {addable.length > 0 && (
+            <button
+              className="icon-action sm mail-add-toggle"
+              onClick={() => setAddingTo((v) => !v)}
+              title="Add a persona to this conversation"
+              aria-label="Add a persona to this conversation"
+              aria-expanded={addingTo}
+            >
+              <Plus size={12} />
+            </button>
+          )}
           {conversation.status === 'working' && <em> · working…</em>}
           {conversation.status === 'awaiting-user' && <em> · waiting on your reply</em>}
         </span>
+        {addingTo && addable.length > 0 && (
+          <div className="mail-to-chips mail-add-chips" role="group" aria-label="Personas to add">
+            {addable.map((p) => (
+              <button
+                key={p.id}
+                className="mail-to-chip"
+                onClick={() => {
+                  onAddParticipant(p.id);
+                  setAddingTo(false);
+                }}
+                title={`Add ${p.name} — the personas here can then mail it, and your replies reach it too`}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
+        )}
       </header>
       <div className="mail-items" ref={scrollRef}>
         {groups.map((group) => {

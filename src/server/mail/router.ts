@@ -180,6 +180,21 @@ export class MailRouter {
   }
 
   /**
+   * The user pulling a persona into an existing conversation (the header's
+   * add control — the human counterpart of add_persona, so no capability
+   * gate). The persona joins the participant set and becomes reachable by
+   * send_mail and addressed by future replies; it gets no turn of its own
+   * until someone mails it — same contract as add_persona.
+   */
+  async addParticipant(conversationId: string, personaId: string): Promise<MailListResult> {
+    const persona = await getPersona(personaId);
+    if (!persona) throw new Error(`No persona "${personaId}" exists.`);
+    const result = await addParticipant(conversationId, persona.id);
+    this.opts.onChange();
+    return result;
+  }
+
+  /**
    * Deliver a mail produced by a scheduled run (`notify_user` under
    * schedule-as-mail): appended as from its persona (or the task itself),
    * addressed to the user — no agent turn runs, the run already did the work.

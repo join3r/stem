@@ -23,6 +23,7 @@ export interface MailApi {
   /** Resolves with the fresh list so the caller can open the new conversation. */
   compose: (input: MailComposeInput) => Promise<MailListResult>;
   reply: (conversationId: string, body: string) => Promise<void>;
+  addParticipant: (conversationId: string, personaId: string) => Promise<void>;
   archive: (ids: string[], archived: boolean) => void;
   snooze: (ids: string[], until: number | null) => void;
   setRead: (ids: string[], read: boolean) => void;
@@ -133,6 +134,12 @@ export function useMail(ready: boolean): MailApi {
     },
     [applyServer]
   );
+  const addParticipant = useCallback(
+    async (conversationId: string, personaId: string) => {
+      applyServer(await window.stem.addMailParticipant(conversationId, personaId));
+    },
+    [applyServer]
+  );
   const remove = useCallback(
     (conversationId: string) => {
       // Optimistic: the row disappears now; the answer reconciles.
@@ -149,7 +156,7 @@ export function useMail(ready: boolean): MailApi {
     [applyServer, refresh]
   );
 
-  return { mail, personas, refresh, compose, reply, archive, snooze, setRead, remove };
+  return { mail, personas, refresh, compose, reply, addParticipant, archive, snooze, setRead, remove };
 }
 
 /**

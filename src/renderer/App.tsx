@@ -1579,6 +1579,9 @@ export default function App() {
                   items={mail.items}
                   personas={mailApi.personas}
                   onReply={(body) => void mailApi.reply(conversation.id, body)}
+                  onAddParticipant={(personaId) =>
+                    void mailApi.addParticipant(conversation.id, personaId)
+                  }
                 />
               );
             })()}

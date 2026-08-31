@@ -3402,6 +3402,8 @@ export interface StemApi {
   composeMail(input: MailComposeInput): Promise<MailListResult>;
   /** Reply into a conversation (resumes the driver persona with full context). */
   replyMail(conversationId: string, body: string): Promise<MailListResult>;
+  /** Pull another persona into an existing conversation's participant set. */
+  addMailParticipant(conversationId: string, personaId: string): Promise<MailListResult>;
   setMailRead(conversationIds: string[], read: boolean): Promise<MailListResult>;
   setMailArchived(conversationIds: string[], archived: boolean): Promise<MailListResult>;
   snoozeMail(conversationIds: string[], until: number | null): Promise<MailListResult>;
