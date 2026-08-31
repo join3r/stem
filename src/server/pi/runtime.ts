@@ -1325,7 +1325,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         void setNaming(threadId, { step: 0, since: 0 }).catch(() => undefined);
       }
 
-      if (isRecallEnabled() && !input.scheduled) {
+      if (isRecallEnabled() && !input.scheduled && (!input.mail || input.mail.from === 'user')) {
         // Deferred, not captured: at prompt time the turn's memorize:false
         // verdict is unknowable (the taint is only set once the assistant reads
         // a private folder). The message is flushed by flushPendingUserCapture
@@ -1338,6 +1338,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // authority). Task prompts can be model-authored without approval, so
         // they must never impersonate the user in recall. The run's assistant
         // reply is still captured normally.
+        //
+        // A mail delivery's prompt is the delivered mail body, and only the
+        // user's own mail may speak as the user: a persona-authored delivery
+        // (a driver's directive to a spoke, a spoke's report back) captured as
+        // role 'user' gets distilled into "The user wants/did ..." facts. So
+        // persona-authored deliveries skip the user capture entirely; their
+        // assistant replies are still captured normally.
         turn.pendingUserCapture = { text: input.input, cwd: this.options.workspaceRoot };
       }
       return { threadId, turnId };
