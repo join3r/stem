@@ -193,24 +193,40 @@ const MAIL_STRIP_RE = /^<!--stem:mail from=([^>]*)-->[\s\S]*?<!--\/stem:mail-->\
 function mailPreamble(mail: { subject: string; from: string; participants?: string[] }, self?: string): string {
   // The other personas this conversation can reach — the To: list is the closed
   // participant set, and this line is how a persona learns who else is in it.
-  const others = (mail.participants ?? []).filter((p) => p !== mail.from && p !== self);
+  const participants = mail.participants ?? [];
+  const others = participants.filter((p) => p !== mail.from && p !== self);
+  // participants[0] drives: it receives the user's mails and alone answers them.
+  // A delivery without a participant list (older callers) is treated as driving.
+  const isDriver = !participants.length || participants[0] === self;
+  const role = isDriver
+    ? others.length
+      ? // Firm, not optional: the user PUT those personas on the To: line — in
+        // the first smoke test a soft "you may consult" was simply ignored and
+        // the verifier the user asked for never heard a word. The single-voice
+        // and don't-restate rules exist for the opposite failure: the first
+        // real fan-out thread answered one user question three times, twice
+        // near-verbatim.
+        `You drive this conversation: you alone answer the user, and each of their mails deserves ONE reply, not ` +
+        `an echo per consultation. The user also addressed it to: ${others.join(', ')}. They put each persona ` +
+        'there for a reason — involve them with the send_mail tool for the parts that match their role (a ' +
+        'verifier checks your work before the user sees it, and so on); skip one only when it clearly has ' +
+        'nothing to add. Delegate with a short brief that says what is needed — do not restate the whole mail ' +
+        'you received. A consulted persona’s reply arrives as a later mail to you, and your current turn ends ' +
+        'after sending. To answer the USER after a consultation, call send_mail with to ["user"] and fold what ' +
+        'the consultations added into that one answer — never repeat a reply the user can already read. A plain ' +
+        'final message goes back to whoever mailed you, which mid-conversation may be a persona, not the user.'
+      : 'send_mail can also reach the user directly (to ["user"]) — useful for a progress note mid-work.'
+    : `You are a consulted participant here; the driver (${participants[0]}) alone answers the user, so a ` +
+      'send_mail to ["user"] is rerouted to the driver. Answer whoever mailed you — your plain final message ' +
+      'goes back to them' +
+      (others.length ? `. Other reachable participants: ${others.join(', ')}.` : '.');
   return [
     `<!--stem:mail from=${mail.from.split('>').join('')}-->`,
     `This is a mail delivery in the conversation "${mail.subject}", from ${
       mail.from === 'user' ? 'the user' : mail.from
     }. Nobody is reading live.`,
     'Work the task with your tools. Your final message is sent back to the sender as your reply mail — write it as the reply.',
-    others.length
-      ? // Firm, not optional: the user PUT those personas on the To: line — in
-        // the first smoke test a soft "you may consult" was simply ignored and
-        // the verifier the user asked for never heard a word.
-        `The user also addressed this conversation to: ${others.join(', ')}. They put each persona there for a ` +
-        'reason — involve them with the send_mail tool for the parts that match their role (a verifier checks your ' +
-        'work before the user sees it, and so on); skip one only when it clearly has nothing to add. A consulted ' +
-        'persona’s reply arrives as a later mail to you, and your current turn ends after sending. To answer ' +
-        'the USER after a consultation, call send_mail with to ["user"] — a plain final message goes back to ' +
-        'whoever mailed you, which mid-conversation may be a persona, not the user.'
-      : 'send_mail can also reach the user directly (to ["user"]) — useful for a progress note mid-work.',
+    role,
     'If you are blocked, need a decision, or an approval was refused, say exactly what you need in your reply: it lands in the sender’s inbox and the conversation waits for their answer.',
     MAIL_CLOSE
   ].join('\n');

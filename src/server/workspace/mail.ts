@@ -44,6 +44,7 @@ function coerceItem(raw: unknown): MailItem | null {
     at: num(r.at) ?? 0
   };
   if (typeof r.taskId === 'string' && r.taskId) item.taskId = r.taskId;
+  if (r.stale === true) item.stale = true;
   if (Array.isArray(r.attachments)) {
     const attachments = r.attachments.flatMap((a) => {
       if (!a || typeof a !== 'object') return [];
@@ -282,17 +283,31 @@ export class CapError extends Error {
  * sender's own budget) would overflow. `budgetExempt` marks an implicit reply
  * to the turn's initiator — exempt from the sender's budget (a capped persona
  * can always finish its assignment) but still spending the global cap.
+ *
+ * `staleIfUserSentAfter` is the userSentAt of the user mail this reply answers:
+ * checked here, inside the atomic write, so a user reply racing the append
+ * cannot slip between a read and the stamp. A persona→user item landing after
+ * a NEWER user send is marked stale — it answers an earlier message.
  */
 export function appendMailItem(
   input: Omit<MailItem, 'id' | 'at'> & {
     at?: number;
     guard?: { exchangeCap: number; senderBudget?: number; budgetExempt?: boolean };
+    staleIfUserSentAfter?: number;
   }
 ): Promise<MailListResult> {
-  const { guard, ...fields } = input;
+  const { guard, staleIfUserSentAfter, ...fields } = input;
   return update((store) => {
     const conversation = conversationOf(store, fields.conversationId);
     const item: MailItem = { ...fields, id: randomUUID(), at: fields.at ?? Date.now() };
+    if (
+      staleIfUserSentAfter !== undefined &&
+      item.from !== 'user' &&
+      item.to.includes('user') &&
+      conversation.userSentAt > staleIfUserSentAfter
+    ) {
+      item.stale = true;
+    }
     // Every persona recipient of a persona's mail spends cap budget — counting
     // only pure persona→persona items would let a CC to the user launder the
     // hop past the runaway guard.

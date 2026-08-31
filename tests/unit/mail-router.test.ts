@@ -457,10 +457,12 @@ describe('mail router', () => {
           expect((await bridge.send({ to: ['orchestrator'], body: 'look' }, ctx)).ok).toBe(true);
         }
       },
-      // Orchestrator ends the chain ON THE USER so no delivery outlives the test.
+      // Orchestrator answers plainly — the hop returns to the driver, which
+      // ends the chain ON THE USER so no delivery outlives the test.
+      { mode: 'ok', reply: 'seen' },
       {
         mode: 'ok',
-        reply: 'seen',
+        reply: 'wrapping',
         bridge: async (bridge, ctx) => {
           expect((await bridge.send({ to: ['user'], body: 'done' }, ctx)).ok).toBe(true);
         }
@@ -758,7 +760,7 @@ describe('fan-out joins', () => {
     expect(mail.conversations[0].exchangeCount).toBe(4); // 2 delegations + 2 replies
   });
 
-  it('a failed branch, an explicit reply, and a to-user detour all settle the wave', async () => {
+  it('a failed branch, an explicit reply, and a rerouted user-detour all settle the wave', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);
     fake.scriptsByPersona.orchestrator = [
@@ -788,7 +790,11 @@ describe('fan-out joins', () => {
         mode: 'ok',
         reply: 'went direct',
         bridge: async (bridge, ctx) => {
-          expect((await bridge.send({ to: ['user'], body: 'around you' }, ctx)).ok).toBe(true);
+          // Tries to answer the user directly — single voice back reroutes the
+          // mail to the driver, where it settles this branch of the join.
+          const res = await bridge.send({ to: ['user'], body: 'around you' }, ctx);
+          expect(res.ok).toBe(true);
+          if (res.ok) expect(res.text).toContain('routed');
         }
       }
     ];
@@ -808,7 +814,10 @@ describe('fan-out joins', () => {
     )!;
     expect(assembly.input).toContain('explicit reply');
     expect(assembly.input).toContain('run failed');
-    expect(assembly.input).toContain('mailed the user directly');
+    // The detour never reached the user: it landed on the driver as this
+    // branch's reply and rode the assembly.
+    expect(assembly.input).toContain('around you');
+    expect(mail.items.find((i) => i.body === 'around you')).toMatchObject({ to: ['orchestrator'] });
     // The failure notice still reached the user, and awaiting-user stuck.
     expect(mail.items.some((i) => i.to.includes('user') && i.body.includes('exploded'))).toBe(true);
     expect(mail.conversations[0].status).toBe('awaiting-user');
@@ -960,6 +969,117 @@ describe('fan-out joins', () => {
   });
 });
 
+describe('single voice back', () => {
+  it("a non-driver's mail to the user is rerouted to the driver", async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.verifier = [
+      {
+        mode: 'ok',
+        reply: 'consulting',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['orchestrator'], body: 'check this' }, ctx)).ok).toBe(true);
+        }
+      },
+      // The rerouted mail arrives here; the driver answers the user once.
+      {
+        mode: 'ok',
+        reply: 'folding in',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['user'], body: 'the one answer' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    fake.scriptsByPersona.orchestrator = [
+      {
+        mode: 'ok',
+        reply: 'went around',
+        bridge: async (bridge, ctx) => {
+          const res = await bridge.send({ to: ['user'], body: 'my direct answer' }, ctx);
+          expect(res.ok).toBe(true);
+          if (res.ok) expect(res.text).toContain('routed');
+        }
+      }
+    ];
+    await router.compose({ to: ['verifier', 'orchestrator'], subject: 'one voice', body: 'q' });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'the one answer' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+    // The detour became driver material — the user heard exactly one voice.
+    expect(mail.items.find((i) => i.body === 'my direct answer')).toMatchObject({
+      from: 'orchestrator',
+      to: ['verifier']
+    });
+    expect(mail.items.filter((i) => i.to.includes('user'))).toHaveLength(1);
+  });
+
+  it('the reroute yields to the exchange cap: the send still reaches the user', async () => {
+    await updateMailSettings({ exchangeCap: 1 });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.verifier = [
+      {
+        mode: 'ok',
+        reply: 'consulting',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['orchestrator'], body: 'check' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    fake.scriptsByPersona.orchestrator = [
+      {
+        mode: 'ok',
+        reply: 'capped out',
+        bridge: async (bridge, ctx) => {
+          // The cap is spent, so rerouting to the driver would overflow it —
+          // the runaway safety valve lets the mail land on the user instead.
+          expect((await bridge.send({ to: ['user'], body: 'straight to you' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    await router.compose({ to: ['verifier', 'orchestrator'], subject: 'capped', body: 'q' });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'straight to you')).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+    expect(mail.items.find((i) => i.body === 'straight to you')).toMatchObject({
+      from: 'orchestrator',
+      to: ['user']
+    });
+  });
+});
+
+describe('stale replies', () => {
+  it('a reply landing after a newer user mail is stamped stale; the fresh one is not', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    const hold = deferred();
+    fake.scriptsByPersona.verifier = [
+      { mode: 'ok', reply: 'slow answer', bridge: () => hold.promise },
+      { mode: 'ok', reply: 'fresh answer' }
+    ];
+    const { conversations } = await router.compose({ to: ['verifier'], subject: 's', body: 'first' });
+    await vi.waitFor(() => expect(fake.starts.length).toBe(1));
+    // The user moves on while the first delivery is still running. The work is
+    // NOT aborted — its reply lands, marked as answering the earlier mail.
+    await router.reply(conversations[0].id, 'second');
+    hold.resolve();
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.filter((i) => i.to.includes('user'))).toHaveLength(2);
+      expect(m.conversations[0].status).toBe('idle');
+      return m;
+    });
+    expect(mail.items.find((i) => i.body === 'slow answer')?.stale).toBe(true);
+    expect(mail.items.find((i) => i.body === 'fresh answer')?.stale).toBeUndefined();
+  });
+});
+
 describe('send budgets', () => {
   it('caps a persona’s own sends but never its reply to its initiator', async () => {
     await savePersona({ id: 'verifier', name: 'Verifier', prompt: 'v', sendBudget: 1 });
@@ -978,17 +1098,19 @@ describe('send budgets', () => {
       },
       // Budget spent — the implicit reply back to the orchestrator still flows.
       { mode: 'ok', reply: 'exempt reply' },
-      { mode: 'ok', reply: 'fresh window' }
-    ];
-    fake.scriptsByPersona.orchestrator = [
-      { mode: 'ok', reply: 'verdict' },
+      // The driver ends the chain ON THE USER so no delivery outlives the test.
       {
         mode: 'ok',
         reply: 'closing',
         bridge: async (bridge, ctx) => {
           expect((await bridge.send({ to: ['user'], body: 'done' }, ctx)).ok).toBe(true);
         }
-      }
+      },
+      { mode: 'ok', reply: 'fresh window' }
+    ];
+    fake.scriptsByPersona.orchestrator = [
+      { mode: 'ok', reply: 'verdict' },
+      { mode: 'ok', reply: 'noted' }
     ];
     const { conversations } = await router.compose({
       to: ['verifier', 'orchestrator', 'secretary'],

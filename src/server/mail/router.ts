@@ -55,6 +55,21 @@ import {
 // The assembly's implicit reply routes to whoever initiated the fanning-out
 // turn — typically the user — so an orchestrating persona splits, waits once,
 // and answers once.
+//
+// One voice back: only the conversation's DRIVER (participants[0]) addresses
+// the user. Another persona's send_mail to ["user"] is rerouted to the driver
+// as material for its answer — the first real fan-out thread got three separate
+// personas apologizing for the same mistake. The reroute yields to the exchange
+// cap (at the cap the send falls through to the user — the runaway safety
+// valve), and the router's own failure notices still reach the user directly:
+// a mail that silently went nowhere stays the one forbidden outcome.
+//
+// Stale replies: every delivery carries the userSentAt of the user mail its
+// wave answers (the epoch), inherited hop to hop. A reply landing on the user
+// after a NEWER user send is stamped stale — the user who has already moved on
+// sees "answers your earlier message" instead of mistaking a slow branch's
+// reply for the answer to their latest one. In-flight work is never aborted:
+// a new user mail supersedes the old wave's replies, it does not kill them.
 
 /** A delivery that never settles must not wedge its conversation forever. */
 const DELIVERY_TIMEOUT_MS = 30 * 60 * 1000; // 30m — mail is async; be generous.
@@ -71,6 +86,12 @@ interface DeliveryTask {
   personaId: string;
   body: string;
   from: string;
+  /**
+   * The userSentAt of the user mail this delivery's wave answers, inherited
+   * hop to hop. A reply landing on the user after a newer user send compares
+   * against this and is stamped stale.
+   */
+  epoch: number;
   /**
    * Files riding this delivery's turn. Only user sends carry them — the
    * synthetic bodies (implicit-reply hops, join assemblies) never do.
@@ -100,6 +121,8 @@ interface JoinState {
   senderId: string;
   /** Who initiated the fanning-out turn — where the assembly's reply routes. */
   initiator: string;
+  /** The wave's epoch (see DeliveryTask.epoch) — the assembly turn inherits it. */
+  epoch: number;
   /** Branch persona id -> display name, removed as each branch settles. */
   awaiting: Map<string, string>;
   buffered: { name: string; body: string; note?: string }[];
@@ -124,6 +147,8 @@ export class MailRouter {
    * it to key a send_mail fan-out's join to the right initiator.
    */
   private readonly turnInitiators = new Map<string, string>();
+  /** Each live delivery turn's epoch (see DeliveryTask.epoch), keyed by turn id. */
+  private readonly turnEpochs = new Map<string, number>();
   /** Threads with a delivery in flight — the mail-turn suppressions read this. */
   private readonly liveThreads = new Set<string>();
   /**
@@ -175,7 +200,10 @@ export class MailRouter {
       body,
       ...(attachments ? { attachments: await attachmentPreviews(attachments) } : {})
     });
-    this.enqueueDelivery(conversation.id, to[0], body, 'user', attachments);
+    // The appended user item's timestamp IS the conversation's new userSentAt —
+    // the epoch every delivery of this wave inherits.
+    const epoch = result.items[result.items.length - 1].at;
+    this.enqueueDelivery(conversation.id, to[0], body, 'user', epoch, attachments);
     return result;
   }
 
@@ -199,7 +227,8 @@ export class MailRouter {
       body: trimmed,
       ...(files ? { attachments: await attachmentPreviews(files) } : {})
     });
-    this.enqueueDelivery(conversationId, driver, trimmed, 'user', files);
+    const epoch = result.items[result.items.length - 1].at;
+    this.enqueueDelivery(conversationId, driver, trimmed, 'user', epoch, files);
     return result;
   }
 
@@ -277,7 +306,25 @@ export class MailRouter {
           `Recipients must be its participants (${conversation.participants.join(', ')}) or "user".`
       };
     }
-    const personaTo = to.filter((t) => t !== 'user');
+    // One voice back: only the driver (participants[0]) addresses the user.
+    // Another persona's user-mail is rerouted to the driver — material for THE
+    // answer — unless the extra hop would overflow the exchange cap, where the
+    // send falls through to the user (the existing runaway safety valve).
+    const driverId = conversation.participants[0];
+    const epoch = this.turnEpochs.get(ctx.turnId) ?? conversation.userSentAt;
+    let finalTo = to;
+    let rerouted = false;
+    if (to.includes('user') && ctx.personaId !== driverId) {
+      const swapped = [...new Set(to.map((t) => (t === 'user' ? driverId : t)))];
+      if (conversation.exchangeCount + swapped.length <= (await this.exchangeCap())) {
+        finalTo = swapped;
+        rerouted = true;
+      }
+    }
+    // A pure answer-the-user send that got rerouted is exempt from the sender's
+    // budget, like an implicit reply: finishing must always be possible.
+    const rerouteOnly = rerouted && to.every((t) => t === 'user');
+    const personaTo = finalTo.filter((t) => t !== 'user');
     const capRefusal =
       'The inter-persona exchange cap for this conversation is used up. Write your result for the ' +
       'user instead — send_mail to ["user"], or just finish your reply.';
@@ -289,7 +336,7 @@ export class MailRouter {
       const cap = await this.exchangeCap();
       if (conversation.exchangeCount + personaTo.length > cap) return { ok: false, error: capRefusal };
       const budget = caller?.sendBudget;
-      if (budget !== undefined) {
+      if (budget !== undefined && !rerouteOnly) {
         const spent = conversation.sendCounts[ctx.personaId] ?? 0;
         if (spent + personaTo.length > budget) return { ok: false, error: budgetRefusal };
       }
@@ -298,12 +345,14 @@ export class MailRouter {
       await appendMailItem({
         conversationId: ctx.conversationId,
         from: ctx.personaId,
-        to,
+        to: finalTo,
         body,
         guard: {
           exchangeCap: await this.exchangeCap(),
-          ...(caller?.sendBudget !== undefined ? { senderBudget: caller.sendBudget } : {})
-        }
+          ...(caller?.sendBudget !== undefined ? { senderBudget: caller.sendBudget } : {}),
+          ...(rerouteOnly ? { budgetExempt: true } : {})
+        },
+        ...(finalTo.includes('user') ? { staleIfUserSentAfter: epoch } : {})
       });
     } catch (error) {
       // With deliveries running in parallel, a racing send can pass the
@@ -315,7 +364,7 @@ export class MailRouter {
     }
     const sent = this.turnMailSent.get(ctx.turnId) ?? { persona: false, user: false };
     if (personaTo.length) sent.persona = true;
-    if (to.includes('user')) sent.user = true;
+    if (finalTo.includes('user')) sent.user = true;
     this.turnMailSent.set(ctx.turnId, sent);
 
     const initiator = this.turnInitiators.get(ctx.turnId) ?? 'user';
@@ -352,19 +401,22 @@ export class MailRouter {
         continue;
       }
       delivered.push(recipient);
-      this.enqueueDelivery(ctx.conversationId, recipient, body, ctx.personaId);
+      this.enqueueDelivery(ctx.conversationId, recipient, body, ctx.personaId, epoch);
     }
     // Fanning out — two or more deliveries from one send — opens (or widens)
     // this sender's join: the replies come back as one assembly turn.
     if (delivered.length >= 2 || (delivered.length >= 1 && this.joinFor(ctx.conversationId, ctx.personaId))) {
-      await this.openJoin(ctx.conversationId, ctx.personaId, initiator, delivered);
+      await this.openJoin(ctx.conversationId, ctx.personaId, initiator, epoch, delivered);
     }
     this.updateActivityDetail(ctx.conversationId);
     this.opts.onChange();
     return {
       ok: true,
       text:
-        `Mail sent to ${to.join(', ')}.` +
+        `Mail sent to ${finalTo.join(', ')}.` +
+        (rerouted
+          ? ` Only the driver (${driverId}) answers the user directly, so your user-mail was routed there.`
+          : '') +
         (personaTo.length ? ' Their reply will arrive as a later mail — finish your turn now.' : '')
     };
   }
@@ -515,12 +567,13 @@ export class MailRouter {
     personaId: string,
     body: string,
     from: string,
+    epoch: number,
     attachments?: TurnAttachment[]
   ): void {
     this.pending.set(conversationId, (this.pending.get(conversationId) ?? 0) + 1);
     const lane: Lane = this.lanes.get(conversationId) ?? { active: new Map(), queue: [] };
     this.lanes.set(conversationId, lane);
-    lane.queue.push({ personaId, body, from, ...(attachments?.length ? { attachments } : {}) });
+    lane.queue.push({ personaId, body, from, epoch, ...(attachments?.length ? { attachments } : {}) });
     this.pump(conversationId);
   }
 
@@ -536,7 +589,7 @@ export class MailRouter {
       if (at < 0) break;
       const [task] = lane.queue.splice(at, 1);
       lane.active.set(task.personaId, '');
-      void this.deliver(conversationId, task.personaId, task.body, task.from, task.attachments)
+      void this.deliver(conversationId, task.personaId, task.body, task.from, task.epoch, task.attachments)
         // quiet: deliver() reports every failure as a mail the user sees; a
         // rejection reaching here has already been told.
         .catch(() => undefined)
@@ -581,6 +634,7 @@ export class MailRouter {
     conversationId: string,
     senderId: string,
     initiator: string,
+    epoch: number,
     branchIds: string[]
   ): Promise<void> {
     const personas = await listPersonas();
@@ -593,6 +647,7 @@ export class MailRouter {
     const join: JoinState = {
       senderId,
       initiator,
+      epoch,
       awaiting: new Map(branchIds.map((id) => [id, nameOf(id)])),
       buffered: [],
       notes: [],
@@ -640,7 +695,7 @@ export class MailRouter {
     );
     const parts = ['Replies to your delegations:', ...sections];
     if (join.notes.length) parts.push(`Notes:\n${join.notes.map((n) => `- ${n}`).join('\n')}`);
-    this.enqueueDelivery(conversationId, join.senderId, parts.join('\n\n'), join.initiator);
+    this.enqueueDelivery(conversationId, join.senderId, parts.join('\n\n'), join.initiator, join.epoch);
   }
 
   /**
@@ -657,6 +712,7 @@ export class MailRouter {
     personaId: string,
     body: string,
     from: string,
+    epoch: number,
     attachments?: TurnAttachment[]
   ): Promise<void> {
     // Minted out here so the finally below can clear the turn's bookkeeping on
@@ -670,7 +726,8 @@ export class MailRouter {
           conversationId,
           personaId,
           `The persona this mail was addressed to no longer exists.`,
-          'awaiting-user'
+          'awaiting-user',
+          epoch
         );
         return;
       }
@@ -696,6 +753,7 @@ export class MailRouter {
       // gap between startTurn resolving and a later subscription, and a missed
       // settle wedges the conversation for the whole timeout.
       this.turnInitiators.set(turnId, from);
+      this.turnEpochs.set(turnId, epoch);
       const threadIdRef = { current: threadId ?? null };
       const settling = this.waitForSettle(turnId, threadIdRef);
       let started;
@@ -728,7 +786,13 @@ export class MailRouter {
       if (!runThreadId || !started.turnId) {
         settling.abandon();
         this.settleBranchFailure(conversationId, from, personaId, 'its delivery never started a turn.');
-        await this.appendReply(conversationId, personaId, 'The delivery never started a turn — nothing ran.', 'awaiting-user');
+        await this.appendReply(
+          conversationId,
+          personaId,
+          'The delivery never started a turn — nothing ran.',
+          'awaiting-user',
+          epoch
+        );
         return;
       }
       threadIdRef.current = runThreadId;
@@ -750,12 +814,13 @@ export class MailRouter {
           conversationId,
           personaId,
           `The persona's run failed: ${settle.error ?? 'the turn did not finish.'}`,
-          'awaiting-user'
+          'awaiting-user',
+          epoch
         );
       } else if (!sent) {
         const reply =
           (await this.lastAssistantText(runThreadId)) || '(The persona finished without writing a reply.)';
-        await this.routeImplicitReply(conversationId, personaId, from, reply);
+        await this.routeImplicitReply(conversationId, personaId, from, reply, epoch);
       } else if (sent.user && !sent.persona) {
         // The turn ended after mailing only the user: the chain has stopped on
         // them (a blocked ask, or an explicit final answer) — say so at drain.
@@ -768,12 +833,13 @@ export class MailRouter {
       const message = error instanceof Error ? error.message : String(error);
       degrade('mail', 'delivered a failure notice instead of a reply', error);
       this.settleBranchFailure(conversationId, from, personaId, `its delivery failed (${message}).`);
-      await this.appendReply(conversationId, personaId, `The delivery failed: ${message}`, 'awaiting-user').catch(() => {
+      await this.appendReply(conversationId, personaId, `The delivery failed: ${message}`, 'awaiting-user', epoch).catch(() => {
         // quiet: the degrade above already recorded the failure; a store that
         // cannot be written has nothing left to say it in.
       });
     } finally {
       this.turnInitiators.delete(turnId);
+      this.turnEpochs.delete(turnId);
       const left = (this.pending.get(conversationId) ?? 1) - 1;
       if (left > 0) this.pending.set(conversationId, left);
       else {
@@ -805,7 +871,8 @@ export class MailRouter {
     conversationId: string,
     personaId: string,
     initiator: string,
-    reply: string
+    reply: string,
+    epoch: number
   ): Promise<void> {
     if (initiator !== 'user') {
       const { conversations } = await readMail();
@@ -829,7 +896,7 @@ export class MailRouter {
           // append: fall through to the cap-spent path below.
           if (!(error instanceof CapError)) throw error;
           this.settleCappedBranch(conversationId, join, personaId);
-          await this.appendReply(conversationId, personaId, reply, 'awaiting-user');
+          await this.appendReply(conversationId, personaId, reply, 'awaiting-user', epoch);
           return;
         }
         if (join) {
@@ -846,16 +913,16 @@ export class MailRouter {
           this.opts.onChange();
           return;
         }
-        this.enqueueDelivery(conversationId, initiator, reply, personaId);
+        this.enqueueDelivery(conversationId, initiator, reply, personaId, epoch);
         this.opts.onChange();
         return;
       }
       // Cap spent: the reply lands on the user instead of looping on.
       this.settleCappedBranch(conversationId, join, personaId);
-      await this.appendReply(conversationId, personaId, reply, 'awaiting-user');
+      await this.appendReply(conversationId, personaId, reply, 'awaiting-user', epoch);
       return;
     }
-    await this.appendReply(conversationId, personaId, reply, 'idle');
+    await this.appendReply(conversationId, personaId, reply, 'idle', epoch);
   }
 
   /** A branch whose reply was forced to the user by the cap must still settle. */
@@ -872,9 +939,10 @@ export class MailRouter {
     conversationId: string,
     personaId: string,
     body: string,
-    drainStatus: 'idle' | 'awaiting-user'
+    drainStatus: 'idle' | 'awaiting-user',
+    epoch: number
   ): Promise<void> {
-    await appendMailItem({ conversationId, from: personaId, to: ['user'], body });
+    await appendMailItem({ conversationId, from: personaId, to: ['user'], body, staleIfUserSentAfter: epoch });
     // Awaiting-user is sticky for the wave: a failure already recorded must not
     // be papered over by a later hop landing cleanly.
     if (this.drainStatus.get(conversationId) !== 'awaiting-user') this.drainStatus.set(conversationId, drainStatus);

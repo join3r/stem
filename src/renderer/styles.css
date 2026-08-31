@@ -2828,6 +2828,7 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-item.from-user { border-color: transparent; background: var(--bubble-user, rgba(127,127,127,0.08)); align-self: flex-end; max-width: 85%; }
 .mail-item-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .mail-item-at { font-size: var(--fs-11); color: var(--muted); }
+.mail-item-stale { font-size: var(--fs-11); color: var(--muted); font-style: italic; white-space: nowrap; }
 .mail-item-body-plain { margin: 0; white-space: pre-wrap; }
 .mail-reply { display: flex; flex-direction: column; gap: 6px; padding: 10px 20px 14px; border-top: 0.5px solid var(--hair); }
 .mail-reply-row { display: flex; gap: 8px; align-items: flex-end; }

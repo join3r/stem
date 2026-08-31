@@ -2016,6 +2016,12 @@ export interface MailItem {
   /** Present when a scheduled task's run produced this mail. */
   taskId?: string;
   /**
+   * The user had already sent a newer mail into this conversation when this
+   * reply landed — it answers an EARLIER message. The renderer badges it so a
+   * late reply is never mistaken for the answer to the latest one.
+   */
+  stale?: boolean;
+  /**
    * What the sender attached, for DISPLAY: image thumbnails as data URLs,
    * everything else a named chip. The attachment bytes themselves ride only
    * the delivery turn — they are never persisted here.

@@ -174,6 +174,14 @@ export function MailConversationView({
       <div className="mail-item-head">
         <strong>{m.from === 'user' ? 'You' : personaName(personas, m.from)}</strong>
         {exchange && <span className="mail-item-to">→ {m.to.map((t) => (t === 'user' ? 'You' : personaName(personas, t))).join(', ')}</span>}
+        {m.stale && (
+          <span
+            className="mail-item-stale"
+            title="This landed after you had already sent a newer mail — it answers an earlier one"
+          >
+            ↩ answers your earlier mail
+          </span>
+        )}
         <span className="mail-item-at">{formatAt(m.at, now)}</span>
       </div>
       {m.from === 'user' ? <p className="mail-item-body-plain">{m.body}</p> : <MdxView text={m.body} />}
