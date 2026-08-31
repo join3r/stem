@@ -229,7 +229,7 @@ export class MailRouter {
     const attachments = input.attachments?.length ? input.attachments : undefined;
     if (!body && !attachments) throw new Error('Write the mail before sending it.');
 
-    const conversation = await createConversation(input.subject, to);
+    const conversation = await createConversation(input.subject ?? '', to, body);
     const result = await appendMailItem({
       conversationId: conversation.id,
       from: 'user',
@@ -361,7 +361,7 @@ export class MailRouter {
       : undefined;
     const from = input.personaId ?? `task:${input.taskId}`;
     const target =
-      conversation ?? (await createConversation(input.subject, [input.personaId ?? 'normal']));
+      conversation ?? (await createConversation(input.subject, [input.personaId ?? 'normal'], input.body));
     await appendMailItem({
       conversationId: target.id,
       from,

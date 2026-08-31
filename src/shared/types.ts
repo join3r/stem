@@ -2106,7 +2106,11 @@ export interface MailListResult {
 export interface MailComposeInput {
   /** Persona ids for the To: field; empty = the built-in Normal persona. */
   to: string[];
-  subject: string;
+  /**
+   * Optional: a blank (or markup-only) subject is derived from the body's
+   * first meaningful line instead (see shared/mail-subject).
+   */
+  subject?: string;
   body: string;
   /** Files riding the first delivery turn, same shape as a chat turn's. */
   attachments?: TurnAttachment[];

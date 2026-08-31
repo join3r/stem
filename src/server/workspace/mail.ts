@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { InboxEntry, InboxState } from '../../shared/inbox';
 import { toMs } from '../../shared/inbox';
+import { cleanMailSubject, deriveMailSubject, NO_SUBJECT, resolveMailSubject } from '../../shared/mail-subject';
 import type { MailConversation, MailItem, MailListResult } from '../../shared/types';
 import { degrade } from '../degrade';
 import { mailStorePath } from './paths';
@@ -108,7 +109,11 @@ function coerceConversation(raw: unknown): MailConversation | null {
   }
   return {
     id: r.id,
-    subject: typeof r.subject === 'string' ? r.subject : '',
+    // Cleaned on READ, not only on write: subjects stored before the hygiene
+    // existed (or written by an older server) heal the next time the store is
+    // served, and persist healed on the next write. One that cleans to ''
+    // gets re-derived from its items in coerce(), where the items are known.
+    subject: cleanMailSubject(typeof r.subject === 'string' ? r.subject : ''),
     participants,
     sessions,
     status,
@@ -161,6 +166,22 @@ function coerce(parsed: unknown): MailFile {
         if (c && item.at > c.userSentAt) c.userSentAt = item.at;
       }
     }
+  }
+  // A conversation whose stored subject was blank or pure markup gets one
+  // derived from its first mail — the user's if there is one, else whatever
+  // opened the thread — so a leaked-markup subject heals into a real name
+  // rather than a shrug. A stored literal NO_SUBJECT is left alone: it was
+  // written deliberately, for a mail whose body offered nothing either.
+  for (const conversation of conversations) {
+    if (conversation.subject) continue;
+    // Oldest first, user mail before persona traffic — and skipping mails
+    // whose body derives to nothing (attachments-only), so one early photo
+    // does not doom the conversation to the shrug.
+    const ofConversation = items.filter((i) => i.conversationId === conversation.id);
+    const derived = [...ofConversation.filter((i) => i.from === 'user'), ...ofConversation]
+      .map((i) => deriveMailSubject(i.body))
+      .find(Boolean);
+    conversation.subject = derived || NO_SUBJECT;
   }
   const inboxRaw = (raw.inbox && typeof raw.inbox === 'object' ? raw.inbox : {}) as Record<string, unknown>;
   const entries: Record<string, InboxEntry> = {};
@@ -253,11 +274,19 @@ function conversationOf(store: MailFile, id: string): MailConversation {
   return conversation;
 }
 
-/** Create a conversation (no items yet). `participants[0]` is the driver. */
-export function createConversation(subject: string, participants: string[]): Promise<MailConversation> {
+/**
+ * Create a conversation (no items yet). `participants[0]` is the driver.
+ * `bodyForSubject` is the first mail's body, the fallback a blank (or
+ * markup-only) subject is derived from — see shared/mail-subject.
+ */
+export function createConversation(
+  subject: string,
+  participants: string[],
+  bodyForSubject = ''
+): Promise<MailConversation> {
   const conversation: MailConversation = {
     id: randomUUID(),
-    subject: subject.trim() || '(no subject)',
+    subject: resolveMailSubject(subject, bodyForSubject),
     participants,
     sessions: {},
     status: 'idle',

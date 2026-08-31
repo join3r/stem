@@ -634,6 +634,38 @@ describe('mail router', () => {
     expect(mail.conversations[0].status).toBe('awaiting-user');
   });
 
+  it('compose without a subject derives one from the body; a dirty subject is cleaned', async () => {
+    const fake = fakeBackend();
+    const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined });
+    await router.compose({ to: ['verifier'], body: 'Summarize the meeting notes\n\nfull minutes attached' });
+    await router.compose({
+      to: ['verifier'],
+      subject: '<!--stem:mail from=user-->\nThis is a mail delivery in the conversation',
+      body: 'Check the deploy'
+    });
+    // Wait for both deliveries to settle so they can't bleed into later tests.
+    const { conversations } = await vi.waitFor(async () => {
+      const mail = await readMail();
+      expect(mail.items.length).toBeGreaterThanOrEqual(4);
+      expect(mail.conversations.every((c) => c.status !== 'working')).toBe(true);
+      return mail;
+    });
+    // The mail's first line names the first; the envelope-leak subject on the
+    // second is pure scaffolding, so it derives from the body too.
+    expect(conversations.map((c) => c.subject)).toEqual(['Summarize the meeting notes', 'Check the deploy']);
+  });
+
+  it('deliverTaskMail cleans a markup-laden notify title', async () => {
+    const fake = fakeBackend();
+    const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined });
+    await router.deliverTaskMail({
+      subject: '**Watch** the `page` <!--stem:scheduled at="2026-08-',
+      body: 'it changed',
+      taskId: 'task-1'
+    });
+    expect((await readMail()).conversations[0].subject).toBe('Watch the page');
+  });
+
   it('deliverTaskMail groups a task’s firings into one conversation', async () => {
     const fake = fakeBackend();
     const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined });

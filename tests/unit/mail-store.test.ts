@@ -169,6 +169,71 @@ describe('conversations and items', () => {
   });
 });
 
+describe('subject hygiene', () => {
+  it('createConversation cleans a markup-laden subject and keeps a clean one verbatim', async () => {
+    await createConversation('Weekly digest <!--stem:mail from=user-->scaffolding<!--/stem:mail-->', ['normal']);
+    await createConversation('Check **the** `feed`', ['normal']);
+    await createConversation('Plain subject', ['normal']);
+    const { conversations } = await readMail();
+    expect(conversations.map((c) => c.subject)).toEqual(['Weekly digest', 'Check the feed', 'Plain subject']);
+  });
+
+  it('a blank subject derives one from the first mail body', async () => {
+    const c = await createConversation('', ['normal'], 'Book the June flights\nand a hotel');
+    expect(c.subject).toBe('Book the June flights');
+    // Nothing to derive from either (attachments-only mail): the explicit shrug.
+    const empty = await createConversation('', ['normal']);
+    expect(empty.subject).toBe('(no subject)');
+  });
+
+  it('heals a dirty stored subject on read: markup-only re-derives from the first user mail', async () => {
+    const c = await createConversation('placeholder', ['normal']);
+    await appendMailItem({ conversationId: c.id, from: 'normal', to: ['user'], body: 'internal note' });
+    await appendMailItem({ conversationId: c.id, from: 'user', to: ['normal'], body: 'Investigate the failing deploy' });
+    // An older server (or the leak itself) wrote the raw envelope into the store.
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw.conversations[0].subject = '<!--stem:mail from=user-->\nThis is a mail delivery in the conversation';
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    // The interior is scaffolding, so the clean is empty — the subject comes
+    // from the first USER mail, not the personas' internal traffic.
+    expect((await readMail()).conversations[0].subject).toBe('Investigate the failing deploy');
+  });
+
+  it('heals a dirty stored subject on read: leaked markdown is stripped in place', async () => {
+    await createConversation('placeholder', ['normal']);
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw.conversations[0].subject = '## **Deploy** update <!--stem:scheduled at="2026-08-';
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    expect((await readMail()).conversations[0].subject).toBe('Deploy update');
+    // Healing is idempotent: the healed subject survives a second read (and
+    // the write-back every mutator's round-trip performs) unchanged.
+    await setMailRead([(await readMail()).conversations[0].id], true);
+    expect((await readMail()).conversations[0].subject).toBe('Deploy update');
+  });
+
+  it('healing skips mails whose body derives to nothing (attachments-only)', async () => {
+    const c = await createConversation('placeholder', ['normal']);
+    await appendMailItem({
+      conversationId: c.id,
+      from: 'user',
+      to: ['normal'],
+      body: '',
+      attachments: [{ kind: 'image', name: 'photo.png' }]
+    });
+    await appendMailItem({ conversationId: c.id, from: 'user', to: ['normal'], body: 'Frame the photo' });
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw.conversations[0].subject = '<!--stem:mail from=user-->';
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    expect((await readMail()).conversations[0].subject).toBe('Frame the photo');
+  });
+
+  it('leaves a stored literal (no subject) alone rather than re-deriving it', async () => {
+    const c = await createConversation('', ['normal']);
+    await appendMailItem({ conversationId: c.id, from: 'user', to: ['normal'], body: 'late body' });
+    expect((await readMail()).conversations[0].subject).toBe('(no subject)');
+  });
+});
+
 describe('triage (shared inbox semantics over userUpdatedAt)', () => {
   async function conversationRow() {
     const { conversations, inbox } = await readMail();
