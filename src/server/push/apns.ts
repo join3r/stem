@@ -33,15 +33,15 @@ interface ApnsConfig {
   teamId: string;
   /** The app's bundle id, which is also the APNs topic for an alert push. */
   bundleId: string;
-  /** Sandbox unless production is asked for: a TestFlight build is sandbox. */
+  /** Sandbox unless production is asked for. Only Xcode dev builds are sandbox; TestFlight and App Store builds mint production tokens. */
   env: 'production' | 'sandbox';
 }
 
 /**
  * Where the two APNs environments live. A token minted by a development build is
  * only addressable on the sandbox host and vice versa, which is why this is
- * configuration and not a constant: the same server binary serves a TestFlight
- * build and a shipped one.
+ * configuration and not a constant: the same server binary serves a dev build
+ * and a TestFlight/App Store one.
  */
 const HOSTS = {
   production: 'api.push.apple.com',

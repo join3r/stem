@@ -105,12 +105,26 @@ second source of truth. Unpairing empties it.
 
 ## TestFlight
 
-1. `eas build --profile production --platform ios` (or archive in Xcode after
-   `npx expo prebuild`).
-2. `eas submit --platform ios`, or upload the `.ipa` with Transporter.
-3. In App Store Connect the build appears under **TestFlight** after processing. Internal
-   testers (up to 100, same team) need no review; external testers need a short one.
-4. Set `STEM_APNS_ENV=production` on the server before testing push against a TestFlight
-   build, and re-pair the phone so the server holds a token minted by that build.
+One-time setup, in the Awantech (AX23G9CAL9) account:
 
-Bump `version` in `app.json` for a new build; EAS handles `buildNumber`.
+1. Create the app record at appstoreconnect.apple.com → Apps → **+** → New App
+   (platform iOS, bundle id `sk.awantech.stem`). This cannot be scripted.
+2. Create an API key under Users and Access → Integrations → App Store Connect API
+   (role App Manager) and download the `.p8` once.
+
+Then every build is:
+
+```sh
+ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_KEY_PATH=…/AuthKey_….p8 ./scripts/testflight.sh
+```
+
+which archives with automatic signing (creating the distribution certificate and
+profile on first run) and uploads. The build appears under **TestFlight** after
+processing. Internal testers (up to 100, must be members of the App Store Connect
+team) need no review; an external group with a public invite link needs a short
+Beta App Review on the first build of each version.
+
+Push: a TestFlight build mints **production** APNs tokens, so set
+`STEM_APNS_ENV=production` on the server and re-pair the phone so the server holds
+a token minted by that build. Bump `version` in `app.json` for a new release;
+Xcode's `manageAppVersionAndBuildNumber` keeps `buildNumber` ascending on its own.
