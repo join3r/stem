@@ -20,7 +20,8 @@ import {
   Check,
   Trash2,
   ChevronRight,
-  Clock
+  Clock,
+  Lock
 } from 'lucide-react';
 import type { ActivityItem, ChatMessage, EscapeAction, ModelSummary, TurnAttachment, TurnTiming } from '../../shared/types';
 import { ActivityRows, SourcesList } from './ActivityRows';
@@ -121,6 +122,10 @@ interface ChatViewProps {
   format: 'md' | 'mdx';
   /** Name of the folder a fresh draft will be saved in, or null for root / a real thread. */
   draftFolderName: string | null;
+  /** The fresh draft is set to start a private chat (see StartTurnInput.private). */
+  draftPrivate?: boolean;
+  /** Present only for a fresh draft: flips `draftPrivate`. An existing chat's flag is fixed. */
+  onToggleDraftPrivate?: () => void;
   /** Show the context-fill meter in the controls row. Off in Quick Chat (too narrow). */
   showContextMeter?: boolean;
   /** The thread the composer's `/learn` saves a skill from. Passed only by the main
@@ -313,6 +318,8 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   serviceTier,
   format,
   draftFolderName,
+  draftPrivate = false,
+  onToggleDraftPrivate,
   showContextMeter = true,
   threadId,
   onChangeEffort,
@@ -646,6 +653,20 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             <EmptyTips format={format} />
             {draftFolderName && (
               <p className="empty-folder">This chat will be saved in “{draftFolderName}”.</p>
+            )}
+            {onToggleDraftPrivate && (
+              <button
+                type="button"
+                className={`empty-private${draftPrivate ? ' on' : ''}`}
+                aria-pressed={draftPrivate}
+                onClick={onToggleDraftPrivate}
+                title="A private chat is saved like any other, but Stem learns nothing from it: no memory is written from it, none is read into it, and the recall tools are off. It cannot be changed once the chat starts."
+              >
+                <Lock size={12} />
+                {draftPrivate
+                  ? 'Private chat — nothing here is saved to memory or read from it'
+                  : 'Make this chat private'}
+              </button>
             )}
           </div>
         )}

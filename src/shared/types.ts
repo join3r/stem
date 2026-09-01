@@ -338,6 +338,18 @@ export interface StartTurnInput {
   /** Output format for this turn: 'mdx' = rich components (default); 'md' = plain Markdown. */
   format?: 'md' | 'mdx';
   /**
+   * Start a PRIVATE chat: nothing said in it is captured into Recall (no
+   * distillation, no episodic history), no recall is injected, and the recall
+   * search tools are off — for every turn of the thread, whichever persona
+   * runs it. Honored only on the turn that creates the thread (no `threadId`);
+   * the flag is then stored with the thread and read back on later turns, so a
+   * client cannot flip an existing chat either way. The chat itself is still
+   * saved and searchable — private means "not learned from", not ephemeral.
+   * Server-side callers (the mail router) set it on every delivery of a
+   * private conversation, whose hidden run threads are not in the chat store.
+   */
+  private?: boolean;
+  /**
    * Which client surface asked for this turn. The two per-surface settings below
    * are resolved from it by the `backend:startTurn` handler, so a client states
    * where it is rather than reading the user's settings itself. Omitted means
@@ -2133,6 +2145,12 @@ export interface MailConversation {
   /** personaId -> hidden pi threadId, created on that persona's first delivery. */
   sessions: Record<string, string>;
   /**
+   * Composed private: every delivery in it runs as a private turn (nothing
+   * captured into Recall, no recall injected or searchable, no persona
+   * reflection), whoever the participants are. Set at compose, never changed.
+   */
+  private?: true;
+  /**
    * 'working' while a delivery is in flight; 'awaiting-user' once a persona's
    * reply asked for the user's input/decision (set when a delivery fails or is
    * blocked); 'aborted' after the user stopped the conversation mid-wave (it
@@ -2187,6 +2205,8 @@ export interface MailComposeInput {
   body: string;
   /** Files riding the first delivery turn, same shape as a chat turn's. */
   attachments?: TurnAttachment[];
+  /** Start the conversation private — see MailConversation.private. */
+  private?: boolean;
 }
 
 // ---- Chats (backend-backed) + Folders (Stem-owned organization) ----
@@ -2233,6 +2253,8 @@ export interface ChatSummary {
    */
   preview?: string;
   folderId: string | null;
+  /** The chat was started private (see StartTurnInput.private): Stem learns nothing from it. */
+  private?: true;
   /** Unix seconds. */
   createdAt: number;
   updatedAt: number;

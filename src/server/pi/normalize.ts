@@ -70,6 +70,13 @@ export interface TurnContext {
   privateRoots?: string[];
   memoryTainted?: boolean;
   /**
+   * The turn belongs to a private chat or mail conversation (see
+   * StartTurnInput.private). Set at turn start together with memoryTainted —
+   * which keeps every capture path shut — and read where the taint alone is
+   * not enough: recall injection, the recall-tool gate, the prompt's notice.
+   */
+  isPrivate?: boolean;
+  /**
    * The turn called a web-access tool (web_search, fetch_content, …), so its
    * assistant reply may restate untrusted public-web content. Unlike
    * memoryTainted this does NOT suppress capture — the reply is still recorded,

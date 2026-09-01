@@ -251,7 +251,7 @@ export class MailRouter {
     const attachments = input.attachments?.length ? input.attachments : undefined;
     if (!body && !attachments) throw new Error('Write the mail before sending it.');
 
-    const conversation = await createConversation(input.subject ?? '', to, body);
+    const conversation = await createConversation(input.subject ?? '', to, body, { private: input.private === true });
     const result = await appendMailItem({
       conversationId: conversation.id,
       from: 'user',
@@ -1145,6 +1145,10 @@ export class MailRouter {
           ...(persona.effort ? { effort: persona.effort } : {}),
           ...(attachments?.length ? { attachments } : {}),
           webSearch: true,
+          // A private conversation's every delivery is a private turn: the
+          // hidden run threads are not in the chat store, so the flag rides
+          // the input (the runtime honors it on mail turns, see startTurn).
+          ...(conversation.private ? { private: true } : {}),
           persona: {
             id: persona.id,
             prompt: persona.prompt,
@@ -1218,7 +1222,9 @@ export class MailRouter {
       // strictly after the reply has been routed, and strictly fire-and-forget
       // — it never rejects (see reflect.ts) and a slow model must not hold the
       // lane.
-      if (notes && settle.status === 'ok') {
+      // A private conversation also leaves the persona's own notes untouched:
+      // what it learned here would be a memory of the thread by another name.
+      if (notes && settle.status === 'ok' && !conversation.private) {
         void reflectOnDelivery(this.opts.runtime, { personaId, assignment: body, threadId: runThreadId });
       }
     } catch (error) {

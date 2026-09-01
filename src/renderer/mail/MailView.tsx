@@ -340,6 +340,7 @@ export const MailComposeView = forwardRef<MailViewHandle, {
   const [to, setTo] = useState<string[]>(['normal']);
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
+  const [isPrivate, setIsPrivate] = useState(false);
   const files = useAttachmentDraft();
   useImperativeHandle(ref, () => ({
     addAttachments: (dropped) => void files.addFiles(dropped)
@@ -360,6 +361,7 @@ export const MailComposeView = forwardRef<MailViewHandle, {
         to,
         subject,
         body,
+        ...(isPrivate ? { private: true } : {}),
         ...(files.attachments.length ? { attachments: files.attachments } : {})
       });
     } catch (err) {
@@ -405,6 +407,13 @@ export const MailComposeView = forwardRef<MailViewHandle, {
             onChange={(e) => setSubject(e.target.value)}
             placeholder="What this is about"
           />
+        </label>
+        <label className="mail-field mail-private-toggle">
+          <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} />
+          <span>
+            Private — nothing in this conversation is saved to memory or read from it, and the personas keep no
+            notes of it. Fixed once sent.
+          </span>
         </label>
         <textarea
           className="mail-compose-body"

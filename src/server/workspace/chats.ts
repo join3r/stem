@@ -24,6 +24,14 @@ interface ChatStore {
   subjects: Record<string, string>;
   /** threadId -> where the thread has got to in its naming schedule. */
   naming: Record<string, NamingState>;
+  /**
+   * Threads started as private chats (StartTurnInput.private): every turn of
+   * these runs with memory capture, recall injection and the recall tools off.
+   * Set once, when the runtime creates the thread; only deleting the chat
+   * removes it. A presence map rather than a boolean per row so an older file
+   * needs no migration and a missing map means "no private chats".
+   */
+  private: Record<string, true>;
 }
 
 /**
@@ -39,7 +47,7 @@ export interface NamingState {
 }
 
 function emptyStore(): ChatStore {
-  return { version: 1, folders: [], assignments: {}, subjects: {}, naming: {} };
+  return { version: 1, folders: [], assignments: {}, subjects: {}, naming: {}, private: {} };
 }
 
 /** Keep only string→string pairs; a hand-edited file can hold anything. */
@@ -70,8 +78,19 @@ async function loadStore(): Promise<ChatStore> {
     folders: Array.isArray(parsed.folders) ? parsed.folders : [],
     assignments: parsed.assignments && typeof parsed.assignments === 'object' ? parsed.assignments : {},
     subjects: coerceMap(parsed.subjects),
-    naming: coerceNaming(parsed.naming)
+    naming: coerceNaming(parsed.naming),
+    private: coercePrivate(parsed.private)
   };
+}
+
+/** Keep only `threadId: true` entries; anything else in a hand-edited file is dropped. */
+function coercePrivate(raw: unknown): Record<string, true> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, true> = {};
+  for (const [threadId, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value === true) out[threadId] = true;
+  }
+  return out;
 }
 
 export async function readStore(): Promise<ChatStore> {
@@ -168,6 +187,27 @@ export async function listFolders(): Promise<Folder[]> {
 
 export async function getAssignments(): Promise<Record<string, string>> {
   return (await readStore()).assignments;
+}
+
+/** The set of threads started as private chats. */
+export async function getPrivateChats(): Promise<Set<string>> {
+  return new Set(Object.keys((await readStore()).private));
+}
+
+/** Whether one thread was started as a private chat. */
+export async function isChatPrivate(threadId: string): Promise<boolean> {
+  return (await readStore()).private[threadId] === true;
+}
+
+/**
+ * Mark a thread private. Called by the runtime on the turn that creates the
+ * thread, before that turn runs, so every later turn reads it back; there is
+ * deliberately no way to unmark one short of deleting the chat.
+ */
+export function setChatPrivate(threadId: string): Promise<void> {
+  return update((store) => {
+    store.private[threadId] = true;
+  });
 }
 
 export async function getSubjects(): Promise<Record<string, string>> {
@@ -289,5 +329,6 @@ export function removeChat(threadId: string): Promise<void> {
     delete store.assignments[threadId];
     delete store.subjects[threadId];
     delete store.naming[threadId];
+    delete store.private[threadId];
   });
 }

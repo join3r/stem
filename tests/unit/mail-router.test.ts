@@ -1874,6 +1874,42 @@ describe('persona memory', () => {
     expect(await listPersonaNotes('cold')).toEqual([]);
   });
 
+  it('a private conversation runs every delivery as a private turn and never reflects', async () => {
+    // verifier owns a memory, so an ordinary delivery would end in a reflection
+    // pass (runtime.complete). Private: the flag rides every startTurn, and the
+    // persona's notes are left alone — a lesson from the thread would be a
+    // memory of it by another name.
+    const fake = fakeBackend();
+    const complete = vi.fn(async () => 'NOTHING');
+    Object.assign(fake.backend, { complete });
+    const router = makeRouter(fake);
+    await router.compose({ to: ['verifier'], subject: 's', body: 'q', private: true });
+    const mail = await settledMail();
+    expect(mail.conversations[0].private).toBe(true);
+    expect(fake.starts).toHaveLength(1);
+    expect(fake.starts[0].private).toBe(true);
+    expect(fake.starts[0].persona?.notes).toBeDefined();
+    // The reply continues the same private conversation: the flag rides again.
+    fake.script = { mode: 'ok', reply: 'second answer' };
+    await router.reply(mail.conversations[0].id, 'and this?');
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items).toHaveLength(4);
+      expect(m.conversations[0].status).toBe('idle');
+    });
+    expect(fake.starts).toHaveLength(2);
+    expect(fake.starts[1].private).toBe(true);
+    expect(complete).not.toHaveBeenCalled();
+    // An ordinary compose carries no flag at all.
+    await router.compose({ to: ['verifier'], subject: 's2', body: 'q2' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items).toHaveLength(6);
+      expect(m.conversations.every((c) => c.status === 'idle')).toBe(true);
+    });
+    expect(fake.starts[2].private).toBeUndefined();
+  });
+
   it('the built-in Critic ships memoryless: no index rides its deliveries', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);

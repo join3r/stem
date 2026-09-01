@@ -400,6 +400,10 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .empty { color: var(--muted); margin-top: 14vh; text-align: center; }
 .empty h2 { color: var(--ink); margin-bottom: 6px; }
 .empty .empty-folder { font-size: 0.85em; margin-top: 10px; opacity: 0.8; }
+.empty .empty-private { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; padding: 5px 10px; border: 0.5px solid var(--hair); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 0.85em; cursor: pointer; }
+.empty .empty-private:hover { color: inherit; border-color: var(--accent); }
+.empty .empty-private.on { color: inherit; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.private-pill { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; padding: 1px 7px; border-radius: 999px; border: 0.5px solid var(--hair); font-size: var(--fs-11); font-weight: 500; color: var(--muted); vertical-align: 1px; }
 /* Starter-prompt cards: one per marquee capability, so a blank chat sells what
    Stem can do instead of leaving a dark void under two lines of copy. */
 .empty-starters {
@@ -2847,6 +2851,10 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-compose-form { flex: 1; overflow-y: auto; padding: 14px 20px; display: flex; flex-direction: column; gap: 10px; max-width: 640px; }
 .mail-field { display: flex; align-items: center; gap: 10px; }
 .mail-field > span { width: 56px; color: var(--muted); font-size: var(--fs-12, 12px); }
+.mail-private-toggle { align-items: flex-start; }
+.mail-private-toggle > span { width: auto; flex: 1; line-height: 1.35; }
+.mail-private-toggle input[type='checkbox'] { flex: none; margin-top: 2px; }
+.mail-private { display: inline-flex; align-items: center; margin-right: 5px; vertical-align: -1px; color: var(--muted); }
 .mail-field input, .mail-field select { flex: 1; border: 0.5px solid var(--hair); border-radius: var(--radius-sm); padding: 6px 8px; font: inherit; background: transparent; color: inherit; }
 .mail-compose-body { resize: vertical; border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 8px 10px; font: inherit; background: transparent; color: inherit; }
 .mail-compose-body:focus, .mail-field input:focus { outline: none; border-color: var(--accent); }

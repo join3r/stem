@@ -49,7 +49,7 @@ import { clampPinnedCwd } from '../harness/pin';
 import { hostShellAgentHint } from '../exec/host-shell';
 import { previewText } from '../chats/preview';
 import { autoTitle, nameThread, nameThreadIfDue as nameIfDue, type SubjectDeps } from '../chats/subject';
-import { setNaming } from '../workspace/chats';
+import { isChatPrivate, setChatPrivate, setNaming } from '../workspace/chats';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
 import { buildRecallContext, type RecallTimings } from '../recall/inject';
 import { reconcileExplicitFact } from '../recall/reconcile';
@@ -1133,8 +1133,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // supersede authority. Scheduled input never gets the user's word treatment.
     // Mail deliveries are gated the same way: the router re-sends persona-
     // authored text through here, and even the user's own compose is addressed
-    // to a persona, not to memory.
-    const memory = input.scheduled || input.mail
+    // to a persona, not to memory. A private chat's "remember that …" goes to
+    // the model like any other message — the prompt tells it nothing is kept.
+    const isPrivate = await this.isPrivateTurn(input);
+    const memory = input.scheduled || input.mail || isPrivate
       ? { captured: false, shouldAcknowledge: false, factId: undefined, path: undefined }
       : await captureMemoryFromUserInput(input.input);
     if (memory.shouldAcknowledge) {
@@ -1222,6 +1224,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // Bind whatever id the turn actually runs on: a fresh draft's new session,
       // or the adopted id ensureActive minted for a fileless pre-created thread.
       this.bindThread(threadId, w);
+      // A private chat is marked on the turn that creates it, BEFORE that turn
+      // runs, so every later turn on the thread reads the flag back from the
+      // store. Refuse rather than proceed on a failed write: an unmarked
+      // private chat would capture its second turn — and the first is gated by
+      // `isPrivate` regardless. Mail turns carry the flag per delivery instead.
+      if (isPrivate && !input.mail && !input.threadId) {
+        await setChatPrivate(threadId).catch((e) => {
+          degrade('pi.private', 'refused the turn rather than run a private chat it could not mark', e);
+          throw new Error(`Could not mark this chat private: ${e instanceof Error ? e.message : String(e)}`);
+        });
+      }
       if (input.scheduled) {
         // pi does NOT restore the session's own model on switch_session (the
         // spawn-time --model pins every runtime rebuild) — without an explicit
@@ -1278,6 +1291,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // can mail the user about it).
       turn.isScheduled = !!input.scheduled || !!input.mail;
       turn.isMail = !!input.mail;
+      // Private chat / mail conversation: the taint keeps every Recall capture
+      // path shut from the first byte (the held-back user message included);
+      // isPrivate is what buildMessage and the tool gate read.
+      if (isPrivate) {
+        turn.isPrivate = true;
+        turn.memoryTainted = true;
+      }
       // The mail bridge's authority: which conversation this delivery belongs
       // to, who may be mailed, and who the sender is — all read from the live
       // turn, never from the tool payload.
@@ -1329,10 +1349,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             // the tool reads this to refuse up front instead of wasting a
             // round-trip on the bridge's refusal (which stays the boundary).
             coding: turn.isMail !== true || !!turn.personaHarness,
-            // Mirrors buildMessage's recall gate: a recall-off persona gets
-            // neither the injected block nor the search tools that would
-            // reproduce it on demand.
-            recall: input.persona?.recall !== false
+            // Mirrors buildMessage's recall gate: a recall-off persona (or a
+            // private chat) gets neither the injected block nor the search
+            // tools that would reproduce it on demand.
+            recall: input.persona?.recall !== false && !isPrivate
           },
           w.gateDir
         ).catch(
@@ -1564,6 +1584,30 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    */
   isTurnRunning(): boolean {
     return this.workers.some((w) => w.currentTurn);
+  }
+
+  /**
+   * Whether this start is a private turn (see StartTurnInput.private). A mail
+   * delivery says so itself — its hidden run thread is not in the chat store,
+   * and only the router (a server-side caller) can set `mail`. A turn on an
+   * existing chat is private iff the chat was marked at creation; the input's
+   * own flag is ignored there, so a client cannot make a memory-bearing chat
+   * suddenly private or vice versa. A turn that creates a chat is private when
+   * it asks to be — startTurn then marks the new thread before running it.
+   */
+  private async isPrivateTurn(input: StartTurnInput): Promise<boolean> {
+    if (input.mail) return input.private === true;
+    if (input.threadId) {
+      return isChatPrivate(input.threadId).catch((e) => {
+        // readStore already answers an empty store for a missing file; what
+        // rejects is a corrupt one. Treat the chat as private: capturing a
+        // private chat is the failure the flag exists to prevent, while one
+        // uncaptured turn of an ordinary chat costs nothing durable.
+        degrade('pi.private', 'ran the turn as private because the chat store could not be read', e);
+        return true;
+      });
+    }
+    return input.private === true;
   }
 
   /**
@@ -3795,11 +3839,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           `user's current message and safety take precedence):\n${standing}`
       );
     }
+    // Private chat: say so, once per turn, so the model neither promises to
+    // remember (the explicit-remember fast path is off here) nor wonders why
+    // it recalls nothing. Kept to one line — it is a fact about the session,
+    // not an instruction about the task.
+    if (turn?.isPrivate) {
+      blocks.push(
+        'This is a private chat: nothing said here is saved to memory, and no memory of the user is available ' +
+          'to you in it. If asked to remember something, say that this chat is private and it will not be kept.'
+      );
+    }
     // A persona with recall off sees none of the user's memory: no facts, no
     // episodic history, no indexed folder excerpts. The block is skipped
     // outright rather than emptied, so nothing about the user rides along
     // with the material (Persona.recall explains why Critic needs this).
-    if (isRecallEnabled() && input.persona?.recall !== false) {
+    if (isRecallEnabled() && input.persona?.recall !== false && !turn?.isPrivate) {
       const chosen: { facts: Fact[]; tier: FactTier } = { facts: [], tier: 'all' };
       const flags: { privateDocsInjected?: boolean } = {};
       const injectedDocs: InjectedDocRef[] = [];

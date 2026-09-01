@@ -8,6 +8,7 @@ import type { PiWorker } from '../../src/server/pi/worker';
 import { newTurnContext } from '../../src/server/pi/normalize';
 import { PiProcess, stderrReason } from '../../src/server/pi/rpc';
 import { updateDefaultModel } from '../../src/server/workspace/settings';
+import { removeChat, setChatPrivate } from '../../src/server/workspace/chats';
 import { settingsStorePath } from '../../src/server/workspace/paths';
 import { recallStore } from '../../src/server/recall/store';
 
@@ -1030,6 +1031,51 @@ describe('scheduled-run model restore', () => {
       expect(cold.message).not.toMatch(/remember|recall|memory/i);
     } finally {
       recallStore.resetFacts();
+    }
+  });
+
+  it('a private turn gets no recall block, a one-line notice, and is decided by the store, not the client', async () => {
+    recallStore.resetFacts();
+    const id = recallStore.upsertFact('The user signs their mails as Vlado', 'explicit');
+    expect(recallStore.setFactPinned(id!, true)).toBe(true);
+    const { runtime } = await tempRuntime();
+    type Internal = {
+      buildMessage: (
+        input: { input: string },
+        threadId: string,
+        turn: { isPrivate?: boolean } | null
+      ) => Promise<{ message: string }>;
+      isPrivateTurn: (input: {
+        input: string;
+        threadId?: string;
+        private?: boolean;
+        mail?: { conversationId: string; subject: string; from: string; participants: string[] };
+      }) => Promise<boolean>;
+    };
+    const internal = runtime as unknown as Internal;
+    try {
+      const open = await internal.buildMessage({ input: 'Review this draft' }, 't-1', null);
+      expect(open.message).toContain('signs their mails as Vlado');
+      expect(open.message).not.toContain('This is a private chat');
+      const closed = await internal.buildMessage({ input: 'Review this draft' }, 't-1', { isPrivate: true });
+      expect(closed.message).not.toContain('signs their mails as Vlado');
+      expect(closed.message).toContain('This is a private chat');
+
+      // Creating turn: the input decides. Existing chat: only the stored mark
+      // does — a client flag on an ordinary chat changes nothing, and a marked
+      // chat stays private even when the client sends nothing.
+      expect(await internal.isPrivateTurn({ input: 'x', private: true })).toBe(true);
+      expect(await internal.isPrivateTurn({ input: 'x' })).toBe(false);
+      expect(await internal.isPrivateTurn({ input: 'x', threadId: 'plain', private: true })).toBe(false);
+      await setChatPrivate('marked');
+      expect(await internal.isPrivateTurn({ input: 'x', threadId: 'marked' })).toBe(true);
+      // A mail delivery says so itself: its run thread is not in the chat store.
+      const mail = { conversationId: 'c', subject: 's', from: 'user', participants: ['critic'] };
+      expect(await internal.isPrivateTurn({ input: 'x', threadId: 'run-1', mail, private: true })).toBe(true);
+      expect(await internal.isPrivateTurn({ input: 'x', threadId: 'run-1', mail })).toBe(false);
+    } finally {
+      recallStore.resetFacts();
+      await removeChat('marked');
     }
   });
 

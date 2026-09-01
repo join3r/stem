@@ -7,6 +7,7 @@ import {
   Folder as FolderIcon,
   FolderOpen,
   FolderPlus,
+  Lock,
   MessageSquare,
   Search,
   SquarePen,
@@ -485,6 +486,15 @@ export function ChatList(props: ChatListProps) {
         {!isEditing && props.scheduledThreadIds?.has(chat.threadId) && (
           <span className="chat-sched-badge" title="Has a scheduled task" aria-label="Has a scheduled task">
             <Clock size={11} />
+          </span>
+        )}
+        {!isEditing && chat.private && (
+          <span
+            className="chat-sched-badge"
+            title="Private chat — nothing here is saved to memory or read from it"
+            aria-label="Private chat"
+          >
+            <Lock size={11} />
           </span>
         )}
       </div>

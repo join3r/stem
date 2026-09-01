@@ -8,6 +8,7 @@ import {
   createFolder,
   deleteFolder,
   getAssignments,
+  getPrivateChats,
   getSubjects,
   listFolders,
   moveFolder,
@@ -45,11 +46,12 @@ const CHAT_SEARCH_COMPLETION_TIMEOUT_MS = 4_000;
 
 export function registerChatsIpc(deps: IpcDeps): void {
   const chatList = async (): Promise<ChatListResult> => {
-    const [allChats, folders, assignments, subjects, inbox, mailThreads] = await Promise.all([
+    const [allChats, folders, assignments, subjects, privateChats, inbox, mailThreads] = await Promise.all([
       deps.runtime().listThreads(),
       listFolders(),
       getAssignments(),
       getSubjects(),
+      getPrivateChats(),
       readInbox(),
       // The hidden persona sessions behind mail conversations are backend
       // threads like any other — the Inbox shows them as mail, so the chat
@@ -63,6 +65,7 @@ export function registerChatsIpc(deps: IpcDeps): void {
       chat.folderId = folderId && valid.has(folderId) ? folderId : null;
       const subject = subjects[chat.threadId];
       if (subject) chat.subject = subject;
+      if (privateChats.has(chat.threadId)) chat.private = true;
     }
     return { chats, folders, inbox };
   };

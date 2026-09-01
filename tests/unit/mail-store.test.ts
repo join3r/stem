@@ -32,6 +32,21 @@ afterEach(() => {
 });
 
 describe('conversations and items', () => {
+  it('a conversation composed private keeps the flag through the file; an ordinary one carries none', async () => {
+    const secret = await createConversation('hush', ['verifier'], '', { private: true });
+    const open = await createConversation('open', ['verifier']);
+    expect(secret.private).toBe(true);
+    expect('private' in open).toBe(false);
+    const { conversations } = await readMail();
+    expect(conversations.find((c) => c.id === secret.id)?.private).toBe(true);
+    expect(conversations.find((c) => c.id === open.id)?.private).toBeUndefined();
+    // A stored value other than exactly `true` (a hand edit) does not make a conversation private.
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw.conversations.find((c: { id: string }) => c.id === open.id).private = 'yes';
+    writeFileSync(path, JSON.stringify(raw));
+    expect((await readMail()).conversations.find((c) => c.id === open.id)?.private).toBeUndefined();
+  });
+
   it('appends items and stamps the activity clocks by addressee', async () => {
     const conversation = await createConversation('Build the thing', ['code-stem']);
     await appendMailItem({ conversationId: conversation.id, from: 'user', to: ['code-stem'], body: 'go' });

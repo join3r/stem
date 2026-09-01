@@ -116,6 +116,7 @@ function coerceConversation(raw: unknown): MailConversation | null {
     subject: cleanMailSubject(typeof r.subject === 'string' ? r.subject : ''),
     participants,
     sessions,
+    ...(r.private === true ? { private: true as const } : {}),
     status,
     exchangeCount: num(r.exchangeCount) ?? 0,
     sendCounts,
@@ -282,13 +283,15 @@ function conversationOf(store: MailFile, id: string): MailConversation {
 export function createConversation(
   subject: string,
   participants: string[],
-  bodyForSubject = ''
+  bodyForSubject = '',
+  opts: { private?: boolean } = {}
 ): Promise<MailConversation> {
   const conversation: MailConversation = {
     id: randomUUID(),
     subject: resolveMailSubject(subject, bodyForSubject),
     participants,
     sessions: {},
+    ...(opts.private ? { private: true as const } : {}),
     status: 'idle',
     exchangeCount: 0,
     sendCounts: {},

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { MailPlus, SquarePen, PanelRight } from 'lucide-react';
+import { Lock, MailPlus, SquarePen, PanelRight } from 'lucide-react';
 import type {
   AppSettings,
   AuthProviderId,
@@ -161,6 +161,10 @@ export default function App() {
   // tell the user which folder a new draft will be saved in (the ref itself is
   // non-reactive, used only on the send path).
   const [draftFolderId, setDraftFolderId] = useState<string | null>(null);
+  // Same pattern for the draft's Private toggle: the ref is what the send reads
+  // (an event callback), the state is what the welcome screen and toolbar show.
+  const [draftPrivate, setDraftPrivate] = useState(false);
+  const pendingDraftPrivateRef = useRef(false);
   // Memory debug: when on, the Facts tab previews which facts the current draft
   // would inject. Reset on send (the draft is consumed) and mirrors the live draft.
   const [previewActive, setPreviewActive] = useState(false);
@@ -736,6 +740,7 @@ export default function App() {
       // not let navigation reclassify this send as belonging to a newer draft.
       const sendSeq = draftSeqRef.current;
       const sendFolder = pendingDraftFolderRef.current;
+      const sendPrivate = pendingDraftPrivateRef.current;
       const meta: MessageMeta = { model: modelId ?? undefined, effort: effort ?? undefined, serviceTier };
       // The draft is consumed — drop back to showing this chat's last injected set.
       setPreviewActive(false);
@@ -751,6 +756,8 @@ export default function App() {
             input: input.text,
             turnId: input.turnId,
             threadId: sendKey === DRAFT ? undefined : sendKey,
+            // Only meaningful on the creating turn; the server stores it with the thread.
+            ...(sendKey === DRAFT && sendPrivate ? { private: true } : {}),
             model: modelId ?? undefined,
             effort: effort ?? undefined,
             serviceTier,
@@ -817,6 +824,8 @@ export default function App() {
               // row, same as opening one — judged now, when its real id exists.
               noteChatOpened(realId);
               pendingDraftFolderRef.current = null;
+              pendingDraftPrivateRef.current = false;
+              setDraftPrivate(false);
             }
             // Show a sidebar row immediately — the backend won't list this thread until its
             // first turn persists, so without this the chat (and its highlight) is
@@ -827,6 +836,7 @@ export default function App() {
                 threadId: realId,
                 title: text.trim() || 'New chat',
                 folderId: sendFolder ?? null,
+                ...(sendPrivate ? { private: true as const } : {}),
                 createdAt: Date.now(),
                 updatedAt: Date.now()
               }
@@ -984,11 +994,29 @@ export default function App() {
     openGateRef.current.invalidate();
     pendingDraftFolderRef.current = folderId;
     setDraftFolderId(folderId);
+    pendingDraftPrivateRef.current = false;
+    setDraftPrivate(false);
     core.store.replace(DRAFT, EMPTY_STATE);
     setActiveThreadId(null);
     setMailView(null);
     setFocusComposerSeq((n) => n + 1);
   }, [core]);
+
+  // The draft's Private toggle (welcome screen). Only a draft has one: an
+  // existing chat's flag was fixed when its first turn created it.
+  const toggleDraftPrivate = useCallback(() => {
+    const next = !pendingDraftPrivateRef.current;
+    pendingDraftPrivateRef.current = next;
+    setDraftPrivate(next);
+  }, []);
+
+  // Whether what the main pane shows is private: the draft's toggle, or the
+  // open chat's stored flag (optimistic rows included, so the pill holds
+  // through the first turn).
+  const activeChatPrivate = useMemo(() => {
+    if (activeThreadId === null) return draftPrivate;
+    return displayList.chats.some((c) => c.threadId === activeThreadId && c.private === true);
+  }, [activeThreadId, draftPrivate, displayList]);
 
   // A brand-new chat is for typing into, so put the caret in the composer — from
   // ⌘N, the titlebar button, or the chat list. Deferred to an effect because
@@ -1709,6 +1737,8 @@ export default function App() {
           serviceTier={serviceTier}
           format={format}
           draftFolderName={draftFolderName}
+          draftPrivate={activeThreadId === null && draftPrivate}
+          onToggleDraftPrivate={activeThreadId === null ? toggleDraftPrivate : undefined}
           threadId={activeThreadId}
           onChangeEffort={setEffort}
           onSelectModel={onSelectModel}
@@ -1860,7 +1890,14 @@ export default function App() {
         <ShortcutHint id="new-mail" />
       </button>
       <div className="toolbar-title">
-        <strong>Stem</strong>
+        <strong>
+          Stem
+          {activeChatPrivate && !mailView && (
+            <span className="private-pill" title="Private chat — nothing here is saved to memory or read from it">
+              <Lock size={10} /> Private
+            </span>
+          )}
+        </strong>
         {selectedModel && (
           <span>
             {selectedModel.displayName} · {selectedModel.providerName}

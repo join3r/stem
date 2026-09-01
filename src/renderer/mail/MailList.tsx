@@ -5,6 +5,7 @@ import {
   Archive,
   ArchiveRestore,
   ChevronRight,
+  Lock,
   Mail,
   MailOpen,
   Send,
@@ -157,7 +158,18 @@ export function MailList(props: MailListProps) {
             {c.status === 'awaiting-user' && <em className="mail-needs-you"> · needs you</em>}
             {c.status === 'aborted' && <em className="mail-aborted"> · stopped</em>}
           </span>
-          <strong title={c.subject}>{c.subject}</strong>
+          <strong title={c.subject}>
+            {c.private && (
+              <span
+                className="mail-private"
+                title="Private conversation — nothing here is saved to memory or read from it"
+                aria-label="Private conversation"
+              >
+                <Lock size={11} />
+              </span>
+            )}
+            {c.subject}
+          </strong>
           <span className="chat-preview">{previewOf(c)}</span>
         </span>
         {variant === 'snoozed' && wake != null && <span className="chat-wake">{formatWake(wake, now)}</span>}
