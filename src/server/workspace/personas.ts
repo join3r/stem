@@ -227,7 +227,21 @@ async function writeFileAtomic(store: PersonasFile): Promise<void> {
 export function listPersonas(): Promise<Persona[]> {
   return enqueue(async () => {
     try {
-      return coerce(JSON.parse(await readFile(personasStorePath(), 'utf8'))).personas;
+      const parsed: unknown = JSON.parse(await readFile(personasStorePath(), 'utf8'));
+      const store = coerce(parsed);
+      // A version-gated migration ran (see coerce): persist it now rather than
+      // on the next unrelated save, so the file on disk says what the running
+      // registry believes — the first deploy of the recall flag left an
+      // inspector reading a v2 Critic row with no `recall` and wondering.
+      const onDisk = (parsed as { version?: unknown } | null)?.version;
+      if (onDisk !== store.version) {
+        await writeFileAtomic(store).catch((err) =>
+          // quiet-ish: the migration re-applies on every read until a write
+          // lands, so nothing is lost — but say so once for the log.
+          degrade('personas', 'left a migrated personas file unwritten', err)
+        );
+      }
+      return store.personas;
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
         const fresh = coerce({});

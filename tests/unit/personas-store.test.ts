@@ -149,6 +149,9 @@ describe('save', () => {
     // the flag the seed now carries — the migration must.
     expect((await getPersona('critic'))?.recall).toBe(false);
     expect((await getPersona('verifier'))?.recall).toBeUndefined();
+    // …and the read persists it: the file on disk now says so too.
+    expect(onDisk().version).toBe(3);
+    expect(onDisk().personas.find((p) => p.id === 'critic')?.recall).toBe(false);
     // The user turns it back on: written as v3, the choice survives the next read.
     const critic = (await getPersona('critic'))!;
     await savePersona({ ...critic, recall: true });
