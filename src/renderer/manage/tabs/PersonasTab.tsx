@@ -54,6 +54,7 @@ function summaryLabel(
   if (p.createdBy) {
     parts.push(`created by ${personas.find((x) => x.id === p.createdBy)?.name ?? p.createdBy}`);
   }
+  if (p.memory === false) parts.push('no private memory');
   return parts.join(' · ');
 }
 
@@ -77,6 +78,7 @@ function sameEdit(a: Persona, b: Persona): boolean {
     (a.harness?.cwd ?? '') === (b.harness?.cwd ?? '') &&
     (a.harness?.device ?? '') === (b.harness?.device ?? '') &&
     (a.canManagePersonas ?? false) === (b.canManagePersonas ?? false) &&
+    (a.memory ?? true) === (b.memory ?? true) &&
     (a.sendBudget ?? 0) === (b.sendBudget ?? 0)
   );
 }
@@ -616,6 +618,19 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                   </label>
                   <label className="persona-cap">
                     <input
+                      type="checkbox"
+                      checked={p.memory !== false}
+                      onChange={(e) => setDraft({ ...p, memory: e.target.checked ? undefined : false })}
+                      disabled={!!p.createdBy}
+                    />
+                    <span>
+                      Keeps private memory — expertise notes this persona saves from its work and
+                      reads on every mail. Turn it off for personas whose value is a fresh outside
+                      view (the built-in Critic ships without one).
+                    </span>
+                  </label>
+                  <label className="persona-cap">
+                    <input
                       type="number"
                       min={1}
                       max={100}
@@ -650,9 +665,10 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       {savingId === p.id ? 'Saving…' : 'Save'}
                     </button>
                   </div>
-                  {/* Only SAVED personas with a store: agent-created helpers keep no
-                      memory, and a never-saved draft has no id on the server yet. */}
-                  {saved && !p.createdBy && <PersonaNotes personaId={p.id} />}
+                  {/* Only SAVED personas with a store: agent-created helpers and
+                      memory-off personas keep none, and a never-saved draft has no
+                      id on the server yet. */}
+                  {saved && !p.createdBy && p.memory !== false && <PersonaNotes personaId={p.id} />}
                 </div>
               )}
             </div>

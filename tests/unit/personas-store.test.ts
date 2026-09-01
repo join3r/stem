@@ -37,9 +37,9 @@ const persona = (over: Partial<Persona> = {}): Persona => ({
 });
 
 describe('first read', () => {
-  it('seeds the four built-ins and writes the file', async () => {
+  it('seeds the five built-ins and writes the file', async () => {
     const personas = await listPersonas();
-    expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'orchestrator']);
+    expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'orchestrator', 'critic']);
     expect(personas.every((p) => p.builtin)).toBe(true);
     expect(onDisk().version).toBe(2);
   });
@@ -47,7 +47,7 @@ describe('first read', () => {
   it('degrades a corrupt file to the built-ins rather than throwing', async () => {
     writeFileSync(path, '{ not json', 'utf8');
     const personas = await listPersonas();
-    expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'orchestrator']);
+    expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'orchestrator', 'critic']);
   });
 
   it('re-seeds a built-in missing from the stored list, keeping edits to the rest', async () => {
@@ -110,6 +110,18 @@ describe('save', () => {
     expect((await getPersona('p1'))?.canManagePersonas).toBe(true);
     await savePersona(persona({ canManagePersonas: false }));
     expect((await getPersona('p1'))?.canManagePersonas).toBeUndefined();
+  });
+
+  it('round-trips the memory opt-out; Critic seeds without a memory, the rest with one', async () => {
+    expect((await getPersona('critic'))?.memory).toBe(false);
+    expect((await getPersona('verifier'))?.memory).toBeUndefined();
+    await savePersona(persona({ memory: false }));
+    expect((await getPersona('p1'))?.memory).toBe(false);
+    // Default-on is stored as absence, and junk never lands as an opt-out.
+    await savePersona(persona({ memory: true }));
+    expect((await getPersona('p1'))?.memory).toBeUndefined();
+    await savePersona({ ...persona(), memory: 'off' });
+    expect((await getPersona('p1'))?.memory).toBeUndefined();
   });
 
   it('migrates the pre-rename canAddPersonas flag on read', async () => {

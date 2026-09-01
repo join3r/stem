@@ -1836,6 +1836,38 @@ describe('persona memory', () => {
     expect(await listPersonaNotes(helper.id)).toEqual([]);
   });
 
+  it('a memory-off persona delivers without a note index and is refused both memory ops', async () => {
+    await savePersona({ id: 'cold', name: 'cold', prompt: '', memory: false });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    const refusals: string[] = [];
+    fake.script = {
+      mode: 'ok',
+      reply: 'done',
+      bridge: async (bridge, ctx) => {
+        const res = await bridge.rememberNote({ body: 'a lesson' }, ctx);
+        if (!res.ok) refusals.push(res.error);
+        const read = await bridge.readNotes(['x'], ctx);
+        expect(read.ok).toBe(false);
+      }
+    };
+    await router.compose({ to: ['cold'], subject: 's', body: 'q' });
+    await settledMail();
+    expect(fake.starts[0].persona?.notes).toBeUndefined();
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toContain('keeps no private memory');
+    expect(await listPersonaNotes('cold')).toEqual([]);
+  });
+
+  it('the built-in Critic ships memoryless: no index rides its deliveries', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    await router.compose({ to: ['critic'], subject: 's', body: 'judge this' });
+    await settledMail();
+    expect(fake.starts[0].persona?.id).toBe('critic');
+    expect(fake.starts[0].persona?.notes).toBeUndefined();
+  });
+
   it('read_notes fetches full bodies by id and names the ids it could not find', async () => {
     const saved = await savePersonaNote('verifier', { title: 'T', body: 'the full body' }, 'user');
     const fake = fakeBackend();
@@ -1856,5 +1888,54 @@ describe('persona memory', () => {
     expect(results).toHaveLength(1);
     expect(results[0]).toContain('the full body');
     expect(results[0]).toContain('No such note: missing');
+  });
+});
+
+describe('repo lock', () => {
+  it('deliveries pinned inside one repo tree run one at a time; a disjoint tree runs in parallel', async () => {
+    await savePersona({
+      id: 'coder-a',
+      name: 'coder-a',
+      prompt: '',
+      harness: { agent: 'claude', cwd: '/nonexistent/repo' }
+    });
+    await savePersona({
+      id: 'coder-b',
+      name: 'coder-b',
+      prompt: '',
+      harness: { agent: 'claude', cwd: '/nonexistent/repo/packages/x' }
+    });
+    await savePersona({
+      id: 'coder-c',
+      name: 'coder-c',
+      prompt: '',
+      harness: { agent: 'claude', cwd: '/nonexistent/elsewhere' }
+    });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    // coder-a's turn stays live until the gate opens — the bridge hook runs
+    // before the fake settles the turn.
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    fake.scriptsByPersona['coder-a'] = [{ mode: 'ok', reply: 'a done', bridge: () => gate }];
+    await router.compose({ to: ['coder-a'], subject: 'a', body: 'work the repo' });
+    await vi.waitFor(() => expect(fake.starts).toHaveLength(1));
+    await router.compose({ to: ['coder-b'], subject: 'b', body: 'work a subdirectory' });
+    await router.compose({ to: ['coder-c'], subject: 'c', body: 'work elsewhere' });
+    // The disjoint tree starts immediately; the same-tree delivery waits.
+    await vi.waitFor(() =>
+      expect(fake.starts.map((s) => s.persona?.id).sort()).toEqual(['coder-a', 'coder-c'])
+    );
+    openGate();
+    await vi.waitFor(async () => {
+      expect(fake.starts.map((s) => s.persona?.id)).toContain('coder-b');
+      const mail = await readMail();
+      expect(mail.conversations).toHaveLength(3);
+      expect(mail.conversations.every((c) => c.status !== 'working')).toBe(true);
+    });
+    // coder-b only ever started AFTER coder-a's turn settled.
+    expect(fake.starts.map((s) => s.persona?.id).indexOf('coder-b')).toBe(2);
   });
 });

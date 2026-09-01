@@ -19,12 +19,15 @@ import { personaMemoryDir } from './paths';
 // WHO owns a store is decided by the persona row, not by this module's
 // callers agreeing to agree: built-ins and editor-made personas do,
 // agent-created helpers (createdBy set) do not — the same "privileged starts
-// absent" rule savePersonaFor applies to flags and pins. Every write path
-// checks personaOwnsMemory; the store dies with delete_persona.
+// absent" rule savePersonaFor applies to flags and pins — and a persona whose
+// memory flag is switched off (the built-in Critic, or the editor toggle)
+// keeps none either: no store at all, not a hidden one, because a store the
+// persona writes but never reads is pure confusion. Every write path checks
+// personaOwnsMemory; the store dies with delete_persona.
 
 /** Whether this persona keeps a private memory (see module doc). */
-export function personaOwnsMemory(persona: Pick<Persona, 'createdBy'>): boolean {
-  return !persona.createdBy;
+export function personaOwnsMemory(persona: Pick<Persona, 'createdBy' | 'memory'>): boolean {
+  return !persona.createdBy && persona.memory !== false;
 }
 
 /** Hard cap per persona — the index is injected wholesale, so it must stay small. */

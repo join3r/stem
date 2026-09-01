@@ -24,6 +24,7 @@ import {
   savePersonaNote
 } from '../workspace/persona-memory';
 import { reflectOnDelivery } from './reflect';
+import { repoLocks } from './repo-lock';
 import { readSettings } from '../workspace/settings';
 import {
   addParticipant,
@@ -678,9 +679,11 @@ export class MailRouter {
     if (!personaOwnsMemory(caller)) {
       return {
         ok: false,
-        error:
-          'Your persona is a temporary helper and keeps no memory. If this lesson should outlive you, ' +
-          'put it in your reply so the persona that created you can remember it.'
+        error: caller.createdBy
+          ? 'Your persona is a temporary helper and keeps no memory. If this lesson should outlive you, ' +
+            'put it in your reply so the persona that created you can remember it.'
+          : 'Your persona keeps no private memory — it is switched off for this persona. If the lesson ' +
+            'matters, put it in your reply instead.'
       };
     }
     const body = req.body?.trim();
@@ -700,7 +703,12 @@ export class MailRouter {
     const caller = await getPersona(ctx.personaId);
     if (!caller) return { ok: false, error: 'Your persona no longer exists.' };
     if (!personaOwnsMemory(caller)) {
-      return { ok: false, error: 'Your persona is a temporary helper and keeps no memory.' };
+      return {
+        ok: false,
+        error: caller.createdBy
+          ? 'Your persona is a temporary helper and keeps no memory.'
+          : 'Your persona keeps no private memory — it is switched off for this persona.'
+      };
     }
     const wanted = [...new Set(ids.map((id) => id.trim()).filter(Boolean))].slice(0, 10);
     if (!wanted.length) return { ok: false, error: 'Give read_notes at least one note id from your index.' };
@@ -904,6 +912,7 @@ export class MailRouter {
     // every exit path.
     const turnId = randomUUID();
     this.activeTurns.set(turnId, { conversationId });
+    let releaseRepoLock: (() => void) | undefined;
     try {
       const persona = await getPersona(personaId);
       if (!persona) {
@@ -935,6 +944,15 @@ export class MailRouter {
       this.lanes.get(conversationId)?.active.set(personaId, persona.name);
       this.updateActivityDetail(conversationId);
       const threadId = conversation.sessions[personaId];
+
+      // Two harnessed deliveries must never work the same repo tree at once
+      // (same device, either cwd inside the other) — this waits until the tree
+      // is free. Before waitForSettle on purpose: waiting for the lock must not
+      // eat into the turn's settle timeout.
+      releaseRepoLock = await repoLocks.acquire(persona.harness);
+      // The wait can outlive a user Stop — nothing should start a turn for a
+      // conversation the user already stopped while it queued for the tree.
+      if (this.stopping.has(conversationId)) return;
 
       // The turn id is minted up front and the settle subscription opens
       // BEFORE starting the turn: an instantly-failing turn can settle in the
@@ -1068,6 +1086,7 @@ export class MailRouter {
         // cannot be written has nothing left to say it in.
       });
     } finally {
+      releaseRepoLock?.();
       this.activeTurns.delete(turnId);
       this.turnInitiators.delete(turnId);
       this.turnEpochs.delete(turnId);

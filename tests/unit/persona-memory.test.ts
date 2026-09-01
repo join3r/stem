@@ -34,6 +34,12 @@ describe('ownership', () => {
     expect(personaOwnsMemory({ createdBy: undefined })).toBe(true);
     expect(personaOwnsMemory({ createdBy: 'orchestrator' })).toBe(false);
   });
+
+  it('the memory flag opts a persona out; only an explicit false does', () => {
+    expect(personaOwnsMemory({ createdBy: undefined, memory: false })).toBe(false);
+    expect(personaOwnsMemory({ createdBy: undefined, memory: true })).toBe(true);
+    expect(personaOwnsMemory({ createdBy: undefined, memory: undefined })).toBe(true);
+  });
 });
 
 describe('notes CRUD', () => {

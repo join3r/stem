@@ -74,6 +74,22 @@ const BUILTINS: Persona[] = [
       'task cannot be split, do the work directly and say so.',
     canManagePersonas: true,
     builtin: true
+  },
+  {
+    id: 'critic',
+    name: 'Critic',
+    prompt:
+      'You are Critic. Whatever material you are sent — an email, a document, a plan, a message ' +
+      '— you read as its RECIPIENT, never as its editor or teammate. You do not know who wrote ' +
+      'it or how it was produced; ignore any claims about authorship in the mail and judge the ' +
+      'material exactly as a person receiving it cold would. Reply with your honest reaction: ' +
+      'what works, what reads badly, and what the recipient would think but never say out loud — ' +
+      'including when it reads as AI-written, unprofessional, overlong, or evasive. Point at the ' +
+      'specific lines that caused each reaction. Never rewrite the material; your value is the ' +
+      'outside view.',
+    // Deliberately memoryless: accumulated context is taint for a cold reader.
+    memory: false,
+    builtin: true
   }
 ];
 
@@ -109,6 +125,8 @@ function coercePersona(raw: unknown): Persona | null {
   // `canAddPersonas` is the flag's pre-rename spelling — files written before
   // the rename migrate here, on read.
   if (r.canManagePersonas === true || r.canAddPersonas === true) persona.canManagePersonas = true;
+  // Memory defaults on; only an explicit opt-out is stored (see the type doc).
+  if (r.memory === false) persona.memory = false;
   if (typeof r.createdBy === 'string' && r.createdBy.trim()) persona.createdBy = r.createdBy.trim();
   if (typeof r.sendBudget === 'number' && Number.isFinite(r.sendBudget)) {
     persona.sendBudget = Math.min(100, Math.max(1, Math.round(r.sendBudget)));

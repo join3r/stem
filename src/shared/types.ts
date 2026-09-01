@@ -2008,6 +2008,13 @@ export interface Persona {
    */
   canManagePersonas?: boolean;
   /**
+   * Whether this persona keeps a private memory (expertise notes). Default on;
+   * stored only when switched off (`false`) — e.g. the built-in Critic, whose
+   * value is the untainted outside view, ships without one. Agent-created
+   * helpers keep no memory regardless of this flag (see `createdBy`).
+   */
+  memory?: boolean;
+  /**
    * Creator persona id, present only on agent-created personas. Round-trips
    * from the store like `builtin` — never taken from an editor/bridge caller —
    * and gates which personas a persona may edit or delete (only its own).
