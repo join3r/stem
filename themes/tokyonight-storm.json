@@ -1,0 +1,27 @@
+{
+  "name": "TokyoNight Storm",
+  "appearance": "dark",
+  "colors": {
+    "paper": "#24283b",
+    "content": "#1f2335",
+    "panel": "#1d202f",
+    "ink": "#c0caf5",
+    "muted": "#565f89",
+    "line": "#2f3549",
+    "hair": "rgba(192, 202, 245, 0.09)",
+    "accent": "#7aa2f7",
+    "accent-ink": "#24283b",
+    "surface": "#1f2335",
+    "field": "#1f2335",
+    "sel": "rgba(122, 162, 247, 0.22)",
+    "inline-bg": "#2a2e42",
+    "info": "#7dcfff",
+    "warn": "#e0af68",
+    "success": "#9ece6a",
+    "danger": "#f7768e",
+    "code-bg": "#1d202f",
+    "code-ink": "#c0caf5",
+    "drop-chat": "#7aa2f7",
+    "drop-files": "#7dcfff"
+  }
+}
