@@ -434,7 +434,8 @@ function registerIpc(): void {
         ? {
             id: persona.id,
             prompt: persona.prompt,
-            ...(persona.harness ? { harness: persona.harness } : {})
+            ...(persona.harness ? { harness: persona.harness } : {}),
+            ...(persona.recall === false ? { recall: false as const } : {})
           }
         : undefined,
       mail: undefined

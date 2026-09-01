@@ -992,6 +992,47 @@ describe('scheduled-run model restore', () => {
     expect(await readFile(file, 'utf8')).toBe(before);
   });
 
+  it('skips the recall block for a persona whose recall flag is off', async () => {
+    // A pinned fact is injected into every turn — the strongest possible recall
+    // signal. Critic (recall: false) must see none of it: a cold reader handed
+    // the author's facts alongside the draft is no longer cold, and the role
+    // prompt's "ignore who wrote it" cannot un-show them.
+    recallStore.resetFacts();
+    const id = recallStore.upsertFact('The user signs their mails as Vlado', 'explicit');
+    expect(id).not.toBeNull();
+    expect(recallStore.setFactPinned(id!, true)).toBe(true);
+    const { runtime } = await tempRuntime();
+    type Internal = {
+      buildMessage: (
+        input: { input: string; persona?: { id: string; prompt: string; recall?: false } },
+        threadId: string,
+        turn: null
+      ) => Promise<{ message: string }>;
+    };
+    const internal = runtime as unknown as Internal;
+    try {
+      const plain = await internal.buildMessage({ input: 'Review this draft' }, 't-1', null);
+      expect(plain.message).toContain('signs their mails as Vlado');
+      const withRecall = await internal.buildMessage(
+        { input: 'Review this draft', persona: { id: 'verifier', prompt: 'You verify.' } },
+        't-1',
+        null
+      );
+      expect(withRecall.message).toContain('signs their mails as Vlado');
+      const cold = await internal.buildMessage(
+        { input: 'Review this draft', persona: { id: 'critic', prompt: 'You are Critic.', recall: false } },
+        't-1',
+        null
+      );
+      // The fence itself may stay (tool guidance rides in it) — what must be
+      // gone is every recall line.
+      expect(cold.message).not.toContain('signs their mails as Vlado');
+      expect(cold.message).not.toMatch(/remember|recall|memory/i);
+    } finally {
+      recallStore.resetFacts();
+    }
+  });
+
   it('never lets a scheduled prompt write memory as the user', async () => {
     // schedule_task needs no approval, and a scheduled run's prompt re-enters
     // startTurn as ordinary input. Before the gate, a task prompt saying

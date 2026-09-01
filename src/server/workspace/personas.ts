@@ -19,7 +19,7 @@ import { deletePersonaMemory } from './persona-memory';
 // persona would come back blank.
 
 interface PersonasFile {
-  version: 2;
+  version: 3;
   personas: Persona[];
 }
 
@@ -87,8 +87,11 @@ const BUILTINS: Persona[] = [
       'including when it reads as AI-written, unprofessional, overlong, or evasive. Point at the ' +
       'specific lines that caused each reaction. Never rewrite the material; your value is the ' +
       'outside view.',
-    // Deliberately memoryless: accumulated context is taint for a cold reader.
+    // Deliberately memoryless, in both directions: its own notebook would
+    // accumulate context, and the user's recall would tell it whose draft it
+    // is reading — either one is taint for a cold reader.
     memory: false,
+    recall: false,
     builtin: true
   }
 ];
@@ -127,6 +130,7 @@ function coercePersona(raw: unknown): Persona | null {
   if (r.canManagePersonas === true || r.canAddPersonas === true) persona.canManagePersonas = true;
   // Memory defaults on; only an explicit opt-out is stored (see the type doc).
   if (r.memory === false) persona.memory = false;
+  if (r.recall === false) persona.recall = false;
   if (typeof r.createdBy === 'string' && r.createdBy.trim()) persona.createdBy = r.createdBy.trim();
   if (typeof r.sendBudget === 'number' && Number.isFinite(r.sendBudget)) {
     persona.sendBudget = Math.min(100, Math.max(1, Math.round(r.sendBudget)));
@@ -164,16 +168,25 @@ function coerce(parsed: unknown): PersonasFile {
   // v1 files even show Secretary without the P2-era canAddPersonas for this
   // exact reason). Version-gated (not granted on every read) so unticking the
   // box sticks once the file is written as v2.
-  if (raw.version !== 2) {
+  const version = typeof raw.version === 'number' ? raw.version : 1;
+  if (version < 2) {
     for (const id of ['secretary', 'orchestrator']) {
       const row = personas.find((p) => p.id === id);
       if (row) row.canManagePersonas = true;
     }
   }
+  // v2 files predate the recall flag: the stored Critic gains the opt-out the
+  // seed now carries, for the same append-only-seeding reason. Version-gated
+  // so a user who deliberately turns Critic's recall back on is not overruled
+  // on the next read.
+  if (version < 3) {
+    const critic = personas.find((p) => p.id === 'critic');
+    if (critic) critic.recall = false;
+  }
   for (const builtin of BUILTINS) {
     if (!seen.has(builtin.id)) personas.push({ ...builtin });
   }
-  return { version: 2, personas };
+  return { version: 3, personas };
 }
 
 // The registry can change from two directions — the editor's IPC and the mail

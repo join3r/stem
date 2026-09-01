@@ -3768,7 +3768,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           `user's current message and safety take precedence):\n${standing}`
       );
     }
-    if (isRecallEnabled()) {
+    // A persona with recall off sees none of the user's memory: no facts, no
+    // episodic history, no indexed folder excerpts. The block is skipped
+    // outright rather than emptied, so nothing about the user rides along
+    // with the material (Persona.recall explains why Critic needs this).
+    if (isRecallEnabled() && input.persona?.recall !== false) {
       const chosen: { facts: Fact[]; tier: FactTier } = { facts: [], tier: 'all' };
       const flags: { privateDocsInjected?: boolean } = {};
       const injectedDocs: InjectedDocRef[] = [];

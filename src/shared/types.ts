@@ -401,6 +401,11 @@ export interface StartTurnInput {
      * preamble to mention remember_note.
      */
     notes?: { id: string; title: string }[];
+    /**
+     * `false` when the persona's `recall` flag is off: the prompt assembler
+     * then skips the recall block for this turn (see Persona.recall).
+     */
+    recall?: false;
   };
   /**
    * Server-internal (stripped at the transport handler like `persona`): this
@@ -2024,6 +2029,18 @@ export interface Persona {
    * helpers keep no memory regardless of this flag (see `createdBy`).
    */
   memory?: boolean;
+  /**
+   * Whether this persona's turns get Stem Recall injected (the user's facts,
+   * episodic history, indexed folder excerpts). Default on; stored only when
+   * switched off (`false`). Separate from `memory` on purpose: that one is the
+   * persona's own notebook, this one is what it may see of the user's. The
+   * built-in Critic ships with both off — a cold reader who is handed the
+   * author's facts alongside the draft stops being cold, and telling it to
+   * ignore who wrote the material is weaker than never showing it. Only
+   * injection is gated; what the turn writes to recall follows the mail and
+   * scheduled-run rules as before.
+   */
+  recall?: boolean;
   /**
    * Creator persona id, present only on agent-created personas. Round-trips
    * from the store like `builtin` — never taken from an editor/bridge caller —

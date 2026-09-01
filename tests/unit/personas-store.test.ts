@@ -42,7 +42,7 @@ describe('first read', () => {
     const personas = await listPersonas();
     expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'orchestrator', 'critic']);
     expect(personas.every((p) => p.builtin)).toBe(true);
-    expect(onDisk().version).toBe(2);
+    expect(onDisk().version).toBe(3);
   });
 
   it('degrades a corrupt file to the built-ins rather than throwing', async () => {
@@ -125,6 +125,37 @@ describe('save', () => {
     expect((await getPersona('p1'))?.memory).toBeUndefined();
   });
 
+  it('round-trips the recall opt-out separately from memory; Critic seeds with both off', async () => {
+    expect((await getPersona('critic'))?.recall).toBe(false);
+    expect((await getPersona('verifier'))?.recall).toBeUndefined();
+    // The two flags are independent: a persona may keep notes yet see no recall, or vice versa.
+    await savePersona(persona({ recall: false }));
+    expect((await getPersona('p1'))?.recall).toBe(false);
+    expect((await getPersona('p1'))?.memory).toBeUndefined();
+    await savePersona(persona({ recall: true, memory: false }));
+    expect((await getPersona('p1'))?.recall).toBeUndefined();
+    expect((await getPersona('p1'))?.memory).toBe(false);
+    await savePersona({ ...persona(), recall: 'off' });
+    expect((await getPersona('p1'))?.recall).toBeUndefined();
+  });
+
+  it('a v2 file switches the stored Critic to no-recall once; turning it back on sticks on v3', async () => {
+    await listPersonas(); // seed
+    const raw = onDisk();
+    raw.version = 2;
+    for (const p of raw.personas) delete p.recall;
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    // Seeding only appends missing ids, so the deployed Critic row never gains
+    // the flag the seed now carries — the migration must.
+    expect((await getPersona('critic'))?.recall).toBe(false);
+    expect((await getPersona('verifier'))?.recall).toBeUndefined();
+    // The user turns it back on: written as v3, the choice survives the next read.
+    const critic = (await getPersona('critic'))!;
+    await savePersona({ ...critic, recall: true });
+    expect(onDisk().version).toBe(3);
+    expect((await getPersona('critic'))?.recall).toBeUndefined();
+  });
+
   it('migrates the pre-rename canAddPersonas flag on read', async () => {
     await listPersonas(); // seed
     const raw = onDisk();
@@ -137,7 +168,7 @@ describe('save', () => {
     expect((await getPersona('secretary'))?.canManagePersonas).toBe(true);
   });
 
-  it('a v1 file grants Secretary and Orchestrator the flag once; unticking sticks on v2', async () => {
+  it('a v1 file grants Secretary and Orchestrator the flag once; unticking sticks on the current version', async () => {
     await listPersonas(); // seed
     const raw = onDisk();
     raw.version = 1;
@@ -150,7 +181,7 @@ describe('save', () => {
     // The user unticks it — the write lands as v2 and the choice sticks.
     const orchestrator = (await getPersona('orchestrator'))!;
     await savePersona({ ...orchestrator, canManagePersonas: undefined });
-    expect(onDisk().version).toBe(2);
+    expect(onDisk().version).toBe(3);
     expect((await getPersona('orchestrator'))?.canManagePersonas).toBeUndefined();
   });
 

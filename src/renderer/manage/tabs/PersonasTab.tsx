@@ -56,6 +56,7 @@ function summaryLabel(
     parts.push(`created by ${personas.find((x) => x.id === p.createdBy)?.name ?? p.createdBy}`);
   }
   if (p.memory === false) parts.push('no private memory');
+  if (p.recall === false) parts.push('no recall');
   if (p.clients) parts.push('open to chats');
   return parts.join(' · ');
 }
@@ -81,6 +82,7 @@ function sameEdit(a: Persona, b: Persona): boolean {
     (a.harness?.device ?? '') === (b.harness?.device ?? '') &&
     (a.canManagePersonas ?? false) === (b.canManagePersonas ?? false) &&
     (a.memory ?? true) === (b.memory ?? true) &&
+    (a.recall ?? true) === (b.recall ?? true) &&
     (a.sendBudget ?? 0) === (b.sendBudget ?? 0) &&
     (a.clients ?? false) === (b.clients ?? false)
   );
@@ -637,6 +639,24 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                         Expertise notes this persona saves from its work and reads on every mail.
                         Turn it off for personas whose value is a fresh outside view (the built-in
                         Critic ships without one).
+                      </InfoTip>
+                    </span>
+                  </label>
+                  <label className="persona-cap">
+                    <input
+                      type="checkbox"
+                      checked={p.recall !== false}
+                      onChange={(e) => setDraft({ ...p, recall: e.target.checked ? undefined : false })}
+                    />
+                    <span>
+                      Sees your memory{' '}
+                      <InfoTip label="About recall for this persona">
+                        Injects Stem Recall — your facts, past conversations, indexed folders —
+                        into this persona’s turns, as in your own chats. Turn it off for a persona
+                        that should judge material cold: a reviewer handed the author’s facts
+                        alongside the draft stops being an outside reader, and asking it to ignore
+                        who wrote it works less well than never showing it. (Critic ships with this
+                        off.)
                       </InfoTip>
                     </span>
                   </label>

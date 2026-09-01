@@ -1149,7 +1149,8 @@ export class MailRouter {
             id: persona.id,
             prompt: persona.prompt,
             ...(persona.harness ? { harness: persona.harness } : {}),
-            ...(notes ? { notes } : {})
+            ...(notes ? { notes } : {}),
+            ...(persona.recall === false ? { recall: false as const } : {})
           },
           mail: {
             conversationId,
