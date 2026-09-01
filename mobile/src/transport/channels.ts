@@ -41,6 +41,13 @@ export interface ChannelSignatures {
   'backend:interruptTurn': StemApi['interruptTurn'];
   /** What models exist — the Settings model rows are pickers over this list. */
   'backend:listModels': StemApi['listModels'];
+  /**
+   * The persona registry, for the composer's picker. The phone offers only the
+   * personas the user opened to clients (`clients: true` — the server refuses a
+   * startTurn as any other), but the channel is the full list: filtering is a
+   * UI decision, not a secret, and every paired device is fully trusted anyway.
+   */
+  'personas:list': StemApi['listPersonas'];
 
   // Inbox triage. Every mutator returns the fresh ChatListResult, so the list
   // screen replaces its state with the answer instead of re-fetching.

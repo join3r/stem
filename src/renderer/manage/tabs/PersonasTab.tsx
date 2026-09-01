@@ -8,6 +8,7 @@ import type {
   PersonaHarnessPin,
   PersonaNote
 } from '../../../shared/types';
+import { InfoTip } from '../../ui/InfoTip';
 import { ModelPicker } from '../../ui/ModelPicker';
 import { clampEffort, effortsOf, EffortSelect } from '../../ui/EffortSelect';
 import { EFFORT_LABELS } from '../../modelLabels';
@@ -55,6 +56,7 @@ function summaryLabel(
     parts.push(`created by ${personas.find((x) => x.id === p.createdBy)?.name ?? p.createdBy}`);
   }
   if (p.memory === false) parts.push('no private memory');
+  if (p.clients) parts.push('open to chats');
   return parts.join(' · ');
 }
 
@@ -79,7 +81,8 @@ function sameEdit(a: Persona, b: Persona): boolean {
     (a.harness?.device ?? '') === (b.harness?.device ?? '') &&
     (a.canManagePersonas ?? false) === (b.canManagePersonas ?? false) &&
     (a.memory ?? true) === (b.memory ?? true) &&
-    (a.sendBudget ?? 0) === (b.sendBudget ?? 0)
+    (a.sendBudget ?? 0) === (b.sendBudget ?? 0) &&
+    (a.clients ?? false) === (b.clients ?? false)
   );
 }
 
@@ -147,13 +150,13 @@ function PersonaNotes({ personaId }: { personaId: string }) {
   return (
     <div className="persona-notes">
       <div className="grp-head">
-        Memory ({notes ? notes.length : '…'})
+        Memory ({notes ? notes.length : '…'}){' '}
+        <InfoTip label="About persona memory">
+          Lessons this persona keeps from its past work. It learns automatically after each mail
+          it handles and can save notes itself; everything here is injected as its note index on
+          every delivery.
+        </InfoTip>
       </div>
-      <p className="muted">
-        Lessons this persona keeps from its past work. It learns automatically after each mail it
-        handles and can save notes itself; everything here is injected as its note index on every
-        delivery.
-      </p>
       {error && <p className="task-failed">{error}</p>}
       {notes?.map((n) =>
         editing?.id === n.id ? (
@@ -412,12 +415,14 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
 
   return (
     <div>
-      <div className="grp-head">Personas</div>
-      <p className="muted">
-        Named configurations you can address mail to: a role prompt, and optionally a pinned model
-        and a coding agent with its own working directory. Duplicate one to make a variant — e.g. a
-        “code — stem” persona is the coding pin pointed at the stem checkout.
-      </p>
+      <div className="grp-head">
+        Personas{' '}
+        <InfoTip label="About personas">
+          Named configurations you can address mail to: a role prompt, and optionally a pinned
+          model and a coding agent with its own working directory. Duplicate one to make a variant
+          — e.g. a “code — stem” persona is the coding pin pointed at the stem checkout.
+        </InfoTip>
+      </div>
       {error && <p className="task-failed">{error}</p>}
       <div className="group">
         {rows.map((stored) => {
@@ -611,9 +616,12 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       }
                     />
                     <span>
-                      Can manage personas — lets this persona widen a mail conversation’s To:
-                      list (add_persona) and create, edit, and delete its own helper personas
-                      (save_persona / delete_persona).
+                      Can manage personas{' '}
+                      <InfoTip label="About managing personas">
+                        Lets this persona widen a mail conversation’s To: list (add_persona) and
+                        create, edit, and delete its own helper personas (save_persona /
+                        delete_persona).
+                      </InfoTip>
                     </span>
                   </label>
                   <label className="persona-cap">
@@ -624,9 +632,27 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       disabled={!!p.createdBy}
                     />
                     <span>
-                      Keeps private memory — expertise notes this persona saves from its work and
-                      reads on every mail. Turn it off for personas whose value is a fresh outside
-                      view (the built-in Critic ships without one).
+                      Keeps private memory{' '}
+                      <InfoTip label="About private memory">
+                        Expertise notes this persona saves from its work and reads on every mail.
+                        Turn it off for personas whose value is a fresh outside view (the built-in
+                        Critic ships without one).
+                      </InfoTip>
+                    </span>
+                  </label>
+                  <label className="persona-cap">
+                    <input
+                      type="checkbox"
+                      checked={p.clients === true}
+                      onChange={(e) => setDraft({ ...p, clients: e.target.checked || undefined })}
+                    />
+                    <span>
+                      Usable in chats from other devices{' '}
+                      <InfoTip label="About chats as this persona">
+                        Offers this persona in the chat composer on your other devices (the phone
+                        app). A chat sent as it runs with its role prompt, pinned model, and coding
+                        setup — off, it stays a mail-and-tasks persona only.
+                      </InfoTip>
                     </span>
                   </label>
                   <label className="persona-cap">
@@ -648,9 +674,12 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       }}
                     />
                     <span>
-                      Send budget per wave — the most mails this persona may start between your
-                      sends in one conversation. Its reply to whoever mailed it is always allowed.
-                      Blank = unlimited (the global exchange cap still applies).
+                      Send budget per wave{' '}
+                      <InfoTip label="About the send budget">
+                        The most mails this persona may start between your sends in one
+                        conversation. Its reply to whoever mailed it is always allowed. Blank =
+                        unlimited (the global exchange cap still applies).
+                      </InfoTip>
                     </span>
                   </label>
                   <div className="push-row">

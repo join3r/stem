@@ -80,7 +80,16 @@ export function InfoTip({ label, children }: { label: string; children: ReactNod
         <Info size={13} />
       </button>
       {open && (
-        <span ref={popRef} className="info-pop" role="note" style={popStyle(pos)}>
+        <span
+          ref={popRef}
+          className="info-pop"
+          role="note"
+          style={popStyle(pos)}
+          // The tip may sit inside a <label> (the persona capability rows):
+          // without this, clicking its text forwards to the labelled checkbox
+          // and toggles a setting the user was only reading about.
+          onClick={(e) => e.preventDefault()}
+        >
           {children}
         </span>
       )}

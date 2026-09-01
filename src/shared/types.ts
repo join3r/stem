@@ -371,6 +371,16 @@ export interface StartTurnInput {
    */
   scheduled?: { at: string; taskId: string };
   /**
+   * Run this turn AS a persona, by id. The one client-settable persona input:
+   * the `backend:startTurn` handler resolves the id against the registry and
+   * refuses it unless that persona's `clients` flag is on, then builds the
+   * server-internal `persona` block below itself — so a client names a persona
+   * the user opened up, and can never smuggle an arbitrary prompt or pin. The
+   * persona's pinned model/effort win over this input's (the scheduler's
+   * precedence).
+   */
+  personaId?: string;
+  /**
    * Server-internal: the persona this turn runs as (mail deliveries). Carries
    * the role prompt because that is spawn-time state — the pool matches the
    * turn to a worker spawned for this persona, replacing a child whose prompt
@@ -2027,6 +2037,14 @@ export interface Persona {
    * can always finish its assignment; the global exchange cap applies on top.
    */
   sendBudget?: number;
+  /**
+   * Chat turns may run as this persona: clients (the phone's composer today)
+   * offer it in their persona picker and pass its id as
+   * StartTurnInput.personaId. Off by default — a persona is a mail/task
+   * worker until the user opens it up, because a chat run gets the persona's
+   * worker, role prompt, and coding-agent pin from any paired device.
+   */
+  clients?: boolean;
   /** Seeded by Stem. Editable like any persona, but cannot be deleted. */
   builtin?: boolean;
 }

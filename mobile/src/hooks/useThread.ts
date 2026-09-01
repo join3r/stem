@@ -63,7 +63,8 @@ export interface ThreadView {
   sending: boolean;
   /** Why the connection makes sending impossible, or null when it doesn't. */
   blocked: string | null;
-  send(text: string): void;
+  /** `personaId` = send this turn AS that persona (one the user opened to clients). */
+  send(text: string, personaId?: string | null): void;
   interrupt(): void;
   reload(): void;
 }
@@ -177,7 +178,7 @@ export function useThread(threadId: string): ThreadView {
   }, [apply, connection, load, threadId]);
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, personaId?: string | null) => {
       const input = text.trim();
       if (!input || pending.current) return;
       // A turn already running on this thread — ours or one started at the desk.
@@ -209,7 +210,7 @@ export function useThread(threadId: string): ThreadView {
         // No `format`: StartTurnInput defaults to 'mdx', which is what the desk
         // asks for and what src/mdx/ now renders. Step 5 pinned this to 'md'
         // while the component map did not exist yet.
-        .rpc('backend:startTurn', { input, threadId })
+        .rpc('backend:startTurn', { input, threadId, ...(personaId ? { personaId } : {}) })
         .then(
           (result) => {
             // One fold for both answers a send can get: a turn to wait for, or a

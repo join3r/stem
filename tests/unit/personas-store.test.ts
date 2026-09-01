@@ -10,6 +10,7 @@ import {
   getPersona,
   listPersonas,
   onPersonasChanged,
+  resolveClientPersona,
   savePersona,
   savePersonaFor,
   updatePersonaFields
@@ -164,6 +165,15 @@ describe('save', () => {
     expect((await getPersona('p1'))?.createdBy).toBe('orchestrator');
   });
 
+  it('round-trips the clients flag; off is stored as absence and junk never lands', async () => {
+    await savePersona(persona({ clients: true }));
+    expect((await getPersona('p1'))?.clients).toBe(true);
+    await savePersona(persona({ clients: false }));
+    expect((await getPersona('p1'))?.clients).toBeUndefined();
+    await savePersona({ ...persona(), clients: 'yes' });
+    expect((await getPersona('p1'))?.clients).toBeUndefined();
+  });
+
   it('clamps sendBudget to 1..100 and drops junk', async () => {
     await savePersona(persona({ sendBudget: 700 }));
     expect((await getPersona('p1'))?.sendBudget).toBe(100);
@@ -262,6 +272,25 @@ describe('bridge mutators', () => {
     } finally {
       onPersonasChanged(null);
     }
+  });
+});
+
+describe('resolveClientPersona (the chat-as-persona gate)', () => {
+  it('resolves a persona the user opened to clients', async () => {
+    await savePersona(persona({ clients: true, model: 'anthropic/claude-fable-5' }));
+    const resolved = await resolveClientPersona('p1');
+    expect(resolved).toMatchObject({ id: 'p1', model: 'anthropic/claude-fable-5', clients: true });
+  });
+
+  it('refuses a persona that exists but is not opened to clients', async () => {
+    await savePersona(persona());
+    await expect(resolveClientPersona('p1')).rejects.toThrow(/isn’t open to chats/);
+    // The built-ins ship closed too — opening one is the user's call.
+    await expect(resolveClientPersona('verifier')).rejects.toThrow(/isn’t open to chats/);
+  });
+
+  it('refuses an id that does not exist', async () => {
+    await expect(resolveClientPersona('ghost')).rejects.toThrow(/No persona/);
   });
 });
 

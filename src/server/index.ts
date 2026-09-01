@@ -22,7 +22,7 @@ import { transportedRawPath } from './files/staging';
 import { piHome } from './workspace/paths';
 import type { TaskScheduler } from './scheduler';
 import { MailRouter } from './mail/router';
-import { onPersonasChanged } from './workspace/personas';
+import { onPersonasChanged, resolveClientPersona } from './workspace/personas';
 import { initTaskScheduler } from './startup/scheduler';
 import type { ExecService } from './exec/service';
 import { detectGitBash } from './exec/git-bash';
@@ -410,18 +410,33 @@ function registerIpc(): void {
     const settings = await readSettings();
     const ci = settings.customInstructions;
     const quickChat = input.surface === 'quickChat';
+    // Chat-as-persona: the client sends only an id; the registry decides what
+    // it means (role prompt, pins) and whether a client may use it at all —
+    // resolveClientPersona refuses any persona whose `clients` flag is off.
+    // The persona's pinned model/effort win over the client's selection, the
+    // scheduler's precedence for its persona runs.
+    const persona = input.personaId ? await resolveClientPersona(input.personaId) : null;
     const started = await runtime!.startTurn({
       ...input,
+      ...(persona?.model ? { model: persona.model } : {}),
+      ...(persona?.effort ? { effort: persona.effort } : {}),
       webSearch: quickChat ? settings.webSearch.quickChat : settings.webSearch.main,
       instructions: quickChat
         ? [ci.main, ci.quickChat].map((s) => s.trim()).filter(Boolean).join('\n')
         : ci.main,
-      // Server-internal: a client claiming a persona would run its turn under
-      // an arbitrary system prompt on a persona-reserved worker, and a client
-      // claiming `mail` would get the mail bridge (send_mail into a real
-      // conversation) plus unattended exec semantics on an interactive turn.
-      // Only the mail router (which calls the runtime directly) sets these.
-      persona: undefined,
+      // Server-internal: a client claiming a persona OBJECT would run its turn
+      // under an arbitrary system prompt on a persona-reserved worker, and a
+      // client claiming `mail` would get the mail bridge (send_mail into a
+      // real conversation) plus unattended exec semantics on an interactive
+      // turn. Only the mail router (which calls the runtime directly) sets
+      // these — a client asks by id, resolved and gated above.
+      persona: persona
+        ? {
+            id: persona.id,
+            prompt: persona.prompt,
+            ...(persona.harness ? { harness: persona.harness } : {})
+          }
+        : undefined,
       mail: undefined
     });
     // Start the turn's clock the moment there is a turn. Waiting for its first

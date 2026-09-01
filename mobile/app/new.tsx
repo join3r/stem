@@ -24,8 +24,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { StartTurnResult } from '@shared/types';
+import { useChatPersonas } from '../src/hooks/useChatPersonas';
 import { useTransport } from '../src/transport/provider';
 import { useKeyboardInset, useKeyboardVisible } from '../src/ui/keyboard';
+import { PersonaChips } from '../src/ui/PersonaChips';
 import { useTheme } from '../src/ui/theme';
 
 export default function NewChatScreen(): ReactElement {
@@ -39,6 +41,11 @@ export default function NewChatScreen(): ReactElement {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [handled, setHandled] = useState<string | null>(null);
+  // Who this chat is with. Rides the send as StartTurnInput.personaId, then
+  // travels to the thread screen as a route param so the conversation stays
+  // with the persona it was started with.
+  const personas = useChatPersonas();
+  const [personaId, setPersonaId] = useState<string | null>(null);
 
   // The same three reasons the thread composer refuses, for the same reason
   // there is no offline queue: a message accepted here would exist nowhere else.
@@ -57,9 +64,15 @@ export default function NewChatScreen(): ReactElement {
     setError(null);
     setHandled(null);
     try {
-      const result: StartTurnResult = await connection.rpc('backend:startTurn', { input });
+      const result: StartTurnResult = await connection.rpc('backend:startTurn', {
+        input,
+        ...(personaId ? { personaId } : {})
+      });
       if (result.threadId) {
-        router.replace({ pathname: '/thread/[id]', params: { id: result.threadId } });
+        router.replace({
+          pathname: '/thread/[id]',
+          params: { id: result.threadId, ...(personaId ? { persona: personaId } : {}) }
+        });
         return;
       }
       setDraft('');
@@ -69,7 +82,7 @@ export default function NewChatScreen(): ReactElement {
     } finally {
       setSending(false);
     }
-  }, [connection, draft, router, sending]);
+  }, [connection, draft, personaId, router, sending]);
 
   const canSend = draft.trim().length > 0 && !sending && !blocked;
 
@@ -103,6 +116,7 @@ export default function NewChatScreen(): ReactElement {
         ]}
       >
         {blocked ? <Text style={[styles.blocked, { color: theme.warn }]}>{blocked}</Text> : null}
+        <PersonaChips personas={personas} selected={personaId} onSelect={setPersonaId} theme={theme} />
         <Pressable
           onPress={() => void submit()}
           disabled={!canSend}

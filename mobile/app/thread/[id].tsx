@@ -36,21 +36,33 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { activityLabel } from '@shared/activity';
 import type { ActivityItem, ChatMessage } from '@shared/types';
+import type { Persona } from '@shared/types';
+import { useChatPersonas } from '../../src/hooks/useChatPersonas';
 import { useThread } from '../../src/hooks/useThread';
 import { useTransport } from '../../src/transport/provider';
 import { MdxActionContext } from '../../src/mdx/actions';
 import { AgentMarkdown } from '../../src/ui/AgentMarkdown';
 import { ConnectionBadge } from '../../src/ui/ConnectionBadge';
+import { PersonaChips } from '../../src/ui/PersonaChips';
 import { useKeyboardInset, useKeyboardVisible } from '../../src/ui/keyboard';
 import { isPinnedToBottom, type ScrollMetrics } from '../../src/ui/scroll';
 import { useTheme, type Theme } from '../../src/ui/theme';
 
 export default function ThreadScreen(): ReactElement {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  // `persona` arrives from the new-chat screen, so a conversation started as a
+  // persona keeps talking to it here rather than silently reverting to Stem.
+  const { id, persona: personaParam } = useLocalSearchParams<{ id: string; persona?: string }>();
   const threadId = String(id ?? '');
   const theme = useTheme();
   const thread = useThread(threadId);
   const [draft, setDraft] = useState('');
+  // Who the next send runs as. Screen-local and per-send on the wire — the
+  // server pins nothing to the thread, so the desk (or a later visit) sending
+  // plain into the same thread is normal, exactly like scheduled persona runs.
+  const personas = useChatPersonas();
+  const [personaId, setPersonaId] = useState<string | null>(
+    typeof personaParam === 'string' && personaParam ? personaParam : null
+  );
 
   // Opening is what marks a thread read — the desktop's rule (see openChat in
   // src/renderer/App.tsx), applied here on mount and again each time a turn
@@ -117,11 +129,11 @@ export default function ThreadScreen(): ReactElement {
   const submit = useCallback(() => {
     const text = draft;
     setDraft('');
-    thread.send(text);
+    thread.send(text, personaId);
     // Sending is always a return to the bottom: the thing you just wrote is
     // there, and so is what answers it.
     pinned.current = true;
-  }, [draft, thread]);
+  }, [draft, personaId, thread]);
 
   const canSend = draft.trim().length > 0 && !thread.blocked && !thread.running && !thread.sending;
 
@@ -130,12 +142,15 @@ export default function ThreadScreen(): ReactElement {
   // components disable their own send button on, so it carries every reason a
   // send would not land — a turn in flight, and the connection being unable to
   // carry one at all — rather than only the first.
+  const sendMessage = thread.send;
   const mdxActions = useMemo(
     () => ({
-      submit: thread.send,
+      // A <Quiz>/<Form> reply is a send like any other, so it goes to whoever
+      // the composer is currently talking to.
+      submit: (text: string) => sendMessage(text, personaId),
       running: thread.running || thread.sending || thread.blocked !== null
     }),
-    [thread.blocked, thread.running, thread.send, thread.sending]
+    [personaId, sendMessage, thread.blocked, thread.running, thread.sending]
   );
 
   // The keyboard's measured cover of the window, as bottom padding — see
@@ -199,6 +214,9 @@ export default function ThreadScreen(): ReactElement {
         canSend={canSend}
         running={thread.running}
         blocked={thread.blocked}
+        personas={personas}
+        personaId={personaId}
+        onSelectPersona={setPersonaId}
       />
     </View>
   );
@@ -299,7 +317,10 @@ function Composer({
   onStop,
   canSend,
   running,
-  blocked
+  blocked,
+  personas,
+  personaId,
+  onSelectPersona
 }: {
   theme: Theme;
   value: string;
@@ -309,6 +330,9 @@ function Composer({
   canSend: boolean;
   running: boolean;
   blocked: string | null;
+  personas: Persona[];
+  personaId: string | null;
+  onSelectPersona: (personaId: string | null) => void;
 }): ReactElement {
   // The home indicator's corner radii eat into the last dozen points of the
   // screen, so the composer stands on the safe-area inset while the keyboard is
@@ -325,6 +349,7 @@ function Composer({
       ]}
     >
       {blocked ? <Text style={[styles.blocked, { color: theme.warn }]}>{blocked}</Text> : null}
+      <PersonaChips personas={personas} selected={personaId} onSelect={onSelectPersona} theme={theme} />
       <View style={styles.composerRow}>
         <TextInput
           style={[styles.input, { backgroundColor: theme.card, borderColor: theme.line, color: theme.text }]}

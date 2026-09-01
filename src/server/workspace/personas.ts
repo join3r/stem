@@ -131,6 +131,8 @@ function coercePersona(raw: unknown): Persona | null {
   if (typeof r.sendBudget === 'number' && Number.isFinite(r.sendBudget)) {
     persona.sendBudget = Math.min(100, Math.max(1, Math.round(r.sendBudget)));
   }
+  // Off is the default and stored as absence, like the flags above.
+  if (r.clients === true) persona.clients = true;
   if (r.builtin === true) persona.builtin = true;
   return persona;
 }
@@ -260,6 +262,23 @@ function update(mutate: (store: PersonasFile) => void): Promise<Persona[]> {
 export async function getPersona(id: string): Promise<Persona | null> {
   const personas = await listPersonas();
   return personas.find((p) => p.id === id) ?? null;
+}
+
+/**
+ * Resolve a persona a CLIENT asked to run a chat turn as (StartTurnInput.
+ * personaId). Refused unless the persona exists and the user has opened it to
+ * clients — the gate lives here, next to the registry, so the transport
+ * handler stays a mapper. Throws messages written to be shown to the sender.
+ */
+export async function resolveClientPersona(id: string): Promise<Persona> {
+  const persona = await getPersona(id.trim());
+  if (!persona) throw new Error(`No persona "${id}" exists.`);
+  if (persona.clients !== true) {
+    throw new Error(
+      `"${persona.name}" isn’t open to chats — turn on “Usable in chats from other devices” for it in the persona editor first.`
+    );
+  }
+  return persona;
 }
 
 /**

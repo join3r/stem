@@ -100,16 +100,26 @@ test('the Files sub-tab lists a seeded Files folder and deletes through to disk'
   }
 });
 
-test('the Personas editor round-trips the manage flag and the send budget', async ({ mainWindow }) => {
+test('the Personas editor round-trips the manage flag, the send budget, and the clients flag', async ({ mainWindow }) => {
   await mainWindow.getByRole('button', { name: 'Personas', exact: true }).click();
 
   // Orchestrator ships with the manage-personas capability on; expanding its
   // row shows the checkbox already ticked.
   await mainWindow.getByText('Orchestrator', { exact: true }).click();
-  const manageBox = mainWindow.locator('label.persona-cap input[type="checkbox"]');
+  const manageBox = mainWindow.locator(
+    'label.persona-cap:has-text("Can manage personas") input[type="checkbox"]'
+  );
   await expect(manageBox).toBeChecked();
 
-  // Set a send budget and save — the value must land in the store.
+  // Chats-from-clients ships OFF for every persona — opening one up is the
+  // user's call, so the box starts unticked and the tick must land in the store.
+  const clientsBox = mainWindow.locator(
+    'label.persona-cap:has-text("Usable in chats") input[type="checkbox"]'
+  );
+  await expect(clientsBox).not.toBeChecked();
+  await clientsBox.check();
+
+  // Set a send budget and save — the values must land in the store.
   const budget = mainWindow.locator('label.persona-cap input[type="number"]');
   await budget.fill('5');
   await mainWindow.getByRole('button', { name: 'Save', exact: true }).click();
@@ -121,5 +131,5 @@ test('the Personas editor round-trips the manage flag and the send budget', asyn
           .then((list: any[]) => list.find((p: any) => p.id === 'orchestrator'))
       )
     )
-    .toMatchObject({ sendBudget: 5, canManagePersonas: true });
+    .toMatchObject({ sendBudget: 5, canManagePersonas: true, clients: true });
 });
