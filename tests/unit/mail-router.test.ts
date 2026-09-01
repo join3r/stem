@@ -21,11 +21,13 @@ import { listPersonas, savePersona, savePersonaFor } from '../../src/server/work
 import { listPersonaNotes, savePersonaNote } from '../../src/server/workspace/persona-memory';
 import { updateMailSettings } from '../../src/server/workspace/settings';
 import {
+  mailDeviceQueuePath,
   mailStorePath,
   personaMemoryDir,
   personasStorePath,
   settingsStorePath
 } from '../../src/server/workspace/paths';
+import { queueMailForDevice, queuedMailConversationIds } from '../../src/server/workspace/mail-device-queue';
 import type {
   ChatBackend,
   MailBridge,
@@ -37,18 +39,21 @@ import type { StartTurnInput } from '../../src/shared/types';
 const mailPath = mailStorePath();
 const personasPath = personasStorePath();
 const settingsPath = settingsStorePath();
+const deviceQueuePath = mailDeviceQueuePath();
 
 beforeEach(() => {
   mkdirSync(dirname(mailPath), { recursive: true });
   rmSync(mailPath, { force: true });
   rmSync(personasPath, { force: true });
   rmSync(settingsPath, { force: true });
+  rmSync(deviceQueuePath, { force: true });
   resetActivity();
 });
 afterEach(() => {
   rmSync(mailPath, { force: true });
   rmSync(personasPath, { force: true });
   rmSync(settingsPath, { force: true });
+  rmSync(deviceQueuePath, { force: true });
 });
 
 /** One scripted delivery turn, consumed in dispatch order. */
@@ -145,8 +150,12 @@ function fakeBackend(): FakeBackend {
 }
 
 /** Wire a router the way index.ts does: bridge attached at construction. */
-function makeRouter(fake: FakeBackend, onChange: () => void = () => undefined): MailRouter {
-  const router = new MailRouter({ runtime: fake.backend, onChange });
+function makeRouter(
+  fake: FakeBackend,
+  onChange: () => void = () => undefined,
+  codingDevice?: (deviceRef: string) => Promise<{ deviceId: string; label: string; online: boolean } | null>
+): MailRouter {
+  const router = new MailRouter({ runtime: fake.backend, onChange, ...(codingDevice ? { codingDevice } : {}) });
   fake.backend.setMailBridge({
     send: (req, ctx) => router.bridgeSend(req, ctx),
     addPersona: (personaId, ctx) => router.bridgeAddPersona(personaId, ctx),
@@ -1982,5 +1991,118 @@ describe('boot-time redelivery', () => {
     const router = makeRouter(fake);
     expect(await router.recoverDroppedDeliveries()).toBe(0);
     expect(fake.starts).toHaveLength(0);
+  });
+});
+
+describe('device-pinned code personas (offline hold)', () => {
+  const offline = { deviceId: 'dev-1', label: 'MacBook', online: false };
+  const online = { deviceId: 'dev-1', label: 'MacBook', online: true };
+
+  async function saveMacCoder(): Promise<void> {
+    await savePersona({
+      id: 'mac-coder',
+      name: 'mac-coder',
+      prompt: '',
+      harness: { agent: 'claude', cwd: '/repo', device: 'dev-1' }
+    });
+  }
+
+  it('holds a user mail while the pinned computer is offline, then delivers on flush', async () => {
+    await saveMacCoder();
+    const fake = fakeBackend();
+    let device = offline;
+    const router = makeRouter(fake, undefined, async () => device);
+    await router.compose({ to: ['mac-coder'], subject: 'build', body: 'build it' });
+    const held = await settledMail();
+    // No turn ran; the notice mail is what the user sees instead.
+    expect(fake.starts).toHaveLength(0);
+    expect(held.conversations[0].status).toBe('awaiting-user');
+    expect(held.items[1].from).toBe('mac-coder');
+    expect(held.items[1].body).toContain('MacBook');
+    expect(held.items[1].body).toContain('queued');
+    expect(await queuedMailConversationIds()).toEqual(new Set([held.conversations[0].id]));
+    // The device announces itself: the wait flushes into a real delivery.
+    device = online;
+    fake.script = { mode: 'ok', reply: 'built' };
+    expect(await router.flushDeviceQueue('dev-1')).toBe(1);
+    await vi.waitFor(async () => {
+      const after = await readMail();
+      expect(after.items.map((i) => i.body)).toContain('built');
+      expect(after.conversations[0].status).toBe('idle');
+    });
+    expect(fake.starts[0].input).toBe('build it');
+    // The wait was consumed — a second announce delivers nothing.
+    expect(await router.flushDeviceQueue('dev-1')).toBe(0);
+  });
+
+  it('a stop while waiting drops the wait — the device coming back delivers nothing', async () => {
+    await saveMacCoder();
+    const fake = fakeBackend();
+    const router = makeRouter(fake, undefined, async () => offline);
+    await router.compose({ to: ['mac-coder'], subject: 'build', body: 'build it' });
+    const held = await settledMail();
+    const id = held.conversations[0].id;
+    expect((await router.stopConversation(id)).stopped).toBe(true);
+    expect((await readMail()).conversations[0].status).toBe('aborted');
+    expect(await router.flushDeviceQueue('dev-1')).toBe(0);
+    expect(fake.starts).toHaveLength(0);
+  });
+
+  it('boot redelivery leaves conversations waiting for a computer alone', async () => {
+    // A wait persisted by a previous process, whose conversation still reads
+    // "user spoke last" — redelivering it would just re-trip the hold and
+    // write a duplicate notice.
+    await saveMacCoder();
+    const conversation = await createConversation('waiting', ['mac-coder']);
+    await appendMailItem({ conversationId: conversation.id, from: 'user', to: ['mac-coder'], body: 'build it' });
+    await queueMailForDevice({
+      conversationId: conversation.id,
+      personaId: 'mac-coder',
+      deviceId: 'dev-1',
+      deviceLabel: 'MacBook'
+    });
+    const fake = fakeBackend();
+    const router = makeRouter(fake, undefined, async () => offline);
+    expect(await router.recoverDroppedDeliveries()).toBe(0);
+    // The boot sweep also holds while the device stays offline.
+    expect(await router.flushDeviceQueuesAtBoot()).toBe(0);
+    expect(fake.starts).toHaveLength(0);
+  });
+
+  it('the boot sweep delivers waits whose device is already online', async () => {
+    await saveMacCoder();
+    const conversation = await createConversation('waiting', ['mac-coder']);
+    await appendMailItem({ conversationId: conversation.id, from: 'user', to: ['mac-coder'], body: 'build it' });
+    await queueMailForDevice({
+      conversationId: conversation.id,
+      personaId: 'mac-coder',
+      deviceId: 'dev-1',
+      deviceLabel: 'MacBook'
+    });
+    const fake = fakeBackend();
+    fake.script = { mode: 'ok', reply: 'built' };
+    const router = makeRouter(fake, undefined, async () => online);
+    expect(await router.flushDeviceQueuesAtBoot()).toBe(1);
+    const mail = await settledMail();
+    expect(mail.items[1]).toMatchObject({ from: 'mac-coder', to: ['user'], body: 'built' });
+  });
+
+  it('a delivery that runs while the device is online clears a stale wait', async () => {
+    await saveMacCoder();
+    const fake = fakeBackend();
+    const router = makeRouter(fake, undefined, async () => online);
+    await router.compose({ to: ['mac-coder'], subject: 'build', body: 'build it' });
+    const mail = await settledMail();
+    const id = mail.conversations[0].id;
+    // A wait left over from a flap: the next online delivery supersedes it.
+    await queueMailForDevice({ conversationId: id, personaId: 'mac-coder', deviceId: 'dev-1', deviceLabel: 'MacBook' });
+    await router.reply(id, 'and again');
+    await vi.waitFor(async () => {
+      const after = await readMail();
+      expect(after.items.length).toBeGreaterThanOrEqual(4);
+      expect(after.conversations[0].status).toBe('idle');
+    });
+    expect(await queuedMailConversationIds()).toEqual(new Set());
+    expect(await router.flushDeviceQueue('dev-1')).toBe(0);
   });
 });

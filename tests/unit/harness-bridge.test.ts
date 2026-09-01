@@ -8,13 +8,14 @@
 //    routed to the wired HarnessBridge with the CURRENT turn's threadId and
 //    scheduled flag injected — never trusted from the payload — and the answer
 //    goes to the process that ASKED, not to a replacement.
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { HARNESS_BRIDGE_TITLE } from '../../src/server/pi/protocol';
 import { PiRuntime } from '../../src/server/pi/runtime';
 import { newTurnContext } from '../../src/server/pi/normalize';
+import { clampPinnedCwd } from '../../src/server/harness/pin';
 import type { HarnessBridge, HarnessRequest } from '../../src/server/backend/types';
 
 // The factory returns before registering anything without a readable mcp.json
@@ -120,6 +121,63 @@ describe('extension side', () => {
     expect(a.isError).toBe(true);
     expect(b.isError).toBe(true);
   });
+
+  it('refuses up front when the turn-context gate says coding is off (unpinned mail persona)', async () => {
+    const gatePath = join(configDir, 'turn-context.json');
+    writeFileSync(gatePath, JSON.stringify({ mail: true, scheduled: true, coding: false }));
+    try {
+      const tool = await registeredCodingAgent();
+      const { asks, ctx } = scriptedCtx(() => JSON.stringify({ ok: true, text: 'never' }));
+      const result = await tool.execute!('c', { agent: 'claude', prompt: 'go' }, undefined, undefined, ctx);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain('code personas');
+      // No round-trip: the refusal is the point of the gate.
+      expect(asks).toHaveLength(0);
+      // An older main that writes no `coding` field reads as allowed — the
+      // bridge in main is the boundary either way.
+      writeFileSync(gatePath, JSON.stringify({ mail: true, scheduled: true }));
+      const allowed = await tool.execute!('c', { agent: 'claude', prompt: 'go' }, undefined, undefined, ctx);
+      expect(allowed.isError).toBeFalsy();
+      expect(asks).toHaveLength(1);
+    } finally {
+      rmSync(gatePath, { force: true });
+    }
+  });
+});
+
+describe('the pin clamp (clampPinnedCwd)', () => {
+  const pin = { agent: 'claude', cwd: '/repo', device: 'dev-1' };
+
+  it('no requested cwd means the pinned folder', () => {
+    expect(clampPinnedCwd(undefined, pin)).toEqual({ ok: true, cwd: '/repo' });
+    expect(clampPinnedCwd('  ', pin)).toEqual({ ok: true, cwd: '/repo' });
+  });
+
+  it('folders inside the pin pass, relative or absolute', () => {
+    expect(clampPinnedCwd('/repo/packages/x', pin)).toEqual({ ok: true, cwd: '/repo/packages/x' });
+    expect(clampPinnedCwd('packages/x', pin)).toEqual({ ok: true, cwd: '/repo/packages/x' });
+    expect(clampPinnedCwd('/repo', pin)).toEqual({ ok: true, cwd: '/repo' });
+  });
+
+  it('escapes are refused: outside paths, siblings, traversal', () => {
+    expect(clampPinnedCwd('/etc', pin).ok).toBe(false);
+    expect(clampPinnedCwd('/repository', pin).ok).toBe(false); // prefix, not a subfolder
+    expect(clampPinnedCwd('../elsewhere', pin).ok).toBe(false);
+    expect(clampPinnedCwd('/repo/../etc', pin).ok).toBe(false);
+  });
+
+  it('windows pins keep windows shapes', () => {
+    const win = { agent: 'claude', cwd: 'C:\\repo', device: 'dev-1' };
+    expect(clampPinnedCwd('C:\\repo\\x', win)).toEqual({ ok: true, cwd: 'C:\\repo\\x' });
+    expect(clampPinnedCwd('C:\\other', win).ok).toBe(false);
+  });
+
+  it('a blank pinned cwd: scratch locally, refused on a device', () => {
+    expect(clampPinnedCwd('/anywhere', { agent: 'claude', cwd: '' })).toEqual({ ok: true });
+    const onDevice = clampPinnedCwd(undefined, { agent: 'claude', cwd: '', device: 'dev-1' });
+    expect(onDevice.ok).toBe(false);
+    if (!onDevice.ok) expect(onDevice.error).toContain('folder');
+  });
 });
 
 describe('runtime side', () => {
@@ -169,6 +227,68 @@ describe('runtime side', () => {
     expect(seen[0]).toMatchObject({ agent: 'claude', threadId: 'the-real-thread', isScheduled: true });
     expect(JSON.parse(sent[0].value)).toEqual({ ok: true, text: 'done' });
     expect(sent[0].id).toBe('elicit-1');
+  });
+
+  it('refuses a mail turn whose persona has no coding pin, before the bridge', async () => {
+    const seen: HarnessRequest[] = [];
+    const { internal, worker, sent } = runtimeWithBridge({
+      handleHarnessRequest: async (req) => {
+        seen.push(req);
+        return { ok: true, text: 'never' };
+      },
+      abortThread: () => {},
+      settleAll: () => {}
+    });
+    worker.currentTurn = newTurnContext('t', 'turn-1');
+    worker.currentTurn.isMail = true;
+    worker.currentTurn.isScheduled = true;
+    internal.handleHarnessBridgeRequest(
+      worker,
+      'elicit-1',
+      JSON.stringify({ agent: 'claude', prompt: 'go', device: 'MacBook', cwd: '/anywhere' })
+    );
+    await settleSends(sent);
+    expect(seen).toHaveLength(0);
+    const answer = JSON.parse(sent[0].value) as { ok: boolean; error?: string };
+    expect(answer.ok).toBe(false);
+    expect(answer.error).toContain('code personas');
+  });
+
+  it('clamps a pinned mail persona to its pin: agent and device forced, cwd bounded', async () => {
+    const seen: HarnessRequest[] = [];
+    const { internal, worker, sent } = runtimeWithBridge({
+      handleHarnessRequest: async (req) => {
+        seen.push(req);
+        return { ok: true, text: 'done' };
+      },
+      abortThread: () => {},
+      settleAll: () => {}
+    });
+    worker.currentTurn = newTurnContext('t', 'turn-1');
+    worker.currentTurn.isMail = true;
+    worker.currentTurn.isScheduled = true;
+    worker.currentTurn.personaHarness = { agent: 'opencode', cwd: '/repo', device: 'dev-1' };
+    // The tool call tries to hop agent and machine; only the in-repo cwd survives.
+    internal.handleHarnessBridgeRequest(
+      worker,
+      'elicit-1',
+      JSON.stringify({ agent: 'claude', prompt: 'go', device: 'OtherMac', cwd: '/repo/packages/x' })
+    );
+    await settleSends(sent);
+    expect(seen[0]).toMatchObject({ agent: 'opencode', device: 'dev-1', cwd: '/repo/packages/x' });
+
+    // A cwd outside the pinned folder is refused without reaching the bridge.
+    sent.length = 0;
+    internal.handleHarnessBridgeRequest(
+      worker,
+      'elicit-2',
+      JSON.stringify({ agent: 'claude', prompt: 'go', cwd: '/etc' })
+    );
+    await settleSends(sent);
+    expect(seen).toHaveLength(1);
+    const refused = JSON.parse(sent[0].value) as { ok: boolean; error?: string };
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain('pinned');
   });
 
   it('answers honestly when no bridge is wired', async () => {

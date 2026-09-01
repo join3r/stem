@@ -45,6 +45,7 @@ import { isContextOverflowError } from '../backend/overflow';
 import { PLAIN_MD_DIRECTIVE, stemAssistantInstructions } from '../workspace/bootstrap';
 import { readSettings } from '../workspace/settings';
 import { resolveHostShell } from '../exec/git-bash';
+import { clampPinnedCwd } from '../harness/pin';
 import { hostShellAgentHint } from '../exec/host-shell';
 import { previewText } from '../chats/preview';
 import { autoTitle, nameThread, nameThreadIfDue as nameIfDue, type SubjectDeps } from '../chats/subject';
@@ -1297,7 +1298,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // Same strictness for the turn-context gate: running a mail delivery on
         // a stale "live chat" value raises approval cards nobody is watching,
         // and the inverse silently muzzles the instructions tool in a real chat.
-        await writeTurnContextGate({ mail: turn.isMail === true, scheduled: turn.isScheduled === true }, w.gateDir).catch(
+        await writeTurnContextGate(
+          {
+            mail: turn.isMail === true,
+            scheduled: turn.isScheduled === true,
+            // coding_agent in a mail delivery belongs to code personas only —
+            // the tool reads this to refuse up front instead of wasting a
+            // round-trip on the bridge's refusal (which stays the boundary).
+            coding: turn.isMail !== true || !!turn.personaHarness
+          },
+          w.gateDir
+        ).catch(
           (e) => {
             degrade('pi.gates', "refused the turn rather than run it on the previous turn's context kind", e);
             throw new Error(`Could not set this turn's context: ${e instanceof Error ? e.message : String(e)}`);
@@ -2497,18 +2508,39 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           fresh_session?: boolean;
           item_id?: string;
         };
-        // The persona's coding pin fills the defaults; explicit tool args win.
-        // This is the whole meaning of a persona's cwd — see shared/types.ts.
+        // In a live chat the persona pin (there is none) plays no part and the
+        // tool args pass through. In a MAIL delivery the pin is the boundary,
+        // not a default: coding_agent belongs to code personas only, and a code
+        // persona's runs are clamped to its pinned agent, device, and folder —
+        // an autonomous caller must not be able to hop machines or escape its
+        // repo by naming them in the tool call (the turn-context gate refuses
+        // the tool up front; this is the enforcement behind it).
         const pin = turn?.personaHarness;
+        let agent = (req.agent ?? '').trim() || (pin?.agent ?? '');
+        let cwd = typeof req.cwd === 'string' && req.cwd.trim() ? req.cwd : pin?.cwd?.trim() || undefined;
+        let device =
+          typeof req.device === 'string' && req.device.trim() ? req.device : pin?.device?.trim() || undefined;
+        if (turn?.isMail) {
+          if (!pin?.agent?.trim()) {
+            return respond({
+              ok: false,
+              error:
+                'Coding agents are reserved for code personas — personas with a coding setup (agent + working ' +
+                'folder) pinned in the persona editor. This persona has none, so do not retry; if the task ' +
+                'needs code changes, say so in your reply and let the sender route it to a code persona.'
+            });
+          }
+          const clamped = clampPinnedCwd(typeof req.cwd === 'string' ? req.cwd : undefined, pin);
+          if (!clamped.ok) return respond({ ok: false, error: clamped.error });
+          agent = pin.agent.trim();
+          cwd = clamped.cwd;
+          device = pin.device?.trim() || undefined;
+        }
         const result = await bridge.handleHarnessRequest({
-          agent: (req.agent ?? '').trim() || (pin?.agent ?? ''),
+          agent,
           prompt: req.prompt ?? '',
-          cwd:
-            typeof req.cwd === 'string' && req.cwd.trim() ? req.cwd : pin?.cwd?.trim() || undefined,
-          device:
-            typeof req.device === 'string' && req.device.trim()
-              ? req.device
-              : pin?.device?.trim() || undefined,
+          cwd,
+          device,
           freshSession: req.fresh_session === true,
           itemId: typeof req.item_id === 'string' && req.item_id ? req.item_id : undefined,
           threadId: turn?.threadId ?? '',

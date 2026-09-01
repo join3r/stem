@@ -35,6 +35,13 @@ import {
   setConversationSession,
   setConversationStatus
 } from '../workspace/mail';
+import {
+  dropQueuedMail,
+  queueMailForDevice,
+  queuedMailConversationIds,
+  queuedMailDeviceIds,
+  takeQueuedMailForDevice
+} from '../workspace/mail-device-queue';
 
 // The mail router: the one place a MailItem turns into an agent turn and a
 // settled turn turns back into a MailItem. Composing appends the user's item
@@ -169,6 +176,14 @@ export interface MailRouterOptions {
   runtime: ChatBackend;
   /** Pushed to every client whenever mail changes (a delivery landed, etc.). */
   onChange: () => void;
+  /**
+   * Resolve a persona pin's device reference (id or label) to a paired
+   * computer and whether it can run coding agents RIGHT NOW (connected, with
+   * its consent switch on). Null when the reference names no usable target at
+   * all (unpaired, ambiguous, a phone) — then the delivery runs normally and
+   * coding_agent reports the problem itself. Absent in tests that don't care.
+   */
+  codingDevice?: (deviceRef: string) => Promise<{ deviceId: string; label: string; online: boolean } | null>;
 }
 
 export class MailRouter {
@@ -292,11 +307,16 @@ export class MailRouter {
    */
   async recoverDroppedDeliveries(): Promise<number> {
     const { conversations, items } = await readMail();
+    // Conversations already waiting for a paired computer have their own
+    // recovery channel (flushDeviceQueue) — redelivering them here would just
+    // trip the offline hold again and write a duplicate notice.
+    const waiting = await queuedMailConversationIds();
     let recovered = 0;
     for (const conversation of conversations) {
       if (conversation.status === 'aborted') continue;
       if (conversation.userSentAt <= conversation.userUpdatedAt) continue;
       if (this.pending.has(conversation.id)) continue;
+      if (waiting.has(conversation.id)) continue;
       const driver = conversation.participants[0];
       if (!driver) continue;
       const mail = items.filter((i) => i.conversationId === conversation.id && i.from === 'user').at(-1);
@@ -308,6 +328,52 @@ export class MailRouter {
       recovered++;
     }
     return recovered;
+  }
+
+  /**
+   * A paired computer announced it runs coding agents: deliver the mail that
+   * was waiting for it (deliveries held by the offline hold in deliver()).
+   * Re-derives each conversation's latest user item from the store — the wait
+   * entry records only THAT a wait exists — and inherits boot redelivery's
+   * guards: conversations with deliveries already in flight, aborted ones, and
+   * deleted ones are skipped, their wait entries consumed.
+   */
+  async flushDeviceQueue(deviceId: string): Promise<number> {
+    const entries = await takeQueuedMailForDevice(deviceId);
+    if (!entries.length) return 0;
+    const { conversations, items } = await readMail();
+    let flushed = 0;
+    for (const entry of entries) {
+      if (this.pending.has(entry.conversationId)) continue;
+      const conversation = conversations.find((c) => c.id === entry.conversationId);
+      if (!conversation || conversation.status === 'aborted') continue;
+      const mail = items.filter((i) => i.conversationId === entry.conversationId && i.from === 'user').at(-1);
+      if (!mail) continue;
+      const body =
+        mail.body.trim() ||
+        '(This mail carried only attachments; their contents were lost while it waited for your computer. Ask the user to resend them.)';
+      this.enqueueDelivery(entry.conversationId, entry.personaId, body, 'user', mail.at, mail.id);
+      flushed++;
+    }
+    return flushed;
+  }
+
+  /**
+   * Boot sweep over the persisted waits: a device that is ALREADY online (it
+   * announced before this process was ready, or while the server was down its
+   * wait became satisfiable) would otherwise hold its mail until the next
+   * reconnect re-announced it.
+   */
+  async flushDeviceQueuesAtBoot(): Promise<number> {
+    if (!this.opts.codingDevice) return 0;
+    let flushed = 0;
+    for (const deviceId of await queuedMailDeviceIds()) {
+      // quiet: an unresolvable device just stays queued — the announce that
+      // eventually names it is the flush that matters.
+      const device = await this.opts.codingDevice(deviceId).catch(() => null);
+      if (device?.online) flushed += await this.flushDeviceQueue(deviceId);
+    }
+    return flushed;
   }
 
   /**
@@ -337,7 +403,13 @@ export class MailRouter {
     const lane = this.lanes.get(conversationId);
     const active = [...this.activeTurns].filter(([, t]) => t.conversationId === conversationId);
     const queued = lane?.queue.length ?? 0;
-    if (!active.length && !queued) return { stopped: false };
+    // A conversation waiting for an offline computer has nothing running, but
+    // the persisted wait IS something to stop — dropped here so the device
+    // coming back does not deliver a mail the user withdrew.
+    // quiet: an unwritable queue store leaves the wait standing, and the stop
+    // still reports honestly on what it could reach below.
+    const waitDropped = await dropQueuedMail(conversationId).catch(() => false);
+    if (!active.length && !queued && !waitDropped) return { stopped: false };
     this.stopping.add(conversationId);
     if (lane && queued) {
       // Dropped tasks never reach deliver(), so their pending counts settle here.
@@ -959,6 +1031,45 @@ export class MailRouter {
           epoch
         );
         return;
+      }
+      // A code persona pinned to a paired computer needs that computer for the
+      // work itself, so a user mail arriving while it is unreachable is HELD,
+      // not run: a turn would only discover the offline device mid-run and
+      // settle as an answered mail nothing ever retries. The wait persists
+      // (workspace/mail-device-queue.ts) and flushes when the device announces
+      // itself; the notice mail says what the wave is waiting for. Only
+      // user-initiated deliveries hold — a fan-out branch or reply hop must
+      // not wedge its join, so those run and let coding_agent report the
+      // offline device itself.
+      if (from === 'user' && persona.harness?.device && this.opts.codingDevice) {
+        // quiet: an oracle that fails answers like an unusable target — the
+        // delivery runs and coding_agent reports the device problem itself.
+        const device = await this.opts.codingDevice(persona.harness.device).catch(() => null);
+        if (device && !device.online) {
+          await queueMailForDevice({
+            conversationId,
+            personaId,
+            deviceId: device.deviceId,
+            deviceLabel: device.label
+          });
+          await this.appendReply(
+            conversationId,
+            personaId,
+            `“${device.label}” is not reachable right now, and this persona's coding work runs there. ` +
+              'Your mail is queued and will be delivered automatically once that computer is back — awake, ' +
+              'running Stem, with "Run coding agents on this computer" switched on.',
+            'awaiting-user',
+            epoch
+          );
+          return;
+        }
+        // Online again: a wait recorded while it was offline is superseded by
+        // this delivery — left behind, the next flush would re-deliver an
+        // already-answered mail.
+        // quiet: a wait that cannot be dropped costs one duplicate redelivery
+        // to a thread that has the context to shrug it off; the delivery in
+        // hand matters more.
+        if (device) await dropQueuedMail(conversationId).catch(() => undefined);
       }
       await setConversationStatus(conversationId, 'working');
       this.opts.onChange();

@@ -1690,7 +1690,10 @@ export default async function stemMcpBridge(pi) {
   // writes settings.json — the extension never touches it. Applies on the next turn.
   // The turn-context gate tells it when a card would sit unanswered (a mail
   // delivery, a scheduled run) so it can say "propose it in your reply" instead.
-  registerInstructionsTool(pi, makeTurnContextGate(join(process.env[ENV_GATE_DIR] || dirname(cfgPath), TURN_CONTEXT_GATE_FILE)));
+  const turnContextGate = makeTurnContextGate(
+    join(process.env[ENV_GATE_DIR] || dirname(cfgPath), TURN_CONTEXT_GATE_FILE)
+  );
+  registerInstructionsTool(pi, turnContextGate);
 
   // Scheduled tasks: let the assistant schedule a prompt to re-run autonomously, and
   // surface a run's result prominently (notify_user). All routed to the main process
@@ -1712,8 +1715,10 @@ export default async function stemMcpBridge(pi) {
   // Coding agents: delegate coding work to an external harness (Claude Code,
   // OpenCode, ...). The tool only forwards the request — the main process owns
   // the settings gate, session continuity, approval cards and the acpx runtime,
-  // and holds this round-trip open for the whole harness turn.
-  registerHarnessTools(pi);
+  // and holds this round-trip open for the whole harness turn. The turn-context
+  // gate tells it when a mail delivery's persona has no coding pin, so it can
+  // refuse up front instead of round-tripping into main's refusal.
+  registerHarnessTools(pi, turnContextGate);
 
   // Stem self-authored skills: let the assistant save its own SKILL.md procedures.
   // The write itself happens in main (see SKILL_BRIDGE_TITLE) — it owns the
@@ -1883,14 +1888,17 @@ const TURN_CONTEXT_GATE_FILE = 'turn-context.json';
  * Reader for the per-turn context gate: what kind of turn is running on THIS
  * worker. Main rewrites the file before every prompt; a missing or unreadable
  * file reads as a live chat, which is also what an older main produces.
+ * `coding` is whether coding_agent may run this turn (false only for a mail
+ * delivery whose persona has no coding pin); absent — an older main — it reads
+ * as allowed, because the harness bridge in main enforces it regardless.
  */
 function makeTurnContextGate(path) {
   return () => {
     try {
       const parsed = JSON.parse(readFileSync(path, 'utf8'));
-      return { mail: parsed.mail === true, scheduled: parsed.scheduled === true };
+      return { mail: parsed.mail === true, scheduled: parsed.scheduled === true, coding: parsed.coding !== false };
     } catch {
-      return { mail: false, scheduled: false };
+      return { mail: false, scheduled: false, coding: true };
     }
   };
 }
@@ -2543,7 +2551,12 @@ async function harnessBridge(ctx, payload) {
   }
 }
 
-function registerHarnessTools(pi) {
+const HARNESS_UNPINNED_REFUSAL =
+  'Coding agents are reserved for code personas — personas with a coding setup (agent + working folder) ' +
+  'pinned in the persona editor. This persona has none, so do not retry; if the task needs code changes, ' +
+  'say so in your reply and let the sender route it to a code persona.';
+
+function registerHarnessTools(pi, turnContext) {
   pi.registerTool({
     name: 'coding_agent',
     label: 'Coding agent',
@@ -2563,7 +2576,10 @@ function registerHarnessTools(pi) {
       'Risky actions (commands, publishes) may pause on an approval card for the user — that time counts ' +
       'against nobody; just let the call run. ' +
       'By default the agent works in this chat\'s scratch folder; pass `cwd` for a real project. Do not use ' +
-      'this in scheduled tasks — it is refused there.',
+      'this in scheduled tasks — it is refused there. ' +
+      'In mail deliveries only code personas (those with a coding setup pinned in the persona editor) may use ' +
+      'it, and their runs are clamped to the pinned agent, computer, and folder — `agent` and `device` are ' +
+      'ignored there, and `cwd` may only name the pinned folder or one inside it.',
     parameters: {
       type: 'object',
       properties: {
@@ -2598,6 +2614,9 @@ function registerHarnessTools(pi) {
       const prompt = String((params && params.prompt) || '').trim();
       if (!agent) return taskErr('Name the coding agent to run (e.g. "claude").');
       if (!prompt) return taskErr('Provide a prompt for the coding agent.');
+      // Code personas only in mail deliveries. The gate saves the round-trip;
+      // main's harness bridge enforces the same rule (and the clamp) itself.
+      if (turnContext && turnContext().coding === false) return taskErr(HARNESS_UNPINNED_REFUSAL);
       const res = await harnessBridge(ctx, {
         agent,
         prompt,

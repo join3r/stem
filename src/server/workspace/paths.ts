@@ -334,6 +334,16 @@ export function mailStorePath(): string {
 }
 
 /**
+ * Mail waiting for a paired computer (server/workspace/mail-device-queue.ts):
+ * conversations whose code persona is pinned to a device that was offline at
+ * delivery time, redelivered when that device announces itself. Persisted so
+ * a server restart cannot silently drop the wait.
+ */
+export function mailDeviceQueuePath(): string {
+  return process.env.STEM_MAIL_DEVICE_QUEUE ?? join(userDataRoot(), 'mail-device-queue.json');
+}
+
+/**
  * State dir for the embedded acpx runtime's FileSessionStore: the harness
  * session records (one JSON per external coding-agent session) that let a
  * later coding_agent call resume the same conversation. Server-side runs only;

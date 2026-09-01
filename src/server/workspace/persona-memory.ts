@@ -145,7 +145,9 @@ export function listPersonaNotes(personaId: string): Promise<PersonaNote[]> {
       degrade('persona-memory', 'listed no notes from an unreadable store', personaId);
       return [];
     }
-    return [...store.notes].sort((a, b) => b.at - a.at);
+    // Reverse before the stable sort so two notes saved in the same
+    // millisecond still list newest-inserted first (the file appends).
+    return [...store.notes].reverse().sort((a, b) => b.at - a.at);
   });
 }
 

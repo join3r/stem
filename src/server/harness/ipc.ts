@@ -7,12 +7,22 @@ import type { DeviceHarnessEventAck, DeviceHarnessPermissionDecision } from '../
 // the transport resolved that from the bearer token, and a device id in the
 // arguments would let one paired machine claim another's turns.
 
-export function registerHarnessIpc(): void {
-  registerServer('harnessHost:announce', (caller: CallerContext, report: unknown): Promise<void> => {
+export function registerHarnessIpc(deps?: {
+  /**
+   * Fired after an announcement lands, with the router's recorded truth for
+   * that device. The mail router listens: a device announcing enabled is the
+   * moment to deliver the mail that was waiting for it (clients re-announce on
+   * every stream reconnect, so this also fires when a sleeping machine wakes).
+   */
+  onAnnounce?: (deviceId: string, enabled: boolean) => void;
+}): void {
+  registerServer('harnessHost:announce', async (caller: CallerContext, report: unknown): Promise<void> => {
     if (!caller) {
       throw new Error('harnessHost:announce needs a paired device — it answers for the CALLER’s machine.');
     }
-    return harnessDeviceRouter().announce(caller.deviceId, report);
+    await harnessDeviceRouter().announce(caller.deviceId, report);
+    const entry = await harnessDeviceRouter().hostFor(caller.deviceId);
+    deps?.onAnnounce?.(caller.deviceId, entry?.enabled === true);
   });
   // One held ensure/run's answer. An unknown id is not an error — it already
   // timed out, was already answered, or belonged to a server that restarted.

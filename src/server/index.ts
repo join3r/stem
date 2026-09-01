@@ -31,7 +31,7 @@ import { initExecService } from './startup/exec';
 import { initHarness } from './startup/harness';
 import type { HarnessService } from './harness/service';
 import { registerHarnessIpc } from './harness/ipc';
-import { closeHarnessDeviceRouter } from './harness/device-host';
+import { closeHarnessDeviceRouter, harnessDeviceRouter } from './harness/device-host';
 import { initSkills } from './startup/skills';
 import {
   closeTransport,
@@ -46,7 +46,7 @@ import { foldTurnEvent, liveTurnCount, noteTurnStart } from './live-turns';
 import { pushApprovalRequest, pushTurnFinished, type ApprovalPushKind } from './push';
 import { closeApns } from './push/apns';
 import { closeDeviceMcpRouter } from './mcp-device/router';
-import { closeExecDeviceRouter } from './exec-device/router';
+import { closeExecDeviceRouter, resolveHarnessTarget } from './exec-device/router';
 import { initRetrieval } from './startup/retrieval';
 import { initRecallTasks } from './startup/recall-tasks';
 import { ensureUsageTracking } from './skills/usage';
@@ -299,6 +299,15 @@ function recoverDroppedMail(): void {
     },
     (err) => degrade('mail', 'left restart-dropped mail undelivered', err)
   );
+  // The sibling sweep for mail waiting on a paired computer: usually the
+  // device's reconnect re-announces and flushes, but a device already online
+  // at this moment has no announcement left to fire.
+  mailRouter.flushDeviceQueuesAtBoot().then(
+    (n) => {
+      if (n) log('mail', 'delivered mail that was waiting for a computer', { conversations: n });
+    },
+    (err) => degrade('mail', 'left device-queued mail waiting', err)
+  );
 }
 
 const WEB_SEARCH_RESTART_DEBOUNCE_MS = 2_000;
@@ -362,7 +371,19 @@ function registerIpc(): void {
   onPersonasChanged(() => emit('personas:changed', undefined));
   registerMailIpc({ router: () => mailRouter, runtime: () => runtime! });
   registerDevicesIpc();
-  registerHarnessIpc();
+  registerHarnessIpc({
+    // A device announcing it runs coding agents is the wake-up the mail
+    // device-queue waits for (clients re-announce on every reconnect).
+    onAnnounce: (deviceId, enabled) => {
+      if (!enabled) return;
+      void mailRouter?.flushDeviceQueue(deviceId).then(
+        (n) => {
+          if (n) log('mail', 'delivered mail that was waiting for a computer', { deviceId, conversations: n });
+        },
+        (err) => degrade('mail', 'left device-queued mail waiting', err)
+      );
+    }
+  });
 
   registerServer('backend:startTurn', async (e, input: StartTurnInput) => {
     // From a transported device, an attachment path can only name a file on
@@ -725,7 +746,20 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   // The mail router: turns MailItems into persona turns and settled turns back
   // into reply mail. Created with the runtime; the IPC layer reaches it through
   // the late-bound getter registerIpc wires.
-  mailRouter = new MailRouter({ runtime, onChange: () => emit('mail:changed', undefined) });
+  mailRouter = new MailRouter({
+    runtime,
+    onChange: () => emit('mail:changed', undefined),
+    // The offline hold's oracle: is the persona pin's computer able to run
+    // coding agents right now? Null when the reference names no usable target
+    // at all — then the delivery runs and coding_agent reports the problem.
+    codingDevice: async (deviceRef) => {
+      const target = await resolveHarnessTarget(deviceRef);
+      if (!target.ok) return null;
+      const entry = await harnessDeviceRouter().hostFor(target.deviceId);
+      const online = entry?.enabled === true && harnessDeviceRouter().isAvailable(target.deviceId);
+      return { deviceId: target.deviceId, label: target.label, online };
+    }
+  });
   // The send_mail/add_persona/save_persona/delete_persona tools inside a
   // persona's delivery turn route here; the runtime supplies the conversation
   // + sender off the live turn.

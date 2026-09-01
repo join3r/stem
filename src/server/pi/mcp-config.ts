@@ -344,13 +344,16 @@ export function piTurnContextPath(gateDir?: string): string {
 }
 
 export async function writeTurnContextGate(
-  ctx: { mail: boolean; scheduled: boolean },
+  ctx: { mail: boolean; scheduled: boolean; coding: boolean },
   gateDir?: string
 ): Promise<void> {
   await mkdir(gateDir ?? piHome(), { recursive: true });
   await writeFile(
     piTurnContextPath(gateDir),
-    JSON.stringify({ mail: ctx.mail, scheduled: ctx.scheduled }, null, 2),
+    // `coding`: whether coding_agent may run this turn — false only for a mail
+    // delivery whose persona has no harness pin (code personas only). The tool
+    // reads it to refuse up front; the harness bridge enforces it regardless.
+    JSON.stringify({ mail: ctx.mail, scheduled: ctx.scheduled, coding: ctx.coding }, null, 2),
     'utf8'
   );
 }
