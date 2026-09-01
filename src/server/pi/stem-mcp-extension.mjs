@@ -1223,13 +1223,62 @@ function registerNativeMcpTool(pi, name, spec, client, tool, protectedRoots) {
       const content = Array.isArray(result && result.content)
         ? result.content
         : [{ type: 'text', text: JSON.stringify(result ?? null) }];
-      return { content, details: {} };
+      return { content: capToolContent(content), details: {} };
     }
   });
 }
 
 function errText(text) {
   return { content: [{ type: 'text', text }], details: {}, isError: true };
+}
+
+// ---- Tool-result size cap ----
+//
+// An MCP server can answer with megabytes (a broad Loki log query once
+// returned 2.1 MB — several times a model's whole context window in ONE tool
+// result; the session it entered was unrecoverable even by compaction, and the
+// mail delivery riding it failed). So results are capped BEFORE they enter the
+// session: text blocks share one budget, the overflow is cut, and a trailing
+// notice tells the model how much was cut and to narrow the call. Non-text
+// blocks (images) pass through untouched — truncated base64 is garbage, not a
+// smaller image.
+export const MCP_RESULT_BUDGET = (() => {
+  const raw = Number.parseInt(process.env.STEM_MCP_RESULT_MAX_CHARS || '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 100_000;
+})();
+
+/** Cap a tools/call content array to the text budget (see above). */
+export function capToolContent(content) {
+  let budget = MCP_RESULT_BUDGET;
+  let total = 0;
+  let cut = false;
+  const out = [];
+  for (const block of content) {
+    if (!block || block.type !== 'text' || typeof block.text !== 'string') {
+      out.push(block);
+      continue;
+    }
+    total += block.text.length;
+    if (block.text.length <= budget) {
+      budget -= block.text.length;
+      out.push(block);
+    } else {
+      if (budget > 0) out.push({ ...block, text: block.text.slice(0, budget) });
+      budget = 0;
+      cut = true;
+    }
+  }
+  if (cut) {
+    out.push({
+      type: 'text',
+      text:
+        `\n[Result truncated: the tool returned ${total} characters of text, over the ` +
+        `${MCP_RESULT_BUDGET}-character budget one result may bring into your context. The beginning is ` +
+        'shown above. Make a narrower call (filters, limits, a shorter time range) if you need the rest — ' +
+        'do NOT retry the same call.]'
+    });
+  }
+  return out;
 }
 
 /** Register the router meta-tools over the connected (non-eager) clients map. */
@@ -1270,7 +1319,7 @@ function registerRouterTools(pi, clients, protectedRoots) {
         ? result.content
         : [{ type: 'text', text: JSON.stringify(result ?? null) }];
       // details carries the real server/tool so normalize.ts can recover the activity label.
-      return { content, details: { server, tool: def.name } };
+      return { content: capToolContent(content), details: { server, tool: def.name } };
     }
   });
 

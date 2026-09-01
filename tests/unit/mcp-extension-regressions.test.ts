@@ -5,12 +5,14 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import stemMcpBridge, {
   bridgeOAuthTokenForServer,
+  capToolContent,
   findProtectedPath,
   isInside,
   makeFsRootsGate,
   makeProtectedRootsGate,
   McpHttpClient,
   MCP_HTTP_REQUEST_TIMEOUT_MS,
+  MCP_RESULT_BUDGET,
   mcpConnectionsSettledForTests,
   resetMcpConnectionCacheForTests,
   withServiceTier
@@ -308,6 +310,85 @@ describe('MCP router protected-roots guard', () => {
     });
     expect(allowed.isError).not.toBe(true);
     expect(methods).toContain('tools/call');
+  });
+});
+
+describe('MCP tool-result size cap', () => {
+  it('passes small results through untouched, non-text blocks included', () => {
+    const image = { type: 'image', data: 'x'.repeat(2 * MCP_RESULT_BUDGET), mimeType: 'image/png' };
+    const content = [{ type: 'text', text: 'small' }, image];
+    expect(capToolContent(content)).toEqual(content);
+  });
+
+  it('cuts an oversized text block at the budget and appends the how-to-narrow notice', () => {
+    const capped = capToolContent([{ type: 'text', text: 'a'.repeat(MCP_RESULT_BUDGET + 500) }]);
+    expect(capped).toHaveLength(2);
+    expect((capped[0] as { text: string }).text).toHaveLength(MCP_RESULT_BUDGET);
+    const notice = (capped[1] as { text: string }).text;
+    expect(notice).toContain('truncated');
+    expect(notice).toContain(String(MCP_RESULT_BUDGET + 500));
+    expect(notice).toContain('narrower call');
+  });
+
+  it('text blocks share ONE budget; later blocks are dropped once it is spent', () => {
+    const half = Math.ceil(MCP_RESULT_BUDGET / 2);
+    const capped = capToolContent([
+      { type: 'text', text: 'a'.repeat(half) },
+      { type: 'image', data: 'img', mimeType: 'image/png' },
+      { type: 'text', text: 'b'.repeat(half) },
+      { type: 'text', text: 'c'.repeat(half) }
+    ]);
+    // First survives whole, image passes through, second is trimmed to the
+    // remainder, third contributes nothing but its size to the notice.
+    const texts = capped.filter((b) => (b as { type: string }).type === 'text') as { text: string }[];
+    expect(capped.some((b) => (b as { type: string }).type === 'image')).toBe(true);
+    const kept = texts.slice(0, -1).reduce((n, b) => n + b.text.length, 0);
+    expect(kept).toBe(MCP_RESULT_BUDGET);
+    expect(texts[texts.length - 1].text).toContain('truncated');
+  });
+
+  it('invoke_tool results are capped before they reach the model', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stem-mcp-cap-'));
+    cleanup.push(root);
+    const configPath = join(root, 'mcp.json');
+    await writeFile(configPath, JSON.stringify({ servers: { logs: { url: 'https://mcp.test', trusted: true } } }));
+    process.env.STEM_MCP_CONFIG = configPath;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { id?: number; method?: string };
+        const result = request.method === 'tools/list'
+          ? { tools: [{ name: 'query', description: 'queries logs' }] }
+          : request.method === 'tools/call'
+            ? { content: [{ type: 'text', text: 'x'.repeat(MCP_RESULT_BUDGET * 3) }] }
+            : {};
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      })
+    );
+
+    type RegisteredTool = {
+      name?: string;
+      execute?: (...args: unknown[]) => Promise<{ content: Array<{ type?: string; text?: string }> }>;
+    };
+    const registered: RegisteredTool[] = [];
+    const fakePi = {
+      registerTool: (tool: RegisteredTool) => registered.push(tool),
+      on: (_name: string, _handler: (...args: unknown[]) => unknown) => {},
+      getActiveTools: () => [] as string[],
+      setActiveTools: (_tools: string[]) => {}
+    };
+    await stemMcpBridge(fakePi);
+    await mcpConnectionsSettledForTests();
+
+    const invoke = registered.find((tool) => tool.name === 'invoke_tool');
+    const result = await invoke!.execute!('call-1', { server: 'logs', tool: 'query', args: {} });
+    const total = result.content.reduce((n, b) => n + (b.text?.length ?? 0), 0);
+    expect(total).toBeLessThan(MCP_RESULT_BUDGET + 1000);
+    expect(result.content[result.content.length - 1]?.text).toContain('truncated');
   });
 });
 
