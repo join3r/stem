@@ -1204,8 +1204,31 @@ export function withServiceTier(payload, tier) {
 // catalog and calls them through invoke_tool; full schemas come from describe_tool
 // only when needed. Token floor stays ~flat regardless of server count.
 
+/**
+ * Refusal for a stem-recall search tool called in a turn whose persona has
+ * recall off (turn-context gate `recall: false`), else null. Only the recall
+ * server's memory searches are covered — read_stem_guide is documentation, not
+ * the user's memory — and only that server: other MCP servers are the user's
+ * own integrations, gated by their own policy. Without this, a persona denied
+ * the injected recall block could call search_facts and get the same material
+ * back, which is the whole leak the flag exists to close.
+ */
+export function recallToolRefusal(serverName, toolName, turnCtx) {
+  if (serverName !== RECALL_SERVER_NAME) return null;
+  if (!RECALL_MEMORY_TOOLS.has(toolName)) return null;
+  if (!turnCtx || turnCtx.recall !== false) return null;
+  return RECALL_OFF_REFUSAL;
+}
+
+const RECALL_MEMORY_TOOLS = new Set(['search_facts', 'search_past_chats', 'search_chat_summaries', 'search_folder_docs']);
+
+const RECALL_OFF_REFUSAL =
+  "This persona works without access to the user's memory, so the recall search tools are off for this turn. " +
+  'Do not retry them. Judge the material in front of you on its own terms; if something essential is missing, ' +
+  'say so in your reply and ask for it.';
+
 /** Register one MCP tool as a native pi tool (used only for the eager recall server). */
-function registerNativeMcpTool(pi, name, spec, client, tool, protectedRoots) {
+function registerNativeMcpTool(pi, name, spec, client, tool, protectedRoots, turnContext) {
   const toolName = spec.trusted ? sanitizeToolName(tool.name) : sanitizeToolName(`${name}_${tool.name}`);
   pi.registerTool({
     name: toolName,
@@ -1213,6 +1236,8 @@ function registerNativeMcpTool(pi, name, spec, client, tool, protectedRoots) {
     description: tool.description || `MCP tool "${tool.name}" from ${name}`,
     parameters: tool.inputSchema || { type: 'object', properties: {} },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const refusal = recallToolRefusal(name, tool.name, turnContext ? turnContext() : null);
+      if (refusal) return errText(refusal);
       if (!spec.trusted && ctx && ctx.ui && typeof ctx.ui.confirm === 'function') {
         const ok = await ctx.ui.confirm('Allow MCP tool', `Run ${name} → ${tool.name}?`);
         if (!ok) return { content: [{ type: 'text', text: 'Denied by user.' }], details: {} };
@@ -1673,9 +1698,20 @@ export default async function stemMcpBridge(pi) {
   const fsRoots = makeFsRootsGate(join(dirname(cfgPath), 'protected-roots.json'));
   const protectedRoots = () => fsRoots().roots;
 
+  // Per-turn context gate (what kind of turn is running on THIS worker, and
+  // whether it may reach the user's memory). Read from this process's own gate
+  // directory, like the search/tier gates further down. Made here because the
+  // recall tools registered next consult it; the instructions and harness
+  // tools below share the one reader.
+  const turnContextGate = makeTurnContextGate(
+    join(process.env[ENV_GATE_DIR] || dirname(cfgPath), TURN_CONTEXT_GATE_FILE)
+  );
+
   // Register tools on THIS session's pi (cheap, no network). Recall stays eager
   // (native tools, used every turn); everything else is behind the router.
-  for (const r of recall) for (const tool of r.tools) registerNativeMcpTool(pi, r.name, r.spec, r.client, tool, protectedRoots);
+  for (const r of recall) {
+    for (const tool of r.tools) registerNativeMcpTool(pi, r.name, r.spec, r.client, tool, protectedRoots, turnContextGate);
+  }
 
   // Register the router meta-tools over the connected servers. `clients` fills in
   // live as background connects land, so their tools become invokable without
@@ -1690,9 +1726,6 @@ export default async function stemMcpBridge(pi) {
   // writes settings.json — the extension never touches it. Applies on the next turn.
   // The turn-context gate tells it when a card would sit unanswered (a mail
   // delivery, a scheduled run) so it can say "propose it in your reply" instead.
-  const turnContextGate = makeTurnContextGate(
-    join(process.env[ENV_GATE_DIR] || dirname(cfgPath), TURN_CONTEXT_GATE_FILE)
-  );
   registerInstructionsTool(pi, turnContextGate);
 
   // Scheduled tasks: let the assistant schedule a prompt to re-run autonomously, and
@@ -1891,14 +1924,21 @@ const TURN_CONTEXT_GATE_FILE = 'turn-context.json';
  * `coding` is whether coding_agent may run this turn (false only for a mail
  * delivery whose persona has no coding pin); absent — an older main — it reads
  * as allowed, because the harness bridge in main enforces it regardless.
+ * `recall` is whether the stem-recall search tools may answer (false for a
+ * recall-off persona); absent it reads as allowed, the pre-gate behaviour.
  */
-function makeTurnContextGate(path) {
+export function makeTurnContextGate(path) {
   return () => {
     try {
       const parsed = JSON.parse(readFileSync(path, 'utf8'));
-      return { mail: parsed.mail === true, scheduled: parsed.scheduled === true, coding: parsed.coding !== false };
+      return {
+        mail: parsed.mail === true,
+        scheduled: parsed.scheduled === true,
+        coding: parsed.coding !== false,
+        recall: parsed.recall !== false
+      };
     } catch {
-      return { mail: false, scheduled: false, coding: true };
+      return { mail: false, scheduled: false, coding: true, recall: true };
     }
   };
 }

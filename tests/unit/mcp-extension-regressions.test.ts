@@ -10,14 +10,16 @@ import stemMcpBridge, {
   isInside,
   makeFsRootsGate,
   makeProtectedRootsGate,
+  makeTurnContextGate,
   McpHttpClient,
   MCP_HTTP_REQUEST_TIMEOUT_MS,
   MCP_RESULT_BUDGET,
   mcpConnectionsSettledForTests,
+  recallToolRefusal,
   resetMcpConnectionCacheForTests,
   withServiceTier
 } from '../../src/server/pi/stem-mcp-extension.mjs';
-import { mcpServerAuthIdentity } from '../../src/server/pi/mcp-config';
+import { mcpServerAuthIdentity, writeTurnContextGate } from '../../src/server/pi/mcp-config';
 
 const cleanup: string[] = [];
 
@@ -468,6 +470,47 @@ describe('McpHttpClient auth healing', () => {
     const result = (await client.rpc('tools/list', {})) as { healed?: boolean };
     expect(sent).toEqual(['Bearer stale-access', 'Bearer relogin-access']);
     expect(result.healed).toBe(true);
+  });
+});
+
+describe('recall search tools in a recall-off turn', () => {
+  // The persona `recall` flag withholds the injected recall block, but the
+  // stem-recall server's search tools were still registered for every turn: a
+  // persona denied the block could call search_facts and get the same material
+  // back. The turn-context gate now carries `recall`, and the bridge refuses
+  // those tools when it is false.
+  const cleanup: string[] = [];
+  afterEach(async () => {
+    for (const p of cleanup.splice(0)) await rm(p, { recursive: true, force: true });
+  });
+
+  it('refuses the memory searches, not the guide, and only for the recall server', () => {
+    const off = { mail: true, scheduled: false, coding: false, recall: false };
+    const on = { ...off, recall: true };
+    for (const tool of ['search_facts', 'search_past_chats', 'search_chat_summaries', 'search_folder_docs']) {
+      expect(recallToolRefusal('stem-recall', tool, off)).toMatch(/without access to the user's memory/);
+      expect(recallToolRefusal('stem-recall', tool, on)).toBeNull();
+    }
+    expect(recallToolRefusal('stem-recall', 'read_stem_guide', off)).toBeNull();
+    // Another server's tool that happens to share a name is the user's own integration.
+    expect(recallToolRefusal('notion', 'search_facts', off)).toBeNull();
+    // No gate reading at all (older main) → allowed, the pre-gate behaviour.
+    expect(recallToolRefusal('stem-recall', 'search_facts', null)).toBeNull();
+  });
+
+  it('reads recall from the gate main writes, and defaults to allowed when the field is missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stem-recall-gate-'));
+    cleanup.push(root);
+    const gate = makeTurnContextGate(join(root, 'turn-context.json'));
+    // No file yet: a live chat with recall.
+    expect(gate()).toEqual({ mail: false, scheduled: false, coding: true, recall: true });
+    // What main writes for a Critic delivery.
+    await writeTurnContextGate({ mail: true, scheduled: false, coding: false, recall: false }, root);
+    expect(gate().recall).toBe(false);
+    expect(recallToolRefusal('stem-recall', 'search_facts', gate())).not.toBeNull();
+    // An older main's file, written before the field existed.
+    await writeFile(join(root, 'turn-context.json'), JSON.stringify({ mail: false, scheduled: false, coding: true }));
+    expect(gate().recall).toBe(true);
   });
 });
 

@@ -344,7 +344,7 @@ export function piTurnContextPath(gateDir?: string): string {
 }
 
 export async function writeTurnContextGate(
-  ctx: { mail: boolean; scheduled: boolean; coding: boolean },
+  ctx: { mail: boolean; scheduled: boolean; coding: boolean; recall: boolean },
   gateDir?: string
 ): Promise<void> {
   await mkdir(gateDir ?? piHome(), { recursive: true });
@@ -353,7 +353,12 @@ export async function writeTurnContextGate(
     // `coding`: whether coding_agent may run this turn — false only for a mail
     // delivery whose persona has no harness pin (code personas only). The tool
     // reads it to refuse up front; the harness bridge enforces it regardless.
-    JSON.stringify({ mail: ctx.mail, scheduled: ctx.scheduled, coding: ctx.coding }, null, 2),
+    // `recall`: whether the stem-recall search tools may answer this turn —
+    // false for a persona whose `recall` flag is off (Critic). The prompt
+    // assembler already withholds the injected recall block for such a turn;
+    // without this gate the model could simply call search_facts and get the
+    // same material back, so the bridge refuses those tools too.
+    JSON.stringify({ mail: ctx.mail, scheduled: ctx.scheduled, coding: ctx.coding, recall: ctx.recall }, null, 2),
     'utf8'
   );
 }

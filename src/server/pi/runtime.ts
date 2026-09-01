@@ -1328,7 +1328,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             // coding_agent in a mail delivery belongs to code personas only —
             // the tool reads this to refuse up front instead of wasting a
             // round-trip on the bridge's refusal (which stays the boundary).
-            coding: turn.isMail !== true || !!turn.personaHarness
+            coding: turn.isMail !== true || !!turn.personaHarness,
+            // Mirrors buildMessage's recall gate: a recall-off persona gets
+            // neither the injected block nor the search tools that would
+            // reproduce it on demand.
+            recall: input.persona?.recall !== false
           },
           w.gateDir
         ).catch(
