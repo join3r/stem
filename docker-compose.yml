@@ -3,10 +3,12 @@
 #   docker compose build
 #   docker compose up -d
 #
-# Everything variable is in `.env` beside this file — see deploy/env.example, and
-# docs/running-on-a-server.md for the whole move. Nothing in here is a secret:
-# the data key's passphrase appears only as the PATH of a file (see `secrets` at
-# the foot), which is the whole point of a Compose secret.
+# Everything variable is in `.env` beside this file — see deploy/env.example.
+# Public hostname: docs/running-on-a-server.md. LAN / Tailscale (HTTP Caddy,
+# Serve for HTTPS): docs/running-on-tailscale.md and
+# deploy/docker-compose.private.yml. Nothing in here is a secret: the data
+# key's passphrase appears only as the PATH of a file (see `secrets` at the
+# foot), which is the whole point of a Compose secret.
 
 name: stem
 
@@ -30,7 +32,12 @@ services:
       # Host header. Without it every proxied request is refused by the
       # DNS-rebinding check — on a socket there is no port of ours a loopback
       # Host could name, so this list is the whole allowlist.
-      STEM_TRUSTED_HOSTS: ${STEM_HOSTNAME:?set STEM_HOSTNAME in .env to the name you reach Stem under, e.g. stem.example.com}
+      #
+      # STEM_TRUSTED_HOSTS, if set, is that list (comma-separated). Otherwise
+      # STEM_HOSTNAME is used as a single name. A LAN + Tailscale deployment
+      # names both the MagicDNS host and the LAN IP — see
+      # docs/running-on-tailscale.md and deploy/docker-compose.private.yml.
+      STEM_TRUSTED_HOSTS: ${STEM_TRUSTED_HOSTS:-${STEM_HOSTNAME:?set STEM_HOSTNAME in .env to the name you reach Stem under, e.g. stem.example.com}}
       # Node's own heap ceiling. Recall's embedding worker is a separate process;
       # this is the main one, which holds the chat store and the SSE ring.
       NODE_OPTIONS: ${STEM_NODE_OPTIONS:---max-old-space-size=1024}
@@ -168,8 +175,10 @@ services:
     environment:
       # A bare hostname makes Caddy get and renew a certificate by itself. Port
       # 80 must be reachable from the internet for that, which is why it is
-      # published above even though nothing is served on it.
-      STEM_SITE_ADDRESS: ${STEM_HOSTNAME:?set STEM_HOSTNAME in .env}
+      # published above even though nothing is served on it. Set
+      # STEM_SITE_ADDRESS=http:// (the private overlay) to turn automatic TLS
+      # off when Tailscale Serve is the thing that gets the certificate.
+      STEM_SITE_ADDRESS: ${STEM_SITE_ADDRESS:-${STEM_HOSTNAME:?set STEM_HOSTNAME in .env}}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - stem-socket:/run/stem

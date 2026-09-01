@@ -25,7 +25,8 @@ it, everything else still arrives, but every connected tool has to be signed in 
 
 If Stem is pointed at a server somewhere else, this pane says so and offers nothing to
 export — your chats are over there, not here. Back that server up where it runs (see
-below).
+below, and [Running on a server](../running-on-a-server.md) or
+[Running on a LAN or Tailscale](../running-on-tailscale.md)).
 
 ## What travels, and what does not
 

@@ -1,0 +1,21 @@
+# Stem on a LAN or a tailnet: Caddy stays HTTP, Tailscale Serve (or nothing)
+# is the TLS front door. NOT for a hostname on the public internet.
+#
+#   COMPOSE_FILE=docker-compose.yml:deploy/docker-compose.private.yml
+#
+# in `.env`, then the ordinary `docker compose up -d`. Same images, same socket,
+# same bind mount — only the two things a machine with no public DNS cannot have
+# are changed: Caddy does not call Let's Encrypt, and port 443 is not published
+# (Tailscale Serve binds 443 on the tailnet itself).
+#
+# See docs/running-on-tailscale.md.
+services:
+  caddy:
+    environment:
+      # Catch-all on port 80. Stem's Host allowlist (STEM_TRUSTED_HOSTS) is still
+      # the thing that refuses a name nobody declared — Caddy just stops being
+      # picky first.
+      STEM_SITE_ADDRESS: 'http://'
+    # !override, not an addition: compose concatenates list entries.
+    ports: !override
+      - '80:80'
