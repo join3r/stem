@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MessageSquare, Folder, FolderInput } from 'lucide-react';
+import { Mail, MessageSquare, Folder, FolderInput } from 'lucide-react';
 
 // Full-window drag-to-place overlay. When the user drags a file anywhere onto the
 // Stem window, the window dims and splits into two destinations:
@@ -13,11 +13,14 @@ import { MessageSquare, Folder, FolderInput } from 'lucide-react';
 const ROOT = '__root__';
 
 interface DropOverlayProps {
-  /** Route an overlay drop on the left zone into the active chat's composer. */
+  /** Route an overlay drop on the left zone into the centre pane's draft —
+   * the chat composer, or the open mail view's attachment draft. */
   onDropToChat: (files: File[]) => void;
+  /** What the centre pane holds, so the left zone names (and reaches) it. */
+  target: 'chat' | 'mail';
 }
 
-export function DropOverlay({ onDropToChat }: DropOverlayProps) {
+export function DropOverlay({ onDropToChat, target }: DropOverlayProps) {
   const [show, setShow] = useState(false);
   const [dirs, setDirs] = useState<string[]>([]);
   const [active, setActive] = useState<string | null>(null);
@@ -121,11 +124,11 @@ export function DropOverlay({ onDropToChat }: DropOverlayProps) {
       <div className="drop-zones">
         <div className={`drop-zone chat${active === 'chat' ? ' active' : ''}`}>
           <div className="dz-glyph">
-            <MessageSquare size={36} />
+            {target === 'mail' ? <Mail size={36} /> : <MessageSquare size={36} />}
           </div>
-          <span className="dz-eyebrow">This chat</span>
-          <h3>Add to this conversation</h3>
-          <p>Stem reads it here, just for now.</p>
+          <span className="dz-eyebrow">{target === 'mail' ? 'This mail' : 'This chat'}</span>
+          <h3>{target === 'mail' ? 'Attach to this mail' : 'Add to this conversation'}</h3>
+          <p>{target === 'mail' ? 'Goes out with the draft you’re writing.' : 'Stem reads it here, just for now.'}</p>
         </div>
 
         <div className="drop-divider" />

@@ -40,7 +40,7 @@ import {
 } from './chats/return-chat';
 import { SnoozeMenu } from './chats/SnoozeMenu';
 import { hasMailWaiting, useMail } from './mail/useMail';
-import { MailComposeView, MailConversationView } from './mail/MailView';
+import { MailComposeView, MailConversationView, type MailViewHandle } from './mail/MailView';
 import { ActivityIndicator } from './ui/ActivityIndicator';
 import { TaskAlertModal } from './TaskAlertModal';
 import { ReleaseNotesModal } from './ReleaseNotesModal';
@@ -178,7 +178,15 @@ export default function App() {
   // Imperative handle to the active ChatView so the drop overlay can push files
   // ("Add to this conversation") into its composer.
   const chatViewRef = useRef<ChatViewHandle>(null);
-  const onDropToChat = useCallback((files: File[]) => chatViewRef.current?.addAttachments(files), []);
+  // Same job for an open mail view (reply box or compose form). When mail holds
+  // the centre pane the ChatView is mounted but hidden — a drop routed there
+  // would vanish into an invisible composer, so route by what the user sees.
+  const mailPaneRef = useRef<MailViewHandle>(null);
+  const mailPaneShowingRef = useRef(false);
+  const onDropToChat = useCallback((files: File[]) => {
+    if (mailPaneShowingRef.current) mailPaneRef.current?.addAttachments(files);
+    else chatViewRef.current?.addAttachments(files);
+  }, []);
   // Bumped by `newConversation`; the effect beside it focuses the composer.
   const [focusComposerSeq, setFocusComposerSeq] = useState(0);
 
@@ -261,6 +269,12 @@ export default function App() {
   // and the unread badge all read from here.
   const mailApi = useMail(!!status?.ok);
   const { mail } = mailApi;
+  // What the centre pane actually shows — the same condition that hides the
+  // chatview-host below, shared so drop routing can't disagree with the DOM.
+  const mailPaneShowing =
+    mailView?.kind === 'compose' ||
+    (mailView?.kind === 'conversation' && mail.conversations.some((c) => c.id === mailView.id));
+  mailPaneShowingRef.current = mailPaneShowing;
 
   // Unread mail conversations waiting in the Inbox — the count badge on the
   // Chats rail tab. Only the Inbox placement counts: an archived or snoozed
@@ -1638,6 +1652,7 @@ export default function App() {
         <main className="conversation">
           {mailView?.kind === 'compose' && (
             <MailComposeView
+              ref={mailPaneRef}
               personas={mailApi.personas}
               onCompose={onComposeSend}
               onCancel={() => setMailView(null)}
@@ -1650,6 +1665,7 @@ export default function App() {
               if (!conversation) return null;
               return (
                 <MailConversationView
+                  ref={mailPaneRef}
                   conversation={conversation}
                   items={mail.items}
                   personas={mailApi.personas}
@@ -1665,14 +1681,7 @@ export default function App() {
             })()}
           {/* Kept mounted (hidden) under an open mail view, so the composer's
               draft and the streaming slice survive a trip through the Inbox. */}
-          <div
-            className="chatview-host"
-            hidden={
-              mailView?.kind === 'compose' ||
-              (mailView?.kind === 'conversation' &&
-                mail.conversations.some((c) => c.id === mailView.id))
-            }
-          >
+          <div className="chatview-host" hidden={mailPaneShowing}>
           <ChatView
             key={activeKey}
           ref={chatViewRef}
@@ -1757,7 +1766,7 @@ export default function App() {
           />
         </aside>
       )}
-      <DropOverlay onDropToChat={onDropToChat} />
+      <DropOverlay onDropToChat={onDropToChat} target={mailPaneShowing ? 'mail' : 'chat'} />
       <McpApprovalCard />
       <InstructionsApprovalCard />
       <SkillApprovalCard />

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import { File, Paperclip, Plus, Send, Square, X } from 'lucide-react';
 import type {
   MailComposeInput,
@@ -81,7 +89,12 @@ function useAttachmentDraft() {
 
   const clear = useCallback(() => setAttachments([]), []);
 
-  return { attachments, pickFiles, onPaste, onDrop, remove, clear };
+  return { attachments, addFiles, pickFiles, onPaste, onDrop, remove, clear };
+}
+
+/** Lets App route DropOverlay drops into the open mail view's draft. */
+export interface MailViewHandle {
+  addAttachments(files: globalThis.File[]): void;
 }
 
 function AttachmentChips({
@@ -116,14 +129,7 @@ function formatAt(at: number, now: number): string {
   return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`;
 }
 
-export function MailConversationView({
-  conversation,
-  items,
-  personas,
-  onReply,
-  onAddParticipant,
-  onStop
-}: {
+export const MailConversationView = forwardRef<MailViewHandle, {
   conversation: MailConversation;
   items: MailItem[];
   personas: Persona[];
@@ -132,9 +138,15 @@ export function MailConversationView({
   onAddParticipant: (personaId: string) => Promise<void>;
   /** Stop the working personas: queued deliveries dropped, running turns interrupted. */
   onStop: () => void;
-}) {
+}>(function MailConversationView(
+  { conversation, items, personas, onReply, onAddParticipant, onStop },
+  ref
+) {
   const [draft, setDraft] = useState('');
   const files = useAttachmentDraft();
+  useImperativeHandle(ref, () => ({
+    addAttachments: (dropped) => void files.addFiles(dropped)
+  }));
   const [addingTo, setAddingTo] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   // Expanded exchange groups, keyed by their first item's id (stable across refreshes).
@@ -314,18 +326,14 @@ export function MailConversationView({
       </div>
     </div>
   );
-}
+});
 
-export function MailComposeView({
-  personas,
-  onCompose,
-  onCancel
-}: {
+export const MailComposeView = forwardRef<MailViewHandle, {
   personas: Persona[];
   /** Resolves once sent; rejection shows its message inline. */
   onCompose: (input: MailComposeInput) => Promise<void>;
   onCancel: () => void;
-}) {
+}>(function MailComposeView({ personas, onCompose, onCancel }, ref) {
   // The To: list in SELECTION ORDER — the first-picked persona is the driver
   // (it receives the mail and owns returning to the user); the rest are
   // participants the driver can consult with send_mail.
@@ -333,6 +341,9 @@ export function MailComposeView({
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const files = useAttachmentDraft();
+  useImperativeHandle(ref, () => ({
+    addAttachments: (dropped) => void files.addFiles(dropped)
+  }));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -434,4 +445,4 @@ export function MailComposeView({
       </div>
     </div>
   );
-}
+});
