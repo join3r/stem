@@ -67,9 +67,9 @@ function ManagePanelImpl({
   // A down retrieval model degrades recall silently (selection falls back to
   // lexical/recency), so it gets the same red dot a dead provider does.
   const retrievalBroken = useRetrievalHealth().broken;
-  // Personas working on mail in the background: the desktop's HUD pill stays
-  // quiet for hidden mail turns, so this pulsing dot is the one "something is
-  // happening" signal until the reply lands (and becomes the unread badge).
+  // Personas working on mail in the background: surfaced only in the hover tip.
+  // The toolbar's pulsing Activity icon already says "something is happening" —
+  // a second blinking dot here was noise, not signal (removed by request).
   const mailWorking = chatProps.mail.conversations.some((c) => c.status === 'working');
   return (
     <div className="manage">
@@ -103,8 +103,6 @@ function ManagePanelImpl({
                 </span>
                 {id === 'settings' && authDeadProvider && <span className="tab-alert-dot" />}
                 {id === 'memory' && retrievalBroken && <span className="tab-alert-dot" />}
-                {/* The unread badge wins the corner once a reply lands. */}
-                {id === 'chats' && mailWorking && unread === 0 && <span className="tab-working-dot" />}
                 {/* Capped at 99+ so a long-ignored Inbox can't widen the rail. */}
                 {unread > 0 && (
                   <span className="tab-count-badge" aria-hidden="true">

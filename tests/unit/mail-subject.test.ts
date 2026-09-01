@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import {
   cleanMailSubject,
   deriveMailSubject,
+  mailPreviewText,
+  MAX_MAIL_PREVIEW,
   MAX_MAIL_SUBJECT,
   NO_SUBJECT,
   resolveMailSubject
@@ -127,5 +129,36 @@ describe('resolveMailSubject', () => {
     expect(resolveMailSubject('', '')).toBe(NO_SUBJECT);
     // Non-string subjects (an older or hostile client) are treated as absent.
     expect(resolveMailSubject(42, '')).toBe(NO_SUBJECT);
+  });
+});
+
+describe('mailPreviewText', () => {
+  it('strips Markdown across lines and joins them into one run of text', () => {
+    const body = [
+      'Published to **TestFlight**.',
+      '',
+      '- App: **Stem by Awantech** (`Stem` was unavailable)',
+      '- Bundle ID: `sk.awantech.stem`'
+    ].join('\n');
+    expect(mailPreviewText(body)).toBe(
+      'Published to TestFlight. App: Stem by Awantech (Stem was unavailable) Bundle ID: sk.awantech.stem'
+    );
+  });
+
+  it('drops heading markers and envelope fences like a subject does', () => {
+    expect(mailPreviewText('<!--stem:mail from=user-->\nscaffolding\n<!--/stem:mail-->\n## Confirmed subscriptions\ntext')).toBe(
+      'Confirmed subscriptions text'
+    );
+  });
+
+  it('caps at MAX_MAIL_PREVIEW without splitting a surrogate pair', () => {
+    const preview = mailPreviewText(`${'a'.repeat(MAX_MAIL_PREVIEW - 2)}😀 trailing`);
+    expect(preview.length).toBeLessThanOrEqual(MAX_MAIL_PREVIEW);
+    expect(/[\uD800-\uDFFF]/u.test(preview)).toBe(false);
+  });
+
+  it('answers "" for a body with nothing readable', () => {
+    expect(mailPreviewText('')).toBe('');
+    expect(mailPreviewText('```\n<!--x-->')).toBe('');
   });
 });

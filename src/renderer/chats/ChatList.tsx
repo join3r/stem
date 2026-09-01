@@ -576,13 +576,6 @@ export function ChatList(props: ChatListProps) {
             {t.id === 'inbox' && props.mailUnreadCount > 0 && (
               <span className="seg-count">{props.mailUnreadCount}</span>
             )}
-            {t.id === 'inbox' && props.mail.conversations.some((c) => c.status === 'working') && (
-              <span
-                className="chat-status running seg-working"
-                title="A persona is working on your mail"
-                aria-label="A persona is working on your mail"
-              />
-            )}
           </button>
         ))}
       </div>

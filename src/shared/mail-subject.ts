@@ -15,6 +15,8 @@ export const MAX_MAIL_SUBJECT = 120;
 const MAX_DERIVED_SUBJECT = 60;
 /** The last-resort subject for a conversation nothing can name. */
 export const NO_SUBJECT = '(no subject)';
+/** How much of a mail body the list row's excerpt shows. */
+export const MAX_MAIL_PREVIEW = 200;
 
 function capped(text: string, max: number): string {
   if (text.length <= max) return text;
@@ -89,6 +91,28 @@ export function deriveMailSubject(body: string): string {
     if (line) return capped(line, MAX_DERIVED_SUBJECT);
   }
   return '';
+}
+
+/**
+ * A mail body as a list row's excerpt: the same hygiene a subject gets — fences
+ * and Markdown stripped, whitespace flattened — applied line by line so heading
+ * and bullet markers at line starts go too, then joined into one run of text.
+ * Persona mail is written in Markdown, and a preview that prints `**` and `##`
+ * literally reads as gibberish under a clean subject.
+ */
+export function mailPreviewText(body: string): string {
+  const text = stripStemFences(body ?? '', '\n');
+  const lines: string[] = [];
+  let length = 0;
+  for (const rawLine of text.split('\n')) {
+    const line = stripMarkup(rawLine);
+    if (!line) continue;
+    lines.push(line);
+    length += line.length + 1;
+    // Enough stripped text to fill the cap — the rest of the body is not read.
+    if (length > MAX_MAIL_PREVIEW) break;
+  }
+  return capped(lines.join(' '), MAX_MAIL_PREVIEW);
 }
 
 /**

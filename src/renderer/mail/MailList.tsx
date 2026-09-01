@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { MailConversation, MailListResult, Persona } from '../../shared/types';
 import { formatWake, isUnread, nextWakeAt, placement, type InboxSubject } from '../../shared/inbox';
+import { mailPreviewText } from '../../shared/mail-subject';
 import { SnoozeMenu } from '../chats/SnoozeMenu';
 import { hasMailWaiting, personaName } from './useMail';
 
@@ -114,7 +115,7 @@ export function MailList(props: MailListProps) {
       if (item.to.includes('user') && (!best || item.at > best.at)) best = item;
       if (item.from === 'user' && (!bestUser || item.at > bestUser.at)) bestUser = item;
     }
-    return (best ?? bestUser)?.body.slice(0, 200) ?? '';
+    return mailPreviewText((best ?? bestUser)?.body ?? '');
   };
 
   const fromLabel = (c: MailConversation): string =>
