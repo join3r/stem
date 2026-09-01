@@ -269,6 +269,7 @@ async function onAuthenticated(): Promise<RuntimeStatus> {
     degrade('auth', 'finished sign-in without a backend that has the new credential', err);
   });
   void scheduler?.start();
+  recoverDroppedMail();
   return runtime!.status();
 }
 
@@ -280,6 +281,26 @@ async function onAuthenticated(): Promise<RuntimeStatus> {
  * never kill a reply in progress. The next spawn picks the file up regardless, so
  * a skipped restart costs correctness nothing beyond the current process.
  */
+/**
+ * Boot-time mail redelivery (see MailRouter.recoverDroppedDeliveries), run at
+ * most once per process at the first signed-in moment — the same moments the
+ * scheduler starts, because a redelivery is a turn and needs a working
+ * backend just like a scheduled run. Once only: the second signed-in moment
+ * (a mid-session login) is not a restart, and the boot pass's own deliveries
+ * may still be in flight.
+ */
+let mailRecoveryDone = false;
+function recoverDroppedMail(): void {
+  if (mailRecoveryDone || !mailRouter) return;
+  mailRecoveryDone = true;
+  mailRouter.recoverDroppedDeliveries().then(
+    (n) => {
+      if (n) log('mail', 'redelivered mail dropped by the last shutdown', { conversations: n });
+    },
+    (err) => degrade('mail', 'left restart-dropped mail undelivered', err)
+  );
+}
+
 const WEB_SEARCH_RESTART_DEBOUNCE_MS = 2_000;
 let webSearchRestartTimer: NodeJS.Timeout | null = null;
 
@@ -306,7 +327,10 @@ function registerIpc(): void {
     const status = await runtime!.login();
     // Signing in mid-session: start the scheduler now (idempotent) so tasks load and
     // catch-up runs without waiting for a restart.
-    if (status.ok) void scheduler?.start();
+    if (status.ok) {
+      void scheduler?.start();
+      recoverDroppedMail();
+    }
     return status;
   });
 
@@ -1009,6 +1033,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
           // working backend. This also runs any tasks missed while Stem was closed
           // (catch-up), exactly once each.
           void scheduler?.start();
+          recoverDroppedMail();
           return runtime!.prewarm();
         })
         .catch((err) => {

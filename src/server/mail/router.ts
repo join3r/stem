@@ -277,6 +277,40 @@ export class MailRouter {
   }
 
   /**
+   * Boot-time redelivery. A server restart (deploy, crash) takes any delivery
+   * in flight down with the process, and a process death writes no failure
+   * mail — before this pass, the user's send just sat unanswered forever with
+   * nothing in the Inbox to say so. On startup, redeliver the latest user mail
+   * of every conversation where the user spoke last and nothing has addressed
+   * them since (userSentAt > userUpdatedAt): the redelivery resumes the
+   * persona's existing hidden thread, so whatever the killed turn already did
+   * is context, not loss. Skips aborted conversations (Stop was the user's
+   * answer) and any conversation this router already has deliveries for (a
+   * user reply can race the boot pass). Attachment bytes never persist, so a
+   * redelivered mail rides without them — the placeholder body for an
+   * attachment-only mail says exactly that.
+   */
+  async recoverDroppedDeliveries(): Promise<number> {
+    const { conversations, items } = await readMail();
+    let recovered = 0;
+    for (const conversation of conversations) {
+      if (conversation.status === 'aborted') continue;
+      if (conversation.userSentAt <= conversation.userUpdatedAt) continue;
+      if (this.pending.has(conversation.id)) continue;
+      const driver = conversation.participants[0];
+      if (!driver) continue;
+      const mail = items.filter((i) => i.conversationId === conversation.id && i.from === 'user').at(-1);
+      if (!mail) continue;
+      const body =
+        mail.body.trim() ||
+        '(This mail carried only attachments; a server restart lost their contents before delivery. Ask the user to resend them.)';
+      this.enqueueDelivery(conversation.id, driver, body, 'user', mail.at, mail.id);
+      recovered++;
+    }
+    return recovered;
+  }
+
+  /**
    * The user pulling a persona into an existing conversation (the header's
    * add control — the human counterpart of add_persona, so no capability
    * gate). The persona joins the participant set and becomes reachable by

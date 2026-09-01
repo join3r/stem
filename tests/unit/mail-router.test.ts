@@ -10,7 +10,13 @@ import { dirname } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetActivity, snapshot } from '../../src/server/activity';
 import { MailRouter } from '../../src/server/mail/router';
-import { readMail } from '../../src/server/workspace/mail';
+import {
+  appendMailItem,
+  createConversation,
+  readMail,
+  setConversationSession,
+  setConversationStatus
+} from '../../src/server/workspace/mail';
 import { listPersonas, savePersona, savePersonaFor } from '../../src/server/workspace/personas';
 import { listPersonaNotes, savePersonaNote } from '../../src/server/workspace/persona-memory';
 import { updateMailSettings } from '../../src/server/workspace/settings';
@@ -1937,5 +1943,44 @@ describe('repo lock', () => {
     });
     // coder-b only ever started AFTER coder-a's turn settled.
     expect(fake.starts.map((s) => s.persona?.id).indexOf('coder-b')).toBe(2);
+  });
+});
+
+describe('boot-time redelivery', () => {
+  it('redelivers a user mail a restart dropped, resuming the persona thread', async () => {
+    // The store exactly as a killed process leaves it: the user's item
+    // appended, no reply, no failure notice, the hidden thread recorded —
+    // the delivery died with the process, not as a run error.
+    const conversation = await createConversation('dropped', ['verifier']);
+    await appendMailItem({
+      conversationId: conversation.id,
+      from: 'user',
+      to: ['verifier'],
+      body: 'still there?'
+    });
+    await setConversationSession(conversation.id, 'verifier', 'thread-from-before');
+    const fake = fakeBackend();
+    fake.script = { mode: 'ok', reply: 'recovered answer' };
+    const router = makeRouter(fake);
+    expect(await router.recoverDroppedDeliveries()).toBe(1);
+    const mail = await settledMail();
+    expect(mail.items[1]).toMatchObject({ from: 'verifier', to: ['user'], body: 'recovered answer' });
+    // The redelivery resumed the killed turn's thread — its work is context.
+    expect(fake.starts[0].threadId).toBe('thread-from-before');
+    // Answered now: the next pass (a later sign-in) has nothing to redeliver.
+    expect(await router.recoverDroppedDeliveries()).toBe(0);
+  });
+
+  it('leaves answered and user-stopped conversations alone', async () => {
+    const answered = await createConversation('answered', ['verifier']);
+    await appendMailItem({ conversationId: answered.id, from: 'user', to: ['verifier'], body: 'q' });
+    await appendMailItem({ conversationId: answered.id, from: 'verifier', to: ['user'], body: 'a' });
+    const stopped = await createConversation('stopped', ['verifier']);
+    await appendMailItem({ conversationId: stopped.id, from: 'user', to: ['verifier'], body: 'q' });
+    await setConversationStatus(stopped.id, 'aborted');
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    expect(await router.recoverDroppedDeliveries()).toBe(0);
+    expect(fake.starts).toHaveLength(0);
   });
 });
