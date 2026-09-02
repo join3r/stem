@@ -104,6 +104,24 @@ describe('conversations and items', () => {
     expect(row.userUpdatedAt).toBeGreaterThan(row.userSentAt);
   });
 
+  it('stamps every appended item and the list with the system version; a mangled stamp is dropped on read', async () => {
+    const c = await createConversation('ver', ['normal']);
+    await appendMailItem({ conversationId: c.id, from: 'user', to: ['normal'], body: 'x' });
+    await appendMailItem({ conversationId: c.id, from: 'normal', to: ['user'], body: 'y' });
+    const list = await readMail();
+    // Under vitest nothing inlines a build-time value, so every hash reads 'unbuilt' —
+    // the shape is what matters: three hashes, no build, on both items and the list.
+    const unbuilt = { persona: 'unbuilt', skills: 'unbuilt', memory: 'unbuilt' };
+    expect(list.sys).toEqual(unbuilt);
+    expect(list.items.map((i) => i.sys)).toEqual([unbuilt, unbuilt]);
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw.items[0].sys = { persona: 'only' };
+    delete raw.items[1].sys;
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    const { items } = await readMail();
+    expect(items.map((i) => 'sys' in i)).toEqual([false, false]);
+  });
+
   it('backfills userSentAt from the items for stores written before the field', async () => {
     const c = await createConversation('s', ['normal']);
     await appendMailItem({ conversationId: c.id, from: 'user', to: ['normal'], body: 'x' });

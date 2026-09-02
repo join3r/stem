@@ -5,6 +5,8 @@ import type { InboxEntry, InboxState } from '../../shared/inbox';
 import { toMs } from '../../shared/inbox';
 import { cleanMailSubject, deriveMailSubject, NO_SUBJECT, resolveMailSubject } from '../../shared/mail-subject';
 import type { MailConversation, MailItem, MailListResult } from '../../shared/types';
+import { coerceSystemVersion } from '../../shared/sys-version';
+import { systemVersion } from '../sys-version';
 import { degrade } from '../degrade';
 import { mailStorePath } from './paths';
 
@@ -46,6 +48,8 @@ function coerceItem(raw: unknown): MailItem | null {
   };
   if (typeof r.taskId === 'string' && r.taskId) item.taskId = r.taskId;
   if (r.stale === true) item.stale = true;
+  const sys = coerceSystemVersion(r.sys);
+  if (sys) item.sys = sys;
   if (Array.isArray(r.attachments)) {
     const attachments = r.attachments.flatMap((a) => {
       if (!a || typeof a !== 'object') return [];
@@ -240,7 +244,9 @@ async function readFileStore(): Promise<MailFile> {
 }
 
 function asResult(store: MailFile): MailListResult {
-  return { conversations: store.conversations, items: store.items, inbox: store.inbox };
+  // `sys` is the serving process's version, so a client can tell which items
+  // the personas AS THEY ARE NOW produced (shared/sys-version.ts sameSystem).
+  return { conversations: store.conversations, items: store.items, inbox: store.inbox, sys: systemVersion() };
 }
 
 export function readMail(): Promise<MailListResult> {
@@ -347,7 +353,11 @@ export function appendMailItem(
   const { guard, staleIfUserSentAfter, ...fields } = input;
   return update((store) => {
     const conversation = conversationOf(store, fields.conversationId);
-    const item: MailItem = { ...fields, id: randomUUID(), at: fields.at ?? Date.now() };
+    // Every item carries the system version in force when it landed. For a
+    // persona's reply that is the code that wrote it; for the user's mail it is
+    // the code that will answer it. Callers never pass one — the stamp is the
+    // store's, so an old item can only ever be missing it, never mis-stamped.
+    const item: MailItem = { ...fields, id: randomUUID(), at: fields.at ?? Date.now(), sys: systemVersion() };
     if (
       staleIfUserSentAfter !== undefined &&
       item.from !== 'user' &&

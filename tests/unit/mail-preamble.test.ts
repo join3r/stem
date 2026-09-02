@@ -3,7 +3,7 @@
 // apart from the assignment (the mail body proper), inside a fence the replay
 // strip can still remove even when the quoted user text is hostile to it.
 import { describe, expect, it } from 'vitest';
-import { mailPreamble } from '../../src/server/pi/runtime';
+import { mailPreamble } from '../../src/server/mail/preamble';
 
 // Mirrors MAIL_STRIP_RE in src/server/pi/runtime.ts — the replay pass that
 // removes the preamble from the rendered user bubble. Kept in sync by these

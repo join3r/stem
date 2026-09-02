@@ -13,9 +13,11 @@ import type {
   MailConversation,
   MailItem,
   Persona,
-  TurnAttachment
+  TurnAttachment,
+  SystemVersion
 } from '../../shared/types';
 import { MdxView } from '../chat/MdxView';
+import { formatSystemVersion, sameSystem } from '../../shared/sys-version';
 import { groupMailTimeline } from './grouping';
 import { personaName } from './useMail';
 
@@ -138,8 +140,14 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   onAddParticipant: (personaId: string) => Promise<void>;
   /** Stop the working personas: queued deliveries dropped, running turns interrupted. */
   onStop: () => void;
+  /**
+   * The serving system's version (MailListResult.sys). A mail stamped with a
+   * different one was made by older persona / skills / memory code and says so,
+   * so a review of "how the personas behave now" can skip it.
+   */
+  currentSys?: SystemVersion;
 }>(function MailConversationView(
-  { conversation, items, personas, onReply, onAddParticipant, onStop },
+  { conversation, items, personas, onReply, onAddParticipant, onStop, currentSys },
   ref
 ) {
   const [draft, setDraft] = useState('');
@@ -187,7 +195,17 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   const mailCard = (m: MailItem, exchange: boolean) => (
     <article key={m.id} className={`mail-item${m.from === 'user' ? ' from-user' : ''}${exchange ? ' exchange' : ''}`}>
       <div className="mail-item-head">
-        <strong>{m.from === 'user' ? 'You' : personaName(personas, m.from)}</strong>
+        <strong title={m.sys ? `Made by system: ${formatSystemVersion(m.sys)}` : undefined}>
+          {m.from === 'user' ? 'You' : personaName(personas, m.from)}
+        </strong>
+        {m.sys && currentSys && !sameSystem(m.sys, currentSys) && (
+          <span
+            className="mail-item-sys"
+            title={`Made by an older version of the persona system (${formatSystemVersion(m.sys)}); now ${formatSystemVersion(currentSys)}`}
+          >
+            older system
+          </span>
+        )}
         {exchange && <span className="mail-item-to">→ {m.to.map((t) => (t === 'user' ? 'You' : personaName(personas, t))).join(', ')}</span>}
         {m.stale && (
           <span

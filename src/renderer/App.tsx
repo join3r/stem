@@ -1696,6 +1696,7 @@ export default function App() {
                   ref={mailPaneRef}
                   conversation={conversation}
                   items={mail.items}
+                  currentSys={mail.sys}
                   personas={mailApi.personas}
                   onReply={(body, attachments) =>
                     void mailApi.reply(conversation.id, body, attachments)

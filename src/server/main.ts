@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import { host } from './host';
 import { DEFAULT_KEY_FILE, readPassphraseFile } from './host/passphrase-key';
 import { startServer } from './index';
+import { systemVersion } from './sys-version';
+import { formatSystemVersion } from '../shared/sys-version';
 import { readDevices } from './transport/auth';
 import { createPairingCode } from './transport/pairing';
 import { exportState, importState } from './workspace/state-transfer';
@@ -238,6 +240,10 @@ async function main(): Promise<void> {
   // names a socket rather than a URL — `unix:` in front, so nothing that reads
   // this line can mistake a path for something it could dial.
   console.log(`[stem-server] listening on ${handle.endpoint.url ?? `unix:${handle.endpoint.socket}`}`);
+  // The version of the persona / skills / memory programming this process
+  // stamps on every mail and turn — compare with `node scripts/sys-version.mjs`
+  // on a checkout to know whether the server runs the code you are reading.
+  console.log(`[stem-server] system ${formatSystemVersion(systemVersion())}`);
 
   // Nothing can talk to a server with an empty registry, and there is no window
   // here to ask in — so a first boot says how to get in without being asked.

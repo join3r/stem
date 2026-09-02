@@ -3,8 +3,13 @@ import react from '@vitejs/plugin-react';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { computeSystemVersion } from './scripts/sys-version.mjs';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
+// Which version of the persona / skills / memory programming this bundle is —
+// hashed from the source tree now, inlined into the main bundle, read by
+// src/server/sys-version.ts, stamped on every mail item and chat turn.
+const systemVersion = JSON.stringify(computeSystemVersion(rootDir));
 const mainAssets = [
   ['src/server/pi/stem-mcp-extension.mjs', 'dist/main/pi/stem-mcp-extension.mjs'],
   ['src/server/pi/pi-node-shim.mjs', 'dist/main/pi/pi-node-shim.mjs']
@@ -26,6 +31,7 @@ function copyMainRuntimeAssets() {
 export default defineConfig({
   main: {
     plugins: [copyMainRuntimeAssets()],
+    define: { __STEM_SYS_VERSION__: systemVersion },
     build: {
       outDir: 'dist/main',
       rollupOptions: {

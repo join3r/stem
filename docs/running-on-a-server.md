@@ -91,8 +91,13 @@ taken as part of the passphrase.
 ## 3. Build the images
 
 ```
-docker compose build
+STEM_GIT_SHA=$(git rev-parse --short=12 HEAD) docker compose build
 ```
+
+`STEM_GIT_SHA` is optional. It goes into the version Stem stamps on every mail and chat
+turn (which persona / skills / memory code produced it — see `node scripts/sys-version.mjs`),
+so a later debugging pass can tell which turns the current code made. Without it the stamp
+still carries the three code hashes, just not the commit.
 
 This installs Stem's production dependencies **inside** the image, on Linux, which is the
 only way the compiled parts of the memory search (`onnxruntime-node`) are the right build.
@@ -350,7 +355,7 @@ cd /opt/stem
 docker compose run --rm -v /backups:/backup \
   stem node dist/main/server.js export /backup/before-upgrade.tar
 git pull
-docker compose build
+STEM_GIT_SHA=$(git rev-parse --short=12 HEAD) docker compose build
 docker compose up -d
 ```
 

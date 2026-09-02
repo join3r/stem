@@ -24,6 +24,7 @@ import {
   Lock
 } from 'lucide-react';
 import type { ActivityItem, ChatMessage, EscapeAction, ModelSummary, TurnAttachment, TurnTiming } from '../../shared/types';
+import { formatSystemVersion } from '../../shared/sys-version';
 import { ActivityRows, SourcesList } from './ActivityRows';
 import { Composer, type ComposerHandle } from './Composer';
 import { MdxView } from './MdxView';
@@ -451,7 +452,14 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         <div className="message-body">
           <div className="message-who">
             {a.label}
-            {metaText && <span className="message-meta">{metaText}</span>}
+            {metaText && (
+              <span
+                className="message-meta"
+                title={m.meta?.sys ? `Made by system: ${formatSystemVersion(m.meta.sys)}` : undefined}
+              >
+                {metaText}
+              </span>
+            )}
             {m.role === 'assistant' && m.timing && formatTiming(m.timing) && (
               <span className="message-timing" title="total · thinking · tool execution">
                 {formatTiming(m.timing)}

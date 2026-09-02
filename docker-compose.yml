@@ -18,6 +18,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # The commit the image is built from, for the `build` field of the
+        # version stamped on every mail and turn (scripts/sys-version.mjs).
+        # Build with STEM_GIT_SHA=$(git rev-parse --short=12 HEAD) in the
+        # environment (or .env); left empty, the stamp just omits it.
+        STEM_GIT_SHA: ${STEM_GIT_SHA:-}
     image: stem-server:local
     # A VPS is x86_64 unless it says otherwise. On an arm server (Hetzner CAX,
     # Ampere, a Pi) put STEM_PLATFORM=linux/arm64 in .env — and note that

@@ -62,6 +62,13 @@ COPY scripts ./scripts
 # actual files (screenshots stay out via .dockerignore).
 COPY docs ./docs
 COPY RELEASE_NOTES.md ./
+# The bundle stamps every mail and turn with the version of the persona / skills
+# / memory code it runs (scripts/sys-version.mjs): the three hashes come from
+# src/ and need nothing more, but the git commit cannot — there is no .git in
+# this stage. docker-compose.yml passes it in; an empty value simply leaves the
+# `build` field off, the hashes still tell the versions apart.
+ARG STEM_GIT_SHA=
+ENV STEM_GIT_SHA=${STEM_GIT_SHA}
 RUN npx electron-vite build
 
 # ---- stage 2: production dependencies ----------------------------------------

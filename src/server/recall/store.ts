@@ -27,6 +27,7 @@ import type {
   FactStatus,
   MemoryConflict,
   SourceRef,
+  SystemVersion,
   TurnTiming
 } from '../../shared/types';
 
@@ -684,6 +685,21 @@ export class RecallStore {
       );
       CREATE INDEX IF NOT EXISTS idx_turn_activities_thread ON turn_activities(thread_id);
 
+      -- Which version of the persona / skills / memory PROGRAMMING produced each
+      -- turn (shared/types.ts SystemVersion; hashed at build time by
+      -- scripts/sys-version.mjs). Same keying as turn_timings so readThread can
+      -- put it on the assistant bubble's meta. build is the git commit, nullable.
+      CREATE TABLE IF NOT EXISTS turn_system (
+        turn_entry_id TEXT PRIMARY KEY,
+        thread_id     TEXT NOT NULL,
+        persona       TEXT NOT NULL,
+        skills        TEXT NOT NULL,
+        memory        TEXT NOT NULL,
+        build         TEXT,
+        created_at    INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_turn_system_thread ON turn_system(thread_id);
+
       -- The durable facts injected on a thread's most recent turn — surfaced in the
       -- Memory UI so you can see what the model actually "knew about you". Keyed by
       -- thread so reopening an old chat still shows its last injected set. fact_ids is
@@ -1201,6 +1217,44 @@ export class RecallStore {
       .run(rec.turnEntryId, rec.threadId, JSON.stringify(rec.payload), this.nowSeconds());
   };
 
+
+  /** Persist (or replace) the system version that produced a turn. Best-effort; keyed by entry id. */
+  upsertTurnSystem = (rec: { turnEntryId: string; threadId: string; sys: SystemVersion }): void => {
+    const handle = this.open();
+    handle
+      .prepare(
+        `INSERT INTO turn_system (turn_entry_id, thread_id, persona, skills, memory, build, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(turn_entry_id) DO UPDATE SET
+           thread_id = excluded.thread_id,
+           persona = excluded.persona,
+           skills = excluded.skills,
+           memory = excluded.memory,
+           build = excluded.build`
+      )
+      .run(
+        rec.turnEntryId,
+        rec.threadId,
+        rec.sys.persona,
+        rec.sys.skills,
+        rec.sys.memory,
+        rec.sys.build ?? null,
+        this.nowSeconds()
+      );
+  };
+
+  /** Load a thread's per-turn system versions, keyed by final assistant entry id. */
+  getTurnSystemsByThread = (threadId: string): Map<string, SystemVersion> => {
+    const handle = this.open();
+    const rows = handle
+      .prepare(`SELECT turn_entry_id AS entryId, persona, skills, memory, build FROM turn_system WHERE thread_id = ?`)
+      .all(threadId) as Array<{ entryId: string; persona: string; skills: string; memory: string; build: string | null }>;
+    const out = new Map<string, SystemVersion>();
+    for (const r of rows) {
+      out.set(r.entryId, { persona: r.persona, skills: r.skills, memory: r.memory, ...(r.build ? { build: r.build } : {}) });
+    }
+    return out;
+  };
 
   /** Load a thread's persisted turn activities, keyed by final assistant entry id. */
   getTurnActivitiesByThread = (threadId: string): Map<string, TurnActivityPayload> => {

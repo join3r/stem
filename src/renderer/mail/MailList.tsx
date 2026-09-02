@@ -11,9 +11,10 @@ import {
   Send,
   Trash2
 } from 'lucide-react';
-import type { MailConversation, MailListResult, Persona } from '../../shared/types';
+import type { MailConversation, MailItem, MailListResult, Persona } from '../../shared/types';
 import { formatWake, isUnread, nextWakeAt, placement, type InboxSubject } from '../../shared/inbox';
 import { mailPreviewText } from '../../shared/mail-subject';
+import { sameSystem } from '../../shared/sys-version';
 import { SnoozeMenu } from '../chats/SnoozeMenu';
 import { hasMailWaiting, personaName } from './useMail';
 
@@ -122,6 +123,17 @@ export function MailList(props: MailListProps) {
   const fromLabel = (c: MailConversation): string =>
     c.participants.map((p) => personaName(personas, p)).join(', ');
 
+  /** The latest persona reply to the user was made by older persona / skills / memory code than the server runs now. */
+  const olderSystem = (c: MailConversation): boolean => {
+    if (!mail.sys) return false;
+    let latest: MailItem | null = null;
+    for (const item of mail.items) {
+      if (item.conversationId !== c.id || item.from === 'user' || !item.to.includes('user')) continue;
+      if (!latest || item.at > latest.at) latest = item;
+    }
+    return !!latest?.sys && !sameSystem(latest.sys, mail.sys);
+  };
+
   const renderRow = (c: MailConversation, variant: 'inbox' | 'snoozed' | 'archived' | 'sent') => {
     const unread = isUnread(subjectOf(c), mail.inbox);
     const wake = mail.inbox.entries[c.id]?.snoozedUntil;
@@ -157,6 +169,11 @@ export function MailList(props: MailListProps) {
             {fromLabel(c)}
             {c.status === 'awaiting-user' && <em className="mail-needs-you"> · needs you</em>}
             {c.status === 'aborted' && <em className="mail-aborted"> · stopped</em>}
+            {olderSystem(c) && (
+              <em className="mail-older-system" title="The latest reply here was made by an older version of the persona system">
+                {' '}· older system
+              </em>
+            )}
           </span>
           <strong title={c.subject}>
             {c.private && (

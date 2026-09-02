@@ -6,6 +6,22 @@ export type { InboxEntry, InboxState } from './inbox';
 
 export type Role = 'user' | 'assistant' | 'system';
 
+/**
+ * Which version of the persona / skills / memory PROGRAMMING produced a turn or
+ * a mail — the code, not the user's data. Each field is a 12-hex hash of that
+ * subsystem's source files, computed at build time (scripts/sys-version.mjs);
+ * `build` is the git commit when the build had one. Stamped on every MailItem
+ * and every assistant message's meta so a debugging pass can keep to the
+ * turns made by the system as it is NOW. Two turns with equal `persona` ran the
+ * same fan-out, preamble and reflection code, whatever their `build`.
+ */
+export interface SystemVersion {
+  persona: string;
+  skills: string;
+  memory: string;
+  build?: string;
+}
+
 /** How an assistant reply was generated, for the avatar tooltip. */
 export interface MessageMeta {
   /** Model id (resolved to a display name by the renderer via the catalog). */
@@ -14,6 +30,8 @@ export interface MessageMeta {
   effort?: string;
   /** 'priority' = Fast; null = Standard; undefined = unknown (e.g. history). */
   serviceTier?: string | null;
+  /** The system version that produced the reply; absent for turns predating the stamp. */
+  sys?: SystemVersion;
 }
 
 /**
@@ -2131,6 +2149,11 @@ export interface MailItem {
    * the delivery turn — they are never persisted here.
    */
   attachments?: MessageAttachment[];
+  /**
+   * The system version in force when this item was appended — for a persona's
+   * reply, the code that produced it. Absent on items predating the stamp.
+   */
+  sys?: SystemVersion;
 }
 
 export interface MailConversation {
@@ -2191,6 +2214,8 @@ export interface MailListResult {
    * timestamp.
    */
   inbox: InboxState;
+  /** The version of the system serving this list — what items' `sys` compare against. */
+  sys?: SystemVersion;
 }
 
 /** What the compose surface sends. */
