@@ -501,10 +501,10 @@ describe('local provider settings', () => {
 });
 
 describe('embeddings settings migration + coercion', () => {
-  it('defaults to local / multilingual-e5-small when no file exists', async () => {
+  it('defaults to local / qwen3-embedding-0.6b when no file exists', async () => {
     const emb = (await readSettings()).retrieval.embeddings;
     expect(emb.mode).toBe('local');
-    expect(emb.localModel).toBe('multilingual-e5-small');
+    expect(emb.localModel).toBe('qwen3-embedding-0.6b');
   });
 
   it('migrates a legacy enabled:true endpoint to remote, keeping its fields', async () => {
@@ -541,7 +541,7 @@ describe('embeddings settings migration + coercion', () => {
     writeFileSync(path, JSON.stringify({ retrieval: { embeddings: { mode: 'bogus', localModel: 'bogus' } } }));
     const emb = (await readSettings()).retrieval.embeddings;
     expect(emb.mode).toBe('local');
-    expect(emb.localModel).toBe('multilingual-e5-small');
+    expect(emb.localModel).toBe('qwen3-embedding-0.6b');
   });
 
   it('round-trips mode and localModel through updateRetrievalSettings', async () => {
@@ -560,10 +560,10 @@ describe('embeddings settings migration + coercion', () => {
 });
 
 describe('reranker settings migration + coercion', () => {
-  it('defaults to local / bge-reranker-v2-m3 when no file exists (the gate ships on)', async () => {
+  it('defaults to local / qwen3-reranker-0.6b when no file exists (the gate ships on)', async () => {
     const rr = (await readSettings()).retrieval.reranker;
     expect(rr.mode).toBe('local');
-    expect(rr.localModel).toBe('bge-reranker-v2-m3');
+    expect(rr.localModel).toBe('qwen3-reranker-0.6b');
   });
 
   it('migrates a legacy enabled:true endpoint to remote, keeping its fields', async () => {
@@ -601,11 +601,11 @@ describe('reranker settings migration + coercion', () => {
     writeFileSync(path, JSON.stringify({ retrieval: { reranker: { mode: 'bogus', localModel: 'bogus' } } }));
     let rr = (await readSettings()).retrieval.reranker;
     expect(rr.mode).toBe('local');
-    expect(rr.localModel).toBe('bge-reranker-v2-m3');
+    expect(rr.localModel).toBe('qwen3-reranker-0.6b');
     await updateRetrievalSettings({ reranker: { mode: 'off' } });
     rr = (await readSettings()).retrieval.reranker;
     expect(rr.mode).toBe('off');
-    expect(rr.localModel).toBe('bge-reranker-v2-m3');
+    expect(rr.localModel).toBe('qwen3-reranker-0.6b');
   });
 
   // Regression: the allowlist used to be a hand-kept copy of the catalog and
@@ -651,9 +651,9 @@ describe('imported (non-catalog) models', () => {
 
   it('rejects an id that names neither a catalog model nor an imported one', async () => {
     await updateRetrievalSettings({ embeddings: { mode: 'local', localModel: 'custom:nobody/nothing' } });
-    expect((await readSettings()).retrieval.embeddings.localModel).toBe('multilingual-e5-small');
+    expect((await readSettings()).retrieval.embeddings.localModel).toBe('qwen3-embedding-0.6b');
     await updateRetrievalSettings({ reranker: { mode: 'local', localModel: 'custom:nobody/nothing' } });
-    expect((await readSettings()).retrieval.reranker.localModel).toBe('bge-reranker-v2-m3');
+    expect((await readSettings()).retrieval.reranker.localModel).toBe('qwen3-reranker-0.6b');
   });
 
   it('refuses a description with no usable repo id, and one that could climb out of the cache', async () => {
@@ -723,7 +723,7 @@ describe('imported (non-catalog) models', () => {
     );
     const r = (await readSettings()).retrieval;
     expect(r.customEmbedModels).toEqual([]);
-    expect(r.embeddings.localModel).toBe('multilingual-e5-small');
+    expect(r.embeddings.localModel).toBe('qwen3-embedding-0.6b');
   });
 });
 

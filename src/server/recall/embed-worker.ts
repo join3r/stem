@@ -44,7 +44,7 @@ const PROGRESS_THROTTLE_MS = 250;
 
 type Extractor = (
   texts: string[],
-  opts: { pooling: 'mean'; normalize: boolean }
+  opts: { pooling: 'mean' | 'last_token'; normalize: boolean }
 ) => Promise<{ dims: number[]; data: Float32Array }>;
 
 interface RerankTokenizerOutput extends Record<string, unknown> {
@@ -202,7 +202,7 @@ async function load(nextSpec: LocalEmbedModelSpec, cacheDir: string): Promise<vo
     // Probe with a tiny input: verifies the model produces vectors, reports the
     // real dimension (not just the catalog's claim), and warms the session so the
     // first user-facing embed doesn't pay first-run graph-optimization cost.
-    const probe = await pipe(['ping'], { pooling: 'mean', normalize: true });
+    const probe = await pipe(['ping'], { pooling: nextSpec.pooling ?? 'mean', normalize: true });
     dim = probe.dims[probe.dims.length - 1];
     extractor = pipe;
     postStatus({ state: 'ready', dim });
@@ -286,9 +286,15 @@ async function embed(id: number, texts: string[], kind: EmbedKind): Promise<void
   try {
     const prefixed = applyPrefixes(spec, kind, texts);
     const vectors: Float32Array[] = [];
-    for (let i = 0; i < prefixed.length; i += RUN_BATCH) {
-      const batch = prefixed.slice(i, i + RUN_BATCH);
-      const out = await extractor(batch, { pooling: 'mean', normalize: true });
+    // Batch size 1 for models flagged `unbatched`: their export mis-attends
+    // across padding (see the spec field), so every text rides alone. Same
+    // per-item throughput as RUN_BATCH on the models measured, just no
+    // amortization of the graph launch.
+    const step = spec.unbatched ? 1 : RUN_BATCH;
+    const pooling = spec.pooling ?? 'mean';
+    for (let i = 0; i < prefixed.length; i += step) {
+      const batch = prefixed.slice(i, i + step);
+      const out = await extractor(batch, { pooling, normalize: true });
       const d = out.dims[out.dims.length - 1];
       for (let row = 0; row < batch.length; row++) {
         // Copy each row out of the batch tensor so rows are independent buffers.

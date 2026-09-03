@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { COSINE_FLOORS, cosineFloorsFor } from './embed-scale';
 
 // The shared retrieval core: tokenization, FTS match building, cosine scans and
 // reciprocal-rank fusion over recall.sqlite — parameterized by a DatabaseSync
@@ -170,7 +171,7 @@ export const FTS_SCORE_CEILING = -0.1;
  * [0.7, 1.0], so 0.82 sits above unrelated-content noise while keeping genuine
  * cross-language matches (calibrated by scripts/recall-eval.mjs).
  */
-export const DEFAULT_SEMANTIC_MIN_COSINE = 0.82;
+export const DEFAULT_SEMANTIC_MIN_COSINE = COSINE_FLOORS.e5.message;
 
 /**
  * Floor for semantic summary hits — deliberately LOWER than the message floor:
@@ -179,7 +180,7 @@ export const DEFAULT_SEMANTIC_MIN_COSINE = 0.82;
  * matches land at 0.79–0.81, under the 0.82 message gate, while ranking stays
  * perfect). The gate only strains noise; RRF does the ranking above it.
  */
-export const DEFAULT_SUMMARY_MIN_COSINE = 0.78;
+export const DEFAULT_SUMMARY_MIN_COSINE = COSINE_FLOORS.e5.summary;
 
 function readMinCosine(db: DatabaseSync, key: string, fallback: number): number {
   try {
@@ -196,25 +197,29 @@ function readMinCosine(db: DatabaseSync, key: string, fallback: number): number 
   }
 }
 
-/** The tunable message min-cosine from the meta table, or the default when unset/unreadable. */
-export function readSemanticMinCosine(db: DatabaseSync): number {
-  return readMinCosine(db, 'recall_semantic_min_cosine', DEFAULT_SEMANTIC_MIN_COSINE);
+/**
+ * The tunable message min-cosine from the meta table, or the embedder's own
+ * default when unset/unreadable. `modelKey` is the query embedding's model: the
+ * e5 numbers below are unreachable for Qwen3 vectors (embed-scale.ts).
+ */
+export function readSemanticMinCosine(db: DatabaseSync, modelKey = ''): number {
+  return readMinCosine(db, 'recall_semantic_min_cosine', cosineFloorsFor(modelKey).message);
 }
 
 /** The tunable summary min-cosine (own key — see DEFAULT_SUMMARY_MIN_COSINE). */
-export function readSummaryMinCosine(db: DatabaseSync): number {
-  return readMinCosine(db, 'recall_summary_min_cosine', DEFAULT_SUMMARY_MIN_COSINE);
+export function readSummaryMinCosine(db: DatabaseSync, modelKey = ''): number {
+  return readMinCosine(db, 'recall_summary_min_cosine', cosineFloorsFor(modelKey).summary);
 }
 
 /**
  * Floor for semantic folder-document hits. Docs are long multi-topic passages
  * like summaries (embedded from title + lead), so they share the lower floor.
  */
-export const DEFAULT_DOC_MIN_COSINE = 0.78;
+export const DEFAULT_DOC_MIN_COSINE = COSINE_FLOORS.e5.doc;
 
 /** The tunable folder-doc min-cosine (read from the folder index's own meta table). */
-export function readDocMinCosine(db: DatabaseSync): number {
-  return readMinCosine(db, 'folder_docs_min_cosine', DEFAULT_DOC_MIN_COSINE);
+export function readDocMinCosine(db: DatabaseSync, modelKey = ''): number {
+  return readMinCosine(db, 'folder_docs_min_cosine', cosineFloorsFor(modelKey).doc);
 }
 
 /** The row buffer may be reused/unaligned — copy into a fresh, 0-aligned buffer. */
@@ -520,7 +525,7 @@ export async function hybridSearchMessages(
       if (qe) {
         const scanOpts: SemanticScanOptions = {
           limit: SEMANTIC_CANDIDATES,
-          minCosine: readSemanticMinCosine(db),
+          minCosine: readSemanticMinCosine(db, qe.model),
           excludeThreadId: opts.excludeThreadId ?? null,
           snippetChars: opts.snippetChars,
           roles: opts.roles
@@ -589,7 +594,7 @@ export function ftsSearchFacts(db: DatabaseSync, rawQuery: string, limit = FTS_C
  * STANDARD_FACT_MIN_COSINE (inject.ts): below it a "hit" is just the nearest
  * stored fact to an arbitrary query, not a match.
  */
-export const FACT_SEARCH_MIN_COSINE = 0.72;
+export const FACT_SEARCH_MIN_COSINE = COSINE_FLOORS.e5.factSearch;
 
 /**
  * Cosine top-N over fact_vectors, floored at `minCosine`. RRF only reranks
@@ -603,7 +608,7 @@ export function semanticSearchFactsCore(
   qVec: Float32Array,
   model: string,
   limit: number,
-  minCosine = FACT_SEARCH_MIN_COSINE
+  minCosine = cosineFloorsFor(model).factSearch
 ): CoreFactHit[] {
   const qMag = Math.sqrt(qVec.reduce((s, v) => s + v * v, 0));
   if (qMag === 0 || limit <= 0) return [];
@@ -788,7 +793,7 @@ export async function hybridSearchSummaries(
       if (qe) {
         const scanOpts: SemanticScanOptions = {
           limit: SEMANTIC_CANDIDATES,
-          minCosine: readSummaryMinCosine(db),
+          minCosine: readSummaryMinCosine(db, qe.model),
           excludeThreadId: opts.excludeThreadId ?? null
         };
         sem = opts.semanticScan
@@ -978,7 +983,7 @@ export async function hybridSearchDocs(
       if (qe) {
         const scanOpts: DocScanOptions = {
           limit: SEMANTIC_CANDIDATES,
-          minCosine: readDocMinCosine(db),
+          minCosine: readDocMinCosine(db, qe.model),
           snippetChars: opts.snippetChars
         };
         sem = opts.semanticScan

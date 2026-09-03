@@ -63,7 +63,8 @@ const FACT_INJECT_PRESETS: { label: string; value: number }[] = [
 // The curated local models, mirrored from server/recall/embed-catalog.ts (labels +
 // sizes only — the specs live in main; the id is the contract).
 const LOCAL_EMBED_MODELS: { id: LocalEmbedModelId; label: string; detail: string }[] = [
-  { id: 'multilingual-e5-small', label: 'Multilingual E5 Small', detail: '~120 MB · recommended' },
+  { id: 'qwen3-embedding-0.6b', label: 'Qwen3 Embedding 0.6B', detail: '~640 MB · recommended · best measured' },
+  { id: 'multilingual-e5-small', label: 'Multilingual E5 Small', detail: '~120 MB · smallest' },
   { id: 'multilingual-e5-base', label: 'Multilingual E5 Base', detail: '~280 MB · higher quality' },
   { id: 'embeddinggemma-300m', label: 'EmbeddingGemma 300M', detail: '~330 MB · largest' }
 ];
@@ -579,9 +580,10 @@ function RerankerFields({
 
 /**
  * The measured-best retrieval setup, stated where it can be seen. Everything the
- * claim rests on lives in recall-bench/ (60 real turns, hand-adjudicated gold):
- * qwen3-embedding:4b via a server endpoint feeding the reranker gate beat the
- * bundled local embedders, every cosine gate, deeper candidate pools, and an
+ * claim rests on lives in recall-bench/ (two gold sets, 60 and 77 real turns,
+ * hand-adjudicated): a Qwen3 embedder — the bundled 0.6B or qwen3-embedding:4b
+ * via a server endpoint, they tied — feeding the Qwen3 reranker gate beat the
+ * E5/Gemma embedders, every cosine gate, deeper candidate pools, and an
  * external memory system. The row sits outside the collapsed advanced section
  * on purpose — a recommendation hidden behind "advanced" reaches nobody who
  * hasn't already found it.
@@ -594,34 +596,35 @@ function RecallQualityRow({
   onReview: () => void;
 }) {
   const embedBest =
-    retrieval.embeddings.mode === 'remote' &&
-    /qwen3-embedding/i.test(retrieval.embeddings.model ?? '');
+    (retrieval.embeddings.mode === 'local' && retrieval.embeddings.localModel === 'qwen3-embedding-0.6b') ||
+    (retrieval.embeddings.mode === 'remote' && /qwen3-embedding/i.test(retrieval.embeddings.model ?? ''));
   const rerankOn = retrieval.reranker.mode !== 'off';
   const rerankBest =
     (retrieval.reranker.mode === 'local' && retrieval.reranker.localModel === 'qwen3-reranker-0.6b') ||
     (retrieval.reranker.mode === 'remote' && /qwen3-reranker/i.test(retrieval.reranker.model ?? ''));
   const best = embedBest && rerankBest;
   const hint = best
-    ? 'Best measured setup — qwen3-embedding:4b with the Qwen3 reranker'
+    ? 'Best measured setup — a Qwen3 embedder with the Qwen3 reranker'
     : embedBest && !rerankOn
       ? 'Reranker is off — it measured best at choosing which facts to send'
       : embedBest
-        ? 'Qwen3 Reranker 0.6B now measures best — switch the reranker model'
+        ? 'Qwen3 Reranker 0.6B measures best — switch the reranker model'
         : rerankOn
-          ? 'Best measured: qwen3-embedding:4b via a server endpoint (Ollama)'
-          : 'Best measured: qwen3-embedding:4b (Ollama) with the Qwen3 reranker';
+          ? 'Best measured: the built-in Qwen3 Embedding 0.6B (or qwen3-embedding via Ollama)'
+          : 'Best measured: Qwen3 Embedding 0.6B with the Qwen3 reranker';
   return (
     <div className="group-row">
       <span className="row-main">
         <strong>
           Recall quality{' '}
           <InfoTip label="How this was measured">
-            Benchmarked on 60 real conversations with hand-labeled relevance:{' '}
-            <code>qwen3-embedding:4b</code> (served via Ollama) feeding the Qwen3 Reranker 0.6B chose
-            the right facts best — ahead of the bundled local models, larger embedders, similarity
-            thresholds, wider candidate pools, and an external memory system. The reranker is what
-            catches cross-language and association matches, like a Slovak question finding an
-            English fact; the Qwen3 reranker separates those from noise markedly better than BGE.
+            Benchmarked twice on real conversations with hand-labeled relevance (60 turns over 369
+            facts, then 77 turns over 915): a Qwen3 embedder feeding the Qwen3 Reranker 0.6B chose the
+            right facts best — ahead of the E5 and Gemma models, similarity thresholds, wider candidate
+            pools, and an external memory system. The built-in Qwen3 Embedding 0.6B tied the 4b served
+            via Ollama on both. The reranker is what catches cross-language and association matches,
+            like a Slovak question finding an English fact; the Qwen3 reranker separates those from
+            noise markedly better than BGE.
           </InfoTip>
         </strong>
         <em>{hint}</em>

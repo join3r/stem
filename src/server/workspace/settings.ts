@@ -37,7 +37,7 @@ import type {
 import { type BackgroundRole, resolveRoleEffort } from '../../shared/modelRoles';
 import { degrade } from '../degrade';
 import { DEFAULT_SCRATCH_TTL_DAYS } from '../exec/scratch';
-import { customModelId, EMBED_CATALOG } from '../recall/embed-catalog';
+import { customModelId, DEFAULT_LOCAL_EMBED_MODEL, EMBED_CATALOG } from '../recall/embed-catalog';
 import { DEFAULT_LOCAL_RERANK_MODEL, RERANK_CATALOG } from '../recall/rerank-catalog';
 import { settingsStorePath } from './paths';
 
@@ -130,7 +130,7 @@ const DEFAULTS: ServerSettings = {
   retrieval: {
     embeddings: {
       mode: 'local',
-      localModel: 'multilingual-e5-small',
+      localModel: DEFAULT_LOCAL_EMBED_MODEL,
       baseUrl: 'http://localhost:11434',
       // 4b, not 8b: measured best cross-language fact recall on Ollama (2026-07-04).
       model: 'qwen3-embedding:4b',
@@ -140,10 +140,10 @@ const DEFAULTS: ServerSettings = {
       // On by default since the reranker became the fact-injection GATE
       // (inject.ts): without it, selection degrades to the scale-free fallback
       // tiers, which recall-bench/ measured as materially worse. The model
-      // (~570 MB) downloads lazily on first use; until it is ready, turns
+      // (~1.2 GB) downloads lazily on first use; until it is ready, turns
       // degrade gracefully rather than wait.
       mode: 'local',
-      localModel: 'bge-reranker-v2-m3',
+      localModel: DEFAULT_LOCAL_RERANK_MODEL,
       baseUrl: 'http://localhost:8080',
       model: '',
       apiKey: null

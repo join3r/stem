@@ -54,6 +54,17 @@ describe('embed catalog', () => {
     expect(applyPrefixes(spec, 'passage', ['x'])).toEqual(['title: none | text: x']);
   });
 
+  it('gives Qwen3 the model-card instruct on queries only, last-token pooling, and one text per pass', () => {
+    const spec = EMBED_CATALOG['qwen3-embedding-0.6b'];
+    expect(applyPrefixes(spec, 'query', ['x'])[0]).toMatch(/^Instruct: .*\nQuery:x$/);
+    expect(applyPrefixes(spec, 'passage', ['x'])).toEqual(['x']);
+    expect(spec.pooling).toBe('last_token');
+    expect(spec.unbatched).toBe(true);
+    // The other bundled models are encoders: mean-pooled, batched — absent fields mean exactly that.
+    expect(EMBED_CATALOG['multilingual-e5-small'].pooling).toBeUndefined();
+    expect(EMBED_CATALOG['multilingual-e5-small'].unbatched).toBeUndefined();
+  });
+
   it('namespaces local cache keys so they can never collide with remote model ids', () => {
     for (const spec of Object.values(EMBED_CATALOG)) {
       expect(localModelCacheKey(spec)).toBe(`local:${spec.repo}`);

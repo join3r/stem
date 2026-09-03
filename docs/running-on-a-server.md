@@ -32,7 +32,7 @@ What you end up with:
 - **Docker Engine and the Compose plugin** on the server
   ([install guide](https://docs.docker.com/engine/install/)).
 - **2 GB of RAM and ~10 GB of disk**, comfortably. The image is around 1.3 GB, the
-  embedding models add ~1.4 GB the first time memory search runs, and what your MCP
+  embedding models add ~1.8 GB the first time memory search runs, and what your MCP
   servers download to start adds a few hundred MB more over time.
 - A copy of this repository on the server, and Stem still installed on your Mac.
 

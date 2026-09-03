@@ -29,9 +29,47 @@ export interface LocalEmbedModelSpec {
   label: string;
   /** Training-time prompt prefixes; prepended verbatim per EmbedKind. */
   prefixes: Record<EmbedKind, string>;
+  /**
+   * How token states become one vector. Encoder models (e5, Gemma) mean-pool;
+   * decoder-style embedders (Qwen3) read the last token, and mean-pooling them
+   * yields vectors that load fine and rank wrong. Absent means 'mean'.
+   */
+  pooling?: 'mean' | 'last_token';
+  /**
+   * Embed one text per forward pass. Set for exports whose fused attention
+   * mis-attends across padding on the bundled runtime: a mixed-length batch of
+   * Qwen3-Embedding-0.6B measured min cosine 0.90–0.92 against the same texts
+   * embedded alone (recall-bench/bench2/cosine_scale.mjs, 2026-09-03). Same
+   * class of bug as the reranker's one-pair-per-pass rule in embed-worker.ts.
+   */
+  unbatched?: boolean;
 }
 
 export const EMBED_CATALOG: Record<LocalEmbedModelId, LocalEmbedModelSpec> = {
+  // Default since 2026-09-03. Measured on both recall benches (recall-bench/
+  // README + bench2/README): tied or edged the qwen3-embedding:4b Ollama
+  // sidecar end-to-end with either reranker (bench #1 F1 0.26 vs 0.26, bench #2
+  // 0.23 vs 0.21) at a quarter of the weights, and beat every e5/Gemma bundled
+  // model. Its cosines sit on a different scale from e5 — see embed-scale.ts,
+  // which is why switching embedders is more than changing this id.
+  'qwen3-embedding-0.6b': {
+    id: 'qwen3-embedding-0.6b',
+    repo: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',
+    dim: 1024,
+    dtype: 'q8',
+    approxSizeMB: 640,
+    label: 'Qwen3 Embedding 0.6B',
+    // Model card: queries carry a one-line task instruction, documents none.
+    // The task wording is the one the benches were measured with; rewording it
+    // moves the cosine scale the floors in embed-scale.ts are calibrated on.
+    prefixes: {
+      query:
+        'Instruct: Given a user message to a personal assistant, retrieve stored facts about the user that are relevant to answering it\nQuery:',
+      passage: ''
+    },
+    pooling: 'last_token',
+    unbatched: true
+  },
   'multilingual-e5-small': {
     id: 'multilingual-e5-small',
     repo: 'Xenova/multilingual-e5-small',
@@ -66,7 +104,7 @@ export const EMBED_CATALOG: Record<LocalEmbedModelId, LocalEmbedModelSpec> = {
   }
 };
 
-export const DEFAULT_LOCAL_EMBED_MODEL: LocalEmbedModelId = 'multilingual-e5-small';
+export const DEFAULT_LOCAL_EMBED_MODEL: LocalEmbedModelId = 'qwen3-embedding-0.6b';
 
 /**
  * The spec for whichever local embedder the settings select — a curated entry or

@@ -163,7 +163,12 @@ export const RERANK_CATALOG: Record<LocalRerankModelId, LocalRerankModelSpec> = 
   }
 };
 
-export const DEFAULT_LOCAL_RERANK_MODEL: LocalRerankModelId = 'bge-reranker-v2-m3';
+// Qwen3 since 2026-09-03: it wins the fact-injection gate on both benches
+// (bench #1 F1 0.26 vs 0.19; bench #2 it is the only gate whose floor can be
+// raised without collapsing — bge falls to F1 0.03 above −4), at the cost of
+// the skill gate, where bge measures better (0.95/0.05 vs 0.75/0.17 on the
+// golden fixture). Fact injection runs every turn; skill inlining is rarer.
+export const DEFAULT_LOCAL_RERANK_MODEL: LocalRerankModelId = 'qwen3-reranker-0.6b';
 
 /**
  * The spec for whichever local reranker the settings select — curated, or

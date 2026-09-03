@@ -2668,7 +2668,11 @@ export interface CustomInstructionsSettings {
 export type EmbeddingsMode = 'off' | 'local' | 'remote';
 
 /** Curated local embedding models (specs live in server/recall/embed-catalog.ts). */
-export type LocalEmbedModelId = 'multilingual-e5-small' | 'multilingual-e5-base' | 'embeddinggemma-300m';
+export type LocalEmbedModelId =
+  | 'qwen3-embedding-0.6b'
+  | 'multilingual-e5-small'
+  | 'multilingual-e5-base'
+  | 'embeddinggemma-300m';
 
 /** Quantization a local model is loaded at, passed to transformers.js as `dtype`. */
 export type LocalModelDtype = 'q8' | 'q4' | 'fp32';

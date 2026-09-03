@@ -1,5 +1,6 @@
 
 import { searchMemoryHybrid, rankFactsLexically } from './search';
+import { COSINE_FLOORS, cosineFloorsFor } from './embed-scale';
 import { hybridSearchSummaries } from './search-core';
 import { searchFolderDocs, type FolderDocHit } from '../folder-index';
 import { scanSummariesOffThread } from './scan';
@@ -80,7 +81,7 @@ export const FALLBACK_MAX_FACTS = 6;
 // verbatim specifics away, so a very strong raw hit from a thread no injected
 // summary covers still earns a seat. "Strong" sits well above the per-leg noise
 // floors (min-cosine 0.82 / bm25 ceiling -0.1): near-verbatim only.
-export const STRONG_RAW_MIN_COSINE = 0.88;
+export const STRONG_RAW_MIN_COSINE = COSINE_FLOORS.e5.strongRaw;
 export const STRONG_RAW_MAX_BM25 = -2;
 const MAX_EXTRA_RAW_HITS = 2;
 // Indexed connected-folder documents: few hits, clipped like message snippets —
@@ -266,7 +267,7 @@ function zGate(candidates: ScoredCandidate[], limit: number): Fact[] {
  * window together. Lower than the sweep's classify-worthy floor would flood
  * the queue with topical siblings; 0.60 keeps it to genuine same-subject pairs.
  */
-export const COINJECT_MIN_COSINE = 0.6;
+export const COINJECT_MIN_COSINE = COSINE_FLOORS.e5.coinject;
 
 /**
  * The async co-injection guard's discovery half: queue every not-yet-classified
@@ -278,7 +279,11 @@ export const COINJECT_MIN_COSINE = 0.6;
  * always was: conflicts raised later by processPendingRelationChecks flow
  * through the disputed-representative logic on subsequent turns.
  */
-function enqueueCoinjectedPairs(facts: Fact[], vectors: Map<number, Float32Array> | undefined): void {
+function enqueueCoinjectedPairs(
+  facts: Fact[],
+  vectors: Map<number, Float32Array> | undefined,
+  minCosine = COINJECT_MIN_COSINE
+): void {
   if (!vectors || facts.length < 2) return;
   try {
     const pairs: Array<[number, number]> = [];
@@ -288,7 +293,7 @@ function enqueueCoinjectedPairs(facts: Fact[], vectors: Map<number, Float32Array
       for (let b = a + 1; b < facts.length; b++) {
         const vb = vectors.get(facts[b].id);
         if (!vb || vb.length !== va.length) continue;
-        if (cosineSim(va, vb) >= COINJECT_MIN_COSINE) pairs.push([facts[a].id, facts[b].id]);
+        if (cosineSim(va, vb) >= minCosine) pairs.push([facts[a].id, facts[b].id]);
       }
     }
     if (pairs.length > 0) enqueueRelationChecks(pairs, 'coinject');
@@ -418,7 +423,9 @@ async function chooseFacts(
   const seen = new Set(pinned.map((f) => f.id));
   const deduped = (relevant ?? []).filter((f) => !seen.has(f.id) && seen.add(f.id));
   const facts = [...pinned, ...deduped];
-  enqueueCoinjectedPairs(facts, vectorSink.vectors);
+  // Memoized: the embed already happened (or already failed) during ranking.
+  const embedderKey = (await getQueryEmbedding())?.model ?? '';
+  enqueueCoinjectedPairs(facts, vectorSink.vectors, cosineFloorsFor(embedderKey).coinject);
   if (deduped.length === 0) tier = pinned.length ? 'pinned-only' : 'none';
   return { facts, tier };
 }
@@ -516,11 +523,12 @@ export async function buildRecallContext(
     summary: clip(h.text, MAX_SUMMARY_SNIPPET_CHARS)
   }));
   const summaryThreads = new Set(summaryHits.map((h) => h.threadId));
+  const strongRawMinCosine = cosineFloorsFor((await getQueryEmbedding())?.model ?? '').strongRaw;
   const userHits = summaries.length === 0
     ? rawUserHits.slice(0, MAX_HITS)
     : rawUserHits
         .filter((h) => !summaryThreads.has(h.threadId))
-        .filter((h) => (h.cosine ?? 0) >= STRONG_RAW_MIN_COSINE || (h.ftsScore ?? 0) <= STRONG_RAW_MAX_BM25)
+        .filter((h) => (h.cosine ?? 0) >= strongRawMinCosine || (h.ftsScore ?? 0) <= STRONG_RAW_MAX_BM25)
         .slice(0, MAX_EXTRA_RAW_HITS);
   if (timings) timings.search = Date.now() - searchStart;
 
