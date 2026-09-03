@@ -183,6 +183,24 @@ async function settledMail() {
   });
 }
 
+/**
+ * The offline-hold notice once the wave has DRAINED. The 'awaiting-user' status
+ * is written by the drain step, after the notice item; settledMail() is
+ * satisfied by the item alone (status 'idle' — the created value — is "not
+ * working"), so it can read the conversation between the two writes and report
+ * the hold as idle. Seen on the ubuntu runner, 2026-09-03.
+ */
+async function heldMail() {
+  return vi.waitFor(async () => {
+    const mail = await readMail();
+    const c = mail.conversations[0];
+    expect(c).toBeTruthy();
+    expect(c.status).toBe('awaiting-user');
+    expect(mail.items.length).toBeGreaterThanOrEqual(2);
+    return mail;
+  });
+}
+
 describe('mail router', () => {
   it('composes, delivers to the driver persona, and appends the implicit reply', async () => {
     const fake = fakeBackend();
@@ -2053,7 +2071,7 @@ describe('device-pinned code personas (offline hold)', () => {
     let device = offline;
     const router = makeRouter(fake, undefined, async () => device);
     await router.compose({ to: ['mac-coder'], subject: 'build', body: 'build it' });
-    const held = await settledMail();
+    const held = await heldMail();
     // No turn ran; the notice mail is what the user sees instead.
     expect(fake.starts).toHaveLength(0);
     expect(held.conversations[0].status).toBe('awaiting-user');
@@ -2080,7 +2098,9 @@ describe('device-pinned code personas (offline hold)', () => {
     const fake = fakeBackend();
     const router = makeRouter(fake, undefined, async () => offline);
     await router.compose({ to: ['mac-coder'], subject: 'build', body: 'build it' });
-    const held = await settledMail();
+    // Drained before the stop: a stop that lands between the notice and the
+    // drain write would have its 'aborted' overwritten by that write.
+    const held = await heldMail();
     const id = held.conversations[0].id;
     expect((await router.stopConversation(id)).stopped).toBe(true);
     expect((await readMail()).conversations[0].status).toBe('aborted');

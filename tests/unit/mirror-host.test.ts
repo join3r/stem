@@ -48,7 +48,19 @@ let host: MirrorHost;
 async function until(check: () => boolean, what: string, ms = 10_000): Promise<void> {
   const deadline = Date.now() + ms;
   while (!check()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    if (Date.now() > deadline) {
+      // The host's own view of the folder rides along: a bare "timed out
+      // waiting for the first sync" (macOS runner, 2026-09-03) cannot tell a
+      // slow round from a failed one parked behind the 30 s retry backoff,
+      // and the round's error (lastError) is otherwise only in the log file.
+      let state = 'unavailable';
+      try {
+        state = JSON.stringify(host.localState());
+      } catch {
+        // quiet: a host that cannot report is itself the finding.
+      }
+      throw new Error(`timed out waiting for ${what}; host state ${state}`);
+    }
     await new Promise((r) => setTimeout(r, 50));
   }
 }
