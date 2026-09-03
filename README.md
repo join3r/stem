@@ -50,7 +50,7 @@ While Stem works you see live **tool activity** — web searches, file reads, te
   </picture>
 </p>
 
-Each turn receives only positively relevant active facts, plus up to five facts you explicitly pin; sensitive facts use a stricter relevance gate, expired or unconfirmed assistant claims stay out, and while two facts conflict only one side goes — marked conflicting, so the model treats it as uncertain instead of forgetting both. Relevance ranking runs on **bundled local embeddings** (Multilingual-E5 or EmbeddingGemma, downloaded once, run on-device) — or an OpenAI-compatible endpoint, or plain keyword matching. Nothing leaves your machine by default and embedding never blocks a reply.
+Each turn receives only positively relevant active facts, plus up to five facts you explicitly pin; sensitive facts use a stricter relevance gate, expired or unconfirmed assistant claims stay out, and while two facts conflict only one side goes — marked conflicting, so the model treats it as uncertain instead of forgetting both. Relevance ranking runs on **bundled local models** (Qwen3 Embedding 0.6B and the Qwen3 reranker by default, with Multilingual-E5 and EmbeddingGemma as smaller options — downloaded once, run on-device) — or an OpenAI-compatible endpoint, or plain keyword matching. Nothing leaves your machine by default and embedding never blocks a reply.
 
 ## Organized like you think
 

@@ -291,7 +291,7 @@ Then the ordinary two commands, and one pull:
 
 ```
 docker compose up -d
-docker compose exec ollama ollama pull qwen3-embedding:4b
+docker compose exec ollama ollama pull qwen3-embedding:0.6b
 ```
 
 In Stem: **Settings → Memory → Embeddings**, your own endpoint, base URL
@@ -303,11 +303,13 @@ http://ollama:11434
 and the model name you pulled. `localhost` is the one address that does not work here — on
 this server localhost is Stem's own container, and Ollama is a neighbour with a name.
 
-**What it costs.** ~3 GB of disk for the weights of a 4b embedding model, and roughly the
-same in RAM whenever one is loaded — on top of Stem's own gigabyte, on a box that is
-running the model on its CPU because a VPS has no GPU. On a 2 GB machine, pull
-`qwen3-embedding:0.6b` instead, or leave the bundled embedder alone; it was measured
-against the alternatives and it is not a consolation prize.
+**What it costs.** Disk and RAM for the weights whenever the model is loaded — on top of
+Stem's own gigabyte, on a box that is running the model on its CPU because a VPS has no
+GPU. Be clear about what it buys: the embedder built into Stem is a Qwen3 model of the same
+family, it was measured against `qwen3-embedding:4b` served this way on two benchmarks, and
+it tied. Ollama here is for someone who already runs it, or who wants to point Stem at a
+model Stem does not bundle — not a quality upgrade, and a 4b model is ~3 GB for no measured
+gain.
 
 **No port is opened.** Ollama listens on 11434 on the private network the containers share,
 and `docker compose ps` shows no published port for it — the same arrangement as Stem

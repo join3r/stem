@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Sparkles } from 'lucide-react';
 import type { ReleaseNoteEntry } from '../shared/types';
 import { renderMdx } from './mdx/render';
@@ -15,6 +15,7 @@ export function ReleaseNotesModal({
   showOnUpdate,
   onToggleShowOnUpdate,
   onShowAll,
+  recommendation,
   onClose
 }: {
   title: string;
@@ -24,6 +25,12 @@ export function ReleaseNotesModal({
   onToggleShowOnUpdate?: (value: boolean) => void;
   /** Offered only while the dialog is showing a subset of the history. */
   onShowAll?: () => void;
+  /**
+   * A call to action tied to this update (e.g. the switch-to-recommended recall
+   * setup), pinned under the notes so it is read after them and never scrolls
+   * away with them. Absent from the Settings-opened history.
+   */
+  recommendation?: ReactNode;
   onClose: () => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -72,6 +79,7 @@ export function ReleaseNotesModal({
             ))
           )}
         </div>
+        {recommendation}
         <div className="mcp-approval-actions release-notes-actions">
           {showOnUpdate !== undefined && onToggleShowOnUpdate && (
             <label className="set-check" title="Show these notes the first time you open a new version">

@@ -1,6 +1,6 @@
 {
   "name": "stem",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "An isolated, pi-backed personal assistant with rich MDX output, app-scoped skills, MCP, and Stem Recall memory.",
   "author": {
     "name": "Vladimir Schmotzer",

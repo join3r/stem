@@ -2997,6 +2997,13 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .release-notes-section .mdx h3 { font-size: var(--fs-12); text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 /* Preference on the left, actions on the right; the rule separates them from the
    scrolling body so clipped prose reads as "there's more" rather than "cut off". */
+/* The update's call to action sits between the scrolling notes and the buttons:
+   read after the notes, never scrolled past, and visually a note rather than a
+   fourth button. */
+.release-notes-recommend { margin: var(--sp-6) 0 var(--sp-2); font-size: var(--fs-13); }
+.release-notes-recommend p { margin: 0 0 var(--sp-3); }
+.release-notes-recommend p svg { vertical-align: -2px; }
+.release-notes-recommend .push-row { justify-content: flex-start; margin-top: var(--sp-4); }
 .release-notes-actions { align-items: center; border-top: 0.5px solid var(--hair); padding-top: var(--sp-6); }
 .release-notes-actions .set-check { margin-right: auto; }
 .mcp-approval-detail {

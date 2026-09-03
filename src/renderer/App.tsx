@@ -44,6 +44,8 @@ import { MailComposeView, MailConversationView, type MailViewHandle } from './ma
 import { ActivityIndicator } from './ui/ActivityIndicator';
 import { TaskAlertModal } from './TaskAlertModal';
 import { ReleaseNotesModal } from './ReleaseNotesModal';
+import { RecallRecommendation } from './RecallRecommendation';
+import { RECALL_DEFAULTS_RELEASE, recommendedRetrievalPatch } from '../shared/recall-recommended';
 import { DropOverlay } from './files/DropOverlay';
 import { useWebSearch } from './webSearch';
 import { useAutoHideScroll } from './hooks/useAutoHideScroll';
@@ -415,11 +417,20 @@ export default function App() {
   // unseen before that). Fetched exactly once per launch — the notes ship inside
   // the build, so they cannot change while the app is open.
   const releaseNotesAskedRef = useRef(false);
+  // The recall setup to offer a switch from, fetched only when the popup covers
+  // the release that changed the defaults — an install that upgraded past it
+  // once is never asked twice, and a fresh install already has the new models.
+  const [releaseNotesRetrieval, setReleaseNotesRetrieval] = useState<AppSettings['retrieval'] | null>(null);
   useEffect(() => {
     if (!onboardingCompleted || releaseNotesAskedRef.current || !window.stem) return;
     releaseNotesAskedRef.current = true;
     void window.stem.getReleaseNotes().then((snapshot) => {
-      if (snapshot.unseen.length > 0) setReleaseNotes(snapshot);
+      if (snapshot.unseen.length === 0) return;
+      setReleaseNotes(snapshot);
+      if (!snapshot.unseen.includes(RECALL_DEFAULTS_RELEASE)) return;
+      void window.stem.getSettings().then((s) => {
+        if (recommendedRetrievalPatch(s.retrieval)) setReleaseNotesRetrieval(s.retrieval);
+      });
     });
   }, [onboardingCompleted]);
 
@@ -1859,9 +1870,18 @@ export default function App() {
             void window.stem.updateReleaseNotesSettings({ showOnUpdate: value });
           }}
           onShowAll={releaseNotesShowAll ? undefined : () => setReleaseNotesShowAll(true)}
+          recommendation={
+            releaseNotesRetrieval && (
+              <RecallRecommendation
+                retrieval={releaseNotesRetrieval}
+                onApply={(patch) => window.stem.updateRetrievalSettings(patch)}
+              />
+            )
+          }
           onClose={() => {
             setReleaseNotes(null);
             setReleaseNotesShowAll(false);
+            setReleaseNotesRetrieval(null);
             // Mark read on dismissal, not on display: a popup the user never got
             // to (a crash mid-launch) should still be waiting next time.
             void window.stem.markReleaseNotesSeen();

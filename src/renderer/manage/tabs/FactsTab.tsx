@@ -27,6 +27,7 @@ import type {
   CustomImportCandidate,
   CustomRerankModel
 } from '../../../shared/types';
+import { recallSetupStatus } from '../../../shared/recall-recommended';
 import { resolveMemoryModel } from '../../../shared/modelRoles';
 import { clampEffort, EffortSelect, effortsOf } from '../../ui/EffortSelect';
 import { MdxView } from '../../chat/MdxView';
@@ -374,15 +375,16 @@ function EmbeddingsFields({
           />
           <input
             className="ifield"
-            placeholder="qwen3-embedding:4b"
+            placeholder="qwen3-embedding:0.6b"
             aria-label="Embeddings model"
             value={local.model}
             onChange={(e) => setLocal({ ...local, model: e.target.value })}
             onBlur={() => onPatch({ model: local.model })}
           />
           <p className="muted">
-            Recommended with Ollama: <code>qwen3-embedding:4b</code> — the best cross-language fact
-            recall we measured.
+            For an endpoint you already run. The built-in Qwen3 Embedding 0.6B measured the same as a
+            4B Qwen3 served this way, so a server buys no quality — a Qwen3 embedding model here keeps
+            the recommended setup, anything else ranks worse.
           </p>
           <input
             className="ifield"
@@ -579,14 +581,13 @@ function RerankerFields({
 }
 
 /**
- * The measured-best retrieval setup, stated where it can be seen. Everything the
- * claim rests on lives in recall-bench/ (two gold sets, 60 and 77 real turns,
- * hand-adjudicated): a Qwen3 embedder — the bundled 0.6B or qwen3-embedding:4b
- * via a server endpoint, they tied — feeding the Qwen3 reranker gate beat the
- * E5/Gemma embedders, every cosine gate, deeper candidate pools, and an
- * external memory system. The row sits outside the collapsed advanced section
- * on purpose — a recommendation hidden behind "advanced" reaches nobody who
- * hasn't already found it.
+ * The measured-best retrieval setup, stated where it can be seen. The verdict
+ * itself lives in shared/recall-recommended.ts (the post-update popup reads the
+ * same one); this row only words it. The recommendation is the built-in Qwen3
+ * pair — a Qwen3 embedder on the user's own endpoint counts as already there,
+ * since it tied, but is never what the row tells anyone to go and get. The row
+ * sits outside the collapsed advanced section on purpose — a recommendation
+ * hidden behind "advanced" reaches nobody who hasn't already found it.
  */
 function RecallQualityRow({
   retrieval,
@@ -595,23 +596,18 @@ function RecallQualityRow({
   retrieval: RetrievalSettings;
   onReview: () => void;
 }) {
-  const embedBest =
-    (retrieval.embeddings.mode === 'local' && retrieval.embeddings.localModel === 'qwen3-embedding-0.6b') ||
-    (retrieval.embeddings.mode === 'remote' && /qwen3-embedding/i.test(retrieval.embeddings.model ?? ''));
+  const { embedOk: embedBest, rerankOk: rerankBest } = recallSetupStatus(retrieval);
   const rerankOn = retrieval.reranker.mode !== 'off';
-  const rerankBest =
-    (retrieval.reranker.mode === 'local' && retrieval.reranker.localModel === 'qwen3-reranker-0.6b') ||
-    (retrieval.reranker.mode === 'remote' && /qwen3-reranker/i.test(retrieval.reranker.model ?? ''));
   const best = embedBest && rerankBest;
   const hint = best
-    ? 'Best measured setup — a Qwen3 embedder with the Qwen3 reranker'
+    ? 'Best measured setup — Qwen3 Embedding 0.6B with the Qwen3 reranker'
     : embedBest && !rerankOn
       ? 'Reranker is off — it measured best at choosing which facts to send'
       : embedBest
         ? 'Qwen3 Reranker 0.6B measures best — switch the reranker model'
         : rerankOn
-          ? 'Best measured: the built-in Qwen3 Embedding 0.6B (or qwen3-embedding via Ollama)'
-          : 'Best measured: Qwen3 Embedding 0.6B with the Qwen3 reranker';
+          ? 'Best measured: the built-in Qwen3 Embedding 0.6B'
+          : 'Best measured: the built-in Qwen3 Embedding 0.6B with the Qwen3 reranker';
   return (
     <div className="group-row">
       <span className="row-main">
@@ -619,12 +615,13 @@ function RecallQualityRow({
           Recall quality{' '}
           <InfoTip label="How this was measured">
             Benchmarked twice on real conversations with hand-labeled relevance (60 turns over 369
-            facts, then 77 turns over 915): a Qwen3 embedder feeding the Qwen3 Reranker 0.6B chose the
-            right facts best — ahead of the E5 and Gemma models, similarity thresholds, wider candidate
-            pools, and an external memory system. The built-in Qwen3 Embedding 0.6B tied the 4b served
-            via Ollama on both. The reranker is what catches cross-language and association matches,
-            like a Slovak question finding an English fact; the Qwen3 reranker separates those from
-            noise markedly better than BGE.
+            facts, then 77 turns over 915): the built-in Qwen3 Embedding 0.6B feeding the Qwen3
+            Reranker 0.6B chose the right facts best — ahead of the E5 and Gemma models, similarity
+            thresholds, wider candidate pools, an external memory system, and a 4B Qwen3 embedder
+            served from Ollama, which it tied on both runs. There is no bigger model worth running
+            for this. The reranker is what catches cross-language and association matches, like a
+            Slovak question finding an English fact; the Qwen3 reranker separates those from noise
+            markedly better than BGE.
           </InfoTip>
         </strong>
         <em>{hint}</em>

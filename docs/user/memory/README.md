@@ -28,13 +28,16 @@ Connected folders can also teach Stem facts. **Memorize** allows retention;
 
 ## Models, and machines that cannot reach the internet
 
-Searching memory by meaning needs a small language model, which runs inside Stem
-— nothing you install, and nothing leaves your computer once it is there. The
-first time memory search runs, Stem downloads it (about 120 MB for the default
-embedder, larger for the reranker that sharpens the ranking) and keeps it in its
-own folder from then on. Under **Memory → Facts → Relevance ranking (advanced)**,
-the line under each model says where it is: *Preparing model…*, *Ready · 384-dim*,
-or an error.
+Searching memory by meaning needs two language models, which run inside Stem
+— nothing you install, and nothing leaves your computer once they are there. The
+first time memory search runs, Stem downloads them (about 640 MB for the default
+embedder, Qwen3 Embedding 0.6B, and about 1.2 GB for the Qwen3 reranker that
+decides which facts are worth showing) and keeps them in its own folder from then
+on. Smaller embedders are one pick away in the same panel if disk is tight; they
+measured worse. Under **Memory → Facts → Relevance ranking (advanced)**, the line
+under each model says where it is: *Preparing model…*, *Ready · 1024-dim*, or an
+error. The **Recall quality** row above that section says whether what you run is
+the measured-best setup, and opens the pickers when it is not.
 
 Stem does not ship these models, and it is not a mirror for them: they come from
 [Hugging Face](https://huggingface.co), whose terms and licences are between you
