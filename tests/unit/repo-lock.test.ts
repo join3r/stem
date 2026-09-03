@@ -21,6 +21,16 @@ async function settled<T>(p: Promise<T>): Promise<boolean> {
   return done;
 }
 
+/**
+ * Let an acquire finish its async realpath and register (as a holder or a
+ * waiter). Two acquires started back to back resolve their paths on the fs
+ * thread pool, which does not promise call order — on the macOS runners the
+ * later one has registered first and taken a lock the test meant the earlier
+ * one to be owed (flaky 2026-09-03). Arrival order is what the queue promises,
+ * so the tests have to make the arrivals arrive in order.
+ */
+const registered = <T>(p: Promise<T>): Promise<T | undefined> => settled(p).then(() => undefined);
+
 // Paths that don't exist: realpath falls back to the lexical name, which is
 // exactly what these tests exercise.
 const repo = '/nonexistent/stem-repo-lock-test/repo';
@@ -96,6 +106,7 @@ describe('queueing', () => {
     const locks = new RepoLocks();
     const releaseA = await locks.acquire({ cwd: repo });
     const b = locks.acquire({ cwd: repo });
+    await registered(b);
     const c = locks.acquire({ cwd: repo });
     releaseA();
     expect(await settled(b)).toBe(true);
@@ -111,6 +122,7 @@ describe('queueing', () => {
     // subtree — free as far as held locks go, but inside what B is owed.
     const releaseA = await locks.acquire({ cwd: join(repo, 'x') });
     const b = locks.acquire({ cwd: repo });
+    await registered(b);
     const c = locks.acquire({ cwd: join(repo, 'y') });
     expect(await settled(c)).toBe(false);
     releaseA();
