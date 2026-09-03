@@ -768,6 +768,17 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
     backgroundEffort: null
   });
   const [showRetrieval, setShowRetrieval] = useState(false);
+  const retrievalSetupRef = useRef<HTMLDivElement>(null);
+
+  /** Open the collapsed ranking controls and scroll them into view. Review
+   *  setup used to only flip the flag — the section sits below Memory, facts,
+   *  and conflicts, so the switch looked missing. */
+  function openRetrievalSetup() {
+    setShowRetrieval(true);
+    setTimeout(() => {
+      retrievalSetupRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  }
   const [rebuild, setRebuild] = useState<MemoryRebuildStatus | null>(null);
   const [conflicts, setConflicts] = useState<MemoryConflict[]>([]);
   const [autoResolved, setAutoResolved] = useState<AutoResolvedConflict[]>([]);
@@ -1088,7 +1099,7 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
                 : 'Until this is fixed, memories rank by embedding similarity alone — cross-language matches are missed.'}
             </span>
           </div>
-          <button className="link-btn" onClick={() => setShowRetrieval(true)}>
+          <button className="link-btn" onClick={openRetrievalSetup}>
             Review setup
           </button>
         </div>
@@ -1109,7 +1120,7 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
           />
         </div>
         {settings.enabled && retrieval && (
-          <RecallQualityRow retrieval={retrieval} onReview={() => setShowRetrieval(true)} />
+          <RecallQualityRow retrieval={retrieval} onReview={openRetrievalSetup} />
         )}
       </div>
 
@@ -1263,7 +1274,7 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
 
       {retrieval && (
         <>
-          <div className="grp-head grp-head-row">
+          <div className="grp-head grp-head-row" ref={retrievalSetupRef} id="memory-retrieval-setup">
             <button
               className="memory-view-toggle"
               aria-expanded={showRetrieval}
