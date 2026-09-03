@@ -12,6 +12,17 @@ Maintainer notes:
   date, tag.
 -->
 
+## 0.5.1 — Unreleased
+
+### Changed
+
+- **Themes ship with Stem.** The theme picker now lists themes bundled with the app (TokyoNight
+  Storm to start) alongside any in your own themes folder; a file of yours with the same name wins.
+  Saving a theme file applies it at once, in every window — the Reload button is gone. A theme can
+  carry both a `light` and a `dark` palette and then follows the OS appearance, and the example file
+  in the themes folder now does. A few surfaces that ignored the theme (the memory-note card, your
+  own mail bubbles, scrollbar thumbs) follow it now.
+
 ## 0.5.0 — 2026-09-03
 
 ### Added

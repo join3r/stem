@@ -2213,7 +2213,7 @@ button.inbox-return-main:focus-visible { outline: none; box-shadow: var(--shadow
   padding: 10px 12px;
   border: 0.5px solid var(--line);
   border-radius: var(--radius-md);
-  background: var(--surface-2, rgba(127, 127, 127, 0.05));
+  background: var(--inline-bg);
 }
 .memory-note-body { flex: 1; min-width: 0; }
 /* Per-fact hover actions (pin / confirm / restore / forget) — calm reveals, like
@@ -2299,12 +2299,12 @@ button.inbox-return-main:focus-visible { outline: none; box-shadow: var(--shadow
   transition: background-color 0.35s ease;
 }
 .messages.is-scrolling, .inspector.is-scrolling,
-.messages:hover, .inspector:hover { scrollbar-color: rgba(95, 90, 80, 0.4) transparent; }
+.messages:hover, .inspector:hover { scrollbar-color: color-mix(in srgb, var(--ink) 40%, transparent) transparent; }
 .messages.is-scrolling::-webkit-scrollbar-thumb,
 .inspector.is-scrolling::-webkit-scrollbar-thumb,
 .messages:hover::-webkit-scrollbar-thumb,
 .inspector:hover::-webkit-scrollbar-thumb {
-  background: rgba(95, 90, 80, 0.32);
+  background: color-mix(in srgb, var(--ink) 32%, transparent);
   background-clip: content-box;
 }
 
@@ -2855,12 +2855,12 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-head-to em { color: var(--accent); font-style: normal; white-space: nowrap; }
 .mail-add-toggle { width: 18px; height: 18px; }
 .mail-stop { width: 18px; height: 18px; color: var(--muted); }
-.mail-stop:hover { color: var(--danger, #c0392b); }
+.mail-stop:hover { color: var(--danger); }
 .mail-add-chips { margin-top: 6px; }
 .mail-compose .mail-head { flex-direction: row; align-items: center; justify-content: space-between; }
 .mail-items { flex: 1; overflow-y: auto; padding: 14px 20px; display: flex; flex-direction: column; gap: 12px; }
 .mail-item { border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 10px 14px; background: var(--panel, transparent); }
-.mail-item.from-user { border-color: transparent; background: var(--bubble-user, rgba(127,127,127,0.08)); align-self: flex-end; max-width: 85%; }
+.mail-item.from-user { border-color: transparent; background: var(--inline-bg); align-self: flex-end; max-width: 85%; }
 .mail-item-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .mail-item-at { font-size: var(--fs-11); color: var(--muted); }
 .mail-item-stale, .mail-item-sys { font-size: var(--fs-11); color: var(--muted); font-style: italic; white-space: nowrap; }
@@ -2871,7 +2871,7 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-attachments-draft { padding: 0; }
 .mail-reply textarea { flex: 1; resize: vertical; border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 8px 10px; font: inherit; background: transparent; color: inherit; }
 .mail-reply textarea:focus { outline: none; border-color: var(--accent); }
-.mail-send { display: inline-flex; align-items: center; gap: 6px; border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 7px 14px; background: var(--accent); color: var(--accent-ink, #fff); cursor: pointer; }
+.mail-send { display: inline-flex; align-items: center; gap: 6px; border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 7px 14px; background: var(--accent); color: var(--accent-ink); cursor: pointer; }
 .mail-send:disabled { opacity: 0.5; cursor: default; }
 
 /* Compose form. */

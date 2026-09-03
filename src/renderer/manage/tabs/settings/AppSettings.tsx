@@ -6,6 +6,7 @@ import type {
   TaskNotifyMode,
   UpdateStatus
 } from '../../../../shared/types';
+import { followsSystem } from '../../../../shared/theme';
 import { ReleaseNotesModal } from '../../../ReleaseNotesModal';
 import { InfoTip } from '../../../ui/InfoTip';
 import { RowSelect, ValueRow } from './rows';
@@ -37,9 +38,12 @@ export function AppSettings() {
 
 /**
  * Which look this machine renders with: follow the OS, force light/dark, or a
- * custom theme — a JSON file of color-token overrides in this machine's themes
- * folder (see desktop/themes.ts). Selecting applies everywhere at once; the
- * windows repaint off the `client:themeChanged` push.
+ * custom theme — a JSON file of color-token overrides, either shipped with the
+ * app or in this machine's themes folder (see desktop/themes.ts). Selecting
+ * applies everywhere at once; the windows repaint off the `client:themeChanged`
+ * push, and the same push arrives when a file in the folder changes, which is
+ * when the list is re-read — there is no reload button because saving the file
+ * is the reload.
  */
 function AppearanceSection() {
   const [selected, setSelected] = useState('system');
@@ -48,6 +52,10 @@ function AppearanceSection() {
   useEffect(() => {
     void window.stem.getSettings().then((s) => setSelected(s.theme.selected));
     void window.stem.listThemes().then(setThemes);
+    return window.stem.onThemeChanged((state) => {
+      setSelected(state.selected);
+      void window.stem.listThemes().then(setThemes);
+    });
   }, []);
 
   function select(value: string) {
@@ -55,13 +63,11 @@ function AppearanceSection() {
     window.stem.updateThemeSettings({ selected: value }).then((s) => setSelected(s.theme.selected));
   }
 
-  /** Pick up new files, and re-apply the selected theme after an edit to it. */
-  function reload() {
-    void window.stem.listThemes().then(setThemes);
-    // An empty patch re-reads the selected theme's file and re-pushes it.
-    void window.stem.updateThemeSettings({}).then((s) => setSelected(s.theme.selected));
-  }
-
+  const describe = (t: CustomTheme): string => {
+    if (t.problem) return t.problem;
+    const where = t.source === 'bundled' ? 'Shipped with Stem' : `Your theme (${t.id}.json)`;
+    return followsSystem(t) ? `${where} — light and dark, follows the OS` : where;
+  };
   const options = [
     { value: 'system', label: 'System', title: 'Follow the OS appearance' },
     { value: 'light', label: 'Light', title: 'The built-in light palette, whatever the OS says' },
@@ -69,7 +75,7 @@ function AppearanceSection() {
     ...themes.map((t) => ({
       value: `custom:${t.id}`,
       label: t.problem ? `${t.name} — broken` : t.name,
-      title: t.problem ?? `Custom theme (${t.id}.json)`
+      title: describe(t)
     }))
   ];
   // A choice whose file is gone still has to show as chosen, or the select goes
@@ -87,10 +93,10 @@ function AppearanceSection() {
             <>
               Theme{' '}
               <InfoTip label="About themes">
-                <strong>System</strong> follows the OS appearance. A custom theme is a small JSON
-                file of colors in the themes folder — open it below and copy{' '}
-                <strong>_example.json</strong> to start one. After editing a theme file, press{' '}
-                <strong>Reload</strong> to see the change.
+                <strong>System</strong> follows the OS appearance. The other themes are small JSON
+                files of colors: some ship with Stem, and any you put in the themes folder are
+                listed too — open it below and copy <strong>_example.json</strong> to start one.
+                Changes to a file show up as soon as you save it.
               </InfoTip>
             </>
           }
@@ -104,9 +110,6 @@ function AppearanceSection() {
             title="Open the themes folder in the file manager"
           >
             Open themes folder
-          </button>
-          <button className="link-btn" onClick={reload} title="Re-read the themes folder and re-apply the selected theme">
-            Reload
           </button>
         </ValueRow>
       </div>

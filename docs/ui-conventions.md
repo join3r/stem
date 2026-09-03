@@ -30,17 +30,21 @@ and the drop-overlay glyphs keep their decorative app-icon curve (`18px`/`22px`)
 floating panels (gate card, HUD pill, MCP confirm card) keep context-tuned one-off shadows because
 each is tuned to its own backdrop. Anything else should use a token.
 
-The one surface that does not follow the theme is the QR plate in the "Pair a phone" dialog
-(`.pair-qr-plate`), which is literal `#fff` and `#000`. It is not read by a person: phone scanners
-expect dark modules on a light field, and an inverted symbol is a coin flip across iOS and Android.
-Nothing else may hard-code a color.
+The surfaces that do not follow the theme are the QR codes (`.pair-qr-plate` in "Pair a phone",
+`.qr-card` in the pairing link), which are literal `#fff` and `#000`. They are not read by a person:
+phone scanners expect dark modules on a light field, and an inverted symbol is a coin flip across iOS
+and Android. The only other literal color is white ink on a saturated fill — the switch knob, the
+glyph on a provider-colored `.row-icon`, the label on a `--danger` button — where white is right
+whatever the palette. Nothing else may hard-code a color, and a token must not be referenced with
+a literal fallback (`var(--x, #abc)`): the fallback hides a missing token from every theme.
 
 The color tokens are also the theming surface: Settings → App → Appearance can force light/dark or
-load a user-authored theme — a JSON file of token overrides in this machine's themes folder,
-applied as inline custom properties over the built-in palette (see `docs/themes.md`). This is one
-more reason a new color must be a token: a hard-coded color is invisible to every custom theme.
-The dark palette exists twice in `styles.css` (a `prefers-color-scheme` block and a
-`data-theme="dark"` block) — **keep the two identical** when touching either.
+load a theme — a JSON file of token overrides, shipped in `themes/` or written into this machine's
+themes folder — applied as inline custom properties over the built-in palette (see
+`docs/themes.md`). This is one more reason a new color must be a token: a hard-coded color is
+invisible to every theme. The dark palette exists twice in `styles.css` (a `prefers-color-scheme`
+block and a `data-theme="dark"` block) — **keep the two identical** when touching either — and a
+third time as the `dark` block of the `_example.json` that `desktop/themes.ts` writes.
 
 ## Manage panel & settings building blocks
 

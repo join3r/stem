@@ -39,6 +39,7 @@ files:
   - dist/**
   - build/icon.png # loaded at runtime via app.getAppPath() (server/index.ts appIcon)
   - RELEASE_NOTES.md # ditto — the "what's new" popup reads it (workspace/release-notes.ts)
+  - themes/** # ditto — the themes shipped with the app (desktop/themes.ts bundledThemesDir)
   # pdf.js is only used for folder-index text extraction (server/folder-index/pdf.ts),
   # which loads legacy/build/pdf.mjs + its fake-worker import pdf.worker.mjs.
   # The browser builds, rendering assets (cmaps/fonts/wasm/icc), minified

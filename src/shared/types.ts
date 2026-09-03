@@ -3011,20 +3011,26 @@ export const THEME_COLOR_TOKENS = [
 ] as const;
 
 /**
- * A user-authored theme, read from `<state root>/themes/<id>.json`. `appearance`
- * names the built-in palette that fills every token the file does not set (and
- * decides `color-scheme`, so native controls match). A file that cannot be used
- * still appears in the list with `problem` set, so the picker can say why
- * instead of silently dropping it.
+ * One theme, read from a JSON file — either shipped with the app (`themes/` in
+ * the repo, `source: 'bundled'`) or written by the user into this machine's
+ * themes folder (`<state root>/themes/<id>.json`, `source: 'user'`; a user file
+ * shadows a bundled one of the same id). A theme carries a `light` palette, a
+ * `dark` palette, or both; with both it follows the OS appearance the way
+ * 'system' does. Each palette lays its colors over the built-in palette of the
+ * same appearance, which also decides `color-scheme` so native controls match.
+ * A file that cannot be used still appears in the list with `problem` set, so
+ * the picker can say why instead of silently dropping it.
  */
 export interface CustomTheme {
   /** The file's base name — what ThemeSettings.selected points at. */
   id: string;
   /** Display name from the file, falling back to the id. */
   name: string;
-  appearance: 'light' | 'dark';
-  /** Validated token → CSS color value. Unknown tokens and unsafe values are dropped. */
-  colors: Record<string, string>;
+  /** Shipped with the app, or from this machine's themes folder. */
+  source: 'bundled' | 'user';
+  /** Validated token → CSS color value, per appearance. Unknown tokens and unsafe values are dropped. */
+  light?: Record<string, string>;
+  dark?: Record<string, string>;
   /** Why the file could not be used, in words the picker can show. */
   problem?: string;
 }
@@ -3814,13 +3820,17 @@ export interface StemApi {
   // and the theme files both live on this machine (see desktop/themes.ts).
   /** The stored choice plus the custom theme it names — asked once on boot. */
   getThemeState(): Promise<ThemeState>;
-  /** The custom themes in this machine's themes folder, re-read from disk. */
+  /** Every theme: the ones shipped with the app, then this machine's themes folder, re-read from disk. */
   listThemes(): Promise<CustomTheme[]>;
   /** Pick a theme. An empty patch re-reads the selected theme's file and re-pushes. */
   updateThemeSettings(patch: Partial<ThemeSettings>): Promise<AppSettings>;
   /** Open the themes folder in the file manager, creating it (and an example) first. */
   revealThemesFolder(): Promise<void>;
-  /** The theme changed — pushed to every window so all three repaint together. */
+  /**
+   * The theme changed — pushed to every window so all three repaint together.
+   * Also fires when a file in the themes folder is added, edited or removed, so
+   * a picker re-lists on it.
+   */
   onThemeChanged(listener: (state: ThemeState) => void): () => void;
   // Devices: which clients may reach the server, and how a new one is admitted.
   /** Every registered device plus any pairing code still outstanding. */

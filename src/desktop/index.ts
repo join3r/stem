@@ -30,7 +30,7 @@ import { createPresenceHeartbeat, type PresenceHeartbeat } from './presence';
 import { createServerProxy, type ServerProxy } from './proxy';
 import { clientCredentials, resolveServerUrl } from './server-endpoint';
 import { readClientSettings, seedReleaseNotesMarker } from './settings';
-import { currentThemeState, resolveWindowBackground } from './themes';
+import { currentThemeState, resolveWindowBackground, watchThemes } from './themes';
 import { createUpdates } from './updates';
 import { createQuickChat } from './quickchat';
 import { loadRenderer, PRELOAD_SCRIPT } from './renderer-assets';
@@ -507,6 +507,15 @@ app.whenReady().then(async () => {
   // Everything the renderer can invoke, bound to ipcMain: every channel the
   // server says it answers, plus this machine's own handlers. Before any window
   // exists, so no renderer can race a missing channel.
+  // All three windows show the palette, so all three are told at once. The
+  // overlay and HUD are off the main push queue (created up front, only ever
+  // hidden), so they are sent to directly.
+  const themeChanged = (state: ThemeState): void => {
+    themeState = state;
+    sendToMain('client:themeChanged', state);
+    quickChat.sendToOverlay('client:themeChanged', state);
+    quickChat.sendToHud('client:themeChanged', state);
+  };
   registerLocalIpc({
     mainWindow: () => mainWindow,
     connection: () => ({ serverUrl, remote: !server, pinnedByEnv: configured.pinnedByEnv }),
@@ -518,16 +527,11 @@ app.whenReady().then(async () => {
     execHost,
     harnessHost,
     mirrorHost,
-    // All three windows show the palette, so all three are told at once. The
-    // overlay and HUD are off the main push queue (created up front, only ever
-    // hidden), so they are sent to directly.
-    themeChanged: (state) => {
-      themeState = state;
-      sendToMain('client:themeChanged', state);
-      quickChat.sendToOverlay('client:themeChanged', state);
-      quickChat.sendToHud('client:themeChanged', state);
-    }
+    themeChanged
   });
+  // A theme file saved, added or removed in the themes folder is the same event
+  // as picking one: every window repaints and the picker re-lists.
+  watchThemes(() => void currentThemeState().then(themeChanged));
   quickChat.registerIpc();
   ipcMain.on('renderer:ready', (event) => {
     const win = mainWindow;
