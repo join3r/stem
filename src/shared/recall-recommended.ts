@@ -6,8 +6,10 @@ import type { PartialRetrievalSettings, RetrievalSettings } from './types';
 // outside the repo): a Qwen3 embedder feeding the Qwen3 reranker gate beat the
 // E5/Gemma embedders, every cosine gate, deeper pools and an external memory
 // system. The bundled 0.6B tied the 4B Qwen3 served via Ollama on both benches,
-// so the recommendation names the built-in model and nothing external — a
-// server endpoint is for people who already run one, not a quality upgrade.
+// so the recommendation is the two built-in models and nothing external: a
+// server endpoint buys no quality, and it is one more thing that can be down.
+// Anything else — including a Qwen3 on the user's own endpoint — gets the offer,
+// with the wording telling a remote-Qwen3 user that quality stays the same.
 
 export const RECOMMENDED_EMBED_MODEL = 'qwen3-embedding-0.6b';
 export const RECOMMENDED_RERANK_MODEL = 'qwen3-reranker-0.6b';
@@ -21,30 +23,31 @@ export const RECOMMENDED_RERANK_MODEL = 'qwen3-reranker-0.6b';
 export const RECALL_DEFAULTS_RELEASE = '0.5.0';
 
 export interface RecallSetupStatus {
-  /** A Qwen3 embedder — the bundled one, or a qwen3-embedding model on the user's own endpoint (they tied). */
+  /** The bundled Qwen3 Embedding 0.6B. */
   embedOk: boolean;
-  /** The Qwen3 reranker, bundled or on the user's own endpoint. */
+  /** The bundled Qwen3 Reranker 0.6B. */
   rerankOk: boolean;
+  /**
+   * A qwen3-embedding model on the user's own endpoint. Not the recommendation
+   * (it needs a server the built-in one does not), but it measured the same, so
+   * the offer and the row say "same quality", not "better".
+   */
+  embedRemoteQwen3: boolean;
 }
 
 export function recallSetupStatus(retrieval: RetrievalSettings): RecallSetupStatus {
   const e = retrieval.embeddings;
   const r = retrieval.reranker;
   return {
-    embedOk:
-      (e.mode === 'local' && e.localModel === RECOMMENDED_EMBED_MODEL) ||
-      (e.mode === 'remote' && /qwen3-embedding/i.test(e.model ?? '')),
-    rerankOk:
-      (r.mode === 'local' && r.localModel === RECOMMENDED_RERANK_MODEL) ||
-      (r.mode === 'remote' && /qwen3-reranker/i.test(r.model ?? ''))
+    embedOk: e.mode === 'local' && e.localModel === RECOMMENDED_EMBED_MODEL,
+    rerankOk: r.mode === 'local' && r.localModel === RECOMMENDED_RERANK_MODEL,
+    embedRemoteQwen3: e.mode === 'remote' && /qwen3-embedding/i.test(e.model ?? '')
   };
 }
 
 /**
  * The settings patch that moves a setup onto the recommendation, touching only
- * the stage(s) that are not already there — a remote Qwen3 embedder is left
- * alone rather than re-embedding every fact for no measured gain. Null when
- * nothing needs to change.
+ * the stage(s) that are not already there. Null when nothing needs to change.
  */
 export function recommendedRetrievalPatch(retrieval: RetrievalSettings): PartialRetrievalSettings | null {
   const { embedOk, rerankOk } = recallSetupStatus(retrieval);

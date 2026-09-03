@@ -584,9 +584,9 @@ function RerankerFields({
  * The measured-best retrieval setup, stated where it can be seen. The verdict
  * itself lives in shared/recall-recommended.ts (the post-update popup reads the
  * same one); this row only words it. The recommendation is the built-in Qwen3
- * pair — a Qwen3 embedder on the user's own endpoint counts as already there,
- * since it tied, but is never what the row tells anyone to go and get. The row
- * sits outside the collapsed advanced section on purpose — a recommendation
+ * pair and nothing external: a Qwen3 on the user's own endpoint tied, so the
+ * hint for it says "same quality, no server needed" rather than "better". The
+ * row sits outside the collapsed advanced section on purpose — a recommendation
  * hidden behind "advanced" reaches nobody who hasn't already found it.
  */
 function RecallQualityRow({
@@ -596,7 +596,7 @@ function RecallQualityRow({
   retrieval: RetrievalSettings;
   onReview: () => void;
 }) {
-  const { embedOk: embedBest, rerankOk: rerankBest } = recallSetupStatus(retrieval);
+  const { embedOk: embedBest, rerankOk: rerankBest, embedRemoteQwen3 } = recallSetupStatus(retrieval);
   const rerankOn = retrieval.reranker.mode !== 'off';
   const best = embedBest && rerankBest;
   const hint = best
@@ -605,9 +605,13 @@ function RecallQualityRow({
       ? 'Reranker is off — it measured best at choosing which facts to send'
       : embedBest
         ? 'Qwen3 Reranker 0.6B measures best — switch the reranker model'
-        : rerankOn
-          ? 'Best measured: the built-in Qwen3 Embedding 0.6B'
-          : 'Best measured: the built-in Qwen3 Embedding 0.6B with the Qwen3 reranker';
+        : embedRemoteQwen3
+          ? rerankBest
+            ? 'Same quality as the built-in Qwen3 Embedding 0.6B, which needs no server'
+            : 'The built-in Qwen3 Embedding 0.6B measured the same and needs no server; the Qwen3 reranker measured best'
+          : rerankOn
+            ? 'Best measured: the built-in Qwen3 Embedding 0.6B'
+            : 'Best measured: the built-in Qwen3 Embedding 0.6B with the Qwen3 reranker';
   return (
     <div className="group-row">
       <span className="row-main">

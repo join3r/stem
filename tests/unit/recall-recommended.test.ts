@@ -36,10 +36,12 @@ describe('recall recommendation', () => {
     expect(RECALL_DEFAULTS_RELEASE).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it('accepts a Qwen3 embedder on the user\'s own endpoint — it tied, so it is not re-embedded', () => {
+  it('a Qwen3 embedder on the user\'s own endpoint is offered the built-in one, flagged as same-quality', () => {
     const r = retrieval({ embeddings: { mode: 'remote', model: 'qwen3-embedding:4b' } });
-    expect(recallSetupStatus(r)).toEqual({ embedOk: true, rerankOk: true });
-    expect(recommendedRetrievalPatch(r)).toBeNull();
+    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: true, embedRemoteQwen3: true });
+    expect(recommendedRetrievalPatch(r)).toEqual({
+      embeddings: { mode: 'local', localModel: RECOMMENDED_EMBED_MODEL }
+    });
   });
 
   it('patches only the stage that is off the recommendation', () => {
@@ -65,7 +67,7 @@ describe('recall recommendation', () => {
     });
 
     const off = retrieval({ embeddings: { mode: 'off' }, reranker: { mode: 'off' } });
-    expect(recallSetupStatus(off)).toEqual({ embedOk: false, rerankOk: false });
+    expect(recallSetupStatus(off)).toEqual({ embedOk: false, rerankOk: false, embedRemoteQwen3: false });
     expect(recommendedRetrievalPatch(off)?.embeddings?.mode).toBe('local');
   });
 
@@ -74,6 +76,6 @@ describe('recall recommendation', () => {
       embeddings: { mode: 'remote', model: 'nomic-embed-text' },
       reranker: { mode: 'remote', model: 'bge-reranker-v2-m3' }
     });
-    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: false });
+    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: false, embedRemoteQwen3: false });
   });
 });
