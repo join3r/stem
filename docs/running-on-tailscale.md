@@ -135,7 +135,7 @@ not Funnel. Funnel is a separate switch.
 On the server:
 
 ```
-docker compose exec stem node dist/main/server.js pair --label "Vlado's MacBook"
+docker compose exec stem node dist/main/server.js pair --label "My MacBook"
 ```
 
 In Stem on the computer you sit at: **Settings → Server**, address

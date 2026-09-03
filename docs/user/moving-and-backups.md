@@ -66,7 +66,7 @@ that will ask to be signed in again. The last line is always the same one: nothi
 paired with this Stem yet.
 
 ```
-stem-server pair --label "Vlado's MacBook"
+stem-server pair --label "My MacBook"
 ```
 
 gives you a code. Enter it in **Settings → Server** on each machine you want to connect,

@@ -210,7 +210,7 @@ docker compose ps
 On the server:
 
 ```
-docker compose exec stem node dist/main/server.js pair --label "Vlado's MacBook"
+docker compose exec stem node dist/main/server.js pair --label "My MacBook"
 ```
 
 It prints an eight-character code, good for ten minutes and one device.
