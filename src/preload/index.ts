@@ -58,6 +58,7 @@ import type {
   StemApi,
   TaskNotifyPayload,
   TaskModelPatch,
+  TaskPromptPatch,
   TaskPersonaPatch,
   TaskSchedulePatch,
   TasksSettings,
@@ -150,6 +151,8 @@ const api: StemApi = {
   deleteTask: (id: string) => ipcRenderer.invoke('tasks:delete', id),
   updateTaskSchedule: (id: string, patch: TaskSchedulePatch) =>
     ipcRenderer.invoke('tasks:updateSchedule', id, patch),
+  updateTaskPrompt: (id: string, patch: TaskPromptPatch) =>
+    ipcRenderer.invoke('tasks:updatePrompt', id, patch),
   updateTaskModel: (id: string, patch: TaskModelPatch) =>
     ipcRenderer.invoke('tasks:updateModel', id, patch),
   updateTaskPersona: (id: string, patch: TaskPersonaPatch) =>

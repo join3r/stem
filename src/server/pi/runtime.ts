@@ -116,7 +116,7 @@ import {
 } from './normalize';
 
 import { PiWorker } from './worker';
-import { mailPreamble } from '../mail/preamble';
+import { mailPreamble, personaNotesBlock } from '../mail/preamble';
 import { systemVersion } from '../sys-version';
 import { secretKeyHex } from './secrets';
 import {
@@ -171,13 +171,19 @@ const CONTEXT_STRIP_RE = /^<!--stem:context-->[\s\S]*?<!--\/stem:context-->\n+/;
 const SCHED_CLOSE = '<!--/stem:scheduled-->';
 const SCHED_STRIP_RE = /^<!--stem:scheduled at="([^"]*)"-->[\s\S]*?<!--\/stem:scheduled-->\n+/;
 
-/** The model-visible scheduled-run preamble, fenced for replay stripping + detection. */
-function scheduledPreamble(at: string): string {
+/**
+ * The model-visible scheduled-run preamble, fenced for replay stripping +
+ * detection. A run AS a persona that owns a memory also reads its notes index
+ * here — the same block a mail delivery renders — so what the persona learned
+ * on one schedule is in front of it on the next.
+ */
+function scheduledPreamble(at: string, notes?: { id: string; title: string }[]): string {
   return [
     `<!--stem:scheduled at="${at}"-->`,
     'This is an automated scheduled run — no human is reading the reply live. Carry out the task.',
     'If, and only if, the result is something the user should be told about, call the notify_user tool with a short message.',
     'Otherwise just finish quietly. Do not ask the user questions — there is no one to answer.',
+    ...personaNotesBlock(notes, SCHED_CLOSE),
     SCHED_CLOSE
   ].join('\n');
 }
@@ -2657,14 +2663,6 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       try {
         const bridge = this.mailBridge;
         if (!bridge) return respond({ ok: false, error: 'Mail is unavailable.' });
-        if (!turn?.mail || !turn.personaId)
-          return respond({ ok: false, error: 'send_mail only works inside a mail conversation. Just write your reply.' });
-        const ctx = {
-          conversationId: turn.mail.conversationId,
-          participants: turn.mail.participants,
-          personaId: turn.personaId,
-          turnId: turn.turnId
-        };
         const req = JSON.parse(payload ?? '{}') as {
           op?: string;
           to?: unknown;
@@ -2677,6 +2675,25 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           effort?: string;
           title?: string;
           ids?: unknown;
+        };
+        // The persona's own notebook (remember_note / read_notes) belongs to the
+        // persona, not to mail: a scheduled run AS a persona reads and writes
+        // it too, so those two ops need only a persona on the live turn. Every
+        // other op acts on a conversation and stays mail-only.
+        const noteOp = req.op === 'remember_note' || req.op === 'read_notes';
+        if (!turn?.personaId || (!noteOp && !turn.mail)) {
+          return respond({
+            ok: false,
+            error: noteOp
+              ? 'Your notes are only available when running as a persona.'
+              : 'send_mail only works inside a mail conversation. Just write your reply.'
+          });
+        }
+        const ctx = {
+          conversationId: turn.mail?.conversationId ?? '',
+          participants: turn.mail?.participants ?? [],
+          personaId: turn.personaId,
+          turnId: turn.turnId
         };
         switch (req.op) {
           case 'send': {
@@ -3868,7 +3885,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // A mail delivery does the same with its own fence — who the mail is from, and
     // that the final message becomes the reply.
     const message = input.scheduled
-      ? `${scheduledPreamble(input.scheduled.at)}\n\n${body}`
+      ? `${scheduledPreamble(input.scheduled.at, input.persona?.notes)}\n\n${body}`
       : input.mail
         ? `${mailPreamble(input.mail, input.persona?.id, input.persona?.notes, input.persona?.recall === false)}\n\n${body}`
         : body;

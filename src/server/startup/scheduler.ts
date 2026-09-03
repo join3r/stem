@@ -1,4 +1,5 @@
 import { TaskScheduler } from '../scheduler';
+import { reflectOnDelivery } from '../mail/reflect';
 import { degrade } from '../degrade';
 import { pushTaskAlert } from '../push';
 import { noteSilentRun } from '../workspace/inbox';
@@ -43,6 +44,9 @@ export function initTaskScheduler(deps: {
     // run yields (preemptForUser) when the user sends a message.
     isUserActive: deps.isUserActive,
     interrupt: (turnId) => deps.runtime.interruptTurn(turnId),
+    // A persona run that settled ok reflects into the persona's memory, the
+    // same pass a mail delivery gets (mail/reflect.ts never rejects).
+    reflect: (args) => reflectOnDelivery(deps.runtime, args),
     // A run that found nothing still wrote a turn, which bumps the thread's
     // mtime — the read-state signal the CHATS TREE bolds rows by. (The Inbox is
     // mail now and never sees the thread; this absorber only keeps a quiet

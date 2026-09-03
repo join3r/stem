@@ -10,6 +10,30 @@
 export const MAIL_CLOSE = '<!--/stem:mail-->';
 
 /**
+ * The persona's private memory as the model sees it — the "what you know"
+ * index plus the remember_note pitch. Present (possibly empty) exactly when
+ * the persona owns a store, so a disposable helper is never told to save
+ * lessons it cannot keep; `undefined` renders nothing. Shared by the mail
+ * preamble and the scheduled-run preamble (pi/runtime.ts), so a persona on a
+ * schedule reads the same notes it reads in mail. Titles are model/user-
+ * authored text landing inside a comment fence — `fence` is the closer to
+ * strip so a title cannot end the fence early.
+ */
+export function personaNotesBlock(notes: { id: string; title: string }[] | undefined, fence: string): string[] {
+  if (notes === undefined) return [];
+  return [
+    (notes.length
+      ? `Your private notes — lessons you saved from earlier work (newest first):\n${notes
+          .map((n) => `- ${n.id} · ${n.title.split(fence).join('')}`)
+          .join('\n')}\nFetch a note's full text with the read_notes tool when it looks relevant to this task.`
+      : 'Your private notebook is empty so far.') +
+      ' When this task teaches you something durable — a procedure, a gotcha, a stable fact about your ' +
+      'domain or tools that would help on a FUTURE task — save it with the remember_note tool. ' +
+      'Facts about the user do not belong there.'
+  ];
+}
+
+/**
  * The model-visible mail-delivery preamble, fenced for replay stripping +
  * detection. `self` is the persona this delivery runs as, kept out of the
  * "other personas" line — the first smoke test told Normal that "normal" was
@@ -102,24 +126,7 @@ export function mailPreamble(
           'repeat the quoted text in your reply.'
       ]
     : [];
-  // The persona's private memory. Present (possibly empty) exactly when the
-  // persona owns a store — its presence is what earns the remember_note pitch,
-  // so a disposable helper is never told to save lessons it cannot keep. Titles
-  // are model/user-authored text landing inside our comment fence — strip any
-  // literal fence closer, like the quoted source body above.
-  const memory =
-    notes === undefined
-      ? []
-      : [
-          (notes.length
-            ? `Your private notes — lessons you saved from earlier work (newest first):\n${notes
-                .map((n) => `- ${n.id} · ${n.title.split(MAIL_CLOSE).join('')}`)
-                .join('\n')}\nFetch a note's full text with the read_notes tool when it looks relevant to this task.`
-            : 'Your private notebook is empty so far.') +
-            ' When this task teaches you something durable — a procedure, a gotcha, a stable fact about your ' +
-            'domain or tools that would help on a FUTURE task — save it with the remember_note tool. ' +
-            'Facts about the user do not belong there.'
-        ];
+  const memory = personaNotesBlock(notes, MAIL_CLOSE);
   return [
     `<!--stem:mail from=${blind ? '' : mail.from.split('>').join('')}-->`,
     blind

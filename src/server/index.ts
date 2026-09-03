@@ -23,6 +23,7 @@ import { piHome } from './workspace/paths';
 import type { TaskScheduler } from './scheduler';
 import { MailRouter } from './mail/router';
 import { onPersonasChanged, resolveClientPersona } from './workspace/personas';
+import { personaTurnFields } from './workspace/persona-turn';
 import { initTaskScheduler } from './startup/scheduler';
 import type { ExecService } from './exec/service';
 import { detectGitBash } from './exec/git-bash';
@@ -416,10 +417,13 @@ function registerIpc(): void {
     // The persona's pinned model/effort win over the client's selection, the
     // scheduler's precedence for its persona runs.
     const persona = input.personaId ? await resolveClientPersona(input.personaId) : null;
+    // notes: false — an interactive chat renders no persona preamble, so the
+    // memory index would be fetched for nothing.
+    const personaFields = persona ? await personaTurnFields(persona, { notes: false }) : null;
     const started = await runtime!.startTurn({
       ...input,
-      ...(persona?.model ? { model: persona.model } : {}),
-      ...(persona?.effort ? { effort: persona.effort } : {}),
+      ...(personaFields?.model ? { model: personaFields.model } : {}),
+      ...(personaFields?.effort ? { effort: personaFields.effort } : {}),
       webSearch: quickChat ? settings.webSearch.quickChat : settings.webSearch.main,
       instructions: quickChat
         ? [ci.main, ci.quickChat].map((s) => s.trim()).filter(Boolean).join('\n')
@@ -430,14 +434,7 @@ function registerIpc(): void {
       // real conversation) plus unattended exec semantics on an interactive
       // turn. Only the mail router (which calls the runtime directly) sets
       // these — a client asks by id, resolved and gated above.
-      persona: persona
-        ? {
-            id: persona.id,
-            prompt: persona.prompt,
-            ...(persona.harness ? { harness: persona.harness } : {}),
-            ...(persona.recall === false ? { recall: false as const } : {})
-          }
-        : undefined,
+      persona: personaFields?.persona,
       mail: undefined
     });
     // Start the turn's clock the moment there is a turn. Waiting for its first

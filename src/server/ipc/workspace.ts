@@ -38,6 +38,7 @@ import type {
   ScratchUsageRow,
   SkillsMode,
   TaskModelPatch,
+  TaskPromptPatch,
   TaskPersonaPatch,
   TaskSchedulePatch
 } from '../../shared/types';
@@ -260,6 +261,10 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   registerServer('tasks:updateSchedule', (_e, id: string, patch: TaskSchedulePatch) => {
     const scheduler = deps.scheduler();
     return scheduler ? scheduler.updateSchedule(id, patch.schedule) : [];
+  });
+  registerServer('tasks:updatePrompt', (_e, id: string, patch: TaskPromptPatch) => {
+    const scheduler = deps.scheduler();
+    return scheduler ? scheduler.updatePrompt(id, patch.prompt) : [];
   });
   registerServer('tasks:updateModel', (_e, id: string, patch: TaskModelPatch) => {
     const scheduler = deps.scheduler();

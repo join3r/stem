@@ -48,11 +48,21 @@ Open **Scheduled tasks**, then:
 - **Next** is the useful date. The `cron` line is Stem’s stored repeat pattern.
 - A run marked **(failed)** carries the reason: hover it. The same line is in the log
   (`stem.log` in Stem’s state folder), which is where to look if the row is gone.
-- Click the task text to show the full instruction.
-- The dotted model label on each row names what its runs execute on. Click it to
-  change that: left on **Chat model**, runs follow whatever model is selected in
-  the task’s chat; pick a model (and optionally an effort) to pin runs of this
-  task to it, regardless of what the chat later switches to.
+- Click the task’s title (or the dotted label at the end of its row) to open the
+  task. The editor shows:
+  - **Prompt** — the full instruction every run re-executes. Edit it and **Save
+    prompt**; the row’s title follows.
+  - **Schedule** — the cron expression (minute hour day month weekday), or the
+    date and time of a one-time run. **Save schedule** refuses an expression that
+    can never fire, and a time already in the past.
+  - **Runs as** — a persona, or a plain run. A persona run uses that persona’s
+    role prompt, coding-agent pin, private memory, and model settings, and its
+    `notify_user` mails arrive from that persona. Each run also lets the persona
+    save what it learned into its notes, as a mail delivery does.
+  - **Model** and effort — what a plain run executes on. Left on **Chat model**,
+    runs follow whatever model is selected in the task’s chat; pick a model (and
+    optionally an effort) to pin runs of this task to it, regardless of what the
+    chat later switches to. A persona’s own pins take precedence.
 - **Open chat** to inspect its history or change its model.
 - **Run now** to test it without changing the next scheduled time.
 - **Pause** to keep the task without running it.

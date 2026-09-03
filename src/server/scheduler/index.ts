@@ -15,6 +15,7 @@ import { toMs } from '../../shared/inbox';
 import { isValidCron, nextAfter } from './cron';
 import { clipError, readTasks, saveTasks, titleFromPrompt } from '../workspace/tasks';
 import { getPersona } from '../workspace/personas';
+import { personaTurnFields } from '../workspace/persona-turn';
 import * as activity from '../activity';
 
 // The main-process scheduler. Holds tasks in memory, keeps ONE timer armed for the
@@ -43,6 +44,11 @@ export interface SchedulerOptions {
    * can keep the turn's mtime bump from reading as activity in the Inbox.
    */
   onSilentRun?: (threadId: string, before: number, at: number) => void;
+  /**
+   * A persona run settled ok: reflect what it taught the persona into its
+   * memory (mail/reflect.ts). Called only for personas that own a memory.
+   */
+  reflect?: (args: { personaId: string; assignment: string; threadId: string }) => Promise<void>;
 }
 
 // Timer cap: setTimeout is unreliable over very long delays and across system
@@ -222,14 +228,41 @@ export class TaskScheduler {
     return this.snapshot();
   }
 
+  /**
+   * Replace a task's schedule. Rejects (the IPC surfaces the message) on a
+   * malformed or unreachable cron and on a datetime that is not one — the same
+   * checks the assistant's schedule_task goes through, so a schedule edited in
+   * the Tasks tab cannot arm something the scheduler can never fire.
+   */
   async updateSchedule(id: string, schedule: TaskSchedule): Promise<ScheduledTask[]> {
+    const checked = this.buildSchedule(
+      schedule.kind === 'cron' ? { prompt: '', cron: schedule.expr } : { prompt: '', at: schedule.at }
+    );
+    if (!checked.ok) throw new Error(checked.error);
     const task = this.tasks.find((t) => t.id === id);
     if (task) {
-      task.schedule = schedule;
+      task.schedule = checked.value;
       // A re-scheduled once-task can fire again, so clear the "already ran" marker
       // that suppresses its next-run computation.
       if (schedule.kind === 'once') task.lastRunAt = undefined;
       task.nextRunAt = this.computeNextRunAt(task, new Date());
+      await this.persistAndArm();
+    }
+    return this.snapshot();
+  }
+
+  /**
+   * Replace the prompt a task re-runs (Tasks tab editor). The title is derived
+   * from the prompt, so it follows. Rejects an empty prompt — a task with
+   * nothing to run is a task that fails every time.
+   */
+  async updatePrompt(id: string, prompt: string): Promise<ScheduledTask[]> {
+    const next = prompt.trim();
+    if (!next) throw new Error('A task needs a prompt to run.');
+    const task = this.tasks.find((t) => t.id === id);
+    if (task) {
+      task.prompt = next;
+      task.title = titleFromPrompt(next);
       await this.persistAndArm();
     }
     return this.snapshot();
@@ -468,18 +501,16 @@ export class TaskScheduler {
         );
       }
     }
+    // The persona block comes from the shared builder (memory index, recall
+    // flag and all), so a persona on a schedule is the same persona as in mail.
+    // Only the pins fall back to the task's own.
+    const personaFields = persona ? await personaTurnFields(persona) : null;
+    const model = personaFields?.model ?? task.model;
+    const effort = personaFields?.effort ?? task.effort;
     const turnExtras = {
-      ...(persona?.model ?? task.model ? { model: persona?.model ?? task.model } : {}),
-      ...(persona?.effort ?? task.effort ? { effort: persona?.effort ?? task.effort } : {}),
-      ...(persona
-        ? {
-            persona: {
-              id: persona.id,
-              prompt: persona.prompt,
-              ...(persona.harness ? { harness: persona.harness } : {})
-            }
-          }
-        : {})
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
+      ...(personaFields ? { persona: personaFields.persona } : {})
     };
 
     const run: ActiveRun = {
@@ -565,6 +596,14 @@ export class TaskScheduler {
         }
         task.lastStatus = settle.status;
         this.recordOutcome(task, settle.status === 'failed' ? settle.error ?? 'The run did not finish.' : null);
+        // What did this run teach the persona? Same pass a mail delivery gets,
+        // for the same reason: a persona that runs nightly and never reflects
+        // never learns. Only for runs that settled ok and only when the persona
+        // owns a memory (the index is present exactly then); fire-and-forget,
+        // never rejects (see mail/reflect.ts).
+        if (settle.status === 'ok' && personaFields?.persona.notes && this.opts.reflect) {
+          void this.opts.reflect({ personaId: personaFields.persona.id, assignment: task.prompt, threadId: task.threadId });
+        }
       } else {
         task.lastStatus = 'ok';
         this.recordOutcome(task, null);

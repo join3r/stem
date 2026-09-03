@@ -908,6 +908,9 @@ export interface ScheduleTaskRequest {
 /** Editable fields when updating a task's schedule from the Tasks tab. */
 export type TaskSchedulePatch = { schedule: TaskSchedule };
 
+/** The Tasks tab's prompt editor: the instruction every run re-executes. */
+export type TaskPromptPatch = { prompt: string };
+
 /** The Tasks tab's model row: null clears a pin back to "the chat's model". */
 export type TaskModelPatch = { model: string | null; effort: string | null };
 
@@ -3532,8 +3535,10 @@ export interface StemApi {
   runTaskNow(id: string): Promise<ScheduledTask[]>;
   /** Delete a task. Returns the fresh list. */
   deleteTask(id: string): Promise<ScheduledTask[]>;
-  /** Replace a task's schedule (cron/once). Returns the fresh list. */
+  /** Replace a task's schedule (cron/once). Rejects with the reason on an invalid one. Returns the fresh list. */
   updateTaskSchedule(id: string, patch: TaskSchedulePatch): Promise<ScheduledTask[]>;
+  /** Replace the prompt a task re-runs (its title follows). Rejects an empty prompt. */
+  updateTaskPrompt(id: string, patch: TaskPromptPatch): Promise<ScheduledTask[]>;
   /** Pin (or clear) the model/effort this task's runs execute on. Returns the fresh list. */
   updateTaskModel(id: string, patch: TaskModelPatch): Promise<ScheduledTask[]>;
   /** Pin (or clear) the persona a task's runs execute as. */

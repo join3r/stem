@@ -2439,9 +2439,9 @@ function registerMailTools(pi) {
     description:
       'Save one durable lesson into YOUR OWN private memory: a procedure that worked, a gotcha you hit, a ' +
       'stable fact about your domain or tools that would help you on a FUTURE task. Your saved notes are ' +
-      'listed (id + title) in every mail delivery you receive; fetch a full note with read_notes. ' +
-      'Do NOT save facts about the user (a separate memory owns those) or one-off task details with no ' +
-      'reuse value. Not available to temporary helper personas. Only works during a mail delivery.',
+      'listed (id + title) at the top of every mail delivery and scheduled run you receive; fetch a full note with ' +
+      'read_notes. Do NOT save facts about the user (a separate memory owns those) or one-off task details with no ' +
+      'reuse value. Not available to temporary helper personas. Only works when running as a persona.',
     parameters: {
       type: 'object',
       properties: {
@@ -2462,7 +2462,7 @@ function registerMailTools(pi) {
     label: 'Read your saved notes',
     description:
       'Fetch the full text of notes from YOUR OWN private memory, by the ids shown in the "Your private ' +
-      'notes" index of this delivery. Up to 10 ids per call. Only works during a mail delivery.',
+      'notes" index at the top of this delivery or scheduled run. Up to 10 ids per call. Only works when running as a persona.',
     parameters: {
       type: 'object',
       properties: {

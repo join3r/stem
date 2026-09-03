@@ -64,13 +64,17 @@ function makeScheduler(runtime: EventEmitter) {
   const changes: ScheduledTask[][] = [];
   const runs: unknown[] = [];
   const silent: { threadId: string; before: number; at: number }[] = [];
+  const reflections: { personaId: string; assignment: string; threadId: string }[] = [];
   const scheduler = new TaskScheduler({
     runtime: runtime as never,
     onChange: (tasks) => changes.push(tasks),
     onRun: (run) => runs.push(run),
-    onSilentRun: (threadId, before, at) => silent.push({ threadId, before, at })
+    onSilentRun: (threadId, before, at) => silent.push({ threadId, before, at }),
+    reflect: async (args) => {
+      reflections.push(args);
+    }
   });
-  return { scheduler, changes, runs, silent };
+  return { scheduler, changes, runs, silent, reflections };
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 5));
@@ -373,6 +377,42 @@ class NotifyingRuntime extends FakeRuntime {
   }
 }
 
+describe('Tasks tab editor', () => {
+  it('updatePrompt rewrites the prompt and its derived title, and refuses an empty one', async () => {
+    const runtime = new FakeRuntime();
+    const { scheduler } = makeScheduler(runtime);
+    const res = await scheduler.create({ prompt: 'old instruction', cron: '0 8 * * *' }, 't1');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const long = 'Every morning, search the live web thoroughly for newly released macOS betas and report.';
+    const [task] = await scheduler.updatePrompt(res.task.id, `  ${long}  `);
+    expect(task.prompt).toBe(long);
+    expect(task.title).toBe(`${long.slice(0, 57)}…`);
+    expect((await readTasks())[0].prompt).toBe(long);
+    await expect(scheduler.updatePrompt(res.task.id, '   ')).rejects.toThrow(/needs a prompt/);
+    expect((await readTasks())[0].prompt).toBe(long);
+    scheduler.stop();
+  });
+
+  it('updateSchedule validates like schedule_task: bad or unreachable cron and past datetimes are refused', async () => {
+    const runtime = new FakeRuntime();
+    const { scheduler } = makeScheduler(runtime);
+    const res = await scheduler.create({ prompt: 'x', cron: '0 8 * * *' }, 't1');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    await expect(scheduler.updateSchedule(res.task.id, { kind: 'cron', expr: 'not cron' })).rejects.toThrow(/Invalid cron/);
+    await expect(scheduler.updateSchedule(res.task.id, { kind: 'cron', expr: '0 0 30 2 *' })).rejects.toThrow(/no reachable/);
+    await expect(scheduler.updateSchedule(res.task.id, { kind: 'once', at: '2001-01-01T00:00:00Z' })).rejects.toThrow(/in the past/);
+    // The stored schedule is untouched by a refused edit…
+    expect((await readTasks())[0].schedule).toEqual({ kind: 'cron', expr: '0 8 * * *' });
+    // …and a valid one (with stray whitespace) lands trimmed with a fresh nextRunAt.
+    const [task] = await scheduler.updateSchedule(res.task.id, { kind: 'cron', expr: ' 30 9 * * 1 ' });
+    expect(task.schedule).toEqual({ kind: 'cron', expr: '30 9 * * 1' });
+    expect(new Date(task.nextRunAt!).getDay()).toBe(1);
+    scheduler.stop();
+  });
+});
+
 describe('schedule-as-persona', () => {
   it('validates the persona at creation and threads it into the run', async () => {
     const runtime = new FakeRuntime();
@@ -389,6 +429,41 @@ describe('schedule-as-persona', () => {
     expect(runtime.starts[0].persona?.id).toBe('verifier');
     expect(runtime.starts[0].persona?.prompt).toContain('Verifier');
     expect(runtime.starts[0].scheduled?.taskId).toBe(res.task.id);
+    scheduler.stop();
+  });
+
+  it('a persona run carries the persona’s memory index and recall flag, and reflects when it settles ok', async () => {
+    const { savePersonaNote } = await import('../../src/server/workspace/persona-memory');
+    // Verifier is a built-in that owns a memory; seed one note so the index is non-empty.
+    const note = await savePersonaNote('verifier', { title: 'Check the build first', body: 'Always run tsc.' }, 'tool');
+    const runtime = new FakeRuntime();
+    const { scheduler, reflections } = makeScheduler(runtime);
+    const res = await scheduler.create({ prompt: 'verify the nightly', cron: '0 8 * * *', personaId: 'verifier' }, 't1');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    scheduler.runNow(res.task.id);
+    await until(() => runtime.starts.length === 1, 'the persona run');
+    // The same persona block a mail delivery gets: the notes index rides the turn…
+    expect(runtime.starts[0].persona?.notes).toEqual([{ id: note.id, title: 'Check the build first' }]);
+    // …and the run that settled ok reflects into the persona's memory.
+    await until(() => reflections.length === 1, 'the reflection pass');
+    expect(reflections[0]).toEqual({ personaId: 'verifier', assignment: 'verify the nightly', threadId: 't1' });
+    scheduler.stop();
+  });
+
+  it('a persona without memory or recall runs blind: no notes index, recall: false, no reflection', async () => {
+    // Critic ships memory: false, recall: false.
+    const runtime = new FakeRuntime();
+    const { scheduler, reflections } = makeScheduler(runtime);
+    const res = await scheduler.create({ prompt: 'grade it', cron: '0 8 * * *', personaId: 'critic' }, 't1');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    scheduler.runNow(res.task.id);
+    await until(() => runtime.starts.length === 1, 'the critic run');
+    expect(runtime.starts[0].persona?.recall).toBe(false);
+    expect(runtime.starts[0].persona?.notes).toBeUndefined();
+    await until(() => (readTasks().then((ts) => ts[0].lastStatus === 'ok')), 'the run to settle');
+    expect(reflections).toHaveLength(0);
     scheduler.stop();
   });
 

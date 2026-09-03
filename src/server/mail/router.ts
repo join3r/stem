@@ -24,6 +24,7 @@ import {
   savePersonaNote
 } from '../workspace/persona-memory';
 import { reflectOnDelivery } from './reflect';
+import { personaTurnFields } from '../workspace/persona-turn';
 import { repoLocks } from './repo-lock';
 import { readSettings } from '../workspace/settings';
 import {
@@ -1131,14 +1132,11 @@ export class MailRouter {
               ...(sourceNames.length ? { attachmentNames: sourceNames } : {})
             }
           : undefined;
-      // The persona's memory index (id + title per note) rides the turn so the
-      // preamble can render "what you know" every delivery. Present (possibly
-      // empty) exactly when the persona owns a store — presence is also what
-      // makes the preamble mention remember_note.
-      // quiet: an unreadable store already degrades inside listPersonaNotes;
-      // the delivery proceeds with an empty index rather than failing.
-      const noteRows = personaOwnsMemory(persona) ? await listPersonaNotes(persona.id).catch(() => []) : undefined;
-      const notes = noteRows?.map((n) => ({ id: n.id, title: n.title }));
+      // The persona's pins and its persona block (role prompt, harness pin,
+      // memory index, recall flag) — built by the shared helper so a delivery
+      // and a scheduled run of the same persona behave the same.
+      const personaFields = await personaTurnFields(persona);
+      const notes = personaFields.persona.notes;
       const threadIdRef = { current: threadId ?? null };
       const settling = this.waitForSettle(turnId, threadIdRef);
       let started;
@@ -1147,21 +1145,13 @@ export class MailRouter {
           input: body,
           turnId,
           ...(threadId ? { threadId } : {}),
-          ...(persona.model ? { model: persona.model } : {}),
-          ...(persona.effort ? { effort: persona.effort } : {}),
+          ...personaFields,
           ...(attachments?.length ? { attachments } : {}),
           webSearch: true,
           // A private conversation's every delivery is a private turn: the
           // hidden run threads are not in the chat store, so the flag rides
           // the input (the runtime honors it on mail turns, see startTurn).
           ...(conversation.private ? { private: true } : {}),
-          persona: {
-            id: persona.id,
-            prompt: persona.prompt,
-            ...(persona.harness ? { harness: persona.harness } : {}),
-            ...(notes ? { notes } : {}),
-            ...(persona.recall === false ? { recall: false as const } : {})
-          },
           mail: {
             conversationId,
             subject: conversation.subject,

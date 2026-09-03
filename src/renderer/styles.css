@@ -2793,10 +2793,22 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .task-item.paused { opacity: 0.6; }
 .task-head { display: flex; align-items: flex-start; gap: var(--sp-3); }
 .task-head .row-main em { font-family: var(--font-mono, ui-monospace, monospace); white-space: normal; overflow: visible; text-overflow: clip; }
-/* Long task prompts: clamp to a readable preview, expand in place on click. */
-.row-main strong.task-title { cursor: pointer; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.row-main strong.task-title.expanded { -webkit-line-clamp: unset; }
+/* The row's face is the task's title (a 60-char label the server derives from
+   the prompt), clamped to two lines; the full prompt lives in the editor below. */
+.row-main strong.task-title { cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .task-meta { font-size: var(--fs-11); padding-left: 2px; }
+/* The editor a task row expands into: prompt, schedule, persona, model. Same
+   shell as the persona editor; the fields stack in the 320px rail. */
+.task-editor { display: flex; flex-direction: column; gap: var(--sp-3); padding-left: 2px; }
+.task-field { display: flex; flex-direction: column; gap: 4px; max-width: 320px; }
+.task-field-label { font-size: var(--fs-11); color: var(--muted); }
+/* select.vfield is tuned for a settings row (right-aligned, half width); here it
+   is a form field like the inputs beside it. */
+.task-editor .vfield { text-align: left; border: 0.5px solid var(--hair); border-radius: var(--radius-sm); padding: 5px 8px; width: 100%; max-width: 100%; }
+/* A paragraph-long watch task scrolls inside its box instead of becoming the page. */
+.task-editor .task-prompt { max-height: 240px; overflow-y: auto; resize: vertical; }
+.task-editor .task-schedule { font-family: var(--font-mono, ui-monospace, monospace); }
+.task-error { font-size: var(--fs-11); color: var(--danger); max-width: 320px; overflow-wrap: anywhere; }
 .task-running { color: var(--accent); }
 /* The collapsed face of the model editor: reads as one more meta fact ("· GPT-5.6
    Sol · High"), the dotted underline being the only hint it opens something. A
@@ -2815,8 +2827,7 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 /* Per-task model pin: a narrow field pair under the meta line, not a full-width
    form row — it is a property of the task, not a section of its own. The gap
    matches what .mp-effort's negative top margin was tuned against. */
-.task-model { display: flex; flex-direction: column; gap: var(--sp-3); max-width: 320px; padding-left: 2px; }
-.task-persona { border: 0.5px solid var(--hair); border-radius: var(--radius-sm); padding: 6px 8px; font: inherit; background: transparent; color: inherit; }
+.task-model { display: flex; flex-direction: column; gap: var(--sp-3); max-width: 320px; }
 /* Hover carries the reason the run failed, so the mark has to invite the hover. */
 .task-failed { color: var(--warn); cursor: help; }
 
