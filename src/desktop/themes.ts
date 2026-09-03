@@ -5,7 +5,14 @@ import { host } from '../server/host';
 import { log } from '../server/log';
 import { readClientSettings } from './settings';
 import { resolvePalette } from '../shared/theme';
-import { THEME_COLOR_TOKENS, type CustomTheme, type ThemeState } from '../shared/types';
+import {
+  THEME_COLOR_TOKENS,
+  THEME_STYLE_TOKENS,
+  THEME_TOKENS,
+  type CustomTheme,
+  type ThemeState,
+  type ThemeToken
+} from '../shared/types';
 
 // Custom themes: small JSON files, each overriding some of the color tokens at
 // the top of renderer/styles.css. Two folders feed the picker: `themes/` in the
@@ -26,12 +33,41 @@ import { THEME_COLOR_TOKENS, type CustomTheme, type ThemeState } from '../shared
 const CUSTOM_PREFIX = 'custom:';
 
 /**
- * A color value a theme file is allowed to carry: hex, rgb()/hsl()/oklch()-style
- * functions, or a bare keyword — and nothing that could smuggle a URL or extra
- * declarations. Applied via CSSOM setProperty (which already refuses to escape
- * the declaration), so this is belt on top of braces.
+ * What a theme file may say for each kind of token — and nothing that could
+ * smuggle a URL or extra declarations. Applied via CSSOM setProperty (which
+ * already refuses to escape the declaration), so this is belt on top of braces.
  */
-const SAFE_COLOR = /^[#a-zA-Z0-9(),./%\s-]{1,100}$/;
+const SAFE = {
+  /** hex, rgb()/hsl()/oklch()-style functions, or a bare keyword */
+  color: /^[#a-zA-Z0-9(),./%\s-]{1,100}$/,
+  /** a font-family list: names, quotes, commas */
+  font: /^[a-zA-Z0-9\s,'"_-]{1,200}$/,
+  /** a plain length */
+  length: /^\d+(\.\d+)?(px|rem|em)$/,
+  /** a box-shadow list, or none */
+  shadow: /^(none|[#a-zA-Z0-9(),./%\s-]{1,300})$/
+} as const;
+const UNSAFE = /url|var|;|\\/i;
+
+/** The multipliers: a unitless number, kept where the app stays usable. */
+const NUMBER_RANGE: Record<string, [number, number]> = {
+  'type-scale': [0.5, 2],
+  'space-scale': [0.5, 2],
+  'shadow-scale': [0, 2]
+};
+
+/** The validated value for one token, or null when the file's value cannot be used. */
+function safeValue(token: ThemeToken, value: unknown): string | null {
+  const kind = THEME_TOKENS[token];
+  if (kind === 'number') {
+    const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : NaN;
+    const [lo, hi] = NUMBER_RANGE[token] ?? [0, 1];
+    return Number.isFinite(n) && n >= lo && n <= hi ? String(n) : null;
+  }
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return SAFE[kind].test(trimmed) && !UNSAFE.test(trimmed) ? trimmed : null;
+}
 
 /** The window-chrome colors the built-in palettes paint (--panel light / dark-ish). */
 const BUILTIN_BG = { light: '#efece5', dark: '#1b1916' } as const;
@@ -53,19 +89,19 @@ export function customThemeId(selected: string): string | null {
   return selected.startsWith(CUSTOM_PREFIX) ? selected.slice(CUSTOM_PREFIX.length) : null;
 }
 
-/** The tokens a palette block sets, validated; anything else is dropped without comment. */
-function readPalette(raw: unknown): Record<string, string> | string {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'must be an object of token → color';
-  const colors = raw as Record<string, unknown>;
+/** The tokens a block sets, validated; anything else is dropped without comment. */
+function readBlock(raw: unknown, allowed: readonly ThemeToken[]): Record<string, string> | string {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'must be an object of token → value';
+  const values = raw as Record<string, unknown>;
   const out: Record<string, string> = {};
-  for (const token of THEME_COLOR_TOKENS) {
-    const value = colors[token];
-    if (typeof value !== 'string') continue;
-    const trimmed = value.trim();
-    if (SAFE_COLOR.test(trimmed) && !/url|var/i.test(trimmed)) out[token] = trimmed;
+  for (const token of allowed) {
+    if (!(token in values)) continue;
+    const value = safeValue(token, values[token]);
+    if (value !== null) out[token] = value;
   }
   return out;
 }
+const readPalette = (raw: unknown) => readBlock(raw, THEME_COLOR_TOKENS);
 
 /**
  * One theme file, read and validated. Never throws: a file that cannot be used
@@ -75,7 +111,8 @@ function readPalette(raw: unknown): Record<string, string> | string {
  * Two shapes are accepted. The original — `"appearance": "dark"` plus one
  * `"colors"` block — is a single-appearance theme. The paired form carries a
  * `"light"` block, a `"dark"` block, or both, each a token → color map; with
- * both, the theme follows the OS the way the System setting does.
+ * both, the theme follows the OS the way the System setting does. Either shape
+ * may add a `"style"` block of non-color tokens (fonts, scales, radii, shadows).
  */
 async function readThemeFile(dir: string, id: string, source: CustomTheme['source']): Promise<CustomTheme> {
   const theme: CustomTheme = { id, name: id, source };
@@ -86,9 +123,21 @@ async function readThemeFile(dir: string, id: string, source: CustomTheme['sourc
     const reason = e instanceof SyntaxError ? 'is not valid JSON' : 'could not be read';
     return { ...theme, problem: `${id}.json ${reason}` };
   }
-  const doc = raw as { name?: unknown; appearance?: unknown; colors?: unknown; light?: unknown; dark?: unknown };
+  const doc = raw as {
+    name?: unknown;
+    appearance?: unknown;
+    colors?: unknown;
+    light?: unknown;
+    dark?: unknown;
+    style?: unknown;
+  };
   if (!doc || typeof doc !== 'object') return { ...theme, problem: `${id}.json is not a JSON object` };
   if (typeof doc.name === 'string' && doc.name.trim()) theme.name = doc.name.trim();
+  if (doc.style !== undefined) {
+    const style = readBlock(doc.style, THEME_STYLE_TOKENS);
+    if (typeof style === 'string') return { ...theme, problem: `"style" ${style}` };
+    theme.style = style;
+  }
 
   const paired = doc.light !== undefined || doc.dark !== undefined;
   if (paired) {
@@ -240,14 +289,26 @@ export function watchThemes(onChange: () => void): () => void {
 }
 
 /**
- * The starting point a new theme is copied from: every themeable token, filled
- * with the built-in palettes — both of them, so the copy follows the OS until
- * its author deletes the block they do not want. Underscore-prefixed so the
+ * The starting point a new theme is copied from: every color token, filled with
+ * the built-in palettes — both of them, so the copy follows the OS until its
+ * author deletes the block they do not want — plus the style knobs most themes
+ * reach for (the full list is THEME_STYLE_TOKENS). Underscore-prefixed so the
  * lister skips it — it is documentation, not a theme — and rewritten on every
  * reveal so it always matches the tokens this build understands.
  */
 const EXAMPLE = {
   name: 'My theme (copy this file, e.g. to my-theme.json)',
+  style: {
+    'font-ui': "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif",
+    'font-mono': "'SF Mono', ui-monospace, monospace",
+    'type-scale': '1',
+    'space-scale': '1',
+    'shadow-scale': '1',
+    'radius-sm': '4px',
+    radius: '6px',
+    'radius-md': '8px',
+    'radius-lg': '12px'
+  },
   light: {
     paper: '#f6f4ef',
     content: '#faf8f3',

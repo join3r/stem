@@ -122,6 +122,63 @@ describe('a theme with a light and a dark palette', () => {
   });
 });
 
+describe('the style block', () => {
+  it('takes fonts, multipliers, lengths and shadows, each by its own rule', async () => {
+    writeTheme('styled', {
+      appearance: 'light',
+      colors: {},
+      style: {
+        'font-ui': " 'Inter', system-ui, sans-serif ",
+        'font-mono': 'JetBrains Mono, monospace',
+        'type-scale': 1.1,
+        'space-scale': '0.9',
+        'shadow-scale': 0,
+        radius: '0px',
+        'radius-lg': '1.25rem',
+        'shadow-pop': 'none',
+        'shadow-btn': '0 1px 2px rgba(0, 0, 0, 0.4)'
+      }
+    });
+    const [theme] = await listThemes();
+    expect(theme.problem).toBeUndefined();
+    expect(theme.style).toEqual({
+      'font-ui': "'Inter', system-ui, sans-serif",
+      'font-mono': 'JetBrains Mono, monospace',
+      'type-scale': '1.1',
+      'space-scale': '0.9',
+      'shadow-scale': '0',
+      radius: '0px',
+      'radius-lg': '1.25rem',
+      'shadow-pop': 'none',
+      'shadow-btn': '0 1px 2px rgba(0, 0, 0, 0.4)'
+    });
+  });
+
+  it('drops what could break the app or smuggle CSS, and color tokens in the wrong block', async () => {
+    writeTheme('wild', {
+      appearance: 'light',
+      colors: { 'font-ui': 'Comic Sans' }, // not a color token
+      style: {
+        paper: '#fff', // not a style token
+        'font-ui': 'url(evil)',
+        'font-mono': 'a; background: red',
+        'type-scale': 0.1, // below the floor
+        'space-scale': 'big',
+        'shadow-scale': 3, // above the ceiling
+        radius: '12', // no unit
+        'radius-md': '10%',
+        'sp-4': 'var(--sp-12)',
+        'shadow-pop': 'url(x)'
+      }
+    });
+    const [theme] = await listThemes();
+    expect(theme.light).toEqual({});
+    expect(theme.style).toEqual({});
+    writeTheme('flat', { appearance: 'light', colors: {}, style: 'compact' });
+    expect((await listThemes()).find((t) => t.id === 'flat')?.problem).toContain('"style"');
+  });
+});
+
 describe('themes shipped with the app', () => {
   it('are listed before the user’s, and a user file of the same id shadows the bundled one', async () => {
     writeTheme('storm', { name: 'Storm (shipped)', appearance: 'dark', colors: {} }, bundled);

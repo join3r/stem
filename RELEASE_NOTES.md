@@ -22,6 +22,10 @@ Maintainer notes:
   carry both a `light` and a `dark` palette and then follows the OS appearance, and the example file
   in the themes folder now does. A few surfaces that ignored the theme (the memory-note card, your
   own mail bubbles, scrollbar thumbs) follow it now.
+- **Themes reach past color.** A theme's `style` block can set the interface and code fonts, scale
+  all text or all spacing at once (a compact or a comfortable Stem), turn shadows down or off, and
+  change corner radii. Motion is not a theme's to change: Stem now follows the OS "reduce motion"
+  setting everywhere.
 
 ## 0.5.0 — 2026-09-03
 

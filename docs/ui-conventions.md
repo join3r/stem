@@ -38,7 +38,13 @@ glyph on a provider-colored `.row-icon`, the label on a `--danger` button — wh
 whatever the palette. Nothing else may hard-code a color, and a token must not be referenced with
 a literal fallback (`var(--x, #abc)`): the fallback hides a missing token from every theme.
 
-The color tokens are also the theming surface: Settings → App → Appearance can force light/dark or
+Font sizes and the spacing scale are `calc(Npx * var(--type-scale))` / `var(--space-scale)`, and
+every shadow's alpha is `calc(a * var(--shadow-scale))`: a theme turns one multiplier and the whole
+app follows. Keep new sizes and shadows in that shape. The odd 3/5/7/9px offsets that seat a control
+against its border stay literal on purpose — they are alignment, not rhythm. Font stacks are
+`--font-ui` and `--font-mono`; never spell a family name in a rule.
+
+The tokens are also the theming surface: Settings → App → Appearance can force light/dark or
 load a theme — a JSON file of token overrides, shipped in `themes/` or written into this machine's
 themes folder — applied as inline custom properties over the built-in palette (see
 `docs/themes.md`). This is one more reason a new color must be a token: a hard-coded color is

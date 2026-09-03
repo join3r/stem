@@ -10,7 +10,8 @@ themes folder, shadows the shipped one — that is how someone tweaks a shipped 
 A shipped theme should set every color token from `THEME_COLOR_TOKENS` (`src/shared/types.ts`), so
 it renders fully rather than inheriting half its palette from the built-in light/dark defaults;
 `tests/unit/themes.test.ts` checks that. A theme that carries both a `light` and a `dark` palette
-follows the OS appearance; one with a single palette is that palette whatever the OS says.
+follows the OS appearance; one with a single palette is that palette whatever the OS says. An
+optional `style` block sets fonts, the type/space/shadow multipliers, radii and shadow recipes.
 
 ## Themes
 

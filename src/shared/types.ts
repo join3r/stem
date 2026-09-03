@@ -2979,36 +2979,86 @@ export interface ThemeSettings {
   selected: string;
 }
 
+/** What a theme token's value may be — each kind has its own validator in desktop/themes.ts. */
+export type ThemeTokenKind = 'color' | 'font' | 'number' | 'length' | 'shadow';
+
 /**
- * The color tokens a custom theme may override — the palette block at the top of
- * renderer/styles.css, by name (without the `--`). Everything the app draws
- * flows from these (docs/ui-conventions.md), which is what makes a theme a small
- * file of colors rather than a stylesheet. Geometry tokens are deliberately not
- * themeable: spacing and type scale are the app's, not a look's.
+ * Every custom property a theme may set, by name (without the `--`) and kind.
+ * These are the tokens at the top of renderer/styles.css: the palette, the two
+ * font stacks, the type/space/shadow multipliers, the type and spacing scales,
+ * the radii and the two shadow recipes. Everything the app draws flows from
+ * these (docs/ui-conventions.md), which is what makes a theme a small file of
+ * values rather than a stylesheet. Not themeable on purpose: control heights,
+ * the reading measure, the z-index ladder and motion timings — changing those
+ * breaks layout rather than restyling it (motion follows the OS's reduce-motion
+ * preference instead).
  */
-export const THEME_COLOR_TOKENS = [
-  'paper',
-  'content',
-  'panel',
-  'ink',
-  'muted',
-  'line',
-  'hair',
-  'accent',
-  'accent-ink',
-  'surface',
-  'field',
-  'sel',
-  'inline-bg',
-  'info',
-  'warn',
-  'success',
-  'danger',
-  'code-bg',
-  'code-ink',
-  'drop-chat',
-  'drop-files'
-] as const;
+export const THEME_TOKENS = {
+  // The palette — per appearance, in a theme's `light` / `dark` blocks.
+  paper: 'color',
+  content: 'color',
+  panel: 'color',
+  ink: 'color',
+  muted: 'color',
+  line: 'color',
+  hair: 'color',
+  accent: 'color',
+  'accent-ink': 'color',
+  surface: 'color',
+  field: 'color',
+  sel: 'color',
+  'inline-bg': 'color',
+  info: 'color',
+  warn: 'color',
+  success: 'color',
+  danger: 'color',
+  'code-bg': 'color',
+  'code-ink': 'color',
+  'drop-chat': 'color',
+  'drop-files': 'color',
+  // Everything else — appearance-independent, in a theme's `style` block.
+  'font-ui': 'font',
+  'font-mono': 'font',
+  'type-scale': 'number',
+  'space-scale': 'number',
+  'shadow-scale': 'number',
+  'fs-10': 'length',
+  'fs-11': 'length',
+  'fs-12': 'length',
+  'fs-13': 'length',
+  'fs-14': 'length',
+  'fs-16': 'length',
+  'fs-18': 'length',
+  'fs-19': 'length',
+  'fs-20': 'length',
+  'sp-1': 'length',
+  'sp-2': 'length',
+  'sp-3': 'length',
+  'sp-4': 'length',
+  'sp-5': 'length',
+  'sp-6': 'length',
+  'sp-7': 'length',
+  'sp-8': 'length',
+  'sp-9': 'length',
+  'sp-10': 'length',
+  'sp-12': 'length',
+  'radius-sm': 'length',
+  radius: 'length',
+  'radius-md': 'length',
+  'radius-lg': 'length',
+  'shadow-pop': 'shadow',
+  'shadow-btn': 'shadow'
+} as const satisfies Record<string, ThemeTokenKind>;
+
+export type ThemeToken = keyof typeof THEME_TOKENS;
+
+const themeTokensOfKind = (want: (kind: ThemeTokenKind) => boolean): ThemeToken[] =>
+  (Object.keys(THEME_TOKENS) as ThemeToken[]).filter((t) => want(THEME_TOKENS[t]));
+
+/** The color tokens — what a palette block may set. */
+export const THEME_COLOR_TOKENS = themeTokensOfKind((k) => k === 'color');
+/** The non-color tokens — what a theme's `style` block may set. */
+export const THEME_STYLE_TOKENS = themeTokensOfKind((k) => k !== 'color');
 
 /**
  * One theme, read from a JSON file — either shipped with the app (`themes/` in
@@ -3018,8 +3068,9 @@ export const THEME_COLOR_TOKENS = [
  * `dark` palette, or both; with both it follows the OS appearance the way
  * 'system' does. Each palette lays its colors over the built-in palette of the
  * same appearance, which also decides `color-scheme` so native controls match.
- * A file that cannot be used still appears in the list with `problem` set, so
- * the picker can say why instead of silently dropping it.
+ * `style` holds the appearance-independent tokens (fonts, scales, radii,
+ * shadows). A file that cannot be used still appears in the list with `problem`
+ * set, so the picker can say why instead of silently dropping it.
  */
 export interface CustomTheme {
   /** The file's base name — what ThemeSettings.selected points at. */
@@ -3028,9 +3079,11 @@ export interface CustomTheme {
   name: string;
   /** Shipped with the app, or from this machine's themes folder. */
   source: 'bundled' | 'user';
-  /** Validated token → CSS color value, per appearance. Unknown tokens and unsafe values are dropped. */
+  /** Validated color token → CSS color value, per appearance. Unknown tokens and unsafe values are dropped. */
   light?: Record<string, string>;
   dark?: Record<string, string>;
+  /** Validated non-color token → value (THEME_STYLE_TOKENS), applied whatever the appearance. */
+  style?: Record<string, string>;
   /** Why the file could not be used, in words the picker can show. */
   problem?: string;
 }
