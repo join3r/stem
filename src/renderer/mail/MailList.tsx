@@ -168,6 +168,7 @@ export function MailList(props: MailListProps) {
           <span className="mail-from">
             {fromLabel(c)}
             {c.status === 'awaiting-user' && <em className="mail-needs-you">needs you</em>}
+            {c.status === 'failed' && <em className="mail-failed">failed</em>}
             {c.status === 'aborted' && <em className="mail-aborted"> · stopped</em>}
             {olderSystem(c) && (
               <em className="mail-older-system" title="The latest reply here was made by an older version of the persona system">

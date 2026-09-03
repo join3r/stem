@@ -2175,12 +2175,14 @@ export interface MailConversation {
   private?: true;
   /**
    * 'working' while a delivery is in flight; 'awaiting-user' once a persona's
-   * reply asked for the user's input/decision (set when a delivery fails or is
-   * blocked); 'aborted' after the user stopped the conversation mid-wave (it
-   * surfaces in the Inbox so the stop is visible, and clears on the next
-   * delivery); 'idle' otherwise.
+   * reply asked for the user's input/decision, or the wave is held on them (a
+   * paired computer offline, the exchange cap spent); 'failed' when a delivery
+   * could not produce a reply (persona gone, turn never started or crashed) —
+   * the notice mail says why, the status says it is not an answer; 'aborted'
+   * after the user stopped the conversation mid-wave (it surfaces in the Inbox
+   * so the stop is visible, and clears on the next delivery); 'idle' otherwise.
    */
-  status: 'idle' | 'working' | 'awaiting-user' | 'aborted';
+  status: 'idle' | 'working' | 'awaiting-user' | 'failed' | 'aborted';
   /** Inter-persona mails spent, against the global cap (later phase). */
   exchangeCount: number;
   /**

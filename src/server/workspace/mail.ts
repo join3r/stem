@@ -100,7 +100,7 @@ function coerceConversation(raw: unknown): MailConversation | null {
   // so an unconditional flip here would silently erase a LIVE working status:
   // exactly the bug where a runaway thread showed idle while its turns ran.
   const rawStatus =
-    r.status === 'working' || r.status === 'awaiting-user' || r.status === 'aborted'
+    r.status === 'working' || r.status === 'awaiting-user' || r.status === 'failed' || r.status === 'aborted'
       ? r.status
       : 'idle';
   const status = rawStatus === 'working' && !liveWorking.has(r.id) ? 'idle' : rawStatus;

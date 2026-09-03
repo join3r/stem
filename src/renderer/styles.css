@@ -1591,8 +1591,10 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
    native-feeling sidebar, not a settings surface. */
 .chats-modes-row { display: flex; align-items: center; gap: var(--sp-4); margin: 0 12px 8px; }
 /* One step smaller than the rail above it, so the two segmented controls read
-   as parent and child rather than as twins. */
-.seg-ctl.chats-modes { flex: 1; min-width: 0; }
+   as parent and child rather than as twins. The track is mixed against the
+   panel like the rail's: the generic seg-ctl mixes against --surface, which on
+   the panel comes out the same colour as the panel and vanishes. */
+.seg-ctl.chats-modes { flex: 1; min-width: 0; background: color-mix(in srgb, var(--ink) 7%, var(--panel)); }
 .seg-ctl.chats-modes button { gap: var(--sp-2); display: inline-flex; align-items: center; justify-content: center; padding: 3px 8px; }
 .chats-actions { flex: none; gap: var(--sp-2); }
 .seg-count {
@@ -2826,8 +2828,11 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
    from-line these are inline tags, so the rule below wins back inline flow —
    without it every status wrapped onto its own line behind a lone "·". */
 .mail-row .mail-from em { display: inline; font-size: inherit; overflow-wrap: normal; }
-/* "needs you" is a pill, not a suffix: it stays on the from-line at any width. */
-.mail-row .mail-from .mail-needs-you { display: inline-block; margin-left: var(--sp-3); padding: 0 6px; border-radius: var(--radius-pill); background: var(--sel); color: var(--accent); font-size: var(--fs-10); font-weight: 600; line-height: 15px; vertical-align: 1px; }
+/* Status pills, not suffixes: they stay on the from-line at any width. */
+.mail-row .mail-from .mail-needs-you,
+.mail-row .mail-from .mail-failed { display: inline-block; margin-left: var(--sp-3); padding: 0 6px; border-radius: var(--radius-pill); font-size: var(--fs-10); font-weight: 600; line-height: 15px; vertical-align: 1px; }
+.mail-row .mail-from .mail-needs-you { background: var(--sel); color: var(--accent); }
+.mail-row .mail-from .mail-failed { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
 .mail-aborted { color: var(--muted); font-style: normal; }
 .mail-sent-icon { margin-right: 2px; opacity: 0.7; }
 

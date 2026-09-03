@@ -259,14 +259,14 @@ describe('mail router', () => {
     expect(mail.items[3].body).toBe('second answer');
   });
 
-  it('a failed run replies with the failure and marks the conversation awaiting-user', async () => {
+  it('a failed run replies with the failure and marks the conversation failed', async () => {
     const fake = fakeBackend();
     fake.script = { mode: 'failed', error: 'model exploded' };
     const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined });
     await router.compose({ to: ['verifier'], subject: 's', body: 'x' });
     const mail = await settledMail();
     expect(mail.items[1].body).toContain('model exploded');
-    expect(mail.conversations[0].status).toBe('awaiting-user');
+    expect(mail.conversations[0].status).toBe('failed');
   });
 
   it('a startTurn that throws still produces a reply mail (nothing vanishes)', async () => {
@@ -883,9 +883,9 @@ describe('fan-out joins', () => {
     // branch's reply and rode the assembly.
     expect(assembly.input).toContain('around you');
     expect(mail.items.find((i) => i.body === 'around you')).toMatchObject({ to: ['orchestrator'] });
-    // The failure notice still reached the user, and awaiting-user stuck.
+    // The failure notice still reached the user, and the failure stuck.
     expect(mail.items.some((i) => i.to.includes('user') && i.body.includes('exploded'))).toBe(true);
-    expect(mail.conversations[0].status).toBe('awaiting-user');
+    expect(mail.conversations[0].status).toBe('failed');
   });
 
   it('a spoke reaches only its initiator; a second mail to a mid-join sender is buffered', async () => {
@@ -1467,7 +1467,7 @@ describe('mail delivery vs pool worker exits', () => {
     await router.compose({ to: ['verifier'], subject: 's', body: 'q' });
     const mail = await settledMail();
     expect(mail.items[1].body).toBe("The persona's run failed: the backend process exited");
-    expect(mail.conversations[0].status).toBe('awaiting-user');
+    expect(mail.conversations[0].status).toBe('failed');
   });
 
   it('an unattributed exit (older backend) still fails conservatively', async () => {

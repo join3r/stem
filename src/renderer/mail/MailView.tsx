@@ -266,6 +266,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
             </>
           )}
           {conversation.status === 'awaiting-user' && <em> · waiting on your reply</em>}
+          {conversation.status === 'failed' && <em> · failed — the last mail says why; reply to try again</em>}
           {conversation.status === 'aborted' && <em> · stopped — reply to pick it back up</em>}
         </span>
         {addingTo && addable.length > 0 && (

@@ -186,6 +186,13 @@ export interface MailRouterOptions {
   codingDevice?: (deviceRef: string) => Promise<{ deviceId: string; label: string; online: boolean } | null>;
 }
 
+/**
+ * What a conversation's status settles to once its deliveries drain. Ranked:
+ * a failure outranks a hold on the user, which outranks a clean answer.
+ */
+type DrainStatus = 'idle' | 'awaiting-user' | 'failed';
+const DRAIN_RANK: Record<DrainStatus, number> = { idle: 0, 'awaiting-user': 1, failed: 2 };
+
 export class MailRouter {
   /** Per-conversation delivery lanes: bounded parallelism, same-persona serial. */
   private readonly lanes = new Map<string, Lane>();
@@ -211,7 +218,7 @@ export class MailRouter {
   /** Deliveries queued or in flight per conversation — the status authority. */
   private readonly pending = new Map<string, number>();
   /** The status to write when a conversation's deliveries drain (default idle). */
-  private readonly drainStatus = new Map<string, 'idle' | 'awaiting-user'>();
+  private readonly drainStatus = new Map<string, DrainStatus>();
   /**
    * One background-activity row per working conversation, labeled by its
    * subject and counting the turns of the wave — mail otherwise works entirely
@@ -1027,7 +1034,7 @@ export class MailRouter {
           conversationId,
           personaId,
           `The persona this mail was addressed to no longer exists.`,
-          'awaiting-user',
+          'failed',
           epoch
         );
         return;
@@ -1176,7 +1183,7 @@ export class MailRouter {
           conversationId,
           personaId,
           'The delivery never started a turn — nothing ran.',
-          'awaiting-user',
+          'failed',
           epoch
         );
         return;
@@ -1203,7 +1210,7 @@ export class MailRouter {
           conversationId,
           personaId,
           `The persona's run failed: ${settle.error ?? 'the turn did not finish.'}`,
-          'awaiting-user',
+          'failed',
           epoch
         );
       } else if (!sent) {
@@ -1233,7 +1240,7 @@ export class MailRouter {
       const message = error instanceof Error ? error.message : String(error);
       degrade('mail', 'delivered a failure notice instead of a reply', error);
       this.settleBranchFailure(conversationId, from, personaId, `its delivery failed (${message}).`);
-      await this.appendReply(conversationId, personaId, `The delivery failed: ${message}`, 'awaiting-user', epoch).catch(() => {
+      await this.appendReply(conversationId, personaId, `The delivery failed: ${message}`, 'failed', epoch).catch(() => {
         // quiet: the degrade above already recorded the failure; a store that
         // cannot be written has nothing left to say it in.
       });
@@ -1347,13 +1354,14 @@ export class MailRouter {
     conversationId: string,
     personaId: string,
     body: string,
-    drainStatus: 'idle' | 'awaiting-user',
+    drainStatus: DrainStatus,
     epoch: number
   ): Promise<void> {
     await appendMailItem({ conversationId, from: personaId, to: ['user'], body, staleIfUserSentAfter: epoch });
-    // Awaiting-user is sticky for the wave: a failure already recorded must not
-    // be papered over by a later hop landing cleanly.
-    if (this.drainStatus.get(conversationId) !== 'awaiting-user') this.drainStatus.set(conversationId, drainStatus);
+    // The worse status is sticky for the wave: a failure already recorded must
+    // not be papered over by a later hop landing cleanly.
+    const current = this.drainStatus.get(conversationId) ?? 'idle';
+    if (DRAIN_RANK[drainStatus] > DRAIN_RANK[current]) this.drainStatus.set(conversationId, drainStatus);
     this.opts.onChange();
   }
 
