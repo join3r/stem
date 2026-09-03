@@ -319,8 +319,8 @@ describe('mail router', () => {
     ]);
     // Two persona-addressed mails were spent against the cap…
     expect(mail.conversations[0].exchangeCount).toBe(2);
-    // …the chain stopped on the user by explicit send_mail → awaiting-user…
-    expect(mail.conversations[0].status).toBe('awaiting-user');
+    // …the chain ended on the user by explicit send_mail — an answer, so idle…
+    expect(mail.conversations[0].status).toBe('idle');
     // …and both personas got their own hidden session.
     expect(Object.keys(mail.conversations[0].sessions).sort()).toEqual(['orchestrator', 'verifier']);
     // Three delivery turns ran: verifier, orchestrator, verifier again — the
@@ -614,13 +614,13 @@ describe('mail router', () => {
     expect(grown.participants).toEqual(['secretary', 'orchestrator']);
   });
 
-  it('a mid-chain mail to the user does not end the conversation as awaiting-user', async () => {
+  it('a mid-chain mail to the user does not change how the conversation ends', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);
     fake.scripts = [
       // The driver CCs the user a progress note AND consults a persona: the
-      // conversation must end on the final implicit answer (idle), not flip to
-      // awaiting-user because of the note.
+      // conversation must still end idle on the final answer, the note is not
+      // a hold on the user.
       {
         mode: 'ok',
         reply: 'working…',
@@ -654,7 +654,7 @@ describe('mail router', () => {
       'crunched',
       'the result'
     ]);
-    expect(mail.conversations[0].status).toBe('awaiting-user');
+    expect(mail.conversations[0].status).toBe('idle');
   });
 
   it('compose without a subject derives one from the body; a dirty subject is cleaned', async () => {

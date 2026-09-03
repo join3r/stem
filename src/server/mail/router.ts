@@ -211,8 +211,7 @@ export class MailRouter {
   private readonly liveThreads = new Set<string>();
   /**
    * What each live delivery turn sent via the bridge, keyed by turn id. A turn
-   * that sent anything gets no implicit reply; one that mailed only the user
-   * has stopped the chain on them (status awaiting-user once the queue drains).
+   * that sent anything gets no implicit reply.
    */
   private readonly turnMailSent = new Map<string, { persona: boolean; user: boolean }>();
   /** Deliveries queued or in flight per conversation — the status authority. */
@@ -1217,12 +1216,12 @@ export class MailRouter {
         const reply =
           (await this.lastAssistantText(runThreadId)) || '(The persona finished without writing a reply.)';
         await this.routeImplicitReply(conversationId, personaId, from, reply, epoch, sourceItemId);
-      } else if (sent.user && !sent.persona) {
-        // The turn ended after mailing only the user: the chain has stopped on
-        // them (a blocked ask, or an explicit final answer) — say so at drain.
-        this.drainStatus.set(conversationId, 'awaiting-user');
       }
-      // else: persona mail sent — the chain continues on the queued deliveries.
+      // else: the turn mailed on its own. A user-addressed mail is an answer
+      // like an implicit one and settles idle — it used to settle awaiting-user,
+      // which tagged every driver's ordinary reply "needs you" while a
+      // single-persona answer went untagged. A persona-addressed mail keeps the
+      // chain going on the queued deliveries.
 
       // The reflection pass: what did this turn teach the persona? Only for
       // turns that settled ok (the failed branch above falls through to here),

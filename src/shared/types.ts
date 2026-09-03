@@ -2174,9 +2174,10 @@ export interface MailConversation {
    */
   private?: true;
   /**
-   * 'working' while a delivery is in flight; 'awaiting-user' once a persona's
-   * reply asked for the user's input/decision, or the wave is held on them (a
-   * paired computer offline, the exchange cap spent); 'failed' when a delivery
+   * 'working' while a delivery is in flight; 'awaiting-user' when the wave is
+   * held on the user rather than answered (a paired computer offline, the
+   * exchange cap spent) — a persona's answer, explicit or implicit, settles
+   * idle; 'failed' when a delivery
    * could not produce a reply (persona gone, turn never started or crashed) —
    * the notice mail says why, the status says it is not an answer; 'aborted'
    * after the user stopped the conversation mid-wave (it surfaces in the Inbox
