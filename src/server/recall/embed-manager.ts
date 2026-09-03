@@ -1,7 +1,7 @@
 import type { LocalEmbedModelSpec } from './embed-catalog';
 import type { LocalRerankModelSpec } from './rerank-catalog';
 import { DEFAULT_LOCAL_RERANK_MODEL } from './rerank-catalog';
-import type { EmbedKind } from './embeddings';
+import { EmbeddingsTimeoutError, type EmbedKind } from './embeddings';
 import type { RerankResult } from './rerank';
 import type { WorkerOutMessage } from './embed-worker';
 import type { WorkerTransport } from './embed-worker-host';
@@ -32,8 +32,15 @@ export interface EmbedWorkerManager {
   ensure(spec: LocalEmbedModelSpec, opts?: { force?: boolean }): void;
   status(): LocalEmbedStatus;
   onStatus(cb: (status: LocalEmbedStatus) => void): () => void;
-  /** Embed via the worker. Queued while loading/downloading; rejects on error state. */
-  embed(texts: string[], kind: EmbedKind): Promise<Float32Array[]>;
+  /**
+   * Embed via the worker. Queued while loading/downloading; rejects on error
+   * state; rejects with {@link EmbeddingsTimeoutError} when the worker does not
+   * answer within `timeoutMs` (default {@link EMBED_TIMEOUT_MS}), telling the
+   * worker to drop the request. Passage requests go to the worker one at a
+   * time, so a budget measures the worker's work on that request and not its
+   * wait behind other backfills; queries go straight through.
+   */
+  embed(texts: string[], kind: EmbedKind, opts?: { timeoutMs?: number }): Promise<Float32Array[]>;
   /** Model switch or mode left 'local': kill the worker; when a spec is given, start loading it. */
   reconfigure(spec: LocalEmbedModelSpec | null): void;
   /** Same contract as ensure(), for the reranker model co-hosted in the worker. */
@@ -50,6 +57,8 @@ export interface EmbedWorkerManager {
 interface PendingEmbed {
   texts: string[];
   kind: EmbedKind;
+  /** Per-request budget: the local client hands passages a longer one than queries. */
+  timeoutMs: number;
   resolve: (vectors: Float32Array[]) => void;
   reject: (err: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
@@ -105,6 +114,10 @@ export function createEmbedWorkerManager(deps: {
   const inflight = new Map<number, PendingEmbed>();
   const rerankInflight = new Map<number, PendingRerank>();
   const queued: PendingEmbed[] = []; // held until 'ready', then flushed
+  // One passage request at the worker at a time; the rest wait here with their
+  // timers not yet started. Queries bypass this — the worker runs them first.
+  let passageActive: PendingEmbed | null = null;
+  const passageWaiting: PendingEmbed[] = [];
   const rerankQueued: PendingRerank[] = [];
   const listeners = new Set<(s: LocalEmbedStatus) => void>();
   const rerankListeners = new Set<(s: LocalRerankStatus) => void>();
@@ -128,7 +141,34 @@ export function createEmbedWorkerManager(deps: {
       p.reject(err);
     }
     inflight.clear();
+    passageActive = null;
+    for (const p of passageWaiting.splice(0)) p.reject(err);
     for (const p of queued.splice(0)) p.reject(err);
+  }
+
+  /** Route a ready-state request: queries go now, passages one at a time. */
+  function dispatch(p: PendingEmbed): void {
+    if (p.kind !== 'passage') {
+      sendEmbed(p);
+      return;
+    }
+    if (passageActive) {
+      passageWaiting.push(p);
+      return;
+    }
+    passageActive = p;
+    sendEmbed(p);
+  }
+
+  /** An in-flight request finished (any way): let the next passage in. */
+  function settled(p: PendingEmbed): void {
+    if (passageActive !== p) return;
+    passageActive = null;
+    const next = passageWaiting.shift();
+    if (next) {
+      passageActive = next;
+      sendEmbed(next);
+    }
   }
 
   function failReranks(message: string): void {
@@ -152,8 +192,13 @@ export function createEmbedWorkerManager(deps: {
     inflight.set(id, p);
     p.timer = setTimeout(() => {
       inflight.delete(id);
-      p.reject(new Error(`local embeddings: timed out after ${embedTimeoutMs}ms`));
-    }, embedTimeoutMs);
+      // Tell the worker to stop: without this the abandoned run keeps the
+      // cores for as long as the request would have taken, and every request
+      // behind it inherits the wait (the 2026-09-03 incident).
+      transport?.send({ type: 'cancel', id });
+      p.reject(new EmbeddingsTimeoutError(`local embeddings: timed out after ${p.timeoutMs}ms`));
+      settled(p);
+    }, p.timeoutMs);
     transport.send({ type: 'embed', id, texts: p.texts, kind: p.kind });
   }
 
@@ -204,7 +249,7 @@ export function createEmbedWorkerManager(deps: {
         // fine and then abort on the first embed (ONNX OOM), and resetting here
         // would let that crash loop forever. The budget is refreshed instead when
         // a worker proves stable by living past STABLE_UPTIME_MS (see onExit).
-        for (const p of queued.splice(0)) sendEmbed(p);
+        for (const p of queued.splice(0)) dispatch(p);
       } else if (msg.status.state === 'error') {
         failEmbeds(`local embeddings: ${msg.status.error ?? 'model failed to load'}`);
       }
@@ -226,6 +271,7 @@ export function createEmbedWorkerManager(deps: {
       inflight.delete(msg.id);
       if (p.timer) clearTimeout(p.timer);
       p.resolve(msg.vectors);
+      settled(p);
       return;
     }
     if (msg.type === 'rerank-result') {
@@ -243,6 +289,7 @@ export function createEmbedWorkerManager(deps: {
         inflight.delete(msg.id);
         if (pe.timer) clearTimeout(pe.timer);
         pe.reject(new Error(`local embeddings: ${msg.message}`));
+        settled(pe);
         return;
       }
       const pr = rerankInflight.get(msg.id);
@@ -367,10 +414,10 @@ export function createEmbedWorkerManager(deps: {
       listeners.add(cb);
       return () => listeners.delete(cb);
     },
-    embed(texts, kind) {
+    embed(texts, kind, opts = {}) {
       return new Promise<Float32Array[]>((resolve, reject) => {
-        const p: PendingEmbed = { texts, kind, resolve, reject };
-        if (status.state === 'ready' && transport) sendEmbed(p);
+        const p: PendingEmbed = { texts, kind, timeoutMs: opts.timeoutMs ?? embedTimeoutMs, resolve, reject };
+        if (status.state === 'ready' && transport) dispatch(p);
         else if (transport && (status.state === 'loading' || status.state === 'downloading')) queued.push(p);
         else reject(new Error('local embeddings: worker not running'));
       });

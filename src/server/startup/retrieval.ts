@@ -3,6 +3,7 @@ import { readSettings, saveCustomModel } from '../workspace/settings';
 import { embedModelsDir, embedSocketPath, recallDbPath } from '../workspace/paths';
 
 import { embedNewMessages } from '../recall/embed-episodic';
+import { embedMissingFactVectors } from '../recall/embed-facts';
 import { scanAllIndexedFolders } from '../folder-index';
 import { getEmbeddingsClient, setRetrievalClients } from '../recall/retrieval';
 import { startEmbedEndpoint } from '../recall/embed-endpoint';
@@ -21,7 +22,7 @@ import { setScanWorkerManager } from '../recall/scan';
 import * as activity from '../activity';
 import { log } from '../log';
 import { recallStore } from '../recall/store';
-const { getEpisodicGeneration, getFactsGeneration, getFactsMissingVector, pruneMessageVectorsExceptModel, pruneSummaryVectorsExceptModel, pruneVectorsExceptModel, getSummariesMissingVector, upsertFactVectorForSnapshot, upsertSummaryVector } = recallStore;
+const { getEpisodicGeneration, pruneMessageVectorsExceptModel, pruneSummaryVectorsExceptModel, pruneVectorsExceptModel, getSummariesMissingVector, upsertSummaryVector } = recallStore;
 
 export interface RetrievalRuntime {
   embedManager: EmbedWorkerManager;
@@ -254,31 +255,9 @@ export function initRetrieval(deps: {
           await saveCustomModel('embed', { ...spec, dim: status.dim });
         }
         const key = localModelCacheKey(spec);
-        const factsGeneration = getFactsGeneration();
         pruneVectorsExceptModel(key);
-        const missing = getFactsMissingVector(key);
-        // Stepped, because after a model switch this is thousands of vectors and
-        // the count is the only honest answer to "why is search worse right now".
-        const factHandle = activity.begin('memory.factEmbed', 'Embedding facts', { stepped: true });
-        let factsDone = 0;
-        for (let i = 0; i < missing.length; i += 64) {
-          if (getFactsGeneration() !== factsGeneration) break;
-          const batch = missing.slice(i, i + 64);
-          const vecs = await localEmbeddings.embed(
-            batch.map((f) => f.text),
-            'passage'
-          );
-          if (getFactsGeneration() !== factsGeneration) break;
-          batch.forEach((f, j) =>
-            upsertFactVectorForSnapshot(f.id, f.text, factsGeneration, key, vecs[j])
-          );
-          factsDone += batch.length;
-          activity.progress(factHandle, { done: factsDone, total: missing.length });
-        }
-        activity.end(factHandle, {
-          worked: factsDone > 0,
-          detail: `Embedded ${factsDone.toLocaleString()} fact${factsDone === 1 ? '' : 's'}`
-        });
+        // Activity (with progress) is reported by the pass itself; it never throws.
+        await embedMissingFactVectors(localEmbeddings, key);
         // Same hygiene + backfill for thread-summary vectors (Level 1.5 search).
         await backfillSummaryVectors(localEmbeddings, key);
         // Same hygiene + backfill for the episodic message vectors (semantic

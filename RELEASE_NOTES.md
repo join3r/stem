@@ -168,6 +168,11 @@ Maintainer notes:
 - **MCP tools are not labeled as web searches.** Tools with "search" in their name showed as
   "Searched the web".
 - **Remote clients over HTTPS start.** The event stream ignored `https://` in the server address.
+- **Switching memory search to the built-in Qwen3 no longer stalls chats.** On a server CPU the
+  re-index sent every fact to the model as one request, each request timed out, the abandoned
+  work kept the processor busy, and a chat waited a quarter of an hour for no answer. Re-indexing
+  now runs in small batches that yield to chats, a chat's own lookup goes first, and a request
+  that times out is dropped rather than finished for nobody.
 
 ## 0.4.0 — 2026-08-12
 

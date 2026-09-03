@@ -88,7 +88,7 @@ export function createRemoteHealthTracker(): RemoteHealthTracker {
       return {
         available: () => client.available(),
         modelId: () => client.modelId(),
-        embed: (texts, kind) => record('embeddings', client.embed(texts, kind))
+        embed: (texts, kind, opts) => record('embeddings', client.embed(texts, kind, opts))
       };
     },
     wrapRerank(client) {

@@ -8,6 +8,7 @@ import { logFilePath } from '../../src/server/workspace/paths';
 import { EMBED_CATALOG } from '../../src/server/recall/embed-catalog';
 import { RERANK_CATALOG } from '../../src/server/recall/rerank-catalog';
 import { createEmbedWorkerManager } from '../../src/server/recall/embed-manager';
+import { EmbeddingsTimeoutError } from '../../src/server/recall/embeddings';
 import type { WorkerOutMessage } from '../../src/server/recall/embed-worker';
 import type { WorkerTransport } from '../../src/server/recall/embed-worker-host';
 import type { LocalEmbedStatus } from '../../src/shared/types';
@@ -116,7 +117,7 @@ describe('embed worker manager', () => {
     expect(mgr.status().dim).toBe(384);
   });
 
-  it('rejects an in-flight embed on timeout', async () => {
+  it('rejects an in-flight embed on timeout, as a timeout, and tells the worker to drop it', async () => {
     vi.useFakeTimers();
     try {
       const { mgr, workers } = manager({ embedTimeoutMs: 1000 });
@@ -124,10 +125,85 @@ describe('embed worker manager', () => {
       workers[0].emit(ready());
       const pending = mgr.embed(['x'], 'passage');
       vi.advanceTimersByTime(1500);
-      await expect(pending).rejects.toThrow(/timed out/);
+      await expect(pending).rejects.toThrow(/timed out after 1000ms/);
+      await expect(pending).rejects.toBeInstanceOf(EmbeddingsTimeoutError);
+      const embedMsg = workers[0].sent.find((m) => m.type === 'embed')!;
+      expect(workers[0].sent).toContainEqual({ type: 'cancel', id: embedMsg.id });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('a per-call budget overrides the default', async () => {
+    vi.useFakeTimers();
+    try {
+      const { mgr, workers } = manager({ embedTimeoutMs: 1000 });
+      mgr.ensure(SPEC);
+      workers[0].emit(ready());
+      const pending = mgr.embed(['x'], 'passage', { timeoutMs: 5000 });
+      vi.advanceTimersByTime(1500);
+      // The default would have fired by now; this request is on the long budget.
+      const embedMsg = workers[0].sent.find((m) => m.type === 'embed')!;
+      expect(workers[0].sent.some((m) => m.type === 'cancel')).toBe(false);
+      workers[0].emit({ type: 'result', id: embedMsg.id as number, dim: 1, vectors: [new Float32Array([1])] });
+      await expect(pending).resolves.toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends passage requests one at a time but queries straight through', async () => {
+    const { mgr, workers } = manager();
+    mgr.ensure(SPEC);
+    workers[0].emit(ready());
+    const w = workers[0];
+    const sentEmbeds = () => w.sent.filter((m) => m.type === 'embed');
+    const p1 = mgr.embed(['a'], 'passage');
+    const p2 = mgr.embed(['b'], 'passage');
+    expect(sentEmbeds()).toHaveLength(1); // p2 waits, timer not started
+    const q = mgr.embed(['q'], 'query');
+    expect(sentEmbeds()).toHaveLength(2); // the query did not wait behind p1
+    expect(sentEmbeds()[1].kind).toBe('query');
+    w.emit({ type: 'result', id: sentEmbeds()[1].id as number, dim: 1, vectors: [new Float32Array([3])] });
+    await expect(q).resolves.toHaveLength(1);
+    expect(sentEmbeds()).toHaveLength(2); // p2 still waiting: a query finishing frees nothing
+    w.emit({ type: 'result', id: sentEmbeds()[0].id as number, dim: 1, vectors: [new Float32Array([1])] });
+    await expect(p1).resolves.toHaveLength(1);
+    expect(sentEmbeds()).toHaveLength(3); // p1 done → p2 sent
+    expect(sentEmbeds()[2].texts).toEqual(['b']);
+    w.emit({ type: 'result', id: sentEmbeds()[2].id as number, dim: 1, vectors: [new Float32Array([2])] });
+    await expect(p2).resolves.toHaveLength(1);
+  });
+
+  it('a passage that times out lets the next waiting passage in', async () => {
+    vi.useFakeTimers();
+    try {
+      const { mgr, workers } = manager({ embedTimeoutMs: 1000 });
+      mgr.ensure(SPEC);
+      workers[0].emit(ready());
+      const w = workers[0];
+      const p1 = mgr.embed(['a'], 'passage');
+      const p2 = mgr.embed(['b'], 'passage');
+      vi.advanceTimersByTime(1500);
+      await expect(p1).rejects.toBeInstanceOf(EmbeddingsTimeoutError);
+      const embeds = w.sent.filter((m) => m.type === 'embed');
+      expect(embeds).toHaveLength(2);
+      w.emit({ type: 'result', id: embeds[1].id as number, dim: 1, vectors: [new Float32Array([2])] });
+      await expect(p2).resolves.toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a worker crash fails the waiting passages too', async () => {
+    const { mgr, workers } = manager();
+    mgr.ensure(SPEC);
+    workers[0].emit(ready());
+    const p1 = mgr.embed(['a'], 'passage');
+    const p2 = mgr.embed(['b'], 'passage');
+    workers[0].exit(1);
+    await expect(p1).rejects.toThrow(/worker exited/);
+    await expect(p2).rejects.toThrow(/worker exited/);
   });
 
   it('fails pending work and respawns when the worker crashes, settling into error after the cap', async () => {

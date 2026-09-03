@@ -4,6 +4,7 @@ import { applyPrefixes } from './embed-catalog';
 import type { LocalEmbedModelSpec } from './embed-catalog';
 import type { LocalRerankModelSpec } from './rerank-catalog';
 import { modelPresent, pathAppearsInMessage } from './embed-files';
+import { createEmbedQueue } from './embed-queue';
 import type { EmbedKind } from './embeddings';
 import type { RerankResult } from './rerank';
 import type { LocalEmbedStatus, LocalRerankStatus } from '../../shared/types';
@@ -18,6 +19,7 @@ import type { LocalEmbedStatus, LocalRerankStatus } from '../../shared/types';
 export type WorkerInMessage =
   | { type: 'load'; spec: LocalEmbedModelSpec; cacheDir: string }
   | { type: 'embed'; id: number; texts: string[]; kind: EmbedKind }
+  | { type: 'cancel'; id: number }
   | { type: 'load-rerank'; spec: LocalRerankModelSpec; cacheDir: string }
   | { type: 'rerank'; id: number; query: string; docs: string[]; topN: number }
   | { type: 'dispose' };
@@ -278,33 +280,39 @@ async function loadRerank(nextSpec: LocalRerankModelSpec, cacheDir: string): Pro
   }
 }
 
-async function embed(id: number, texts: string[], kind: EmbedKind): Promise<void> {
+/** One ONNX run over already-prefixed texts; one independent buffer per row. */
+async function runEmbedStep(texts: string[]): Promise<Float32Array[]> {
+  if (!extractor || !spec) throw new Error('model not loaded');
+  const pooling = spec.pooling ?? 'mean';
+  const out = await extractor(texts, { pooling, normalize: true });
+  const d = out.dims[out.dims.length - 1];
+  const vectors: Float32Array[] = [];
+  for (let row = 0; row < texts.length; row++) {
+    // Copy each row out of the batch tensor so rows are independent buffers.
+    vectors.push(out.data.slice(row * d, (row + 1) * d));
+  }
+  return vectors;
+}
+
+// Requests run through one queue (see embed-queue.ts): one ONNX run at a time,
+// queries ahead of passage work, cancelled requests dropped between steps.
+const embedQueue = createEmbedQueue({
+  run: runEmbedStep,
+  // Batch size 1 for models flagged `unbatched`: their export mis-attends
+  // across padding (see the spec field), so every text rides alone. Same
+  // per-item throughput as RUN_BATCH on the models measured, just no
+  // amortization of the graph launch.
+  stepSize: () => (spec?.unbatched ? 1 : RUN_BATCH),
+  done: (id, vectors) => post({ type: 'result', id, dim, vectors }),
+  fail: (id, err) => post({ type: 'error', id, message: err instanceof Error ? err.message : String(err) })
+});
+
+function embed(id: number, texts: string[], kind: EmbedKind): void {
   if (!extractor || !spec) {
     post({ type: 'error', id, message: 'model not loaded' });
     return;
   }
-  try {
-    const prefixed = applyPrefixes(spec, kind, texts);
-    const vectors: Float32Array[] = [];
-    // Batch size 1 for models flagged `unbatched`: their export mis-attends
-    // across padding (see the spec field), so every text rides alone. Same
-    // per-item throughput as RUN_BATCH on the models measured, just no
-    // amortization of the graph launch.
-    const step = spec.unbatched ? 1 : RUN_BATCH;
-    const pooling = spec.pooling ?? 'mean';
-    for (let i = 0; i < prefixed.length; i += step) {
-      const batch = prefixed.slice(i, i + step);
-      const out = await extractor(batch, { pooling, normalize: true });
-      const d = out.dims[out.dims.length - 1];
-      for (let row = 0; row < batch.length; row++) {
-        // Copy each row out of the batch tensor so rows are independent buffers.
-        vectors.push(out.data.slice(row * d, (row + 1) * d));
-      }
-    }
-    post({ type: 'result', id, dim, vectors });
-  } catch (err) {
-    post({ type: 'error', id, message: err instanceof Error ? err.message : String(err) });
-  }
+  embedQueue.push({ id, kind, texts: applyPrefixes(spec, kind, texts) });
 }
 
 async function rerank(id: number, query: string, docs: string[], topN: number): Promise<void> {
@@ -364,6 +372,7 @@ async function dispose(): Promise<void> {
   // pool may still be winding down, which aborts with "mutex lock failed"
   // (std::terminate) in the terminal. A SIGTERM kill skips that teardown
   // entirely, so it can't abort.
+  embedQueue.clear();
   const pipe = extractor as unknown as { dispose?: () => Promise<void> } | null;
   extractor = null;
   const rr = reranker;
@@ -390,7 +399,8 @@ let loadChain: Promise<void> = Promise.resolve();
 port.on('message', (e: { data: WorkerInMessage }) => {
   const msg = e.data;
   if (msg.type === 'load') loadChain = loadChain.then(() => load(msg.spec, msg.cacheDir));
-  else if (msg.type === 'embed') void embed(msg.id, msg.texts, msg.kind);
+  else if (msg.type === 'embed') embed(msg.id, msg.texts, msg.kind);
+  else if (msg.type === 'cancel') embedQueue.cancel(msg.id);
   else if (msg.type === 'load-rerank') loadChain = loadChain.then(() => loadRerank(msg.spec, msg.cacheDir));
   else if (msg.type === 'rerank') void rerank(msg.id, msg.query, msg.docs, msg.topN);
   else if (msg.type === 'dispose') void dispose();

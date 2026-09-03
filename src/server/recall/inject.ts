@@ -6,6 +6,7 @@ import { searchFolderDocs, type FolderDocHit } from '../folder-index';
 import { scanSummariesOffThread } from './scan';
 import { getEmbeddingsClient, getRerankClient } from './retrieval';
 import { degrade } from '../degrade';
+import { INLINE_FACT_EMBED_MAX, embedMissingFactVectors } from './embed-facts';
 import type { EmbeddingsClient } from './embeddings';
 import { cosineSim, dot, magnitude } from './vector';
 import { recallStore, MAX_PINNED_FACTS, type Fact, type FactTier, type InjectedDocRef } from './store';
@@ -102,7 +103,7 @@ function clip(text: string, max: number): string {
 /** Per-stage latency breakdown for one buildRecallContext call (ms). */
 export interface RecallTimings {
   facts?: number; // chooseFacts total (embed + cosine + rerank, or cheap path)
-  embed?: number; // query embed + lazy fact-vector backfill
+  embed?: number; // query embed + the inline top-up of a few missing fact vectors
   rerank?: number; // reranker round-trip
   search?: number; // episodic search total (FTS + semantic + fusion)
   semantic?: number; // semantic leg of the episodic search (cosine scan + fusion)
@@ -112,7 +113,7 @@ export interface RecallTimings {
 /**
  * The per-turn query embedding, resolved lazily and at most once: fact ranking
  * and the episodic semantic leg share the same vector. `client` rides along so
- * the fact path can also run its lazy passage-vector backfill.
+ * the fact path can also top up a few missing fact vectors.
  */
 interface TurnQueryEmbedding {
   vec: Float32Array;
@@ -210,8 +211,8 @@ function cosineRank(qVec: Float32Array, facts: Fact[], vectors: Map<number, Floa
 }
 
 /**
- * Semantic candidate stage: embed the query, ensure every fact has a cached
- * vector (lazy, batched), cosine-rank to M. No gating here — that is the next
+ * Semantic candidate stage: embed the query, kick the background pass for any
+ * fact backlog without vectors (a few are embedded inline), cosine-rank to M. No gating here — that is the next
  * stage's job. Throws on any unavailability/error so the caller can degrade.
  */
 async function rankSemanticCandidates(
@@ -226,13 +227,21 @@ async function rankSemanticCandidates(
   if (!qe) throw new Error('embeddings unavailable');
   const { vec: qVec, model, client } = qe;
 
-  // Lazily embed only facts missing a vector for this model, then cache them.
+  // Facts missing a vector for this model: a handful (distilled since the last
+  // turn) are embedded here, urgently, so they can rank now. A backlog is not —
+  // after a model switch "missing" is the whole set, and a turn that waited for
+  // it got no answer for sixteen minutes on a CPU server (2026-09-03). That
+  // goes to the background pass, and until it reaches a fact only the lexical
+  // leg sees it.
   const embStart = Date.now();
   const missing = getFactsMissingVector(model);
-  if (missing.length > 0) {
+  if (missing.length > INLINE_FACT_EMBED_MAX) {
+    void embedMissingFactVectors(client, model);
+  } else if (missing.length > 0) {
     const vecs = await client.embed(
       missing.map((f) => f.text),
-      'passage'
+      'passage',
+      { urgent: true }
     );
     if (getFactsGeneration() !== factsGeneration) throw new Error('facts reset during selection');
     missing.forEach((f, i) => upsertFactVectorForSnapshot(f.id, f.text, factsGeneration, model, vecs[i]));

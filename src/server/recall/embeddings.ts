@@ -23,6 +23,16 @@ export interface EmbeddingsConfig {
  */
 export type EmbedKind = 'query' | 'passage';
 
+export interface EmbedOptions {
+  /**
+   * A chat turn is waiting on this passage work (a handful of facts distilled
+   * since the last turn, embedded before ranking). Scheduled like a query: no
+   * waiting for a lull, the query budgets, background batches yield to it. The
+   * prefix stays the passage one. Never for a backlog — that is a pass.
+   */
+  urgent?: boolean;
+}
+
 export interface EmbeddingsClient {
   /** Whether a usable (enabled + configured) endpoint is present right now. */
   available(): Promise<boolean>;
@@ -33,7 +43,7 @@ export interface EmbeddingsClient {
    * {@link EmbeddingsUnavailableError} when no config is present, or a plain Error
    * on any transport/timeout/shape failure — callers fall back rather than break.
    */
-  embed(texts: string[], kind?: EmbedKind): Promise<Float32Array[]>;
+  embed(texts: string[], kind?: EmbedKind, opts?: EmbedOptions): Promise<Float32Array[]>;
 }
 
 /** Thrown when the endpoint is disabled/unconfigured — callers fall back to recency. */
@@ -79,7 +89,7 @@ function estTokens(text: string): number {
 }
 
 /** Greedy packing under both caps; every text lands in exactly one batch. */
-function packBatches(texts: string[]): string[][] {
+export function packBatches(texts: string[]): string[][] {
   const out: string[][] = [];
   let batch: string[] = [];
   let tokens = 0;
@@ -97,8 +107,112 @@ function packBatches(texts: string[]): string[][] {
   return out;
 }
 
-/** A request cut off by our own timeout — the one failure worth retrying. */
-class EmbeddingsTimeoutError extends Error {}
+/**
+ * A request cut off by our own timeout — the one failure worth retrying. Both
+ * backends throw it (the HTTP client on its abort, the local worker manager on
+ * its timer) so the shared scheduler below can bisect either one.
+ */
+export class EmbeddingsTimeoutError extends Error {}
+
+export interface EmbedBudgets {
+  /** A query with the endpoint otherwise idle. */
+  timeoutMs: number;
+  /** A query that has to wait out a passage request already at the endpoint. */
+  busyQueryTimeoutMs: number;
+  /** One packed passage batch. */
+  passageTimeoutMs: number;
+}
+
+export const DEFAULT_EMBED_BUDGETS: EmbedBudgets = {
+  timeoutMs: DEFAULT_TIMEOUT_MS,
+  busyQueryTimeoutMs: DEFAULT_BUSY_QUERY_TIMEOUT_MS,
+  passageTimeoutMs: DEFAULT_PASSAGE_TIMEOUT_MS
+};
+
+/** One request to the backend: these texts, this budget. Throws EmbeddingsTimeoutError on its own timer. */
+export type EmbedSender = (texts: string[], kind: EmbedKind, budgetMs: number) => Promise<Float32Array[]>;
+
+/**
+ * The traffic rules every embeddings backend shares, over a bare `send`:
+ * passages are packed into bounded batches, each of which waits for a query
+ * lull, is marked busy while out, runs on the long budget and bisects on
+ * timeout; a query is registered so background work yields, and takes the busy
+ * budget when a passage batch is already out. Written for the HTTP client after
+ * the 2026-08-21 indexing incident and then found missing from the local worker
+ * on 2026-09-03: Qwen3 0.6B on a CPU server took 1,580 facts as ONE request
+ * against a flat 60s timer, every batch timed out, and the abandoned work kept
+ * the cores busy for a quarter of an hour while each later request queued
+ * behind it and timed out too. `kind` undefined counts as a query — the Test
+ * button and the ad-hoc callers embed one text and are waiting for it — and so
+ * does an `urgent` passage (see {@link EmbedOptions}), which keeps its prefix
+ * but takes the query's place in line.
+ */
+export async function scheduledEmbed(
+  send: EmbedSender,
+  texts: string[],
+  kind: EmbedKind | undefined,
+  budgets: EmbedBudgets,
+  schedule: EmbedSchedule,
+  opts: EmbedOptions = {}
+): Promise<Float32Array[]> {
+  if (texts.length === 0) return [];
+  // Every passage request first waits out any in-flight query (plus a lull —
+  // the rest of that turn runs on the same box), and is marked while at the
+  // endpoint so queries know to take the busy budget. Per-request rather
+  // than per-call: a large backfill call spans several requests, and the
+  // gaps between them are exactly where a chat turn's query slips in.
+  async function passageRequest(batch: string[]): Promise<Float32Array[]> {
+    await schedule.waitForQueryLull();
+    const end = schedule.beginPassage();
+    try {
+      return await send(batch, 'passage', budgets.passageTimeoutMs);
+    } finally {
+      end();
+    }
+  }
+  // Only passage work retries on timeout: it's background, so the extra
+  // wait costs nobody, whereas a query retry would double a turn's stall
+  // when lexical fallback is standing right there. Anything else (HTTP
+  // status, response shape) fails the same way twice; rethrow.
+  //
+  // The retry must change the outcome, not repeat it. A multi-text batch
+  // that overran its budget was mis-sized (the token estimate undershot),
+  // and resending it verbatim is doomed to the same overrun — observed live
+  // on 2026-08-19: 400 at 2m0s, retry, 400 at 2m0s, pass dead, watermark
+  // stuck. Bisect instead, down to a single text, which does get one
+  // verbatim retry — momentary contention is the only thing left to blame.
+  async function embedPassage(batch: string[]): Promise<Float32Array[]> {
+    try {
+      return await passageRequest(batch);
+    } catch (err) {
+      if (!(err instanceof EmbeddingsTimeoutError)) throw err;
+      if (batch.length === 1) return passageRequest(batch);
+      const mid = Math.ceil(batch.length / 2);
+      const left = await embedPassage(batch.slice(0, mid));
+      return [...left, ...(await embedPassage(batch.slice(mid)))];
+    }
+  }
+  if (kind === 'passage' && !opts.urgent) {
+    const out: Float32Array[] = [];
+    for (const batch of packBatches(texts)) out.push(...(await embedPassage(batch)));
+    return out;
+  }
+  const sendKind: EmbedKind = kind ?? 'query';
+  // A query: registered so background work yields, and budgeted per batch —
+  // busy is read at send time because a passage request may start or finish
+  // while an earlier batch of this same call runs.
+  const end = schedule.beginQuery();
+  try {
+    const out: Float32Array[] = [];
+    for (const batch of packBatches(texts)) {
+      const budgetMs = schedule.passageBusy() ? budgets.busyQueryTimeoutMs : budgets.timeoutMs;
+      out.push(...(await send(batch, sendKind, budgetMs)));
+    }
+    return out;
+  } finally {
+    end();
+  }
+}
 
 function trimUrl(base: string): string {
   return base.replace(/\/+$/, '');
@@ -113,9 +227,11 @@ export function createHttpEmbeddingsClient(
     schedule?: EmbedSchedule;
   } = {}
 ): EmbeddingsClient {
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const passageTimeoutMs = opts.passageTimeoutMs ?? DEFAULT_PASSAGE_TIMEOUT_MS;
-  const busyQueryTimeoutMs = opts.busyQueryTimeoutMs ?? DEFAULT_BUSY_QUERY_TIMEOUT_MS;
+  const budgets: EmbedBudgets = {
+    timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    passageTimeoutMs: opts.passageTimeoutMs ?? DEFAULT_PASSAGE_TIMEOUT_MS,
+    busyQueryTimeoutMs: opts.busyQueryTimeoutMs ?? DEFAULT_BUSY_QUERY_TIMEOUT_MS
+  };
   const schedule = opts.schedule ?? embedSchedule;
 
   async function embedBatch(cfg: EmbeddingsConfig, texts: string[], budgetMs: number): Promise<Float32Array[]> {
@@ -174,65 +290,10 @@ export function createHttpEmbeddingsClient(
     async modelId() {
       return (await getConfig())?.model ?? null;
     },
-    async embed(texts, kind) {
+    async embed(texts, kind, opts) {
       const cfg = await getConfig();
       if (!cfg) throw new EmbeddingsUnavailableError();
-      if (texts.length === 0) return [];
-      // Every passage request first waits out any in-flight query (plus a lull —
-      // the rest of that turn runs on the same box), and is marked while at the
-      // endpoint so queries know to take the busy budget. Per-request rather
-      // than per-call: a large backfill call spans several requests, and the
-      // gaps between them are exactly where a chat turn's query slips in.
-      async function passageRequest(batch: string[]): Promise<Float32Array[]> {
-        await schedule.waitForQueryLull();
-        const end = schedule.beginPassage();
-        try {
-          return await embedBatch(cfg!, batch, passageTimeoutMs);
-        } finally {
-          end();
-        }
-      }
-      // Only passage work retries on timeout: it's background, so the extra
-      // wait costs nobody, whereas a query retry would double a turn's stall
-      // when lexical fallback is standing right there. Anything else (HTTP
-      // status, response shape) fails the same way twice; rethrow.
-      //
-      // The retry must change the outcome, not repeat it. A multi-text batch
-      // that overran its budget was mis-sized (the token estimate undershot),
-      // and resending it verbatim is doomed to the same overrun — observed live
-      // on 2026-08-19: 400 at 2m0s, retry, 400 at 2m0s, pass dead, watermark
-      // stuck. Bisect instead, down to a single text, which does get one
-      // verbatim retry — momentary contention is the only thing left to blame.
-      async function embedPassage(batch: string[]): Promise<Float32Array[]> {
-        try {
-          return await passageRequest(batch);
-        } catch (err) {
-          if (!(err instanceof EmbeddingsTimeoutError)) throw err;
-          if (batch.length === 1) return passageRequest(batch);
-          const mid = Math.ceil(batch.length / 2);
-          const left = await embedPassage(batch.slice(0, mid));
-          return [...left, ...(await embedPassage(batch.slice(mid)))];
-        }
-      }
-      if (kind === 'passage') {
-        const out: Float32Array[] = [];
-        for (const batch of packBatches(texts)) out.push(...(await embedPassage(batch)));
-        return out;
-      }
-      // A query: registered so background work yields, and budgeted per batch —
-      // busy is read at send time because a passage request may start or finish
-      // while an earlier batch of this same call runs.
-      const end = schedule.beginQuery();
-      try {
-        const out: Float32Array[] = [];
-        for (const batch of packBatches(texts)) {
-          const budgetMs = schedule.passageBusy() ? busyQueryTimeoutMs : timeoutMs;
-          out.push(...(await embedBatch(cfg, batch, budgetMs)));
-        }
-        return out;
-      } finally {
-        end();
-      }
+      return scheduledEmbed((batch, _kind, budgetMs) => embedBatch(cfg, batch, budgetMs), texts, kind, budgets, schedule, opts);
     }
   };
 }
