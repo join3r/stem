@@ -1238,7 +1238,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .insp-tabs {
   display: flex;
   justify-content: center;
-  padding: 9px 9px 4px;
+  padding: 9px 12px 4px; /* the panel gutter: everything below lines up on it */
   position: sticky;
   top: 0;
   background: var(--panel);
@@ -1294,7 +1294,8 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 
 .manage-body { padding: 6px 14px 14px; }
 /* Chats list runs close to the panel edges so rows/selection use the full width. */
-.manage-body.chats { padding: 6px 4px 14px; }
+/* The chat list runs edge to edge; its rows and controls carry the 12px gutter themselves. */
+.manage-body.chats { padding: 6px 0 14px; }
 
 .muted { color: var(--muted); font-size: var(--fs-12); }
 .error { color: var(--danger); font-size: var(--fs-12); }
@@ -1588,8 +1589,12 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 /* Inbox | Chats leads the panel, in the position and shape Memory's Facts | Recall
    established. Bare, not inside a .formgroup card: the chat list is a
    native-feeling sidebar, not a settings surface. */
-.seg-ctl.chats-modes { margin: 0 12px 8px; }
-.seg-ctl.chats-modes button { gap: var(--sp-2); display: inline-flex; align-items: center; justify-content: center; }
+.chats-modes-row { display: flex; align-items: center; gap: var(--sp-4); margin: 0 12px 8px; }
+/* One step smaller than the rail above it, so the two segmented controls read
+   as parent and child rather than as twins. */
+.seg-ctl.chats-modes { flex: 1; min-width: 0; }
+.seg-ctl.chats-modes button { gap: var(--sp-2); display: inline-flex; align-items: center; justify-content: center; padding: 3px 8px; }
+.chats-actions { flex: none; gap: var(--sp-2); }
 .seg-count {
   font-size: var(--fs-10);
   font-weight: 700;
@@ -2817,7 +2822,9 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 /* Rows reuse the inbox-row look; mail adds a from-line above the subject. */
 .mail-row .mail-from { display: block; font-size: var(--fs-11); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mail-row.unread .mail-from { color: var(--ink); }
-.mail-needs-you { color: var(--accent); font-style: normal; }
+/* A pill, not a "· needs you" suffix: it stays on the from-line at any width
+   instead of wrapping behind a lone separator dot. */
+.mail-needs-you { display: inline-block; margin-left: var(--sp-3); padding: 0 6px; border-radius: var(--radius-pill); background: var(--sel); color: var(--accent); font-size: var(--fs-10); font-weight: 600; line-height: 15px; font-style: normal; vertical-align: 1px; }
 .mail-aborted { color: var(--muted); font-style: normal; }
 .mail-sent-icon { margin-right: 2px; opacity: 0.7; }
 

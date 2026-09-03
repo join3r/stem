@@ -572,26 +572,27 @@ export function ChatList(props: ChatListProps) {
 
   return (
     <div className="chats-panel">
-      {/* Grouped and labelled: the rail's Chats tab and this control's Chats
-          segment share a name, so the group is what tells them apart. */}
-      <div className="seg-ctl chats-modes" role="group" aria-label="Chat list mode">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            ref={t.id === 'inbox' ? inboxSegRef : undefined}
-            className={tab === t.id ? 'active' : ''}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-            {t.id === 'inbox' && props.mailUnreadCount > 0 && (
-              <span className="seg-count">{props.mailUnreadCount}</span>
-            )}
-          </button>
-        ))}
-      </div>
-      <div className="grp-head chats-head">
-        <span>{TABS.find((t) => t.id === tab)?.label}</span>
-        <span className="grp-head-actions">
+      {/* One row: the Inbox | Chats switch plus the list's actions. Grouped and
+          labelled because the rail's Chats tab and this control's Chats segment
+          share a name. No heading under it — the active segment already names
+          the list, so a second "INBOX" only cost a row. */}
+      <div className="chats-modes-row">
+        <div className="seg-ctl chats-modes" role="group" aria-label="Chat list mode">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              ref={t.id === 'inbox' ? inboxSegRef : undefined}
+              className={tab === t.id ? 'active' : ''}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+              {t.id === 'inbox' && props.mailUnreadCount > 0 && (
+                <span className="seg-count">{props.mailUnreadCount}</span>
+              )}
+            </button>
+          ))}
+        </div>
+        <span className="grp-head-actions chats-actions">
           {tab === 'inbox' && props.mailUnreadCount > 0 && (
             <button className="grp-head-add" title="Mark all as read" onClick={props.onMailMarkAllRead}>
               <CheckCheck size={14} />
