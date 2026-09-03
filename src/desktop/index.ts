@@ -532,6 +532,13 @@ app.whenReady().then(async () => {
   // A theme file saved, added or removed in the themes folder is the same event
   // as picking one: every window repaints and the picker re-lists.
   watchThemes(() => void currentThemeState().then(themeChanged));
+  // A theme with both palettes follows the OS appearance. The renderer watches
+  // prefers-color-scheme itself, but the main process is the authority (it also
+  // paints new windows' chrome from nativeTheme), so an OS flip re-pushes the
+  // same state and every window re-resolves against the new appearance.
+  nativeTheme.on('updated', () => {
+    if (themeState.custom) themeChanged(themeState);
+  });
   quickChat.registerIpc();
   ipcMain.on('renderer:ready', (event) => {
     const win = mainWindow;
