@@ -282,27 +282,28 @@ describe('embed worker manager', () => {
   });
 });
 
-describe('co-hosted reranker', () => {
-  it('loads the reranker into a live embed worker in place (no restart)', () => {
+describe('separate rerank worker', () => {
+  it('loads the reranker in its own process so it cannot abort the embedder', () => {
     const { mgr, workers } = manager();
     mgr.ensure(SPEC);
     workers[0].emit(ready());
     mgr.ensureRerank(RERANK_SPEC);
-    expect(workers).toHaveLength(1); // same process
-    expect(workers[0].sent.at(-1)).toMatchObject({ type: 'load-rerank', cacheDir: '/tmp/models' });
+    expect(workers).toHaveLength(2);
+    expect(workers[0].sent.map((m) => m.type)).toEqual(['load']);
+    expect(workers[1].sent.map((m) => m.type)).toEqual(['load-rerank']);
     expect(mgr.rerankStatus().state).toBe('loading');
     mgr.ensureRerank(RERANK_SPEC); // idempotent while the same model is up
-    expect(workers[0].sent.filter((m) => m.type === 'load-rerank')).toHaveLength(1);
+    expect(workers).toHaveLength(2);
   });
 
-  it('spawns rerank-only when embeddings are not local, then adds the embedder in place', () => {
+  it('spawns rerank-only when embeddings are not local, then adds the embedder as a second process', () => {
     const { mgr, workers } = manager();
     mgr.ensureRerank(RERANK_SPEC);
     expect(workers).toHaveLength(1);
     expect(workers[0].sent.map((m) => m.type)).toEqual(['load-rerank']);
     mgr.ensure(SPEC);
-    expect(workers).toHaveLength(1);
-    expect(workers[0].sent.map((m) => m.type)).toEqual(['load-rerank', 'load']);
+    expect(workers).toHaveLength(2);
+    expect(workers[1].sent.map((m) => m.type)).toEqual(['load']);
   });
 
   it('queues reranks while loading, flushes on ready, and resolves results', async () => {
@@ -334,7 +335,7 @@ describe('co-hosted reranker', () => {
     workers[0].emit(ready());
     const embedPending = mgr.embed(['x'], 'passage');
     const rerankPending = mgr.rerank('q', ['a'], 1);
-    workers[0].emit({ type: 'rerank-status', status: { model: RERANK_SPEC.id, state: 'error', error: 'oom' } });
+    workers[1].emit({ type: 'rerank-status', status: { model: RERANK_SPEC.id, state: 'error', error: 'oom' } });
     await expect(rerankPending).rejects.toThrow(/oom/);
     expect(mgr.rerankStatus().state).toBe('error');
     // The embed side is untouched and still completes.
@@ -344,40 +345,85 @@ describe('co-hosted reranker', () => {
     expect((await embedPending).length).toBe(1);
   });
 
-  it('a crash respawn reloads BOTH models', async () => {
+  it('a rerank-worker crash respawns only the reranker', async () => {
     const { mgr, workers } = manager();
     mgr.ensure(SPEC);
     mgr.ensureRerank(RERANK_SPEC);
     workers[0].emit(ready());
-    workers[0].emit(rerankReady());
+    workers[1].emit(rerankReady());
     const pending = mgr.rerank('q', ['a'], 1);
-    workers[0].exit(1);
+    workers[1].exit(1);
     await expect(pending).rejects.toThrow(/exited/);
-    expect(workers).toHaveLength(2);
-    expect(workers[1].sent.map((m) => m.type).sort()).toEqual(['load', 'load-rerank']);
+    expect(workers).toHaveLength(3);
+    expect(workers[2].sent.map((m) => m.type)).toEqual(['load-rerank']);
+    expect(mgr.status().state).toBe('ready');
   });
 
-  it('an embed model switch restarts the process and reloads the reranker too', () => {
+  it('a rerank abort while loading leaves the embedder running', () => {
     const { mgr, workers } = manager();
     mgr.ensure(SPEC);
     mgr.ensureRerank(RERANK_SPEC);
     workers[0].emit(ready());
-    workers[0].emit(rerankReady());
+    workers[1].exit(5);
+    // Embedder untouched; reranker gets its own respawn.
+    expect(mgr.status().state).toBe('ready');
+    expect(workers).toHaveLength(3);
+    expect(workers[2].sent.map((m) => m.type)).toEqual(['load-rerank']);
+  });
+
+  it('force-retry after a rerank crash-loop restarts only the rerank worker', () => {
+    const { mgr, workers } = manager();
+    mgr.ensure(SPEC);
+    mgr.ensureRerank(RERANK_SPEC);
+    workers[0].emit(ready());
+    workers[1].exit(5);
+    workers[2].exit(5);
+    workers[3].exit(5);
+    workers[4].exit(5);
+    expect(mgr.rerankStatus().state).toBe('error');
+    expect(mgr.status().state).toBe('ready');
+    mgr.ensureRerank(RERANK_SPEC, { force: true });
+    expect(workers.at(-1)!.sent.map((m) => m.type)).toEqual(['load-rerank']);
+    expect(mgr.rerankStatus().state).toBe('loading');
+  });
+
+  it('names Qwen3-Reranker-0.6B and points at BGE when that worker crash-loops', () => {
+    const qwen = RERANK_CATALOG['qwen3-reranker-0.6b'];
+    const { mgr, workers } = manager();
+    mgr.ensureRerank(qwen);
+    workers[0].exit(5);
+    workers[1].exit(5);
+    workers[2].exit(5);
+    workers[3].exit(5);
+    expect(mgr.rerankStatus()).toMatchObject({
+      state: 'error',
+      error: expect.stringMatching(/too large for this machine.*BGE/i)
+    });
+  });
+
+  it('an embed model switch restarts only the embedder', () => {
+    const { mgr, workers } = manager();
+    mgr.ensure(SPEC);
+    mgr.ensureRerank(RERANK_SPEC);
+    workers[0].emit(ready());
+    workers[1].emit(rerankReady());
     mgr.reconfigure(EMBED_CATALOG['multilingual-e5-base']);
-    expect(workers).toHaveLength(2);
-    expect(workers[1].sent.map((m) => m.type).sort()).toEqual(['load', 'load-rerank']);
+    expect(workers).toHaveLength(3);
+    expect(workers[2].sent.map((m) => m.type)).toEqual(['load']);
+    expect((workers[2].sent[0] as { spec: { id: string } }).spec.id).toBe('multilingual-e5-base');
+    expect(mgr.rerankStatus().state).toBe('ready');
   });
 
-  it('reconfigureRerank(null) restarts with the embedder only and goes idle', () => {
+  it('reconfigureRerank(null) stops the reranker and leaves the embedder up', () => {
     const { mgr, workers } = manager();
     mgr.ensure(SPEC);
     mgr.ensureRerank(RERANK_SPEC);
     workers[0].emit(ready());
-    workers[0].emit(rerankReady());
+    workers[1].emit(rerankReady());
     mgr.reconfigureRerank(null);
     expect(mgr.rerankStatus().state).toBe('idle');
+    expect(mgr.status().state).toBe('ready');
     expect(workers).toHaveLength(2);
-    expect(workers[1].sent.map((m) => m.type)).toEqual(['load']);
   });
 
   it('rejects reranks when the worker is not running instead of hanging', async () => {
@@ -402,23 +448,23 @@ describe('co-hosted reranker', () => {
   // A worker that purged a corrupt weights cache asks (via purgedCorruptCache)
   // for a NEW process to redo the download in — a failed ONNX load poisons
   // transformers.js state for every later load in the same one.
-  it('restarts the worker after a corrupt-cache purge instead of surfacing the error', () => {
+  it('restarts only the embedder after a corrupt-cache purge instead of surfacing the error', () => {
     const { mgr, workers } = manager();
     mgr.ensure(SPEC);
     mgr.ensureRerank(RERANK_SPEC);
+    workers[1].emit(rerankReady());
     workers[0].emit({
       type: 'status',
       status: { model: SPEC.id, state: 'error', error: 'Protobuf parsing failed', purgedCorruptCache: true }
     });
-    expect(workers).toHaveLength(2);
+    expect(workers).toHaveLength(3);
     // Silent recovery: never an 'error' the restart is about to fix.
     expect(mgr.status().state).toBe('loading');
-    expect(workers[1].sent.map((m) => m.type).sort()).toEqual(['load', 'load-rerank']);
-    // The replacement loads clean.
-    workers[1].emit(ready());
-    workers[1].emit(rerankReady());
-    expect(mgr.status().state).toBe('ready');
+    expect(workers[2].sent.map((m) => m.type)).toEqual(['load']);
+    // The reranker is still the original process.
     expect(mgr.rerankStatus().state).toBe('ready');
+    workers[2].emit(ready());
+    expect(mgr.status().state).toBe('ready');
   });
 
   it('caps corrupt-cache restarts so a persistently bad download settles into error', () => {
@@ -480,7 +526,7 @@ describe('co-hosted reranker', () => {
     mgr.ensure(SPEC);
     expect(mgr.status()).toMatchObject({ state: 'error', error: 'utilityProcess unavailable' });
     expect(await newLines(before)).toContainEqual(
-      expect.stringContaining('[embed-worker] fork failed {"error":"utilityProcess unavailable"}')
+      expect.stringContaining('[embed-worker] fork failed {"error":"utilityProcess unavailable","kind":"embed"}')
     );
   });
 });

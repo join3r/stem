@@ -201,10 +201,11 @@ export function initRetrieval(deps: {
         })
       )
     }),
-    // Precision rerank stage: the bundled cross-encoder (co-hosted in the embed
-    // worker) or the user's own Cohere/Jina-style /rerank endpoint (llama.cpp
-    // --reranking, vLLM, Infinity, TEI — note Ollama can't serve one). Off/not
-    // ready → inject degrades to the cosine ranking.
+    // Precision rerank stage: the bundled cross-encoder (its own utility
+    // process — sharing one with the embedder aborted Qwen3-Reranker-0.6B) or
+    // the user's own Cohere/Jina-style /rerank endpoint (llama.cpp --reranking,
+    // vLLM, Infinity, TEI — note Ollama can't serve one). Off/not ready → inject
+    // degrades to the cosine ranking.
     rerank: createRerankRouter({
       getMode: async () => (await getRerankSettings()).mode,
       local: createLocalRerankClient(getRetrieval, embedManager),

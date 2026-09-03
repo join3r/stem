@@ -8,13 +8,12 @@ import type { WorkerTransport } from './embed-worker-host';
 import { log } from '../log';
 import type { LocalEmbedStatus, LocalRerankStatus } from '../../shared/types';
 
-// Main-process side of the local retrieval worker: owns the utility-process
-// lifecycle (lazy spawn on first demand, respawn on crash, dispose on model
-// switch) and multiplexes embed + rerank requests over it. One process hosts
-// both models — the embedder and (when enabled) the reranker cross-encoder —
-// each with its own spec, status channel, and request queue. Everything here is
-// non-blocking: ensure() just kicks the machinery, and callers learn readiness
-// via status()/onStatus rather than awaiting a download.
+// Main-process side of the local retrieval workers: owns utility-process
+// lifecycle (lazy spawn, respawn on crash, dispose on model switch) and
+// multiplexes requests. Embedder and reranker each get their own process —
+// co-hosting them in one ONNX runtime is what aborted Qwen3-Reranker-0.6B
+// (exit 5 / SIGTRAP) after the embedder had already loaded. Callers learn
+// readiness via status()/onStatus; ensure() never blocks the turn.
 //
 // The `embed-worker` log lines cover the lifecycle events that never reach a
 // status callback, and so would otherwise exist nowhere a user can send us: a
@@ -41,15 +40,15 @@ export interface EmbedWorkerManager {
    * wait behind other backfills; queries go straight through.
    */
   embed(texts: string[], kind: EmbedKind, opts?: { timeoutMs?: number }): Promise<Float32Array[]>;
-  /** Model switch or mode left 'local': kill the worker; when a spec is given, start loading it. */
+  /** Model switch or mode left 'local': kill the embed worker; when a spec is given, start loading it. */
   reconfigure(spec: LocalEmbedModelSpec | null): void;
-  /** Same contract as ensure(), for the reranker model co-hosted in the worker. */
+  /** Same contract as ensure(), for the reranker in its own worker. */
   ensureRerank(spec: LocalRerankModelSpec, opts?: { force?: boolean }): void;
   rerankStatus(): LocalRerankStatus;
   onRerankStatus(cb: (status: LocalRerankStatus) => void): () => void;
   /** Rerank via the worker. Queued while loading/downloading; rejects on error state. */
   rerank(query: string, docs: string[], topN: number): Promise<RerankResult[]>;
-  /** Reranker model switch or mode left 'local': reload the worker with the new set of models. */
+  /** Reranker model switch or mode left 'local': reload only the rerank worker. */
   reconfigureRerank(spec: LocalRerankModelSpec | null): void;
   dispose(): void;
 }
@@ -80,9 +79,8 @@ const MAX_RESPAWNS = 3;
 // Restarts granted when the worker reports it purged a corrupt weights cache
 // (truncated download). The retry MUST be a new process — a failed ONNX load
 // poisons transformers.js state for every later load in the same one — and the
-// budget is 2 so the embedder and the reranker can each self-heal once per
-// kick; a re-download that comes back corrupt again settles into 'error'
-// instead of looping the download forever.
+// budget is 2 so a re-download that comes back corrupt again settles into
+// 'error' instead of looping the download forever. Each stage has its own count.
 const MAX_CORRUPT_RESPAWNS = 2;
 // A worker that survives this long before dying is treated as a genuine one-off
 // crash (fresh respawn budget), not a crash loop. Shorter than this counts toward
@@ -90,6 +88,19 @@ const MAX_CORRUPT_RESPAWNS = 2;
 // the first backfill batch — settles into a visible 'error' instead of respawning
 // forever. Must exceed a load+first-embed cycle (a few seconds) comfortably.
 const STABLE_UPTIME_MS = 60_000;
+
+/** Settled crash-loop copy. Qwen3's ~1.2 GB causal LM is named because that is
+ *  the model the 0.5.0 default puts here, and the one that aborts on machines
+ *  that load the embedder fine — BGE is the smaller catalog alternative. */
+function stageCrashError(
+  kind: 'embed' | 'rerank',
+  model: { id: string; label: string; approxSizeMB: number }
+): string {
+  if (kind === 'rerank' && model.id === 'qwen3-reranker-0.6b') {
+    return `${model.label} (~${model.approxSizeMB} MB) is too large for this machine — pick BGE or turn the stage off`;
+  }
+  return 'worker keeps crashing — try a smaller model or turn the stage off';
+}
 
 export function createEmbedWorkerManager(deps: {
   spawn: () => WorkerTransport;
@@ -100,16 +111,20 @@ export function createEmbedWorkerManager(deps: {
   const embedTimeoutMs = deps.embedTimeoutMs ?? EMBED_TIMEOUT_MS;
   const rerankTimeoutMs = deps.rerankTimeoutMs ?? RERANK_TIMEOUT_MS;
 
-  let transport: WorkerTransport | null = null;
+  let embedTransport: WorkerTransport | null = null;
+  let rerankTransport: WorkerTransport | null = null;
   let spec: LocalEmbedModelSpec | null = null;
   let rerankSpec: LocalRerankModelSpec | null = null;
   let status: LocalEmbedStatus = { model: 'multilingual-e5-small', state: 'idle' };
   let rrStatus: LocalRerankStatus = { model: DEFAULT_LOCAL_RERANK_MODEL, state: 'idle' };
   let lastErrorAt = 0;
   let lastRerankErrorAt = 0;
-  let respawns = 0;
-  let corruptRespawns = 0;
-  let spawnedAt = 0;
+  let embedRespawns = 0;
+  let rerankRespawns = 0;
+  let embedCorruptRespawns = 0;
+  let rerankCorruptRespawns = 0;
+  let embedSpawnedAt = 0;
+  let rerankSpawnedAt = 0;
   let nextId = 1;
   const inflight = new Map<number, PendingEmbed>();
   const rerankInflight = new Map<number, PendingRerank>();
@@ -181,13 +196,8 @@ export function createEmbedWorkerManager(deps: {
     for (const p of rerankQueued.splice(0)) p.reject(err);
   }
 
-  function failAll(embedMessage: string, rerankMessage: string): void {
-    failEmbeds(embedMessage);
-    failReranks(rerankMessage);
-  }
-
   function sendEmbed(p: PendingEmbed): void {
-    if (!transport) return;
+    if (!embedTransport) return;
     const id = nextId++;
     inflight.set(id, p);
     p.timer = setTimeout(() => {
@@ -195,54 +205,85 @@ export function createEmbedWorkerManager(deps: {
       // Tell the worker to stop: without this the abandoned run keeps the
       // cores for as long as the request would have taken, and every request
       // behind it inherits the wait (the 2026-09-03 incident).
-      transport?.send({ type: 'cancel', id });
+      embedTransport?.send({ type: 'cancel', id });
       p.reject(new EmbeddingsTimeoutError(`local embeddings: timed out after ${p.timeoutMs}ms`));
       settled(p);
     }, p.timeoutMs);
-    transport.send({ type: 'embed', id, texts: p.texts, kind: p.kind });
+    embedTransport.send({ type: 'embed', id, texts: p.texts, kind: p.kind });
   }
 
   function sendRerank(p: PendingRerank): void {
-    if (!transport) return;
+    if (!rerankTransport) return;
     const id = nextId++;
     rerankInflight.set(id, p);
     p.timer = setTimeout(() => {
       rerankInflight.delete(id);
       p.reject(new Error(`local reranker: timed out after ${rerankTimeoutMs}ms`));
     }, rerankTimeoutMs);
-    transport.send({ type: 'rerank', id, query: p.query, docs: p.docs, topN: p.topN });
+    rerankTransport.send({ type: 'rerank', id, query: p.query, docs: p.docs, topN: p.topN });
   }
 
   /**
-   * The worker found and purged a corrupt weights cache: restart it so the
-   * re-download happens in a clean process, silently (statuses go back to
-   * 'loading' rather than surfacing an error the restart is about to fix).
-   * Within budget only; past it the error status flows through as usual.
+   * Ask a worker to drop its ONNX session, then SIGTERM it. The worker never
+   * exits itself — process.exit() with a live ORT thread pool aborts
+   * ("mutex lock failed"), while SIGTERM skips C++ static destructors and can't.
+   * The timer is the backstop for a hung worker. Clearing `slot` first stops
+   * onExit from treating this as a crash.
    */
-  function restartAfterCorruptPurge(status: {
-    state: string;
-    error?: string;
-    purgedCorruptCache?: boolean;
-  }): boolean {
-    if (status.state !== 'error' || !status.purgedCorruptCache) return false;
-    if (corruptRespawns >= MAX_CORRUPT_RESPAWNS) return false;
-    corruptRespawns += 1;
-    // The one failure the UI never shows: a re-download that keeps coming back
-    // corrupt reads as a slow first load until the budget runs out.
-    log('embed-worker', 'purged corrupt weights cache, restarting to re-download', {
-      attempt: corruptRespawns,
-      of: MAX_CORRUPT_RESPAWNS,
-      error: status.error
+  function shutdown(slot: { current: WorkerTransport | null }): void {
+    const t = slot.current;
+    slot.current = null;
+    if (!t) return;
+    t.send({ type: 'dispose' });
+    const killTimer = setTimeout(() => t.kill(), 2000);
+    killTimer.unref?.();
+    t.onMessage((raw) => {
+      if ((raw as WorkerOutMessage).type === 'disposed') {
+        clearTimeout(killTimer);
+        t.kill();
+      }
     });
-    stop();
-    spawnProcess();
+  }
+
+  const embedSlot = { get current() { return embedTransport; }, set current(v) { embedTransport = v; } };
+  const rerankSlot = { get current() { return rerankTransport; }, set current(v) { rerankTransport = v; } };
+
+  /**
+   * The worker found and purged a corrupt weights cache: restart THAT stage's
+   * process so the re-download happens clean, silently. The other stage is
+   * left running — a truncated embedder download must not bounce the reranker.
+   */
+  function restartAfterCorruptPurge(
+    kind: 'embed' | 'rerank',
+    next: { state: string; error?: string; purgedCorruptCache?: boolean }
+  ): boolean {
+    if (next.state !== 'error' || !next.purgedCorruptCache) return false;
+    const used = kind === 'embed' ? embedCorruptRespawns : rerankCorruptRespawns;
+    if (used >= MAX_CORRUPT_RESPAWNS) return false;
+    if (kind === 'embed') embedCorruptRespawns += 1;
+    else rerankCorruptRespawns += 1;
+    log('embed-worker', 'purged corrupt weights cache, restarting to re-download', {
+      attempt: kind === 'embed' ? embedCorruptRespawns : rerankCorruptRespawns,
+      of: MAX_CORRUPT_RESPAWNS,
+      error: next.error,
+      kind
+    });
+    if (kind === 'embed') {
+      failEmbeds('local embeddings: worker stopped');
+      shutdown(embedSlot);
+      spawnEmbed();
+    } else {
+      failReranks('local reranker: worker stopped');
+      shutdown(rerankSlot);
+      spawnRerank();
+    }
     return true;
   }
 
-  function handleMessage(raw: unknown): void {
+  function handleEmbedMessage(raw: unknown): void {
     const msg = raw as WorkerOutMessage;
     if (msg.type === 'status') {
-      if (restartAfterCorruptPurge(msg.status)) return;
+      if (restartAfterCorruptPurge('embed', msg.status)) return;
       setStatus(msg.status);
       if (msg.status.state === 'ready') {
         // Reaching 'ready' does NOT reset the respawn budget: a worker can load
@@ -255,16 +296,6 @@ export function createEmbedWorkerManager(deps: {
       }
       return;
     }
-    if (msg.type === 'rerank-status') {
-      if (restartAfterCorruptPurge(msg.status)) return;
-      setRerankStatus(msg.status);
-      if (msg.status.state === 'ready') {
-        for (const p of rerankQueued.splice(0)) sendRerank(p);
-      } else if (msg.status.state === 'error') {
-        failReranks(`local reranker: ${msg.status.error ?? 'model failed to load'}`);
-      }
-      return;
-    }
     if (msg.type === 'result') {
       const p = inflight.get(msg.id);
       if (!p) return; // timed out already
@@ -274,140 +305,153 @@ export function createEmbedWorkerManager(deps: {
       settled(p);
       return;
     }
+    if (msg.type === 'error' && typeof msg.id === 'number') {
+      const pe = inflight.get(msg.id);
+      if (!pe) return;
+      inflight.delete(msg.id);
+      if (pe.timer) clearTimeout(pe.timer);
+      pe.reject(new Error(`local embeddings: ${msg.message}`));
+      settled(pe);
+    }
+  }
+
+  function handleRerankMessage(raw: unknown): void {
+    const msg = raw as WorkerOutMessage;
+    if (msg.type === 'rerank-status') {
+      if (restartAfterCorruptPurge('rerank', msg.status)) return;
+      setRerankStatus(msg.status);
+      if (msg.status.state === 'ready') {
+        for (const p of rerankQueued.splice(0)) sendRerank(p);
+      } else if (msg.status.state === 'error') {
+        failReranks(`local reranker: ${msg.status.error ?? 'model failed to load'}`);
+      }
+      return;
+    }
     if (msg.type === 'rerank-result') {
       const p = rerankInflight.get(msg.id);
-      if (!p) return; // timed out already
+      if (!p) return;
       rerankInflight.delete(msg.id);
       if (p.timer) clearTimeout(p.timer);
       p.resolve(msg.results);
       return;
     }
-    if (msg.type === 'error') {
-      if (typeof msg.id !== 'number') return; // load errors arrive as status
-      const pe = inflight.get(msg.id);
-      if (pe) {
-        inflight.delete(msg.id);
-        if (pe.timer) clearTimeout(pe.timer);
-        pe.reject(new Error(`local embeddings: ${msg.message}`));
-        settled(pe);
-        return;
-      }
+    if (msg.type === 'error' && typeof msg.id === 'number') {
       const pr = rerankInflight.get(msg.id);
-      if (pr) {
-        rerankInflight.delete(msg.id);
-        if (pr.timer) clearTimeout(pr.timer);
-        pr.reject(new Error(`local reranker: ${msg.message}`));
-      }
+      if (!pr) return;
+      rerankInflight.delete(msg.id);
+      if (pr.timer) clearTimeout(pr.timer);
+      pr.reject(new Error(`local reranker: ${msg.message}`));
     }
   }
 
-  /** Start the worker process and kick loads for whichever specs are set. */
-  function spawnProcess(): void {
+  function onUnexpectedExit(
+    kind: 'embed' | 'rerank',
+    code: number | undefined,
+    uptimeMs: number
+  ): void {
+    if (uptimeMs >= STABLE_UPTIME_MS) {
+      if (kind === 'embed') embedRespawns = 0;
+      else rerankRespawns = 0;
+    }
+    const respawns = kind === 'embed' ? embedRespawns : rerankRespawns;
+    const want = kind === 'embed' ? spec : rerankSpec;
+    const respawning = respawns < MAX_RESPAWNS && !!want;
+    log('embed-worker', 'worker exited unexpectedly', {
+      code: code ?? null,
+      uptimeMs,
+      kind,
+      embed: spec?.id ?? null,
+      rerank: rerankSpec?.id ?? null,
+      respawning,
+      respawns
+    });
+    if (respawning) {
+      if (kind === 'embed') {
+        embedRespawns += 1;
+        spawnEmbed();
+      } else {
+        rerankRespawns += 1;
+        spawnRerank();
+      }
+      return;
+    }
+    const error = kind === 'embed' && spec
+      ? stageCrashError('embed', spec)
+      : kind === 'rerank' && rerankSpec
+        ? stageCrashError('rerank', rerankSpec)
+        : 'worker keeps crashing — try a smaller model or turn the stage off';
+    if (kind === 'embed' && spec) setStatus({ model: spec.id, state: 'error', error });
+    if (kind === 'rerank' && rerankSpec) setRerankStatus({ model: rerankSpec.id, state: 'error', error });
+  }
+
+  function spawnEmbed(): void {
+    if (!spec) return;
     let t: WorkerTransport;
     try {
       t = deps.spawn();
     } catch (err) {
-      // Never throws out of ensure(): callers (available() on the turn hot path)
-      // must fall back, not break the turn.
       const message = err instanceof Error ? err.message : 'failed to start embedding worker';
-      log('embed-worker', 'fork failed', { error: message });
-      if (spec) setStatus({ model: spec.id, state: 'error', error: message });
-      if (rerankSpec) setRerankStatus({ model: rerankSpec.id, state: 'error', error: message });
+      log('embed-worker', 'fork failed', { error: message, kind: 'embed' });
+      setStatus({ model: spec.id, state: 'error', error: message });
       return;
     }
-    transport = t;
-    spawnedAt = Date.now();
-    // Anchors the story a failure log has to tell: "never even forked" and
-    // "forked and then died" are the same silence without this line.
-    log('embed-worker', 'spawned', { embed: spec?.id ?? null, rerank: rerankSpec?.id ?? null });
-    if (spec) setStatus({ model: spec.id, state: 'loading' });
-    if (rerankSpec) setRerankStatus({ model: rerankSpec.id, state: 'loading' });
-    // Identity-guarded: a superseded worker lives up to 2 s after stop() and its
-    // late messages must not clobber the replacement's status or requests.
+    embedTransport = t;
+    embedSpawnedAt = Date.now();
+    log('embed-worker', 'spawned', { embed: spec.id, rerank: null });
+    setStatus({ model: spec.id, state: 'loading' });
     t.onMessage((msg) => {
-      if (transport === t) handleMessage(msg);
+      if (embedTransport === t) handleEmbedMessage(msg);
     });
     t.onExit((code) => {
-      if (transport !== t) return; // superseded by reconfigure
-      transport = null;
-      const uptimeMs = Date.now() - spawnedAt;
-      failAll('local embeddings: worker exited', 'local reranker: worker exited');
-      // A worker that ran past STABLE_UPTIME_MS before dying is a one-off crash,
-      // not a loop — refund its respawn budget so a long-lived worker that finally
-      // trips over one bad input gets a fresh start.
-      if (uptimeMs >= STABLE_UPTIME_MS) respawns = 0;
-      // Unexpected exit (dispose/reconfigure clear `transport` first): respawn
-      // with a cap so a crash-looping model settles into 'error' instead of
-      // burning CPU forever; the next settings change or Test resets the count.
-      const respawning = respawns < MAX_RESPAWNS && !!(spec || rerankSpec);
-      // A process that ABORTS (ONNX OOM, an ORT mutex abort on load) never posts
-      // an error status, so this exit is the only record that it ran at all. The
-      // reason itself died with the child's stderr; the code and the uptime are
-      // what separate "aborted mid-load" from "aborted on the first embed".
-      log('embed-worker', 'worker exited unexpectedly', {
-        code: code ?? null,
-        uptimeMs,
-        embed: spec?.id ?? null,
-        rerank: rerankSpec?.id ?? null,
-        respawning,
-        respawns
-      });
-      if (respawning) {
-        respawns += 1;
-        spawnProcess();
-      } else {
-        const error = 'worker keeps crashing — try a smaller model or turn the stage off';
-        if (spec) setStatus({ model: spec.id, state: 'error', error });
-        if (rerankSpec) setRerankStatus({ model: rerankSpec.id, state: 'error', error });
-      }
+      if (embedTransport !== t) return;
+      embedTransport = null;
+      failEmbeds('local embeddings: worker exited');
+      onUnexpectedExit('embed', code, Date.now() - embedSpawnedAt);
     });
-    if (spec) t.send({ type: 'load', spec, cacheDir: deps.cacheDir() });
-    if (rerankSpec) t.send({ type: 'load-rerank', spec: rerankSpec, cacheDir: deps.cacheDir() });
+    t.send({ type: 'load', spec, cacheDir: deps.cacheDir() });
   }
 
-  function stop(): void {
-    const t = transport;
-    transport = null; // cleared first so onExit doesn't respawn
-    if (t) {
-      // Ask the worker to release its ONNX sessions, then SIGTERM it on ack. The
-      // worker never exits itself — process.exit() with a live ORT thread pool
-      // aborts ("mutex lock failed"), while SIGTERM skips C++ static destructors
-      // and can't. The timer is the backstop for a hung worker.
-      t.send({ type: 'dispose' });
-      const killTimer = setTimeout(() => t.kill(), 2000);
-      killTimer.unref?.();
-      t.onMessage((raw) => {
-        if ((raw as WorkerOutMessage).type === 'disposed') {
-          clearTimeout(killTimer);
-          t.kill();
-        }
-      });
+  function spawnRerank(): void {
+    if (!rerankSpec) return;
+    let t: WorkerTransport;
+    try {
+      t = deps.spawn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'failed to start embedding worker';
+      log('embed-worker', 'fork failed', { error: message, kind: 'rerank' });
+      setRerankStatus({ model: rerankSpec.id, state: 'error', error: message });
+      return;
     }
-    failAll('local embeddings: worker stopped', 'local reranker: worker stopped');
+    rerankTransport = t;
+    rerankSpawnedAt = Date.now();
+    log('embed-worker', 'spawned', { embed: null, rerank: rerankSpec.id });
+    setRerankStatus({ model: rerankSpec.id, state: 'loading' });
+    t.onMessage((msg) => {
+      if (rerankTransport === t) handleRerankMessage(msg);
+    });
+    t.onExit((code) => {
+      if (rerankTransport !== t) return;
+      rerankTransport = null;
+      failReranks('local reranker: worker exited');
+      onUnexpectedExit('rerank', code, Date.now() - rerankSpawnedAt);
+    });
+    t.send({ type: 'load-rerank', spec: rerankSpec, cacheDir: deps.cacheDir() });
   }
 
   return {
     ensure(target, opts = {}) {
       const sameModel = spec?.id === target.id;
-      // Healthy (or still loading) worker on the right model → nothing to do.
-      if (sameModel && transport && status.state !== 'error') return;
-      // After a failure the worker may still be alive but useless; retries are
-      // rate-limited so the turn-hot-path available() probe can't hammer a dead
-      // endpoint, while force (Test button / settings change) restarts now.
-      if (sameModel && status.state === 'error' && !opts.force && Date.now() - lastErrorAt < ERROR_RETRY_MS) return;
-      // A live worker that just isn't running THIS model yet (e.g. spawned for
-      // the reranker alone) can load it in place — no process restart needed.
-      if (transport && !spec) {
-        spec = target;
-        setStatus({ model: target.id, state: 'loading' });
-        transport.send({ type: 'load', spec: target, cacheDir: deps.cacheDir() });
+      if (sameModel && embedTransport && status.state !== 'error') return;
+      if (sameModel && status.state === 'error' && !opts.force && Date.now() - lastErrorAt < ERROR_RETRY_MS)
         return;
+      if (embedTransport) {
+        failEmbeds('local embeddings: worker stopped');
+        shutdown(embedSlot);
       }
-      if (transport) stop();
       spec = target;
-      respawns = 0;
-      corruptRespawns = 0;
-      spawnProcess();
+      embedRespawns = 0;
+      embedCorruptRespawns = 0;
+      spawnEmbed();
     },
     status: () => status,
     onStatus(cb) {
@@ -417,24 +461,25 @@ export function createEmbedWorkerManager(deps: {
     embed(texts, kind, opts = {}) {
       return new Promise<Float32Array[]>((resolve, reject) => {
         const p: PendingEmbed = { texts, kind, timeoutMs: opts.timeoutMs ?? embedTimeoutMs, resolve, reject };
-        if (status.state === 'ready' && transport) dispatch(p);
-        else if (transport && (status.state === 'loading' || status.state === 'downloading')) queued.push(p);
+        if (status.state === 'ready' && embedTransport) dispatch(p);
+        else if (embedTransport && (status.state === 'loading' || status.state === 'downloading')) queued.push(p);
         else reject(new Error('local embeddings: worker not running'));
       });
     },
     reconfigure(target) {
-      stop();
+      failEmbeds('local embeddings: worker stopped');
+      shutdown(embedSlot);
       spec = target;
       if (!target) setStatus({ model: status.model, state: 'idle' });
-      if (target || rerankSpec) {
-        respawns = 0;
-        corruptRespawns = 0;
-        spawnProcess();
+      if (target) {
+        embedRespawns = 0;
+        embedCorruptRespawns = 0;
+        spawnEmbed();
       }
     },
     ensureRerank(target, opts = {}) {
       const sameModel = rerankSpec?.id === target.id;
-      if (sameModel && transport && rrStatus.state !== 'error') return;
+      if (sameModel && rerankTransport && rrStatus.state !== 'error') return;
       if (
         sameModel &&
         rrStatus.state === 'error' &&
@@ -442,18 +487,22 @@ export function createEmbedWorkerManager(deps: {
         Date.now() - lastRerankErrorAt < ERROR_RETRY_MS
       )
         return;
-      // The worker replaces its reranker in place (disposing the old session),
-      // so a live process never needs a restart for a rerank load/switch.
-      if (transport) {
+      // Same process, different weights: the worker disposes the old session
+      // before loading the new one. A live crash-looping worker is restarted.
+      if (rerankTransport && rrStatus.state !== 'error') {
         rerankSpec = target;
         setRerankStatus({ model: target.id, state: 'loading' });
-        transport.send({ type: 'load-rerank', spec: target, cacheDir: deps.cacheDir() });
+        rerankTransport.send({ type: 'load-rerank', spec: target, cacheDir: deps.cacheDir() });
         return;
       }
+      if (rerankTransport) {
+        failReranks('local reranker: worker stopped');
+        shutdown(rerankSlot);
+      }
       rerankSpec = target;
-      respawns = 0;
-      corruptRespawns = 0;
-      spawnProcess();
+      rerankRespawns = 0;
+      rerankCorruptRespawns = 0;
+      spawnRerank();
     },
     rerankStatus: () => rrStatus,
     onRerankStatus(cb) {
@@ -463,30 +512,32 @@ export function createEmbedWorkerManager(deps: {
     rerank(query, docs, topN) {
       return new Promise<RerankResult[]>((resolve, reject) => {
         const p: PendingRerank = { query, docs, topN, resolve, reject };
-        if (rrStatus.state === 'ready' && transport) sendRerank(p);
-        else if (transport && (rrStatus.state === 'loading' || rrStatus.state === 'downloading'))
+        if (rrStatus.state === 'ready' && rerankTransport) sendRerank(p);
+        else if (rerankTransport && (rrStatus.state === 'loading' || rrStatus.state === 'downloading'))
           rerankQueued.push(p);
         else reject(new Error('local reranker: worker not running'));
       });
     },
     reconfigureRerank(target) {
-      // Unlike an embed-model switch, the reranker can be swapped in place; a
-      // full restart is only needed to UNLOAD it (freeing its ONNX session).
-      if (target && transport) {
+      if (target && rerankTransport) {
         this.ensureRerank(target, { force: true });
         return;
       }
-      stop();
+      failReranks('local reranker: worker stopped');
+      shutdown(rerankSlot);
       rerankSpec = target;
       if (!target) setRerankStatus({ model: rrStatus.model, state: 'idle' });
-      if (target || spec) {
-        respawns = 0;
-        corruptRespawns = 0;
-        spawnProcess();
+      if (target) {
+        rerankRespawns = 0;
+        rerankCorruptRespawns = 0;
+        spawnRerank();
       }
     },
     dispose() {
-      stop();
+      failEmbeds('local embeddings: worker stopped');
+      failReranks('local reranker: worker stopped');
+      shutdown(embedSlot);
+      shutdown(rerankSlot);
       spec = null;
       rerankSpec = null;
     }
