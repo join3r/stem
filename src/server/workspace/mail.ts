@@ -406,10 +406,14 @@ export function setConversationStatus(
   id: string,
   status: MailConversation['status']
 ): Promise<MailListResult> {
-  if (status === 'working') liveWorking.add(id);
-  else liveWorking.delete(id);
+  // The flag flips INSIDE the serialized write, never ahead of it: flipped at
+  // call time, a read already queued before this write coerced the still-stored
+  // 'working' to idle — a conversation with its failure mail on file and an
+  // idle row, for one poll. Together, the file and the flag change as one.
   return update((store) => {
     conversationOf(store, id).status = status;
+    if (status === 'working') liveWorking.add(id);
+    else liveWorking.delete(id);
   });
 }
 

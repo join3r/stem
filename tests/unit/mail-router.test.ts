@@ -49,7 +49,11 @@ beforeEach(() => {
   rmSync(deviceQueuePath, { force: true });
   resetActivity();
 });
-afterEach(() => {
+afterEach(async () => {
+  // Drain the store's write chain before removing the file: a test that ends
+  // with a router write still queued would otherwise land that write AFTER the
+  // next test's clean slate, handing it this test's conversations.
+  await readMail();
   rmSync(mailPath, { force: true });
   rmSync(personasPath, { force: true });
   rmSync(settingsPath, { force: true });

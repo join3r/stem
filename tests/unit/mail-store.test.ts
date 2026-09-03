@@ -189,6 +189,20 @@ describe('conversations and items', () => {
     expect((await readMail()).conversations[0].status).toBe('idle');
   });
 
+  it('a read queued before a status write sees the status on file, not the one coming', async () => {
+    const c = await createConversation('s', ['normal']);
+    await setConversationStatus(c.id, 'working');
+    // The read is queued first, so it must serve the file as it stands:
+    // 'working'. The bug was the live flag dropping at call time, ahead of the
+    // write, so this read coerced the stored 'working' to idle — the mail
+    // router's failure reply sat on file under an idle row for one poll.
+    const read = readMail();
+    const write = setConversationStatus(c.id, 'failed');
+    expect((await read).conversations[0].status).toBe('working');
+    expect((await write).conversations[0].status).toBe('failed');
+    expect((await readMail()).conversations[0].status).toBe('failed');
+  });
+
   it('deletes a conversation with its items and triage state, returning its threads', async () => {
     const c = await createConversation('s', ['normal']);
     await setConversationSession(c.id, 'normal', 'thread-1');
