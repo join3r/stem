@@ -21,9 +21,9 @@ Maintainer notes:
   Normal, Verifier, Secretary, Orchestrator and Critic. They are edited in the new **Personas**
   tab; the built-ins cannot be deleted. A persona can be sent mail (below), can run a scheduled
   task (the task's row in the Tasks tab picks the persona and the model), and can be offered in
-  chats from your phone with **Usable in chats from other devices**. Each persona keeps notes
-  about its work and reads them before its next mail; they are in the editor's Memory section,
-  and can be turned off. Each has a **Sees your memory** switch. Critic has neither notes nor
+  chats from other paired devices with **Usable in chats from other devices**. Each persona
+  keeps notes about its work and reads them before its next mail; they are in the editor's
+  Memory section, and can be turned off. Each has a **Sees your memory** switch. Critic has neither notes nor
   access to your memory, so it reviews a draft without knowing who wrote it. A persona pinned to
   a coding agent and a folder works in that repo; only pinned personas may use a coding agent,
   and two mails aimed at the same repo run one after the other.
@@ -53,12 +53,6 @@ Maintainer notes:
 - **More attachments.** A PDF dropped into a chat goes to the model as text (scans without a text
   layer do not). HEIC photos from an iPhone are converted on the way in. Word documents in
   connected folders are indexed like text and PDF.
-- **iPhone app (TestFlight).** Pair it from Settings → Server → Pair a phone by scanning a QR. The
-  phone shows your chats with replies streaming in and the same formatting as the desk, starts
-  new chats, and answers approval cards for commands and coding agents. It works from its cache
-  without a signal, and its Settings are your Stem's settings. The phone is pushed for an
-  approval, a finished long turn or a scheduled task result, only when no desktop Stem has been
-  used in the last five minutes; pushes carry no content.
 - **Coding agents.** Settings → App → Coding agents lets the assistant hand a job to Claude Code,
   or another agent speaking the same protocol, in a folder you name. The agent's asks come to you
   as approval cards, with the diff when there is one, and your command approval mode applies to
@@ -141,7 +135,7 @@ Maintainer notes:
 - **An allowed command is no longer reported as refused.** Approval cards timed out after two
   minutes with "the user declined", and when a turn asked for two commands at once only the first
   card was shown. Cards now wait ten minutes, only the visible card counts down, a timeout tells
-  the assistant that nobody answered, and a card raised while the phone was asleep waits for it.
+  the assistant that nobody answered, and a card raised for a device that is offline waits for it.
 - **Stop works at any stage.** It was inactive during "Working…". It now cancels immediately,
   shows "Stopping…" until done, and a stopped turn cannot resume.
 - **Mail survives a restart.** A mail cut off by a server restart is redelivered at startup. A
@@ -160,8 +154,8 @@ Maintainer notes:
   truncated with a note to narrow the call.
 - **Unreadable files are not treated as empty.** An unreadable settings, tasks or chat store was
   read as empty and overwritten on the next save. It is no longer written.
-- **Chats driven from elsewhere load fully.** A thread touched only from the phone, over MCP or
-  by a scheduled task showed only its last exchange until a restart.
+- **Chats driven from elsewhere load fully.** A thread touched only from another device, over MCP
+  or by a scheduled task showed only its last exchange until a restart.
 - **Read state.** A chat you are looking at is read whichever device wrote to it. A chat still
   generating does not go bold early. A chat you marked unread stays unread.
 - **The server address is kept.** A paired Mac could lose its server address and start an empty

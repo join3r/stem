@@ -3000,6 +3000,11 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 /* The update's call to action sits between the scrolling notes and the buttons:
    read after the notes, never scrolled past, and visually a note rather than a
    fourth button. */
+/* "Beta" beside a feature that ships but is still changing (personas, mail).
+   aria-hidden where it sits inside a control, so the control's name stays the
+   word people (and tests) know it by; the explanation rides on the title. */
+.beta-pill { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: var(--radius-pill); font-size: var(--fs-10); font-weight: 600; letter-spacing: 0.02em; text-transform: none; vertical-align: 1px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.seg-ctl button .beta-pill { margin-left: 4px; padding: 0 5px; }
 .release-notes-recommend { margin: var(--sp-6) 0 var(--sp-2); font-size: var(--fs-13); }
 .release-notes-recommend p { margin: 0 0 var(--sp-3); }
 .release-notes-recommend p svg { vertical-align: -2px; }

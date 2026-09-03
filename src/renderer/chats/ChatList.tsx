@@ -91,6 +91,9 @@ const FOLDER_MIME = 'application/x-stem-folder';
  */
 export type ChatsTab = 'inbox' | 'chats';
 
+/** Mail is in beta: the Inbox segment and the compose header both say so. */
+export const MAIL_BETA_TITLE = 'Beta: mail to personas works, but how threads and replies behave is still changing.';
+
 const TABS: { id: ChatsTab; label: string }[] = [
   { id: 'inbox', label: 'Inbox' },
   { id: 'chats', label: 'Chats' }
@@ -586,6 +589,11 @@ export function ChatList(props: ChatListProps) {
               onClick={() => setTab(t.id)}
             >
               {t.label}
+              {t.id === 'inbox' && (
+                <span className="beta-pill" aria-hidden="true" title={MAIL_BETA_TITLE}>
+                  Beta
+                </span>
+              )}
               {t.id === 'inbox' && props.mailUnreadCount > 0 && (
                 <span className="seg-count">{props.mailUnreadCount}</span>
               )}

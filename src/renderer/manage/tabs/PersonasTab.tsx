@@ -88,6 +88,9 @@ function sameEdit(a: Persona, b: Persona): boolean {
   );
 }
 
+/** Why the tab wears a Beta pill; the same words sit on the mail badges. */
+const BETA_TITLE = 'Beta: personas work, but how they are set up and what they can do is still changing.';
+
 /** How a note earned its place — shown as a chip beside the title. */
 const NOTE_SOURCE_LABELS: Record<PersonaNote['source'], string> = {
   reflection: 'Learned',
@@ -418,7 +421,10 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
   return (
     <div>
       <div className="grp-head">
-        Personas{' '}
+        Personas
+        <span className="beta-pill" title={BETA_TITLE}>
+          Beta
+        </span>{' '}
         <InfoTip label="About personas">
           Named configurations you can address mail to: a role prompt, and optionally a pinned
           model and a coding agent with its own working directory. Duplicate one to make a variant

@@ -8,6 +8,7 @@ import {
   useState
 } from 'react';
 import { File, Paperclip, Plus, Send, Square, X } from 'lucide-react';
+import { MAIL_BETA_TITLE } from '../chats/ChatList';
 import type {
   MailComposeInput,
   MailConversation,
@@ -392,7 +393,12 @@ export const MailComposeView = forwardRef<MailViewHandle, {
   return (
     <div className="mail-view mail-compose">
       <header className="mail-head">
-        <h1>New mail</h1>
+        <h1>
+          New mail
+          <span className="beta-pill" aria-hidden="true" title={MAIL_BETA_TITLE}>
+            Beta
+          </span>
+        </h1>
         <button className="icon-action sm" onClick={onCancel} title="Discard" aria-label="Discard">
           <X size={14} />
         </button>
