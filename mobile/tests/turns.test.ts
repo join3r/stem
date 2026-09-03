@@ -8,9 +8,9 @@
 // saying so.
 
 import { describe, expect, it } from 'vitest';
-import { EMPTY_STATE, type ThreadState } from '@shared/chatState';
+import { EMPTY_STATE, mergeHydratedThread, type ThreadState } from '@shared/chatState';
 import type { ChatMessage } from '@shared/types';
-import { applyStartTurnResult, interruptTarget } from '../src/chat/turns';
+import { applyStartTurnResult, interruptTarget, settleAgainstSnapshot } from '../src/chat/turns';
 
 /** The optimistic half of a send, exactly as ../src/hooks/useThread.ts writes it. */
 function sent(prev: ThreadState, id: string, content: string): ThreadState {
@@ -88,5 +88,68 @@ describe('interruptTarget', () => {
 
     expect(second.state.running).toBe(false);
     expect(interruptTarget(second.state)).toBeNull();
+  });
+});
+
+// The turn that finished while the phone was asleep.
+//
+// Its `turn/completed` aged out of the server's replay ring, so the slice still
+// says running when the app comes back. Re-reading the transcript does not fix
+// that — the first test pins why — and the snapshot on the fresh stream is what
+// does.
+describe('settleAgainstSnapshot', () => {
+  const stranded: ThreadState = {
+    ...EMPTY_STATE,
+    messages: [
+      { id: 'u-1', role: 'user', content: 'hello', turnId: 't-1' },
+      { id: 't-1', role: 'assistant', content: 'Hel' }
+    ],
+    running: true,
+    status: 'running',
+    streamingId: 't-1',
+    activeTurnId: 't-1',
+    hydrated: true
+  };
+
+  it('is the bug: a hydration alone keeps a stranded turn running', () => {
+    const history: ChatMessage[] = [
+      { id: 'u-1', role: 'user', content: 'hello' },
+      { id: 'a-1', role: 'assistant', content: 'Hello there.' }
+    ];
+    const merged = mergeHydratedThread(history, stranded, stranded);
+    // The live slice wins, by design — which is right for an in-flight turn and
+    // wrong for this one, and the merge cannot tell them apart.
+    expect(merged.running).toBe(true);
+    expect(merged.streamingId).toBe('t-1');
+  });
+
+  it('settles a running thread the snapshot does not list', () => {
+    const settled = settleAgainstSnapshot(stranded, [{ threadId: 'other', turnId: 'x' }], 'thread-1', false);
+    expect(settled.running).toBe(false);
+    expect(settled.streamingId).toBeNull();
+    expect(settled.activeTurnId).toBeNull();
+    expect(settled.status).toBe('idle');
+    // The words are kept; only the "still being written" is withdrawn.
+    expect(text(settled.messages)).toEqual(text(stranded.messages));
+    // And a hydration on top now lands idle.
+    expect(mergeHydratedThread([], settled, settled).running).toBe(false);
+  });
+
+  it('leaves a thread the snapshot says is running exactly as it is', () => {
+    expect(settleAgainstSnapshot(stranded, [{ threadId: 'thread-1', turnId: 't-1' }], 'thread-1', false)).toBe(
+      stranded
+    );
+  });
+
+  it('leaves an idle thread alone, by identity', () => {
+    const idle = { ...EMPTY_STATE, hydrated: true };
+    expect(settleAgainstSnapshot(idle, [], 'thread-1', false)).toBe(idle);
+  });
+
+  it('does not touch a send whose startTurn has not answered yet', () => {
+    // The snapshot may be older than the send by a few milliseconds; the answer
+    // to the send is what settles it (applyStartTurnResult).
+    const optimistic = sent(EMPTY_STATE, 'u-2', 'and now?');
+    expect(settleAgainstSnapshot(optimistic, [], 'thread-1', true)).toBe(optimistic);
   });
 });

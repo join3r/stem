@@ -54,9 +54,17 @@ export default function ChatsScreen(): ReactElement {
   const { connection, pairing } = useTransport();
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const { list, loading, error, refresh, replace } = useChatList();
+  const { list, loading, error, refresh, revalidate, replace } = useChatList();
   const live = useLiveTurns();
   const [filter, setFilter] = useState<InboxFilter>('inbox');
+  // The pull spinner shows for a PULL and nothing else. Binding it to `loading`
+  // made every quiet revalidation (focus, wake) animate the control — and a
+  // RefreshControl shown programmatically while the list is off screen is a
+  // known way to leave it stuck open, content pushed a spinner's height down.
+  const [pulling, setPulling] = useState(false);
+  useEffect(() => {
+    if (!loading) setPulling(false);
+  }, [loading]);
   // Re-derives placement when a snooze expires. Bumped by the timer below and by
   // nothing else — every other change to the list arrives as a new `list`.
   const [now, setNow] = useState(() => Date.now());
@@ -75,10 +83,11 @@ export default function ChatsScreen(): ReactElement {
   );
   // Coming back from a thread: opening it marked it read on the server, and no
   // push announces an inbox stamp — refetch so the dot is gone when the row is.
+  // Quietly: nobody pulled, and the link may be mid-reconnect.
   useFocusEffect(
     useCallback(() => {
-      refresh();
-    }, [refresh])
+      revalidate();
+    }, [revalidate])
   );
 
   const chats = useMemo(() => list?.chats ?? [], [list]);
@@ -151,9 +160,18 @@ export default function ChatsScreen(): ReactElement {
       <FlatList
         data={rows}
         keyExtractor={(row) => row.chat.threadId}
-        contentInsetAdjustmentBehavior="automatic"
+        // "never": no navigation bar over this list, and "automatic" borrowed the
+        // root stack's header inset after a thread was popped (see Settings).
+        contentInsetAdjustmentBehavior="never"
         refreshControl={
-          <RefreshControl refreshing={loading && list !== null} onRefresh={refresh} tintColor={theme.dim} />
+          <RefreshControl
+            refreshing={pulling}
+            onRefresh={() => {
+              setPulling(true);
+              refresh();
+            }}
+            tintColor={theme.dim}
+          />
         }
         ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: theme.line }]} />}
         ListHeaderComponent={
@@ -161,6 +179,15 @@ export default function ChatsScreen(): ReactElement {
             {error ? (
               <View style={[styles.banner, { backgroundColor: theme.card, borderColor: theme.line }]}>
                 <Text style={[styles.bannerText, { color: theme.bad }]}>{error}</Text>
+              </View>
+            ) : list?.offline ? (
+              // The cache answered because nothing else did (see
+              // ../../../src/offline/cache.ts). Said in the list's own voice,
+              // not the error's: this is a saved copy, not a failure to show one.
+              <View style={[styles.banner, { backgroundColor: theme.card, borderColor: theme.line }]}>
+                <Text style={[styles.bannerText, { color: theme.dim }]}>
+                  Showing a saved copy — the server can’t be reached right now.
+                </Text>
               </View>
             ) : null}
             <View style={[styles.filters, { borderColor: theme.line }]}>

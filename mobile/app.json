@@ -2,7 +2,7 @@
   "expo": {
     "name": "Stem",
     "slug": "stem",
-    "version": "0.4.0",
+    "version": "0.4.1",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",

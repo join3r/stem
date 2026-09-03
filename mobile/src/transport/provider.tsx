@@ -10,9 +10,12 @@
 //
 // Foreground handling is the mobile half of what a desktop gets for free. iOS
 // suspends the process; the socket it was reading may or may not still exist
-// when it comes back, and the OS does not say which. So on `active` we ask the
-// stream to reconnect if it is not open — cheap when it already is (the call is
-// a no-op) and the difference between a live app and a dead one when it is not.
+// when it comes back, and the OS does not say which — a dead one looks exactly
+// like a quiet one from inside JS. So `background` closes the stream on purpose
+// (connection.sleep) and `active` opens a fresh one from the bookmark and tells
+// every screen to refetch (connection.wake). `inactive` is ignored: it is the
+// app switcher, Face ID, a share sheet — moments the app is about to be active
+// again and reconnecting through would only churn the socket.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState } from 'react-native';
@@ -84,6 +87,7 @@ export function TransportProvider({ children }: { children: ReactNode }): ReactN
     });
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') connection.wake();
+      else if (state === 'background') connection.sleep();
     });
     return () => {
       generation.current += 1;

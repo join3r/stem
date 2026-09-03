@@ -1,6 +1,6 @@
 {
   "name": "stem-mobile",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {

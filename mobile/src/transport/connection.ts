@@ -18,12 +18,47 @@
 // one surface, so the routing table collapses to "whoever asked for this channel
 // gets it" and the filtering that used to happen in the router (which thread is
 // this for?) happens in the screen that knows.
+//
+// A DROP IS A RECONNECT FIRST AND AN OUTAGE SECOND. One request that nothing
+// answered used to flip `reachable` for the whole app on the spot, and on a phone
+// that one request is routine: the first fetch after the screen unlocks goes out
+// before the radio has re-associated, and every RPC that was in the air when iOS
+// suspended us fails the instant we come back. Painting the app red for that is
+// lying about the connection in the one moment the user is looking at it. So a
+// failure now opens a GRACE (RECONNECT_GRACE_MS) during which the status says
+// `reconnecting` and `reachable` is left alone; only a grace that ends with the
+// failures still coming and no stream open says offline. A server that answers
+// — with anything, including an error — ends the question at once, and a stream
+// opening ends it the other way. Nothing here changes what the cache may do:
+// "nothing answered" is a fact about one call, and it is answered from the cache
+// whether or not the status has given up yet.
 
 import type { BackendEventEnvelope, LiveTurn } from '@shared/types';
 import type { OfflineCache } from '../offline/cache';
 import type { ChannelArgs, ChannelName, ChannelResult } from './channels';
 import { rpc, rpcRaw, UnreachableError, type Endpoint } from './rpc';
 import { createEventStream, type EventStream, type StreamingFetch } from './stream';
+
+export { UnreachableError };
+
+/**
+ * Did this call reach nobody? The one question a screen may ask about a
+ * failure, and the question that decides whether it is worth a banner: a
+ * background refetch that nothing answered while the link is reconnecting is
+ * not news, a server error always is. Here rather than imported from ./rpc so
+ * the screens keep to this file, as the header says they should.
+ */
+export function isUnreachable(error: unknown): boolean {
+  return error instanceof UnreachableError;
+}
+
+/**
+ * How long a dropped link is "reconnecting" before it is "offline". Long enough
+ * for a radio to come back after an unlock and for the first backoff steps to
+ * run (250, 500, 1000, 2000ms), short enough that a server that is really gone
+ * is not hidden behind a dim dot for long.
+ */
+export const RECONNECT_GRACE_MS = 6_000;
 
 /** What the connection indicator renders, and what a composer would gate on. */
 export interface ConnectionStatus {
@@ -39,6 +74,12 @@ export interface ConnectionStatus {
    * "pair again", not "wait".
    */
   unauthorized: boolean;
+  /**
+   * A stream is being (re)opened and the link has not been down long enough to
+   * call the server gone. The dim state between Live and Offline — see the
+   * header. Always false while streaming.
+   */
+  reconnecting: boolean;
 }
 
 export type Unsubscribe = () => void;
@@ -74,6 +115,15 @@ export interface Connection {
   onResync(listener: () => void): Unsubscribe;
   /** What was running when the stream opened; see LiveTurn in shared/types.ts. */
   onLiveTurns(listener: (liveTurns: LiveTurn[]) => void): Unsubscribe;
+  /**
+   * The app is in front again and whatever is on screen is of unknown age.
+   * Screens holding server data refetch it QUIETLY — spinner if they like, no
+   * banner if nothing answers, because the stream is being reopened at the same
+   * moment and the link may not be back yet. Not onResync: that one is the
+   * server saying frames were lost, and this one is the phone saying it was not
+   * watching.
+   */
+  onWake(listener: () => void): Unsubscribe;
   rpc<C extends ChannelName>(channel: C, ...args: ChannelArgs<C>): Promise<ChannelResult<C>>;
   /**
    * Point this connection at a server, or at nothing. Persisting the pairing is
@@ -81,8 +131,19 @@ export interface Connection {
    * connect goes, and restarts the stream so it goes there immediately.
    */
   setEndpoint(endpoint: Endpoint | null): void;
-  /** Reconnect now if the stream is down — what an app returning to the foreground calls. */
+  /**
+   * The app is in front. Drop whatever stream there was, open a fresh one from
+   * the bookmark, and tell the screens (onWake). Unconditional on purpose — see
+   * the RESUME paragraph in ./stream.ts for why "only if it is down" is not
+   * answerable after a suspension.
+   */
   wake(): void;
+  /**
+   * The app is in the background. Close the stream and stop retrying until
+   * wake(); the bookmark and the pairing stay. Nothing about reachability is
+   * concluded from a socket we closed ourselves.
+   */
+  sleep(): void;
   start(): void;
   stop(): void;
 }
@@ -112,12 +173,14 @@ export function createConnection(deps: ConnectionDeps): Connection {
     paired: false,
     reachable: false,
     streaming: false,
-    unauthorized: false
+    unauthorized: false,
+    reconnecting: false
   };
 
   const statusListeners = emitter<ConnectionStatus>();
   const resyncListeners = emitter<void>();
   const liveTurnListeners = emitter<LiveTurn[]>();
+  const wakeListeners = emitter<void>();
   const pushListeners = new Map<string, ReturnType<typeof emitter<unknown>>>();
 
   const patchStatus = (patch: Partial<ConnectionStatus>): void => {
@@ -126,12 +189,79 @@ export function createConnection(deps: ConnectionDeps): Connection {
       next.paired === status.paired &&
       next.reachable === status.reachable &&
       next.streaming === status.streaming &&
-      next.unauthorized === status.unauthorized
+      next.unauthorized === status.unauthorized &&
+      next.reconnecting === status.reconnecting
     ) {
       return;
     }
     status = next;
     statusListeners.emit(status);
+  };
+
+  // The grace — see the header. One timer; `failedInGrace` is whether anything
+  // came back "nothing answered" since it was armed, which is what the timer
+  // looks at when it fires.
+  let graceTimer: ReturnType<typeof setTimeout> | null = null;
+  let failedInGrace = false;
+
+  const endGrace = (): void => {
+    if (graceTimer !== null) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+    }
+    failedInGrace = false;
+    patchStatus({ reconnecting: false });
+  };
+
+  const beginGrace = (): void => {
+    if (graceTimer !== null) return;
+    failedInGrace = false;
+    patchStatus({ reconnecting: true });
+    const arm = (): void => {
+      graceTimer = setTimeout(() => {
+        graceTimer = null;
+        if (status.streaming) {
+          // Cannot happen — onStreaming(true) ends the grace — but the honest
+          // fallback is the same answer.
+          endGrace();
+          return;
+        }
+        if (failedInGrace) {
+          // The link has been down for the whole grace and something tried and
+          // failed in it. That is what offline means.
+          failedInGrace = false;
+          patchStatus({ reachable: false, reconnecting: false });
+          return;
+        }
+        // Nothing failed, nothing opened: a handshake still in the air. Waiting
+        // is the only honest thing, and the connect timeout in ./stream.ts
+        // guarantees this does not wait forever.
+        arm();
+      }, RECONNECT_GRACE_MS);
+    };
+    arm();
+  };
+
+  /**
+   * Every transport verdict — a fetch that answered or one that reached nobody
+   * — lands here rather than on `reachable` directly. This is the one place
+   * that knows whether a failure is news.
+   */
+  const noteTransport = (ok: boolean): void => {
+    if (ok) {
+      failedInGrace = false;
+      patchStatus({ reachable: true });
+      return;
+    }
+    // An RPC failing under an open stream is that RPC's problem, not the link's:
+    // the stream is the authority while it is up, and a single POST timing out
+    // through a proxy must not paint the app offline.
+    if (status.streaming) return;
+    // Already offline: more failures are more of the same, and opening a grace
+    // for each retry would blink the dot between Connecting and Offline forever.
+    if (!status.reachable && graceTimer === null) return;
+    failedInGrace = true;
+    beginGrace();
   };
 
   /**
@@ -157,15 +287,23 @@ export function createConnection(deps: ConnectionDeps): Connection {
     onPush: (channel, payload) => pushListeners.get(channel)?.emit(payload),
     onResync: () => resyncListeners.emit(undefined),
     onSnapshot: (liveTurns) => liveTurnListeners.emit(liveTurns),
-    onReachable: (reachable) => patchStatus({ reachable }),
+    onReachable: noteTransport,
     // A connect that got as far as a stream is a connect the credential passed,
     // so this is also where a stale `unauthorized` is cleared — and the moment
     // worth topping the offline cache up in, since the phone is demonstrably on
-    // a network right now and may not be in a minute.
+    // a network right now and may not be in a minute. A stream CLOSING opens the
+    // grace: the reader is about to reconnect, and whether that is a blip or an
+    // outage is not known yet.
     onStreaming: (streaming) => {
-      patchStatus(streaming ? { streaming, unauthorized: false } : { streaming });
-      if (streaming) deps.cache?.schedulePrefetch(prefetchCall);
-      else deps.cache?.cancel();
+      if (streaming) {
+        patchStatus({ streaming, unauthorized: false, reachable: true });
+        endGrace();
+        deps.cache?.schedulePrefetch(prefetchCall);
+      } else {
+        patchStatus({ streaming });
+        if (status.paired) beginGrace();
+        deps.cache?.cancel();
+      }
     },
     onRefused: (httpStatus) => patchStatus({ unauthorized: httpStatus === 401 })
   });
@@ -187,13 +325,14 @@ export function createConnection(deps: ConnectionDeps): Connection {
       onPush('backend:event', (payload) => listener(payload as BackendEventEnvelope)),
     onResync: (listener) => resyncListeners.add(listener),
     onLiveTurns: (listener) => liveTurnListeners.add(listener),
+    onWake: (listener) => wakeListeners.add(listener),
     async rpc<C extends ChannelName>(channel: C, ...args: ChannelArgs<C>): Promise<ChannelResult<C>> {
       if (!endpoint) throw new Error('This phone is not paired with a Stem server yet.');
       let result: ChannelResult<C>;
       try {
         result = await rpc(endpoint, channel, args, {
           fetch: deps.fetch,
-          onReachable: (reachable) => patchStatus({ reachable })
+          onReachable: noteTransport
         });
       } catch (e) {
         // The ONLY place the cache is ever read, and the reason the throw is
@@ -216,6 +355,7 @@ export function createConnection(deps: ConnectionDeps): Connection {
     },
     setEndpoint(next) {
       endpoint = next;
+      endGrace();
       patchStatus({
         paired: next !== null,
         // Nothing is known about a server we have not spoken to yet, and the
@@ -227,10 +367,29 @@ export function createConnection(deps: ConnectionDeps): Connection {
       // to; its answers must not land in the cache under the new one's name.
       deps.cache?.cancel();
       stream.stop();
-      if (next) stream.start();
+      if (next) {
+        // "Connecting", not "Offline", for the first moments after launch: the
+        // grace is what the dot reads while the handshake is out.
+        beginGrace();
+        stream.start();
+      }
     },
     wake() {
-      stream.retryNow();
+      if (!endpoint) return;
+      // The grace opens here explicitly because the reader may not have been
+      // streaming (a socket the OS already tore down reports nothing), in which
+      // case reconnect() has no streaming edge to fall to false on.
+      beginGrace();
+      stream.reconnect();
+      wakeListeners.emit(undefined);
+    },
+    sleep() {
+      deps.cache?.cancel();
+      stream.sleep();
+      // AFTER the stream closes: closing it reports a streaming edge, which
+      // opens a grace, and a socket we are closing on purpose says nothing
+      // about the server — so that grace is dropped here, not concluded.
+      endGrace();
     },
     start() {
       stream.start();
@@ -238,6 +397,7 @@ export function createConnection(deps: ConnectionDeps): Connection {
     stop() {
       deps.cache?.cancel();
       stream.stop();
+      endGrace();
     }
   };
 }

@@ -67,6 +67,37 @@ export function readIdle(prev: ReadState): ReadState {
   return { request: prev.request + 1, loading: false, error: null };
 }
 
+/**
+ * The read ended without an answer worth showing: nothing answered, and the
+ * screen did not ask — the phone did, on its way back to the foreground or on a
+ * stream edge, while the link was still being reopened. The spinner stops, the
+ * data on screen stays, and whatever banner was already up stays too (it was
+ * about something else). Neither a success nor a failure; see shouldAbandon.
+ */
+export function readAbandoned(prev: ReadState, request: number): ReadState {
+  if (!isCurrent(prev, request)) return prev;
+  return { request: prev.request, loading: false, error: prev.error };
+}
+
+/**
+ * Who asked for this read. `user` is a finger: a pull, a tap, an open screen.
+ * `background` is the phone keeping itself current: a focus, a wake, a resync,
+ * a settled turn. Only the second may be abandoned quietly.
+ */
+export type ReadCause = 'user' | 'background';
+
+/**
+ * Whether a failed read is one to say nothing about. Three conditions, all
+ * required: nobody asked (`background`), nothing answered (`unreachable` — a
+ * server error is always news), and the link has not given up yet (`reachable`
+ * still true, i.e. the transport is inside its reconnect grace). Once the
+ * transport does say offline, a background read failing is worth the banner:
+ * the user should know their screen is stale and why.
+ */
+export function shouldAbandon(cause: ReadCause, unreachable: boolean, reachable: boolean): boolean {
+  return cause === 'background' && unreachable && reachable;
+}
+
 /** Is this the request the screen is still waiting for? */
 export function isCurrent(state: ReadState, request: number): boolean {
   return state.request === request;

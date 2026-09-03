@@ -38,6 +38,19 @@
 // wifi and cellular — so it does not by itself mean the server is gone; the
 // honest test is whether the next connect can be made at all, which is why
 // `reachable:false` is set on a failed connect and nowhere else.
+//
+// RESUME. iOS suspends the process; when it comes back the socket the reader was
+// parked on is usually dead and NOTHING says so — read() simply never resolves,
+// the stall timer was frozen along with everything else, and `streaming` still
+// reads true. A wake that only reconnects "if nothing is open" is therefore a
+// no-op in exactly the case it exists for. So the foreground is a hard reset:
+// reconnect() drops whatever is open or in flight and connects again with the
+// bookmark, which the server turns into a resumption or a resync; sleep() is
+// the matching half for the background, dropping the socket on purpose rather
+// than letting the OS do it behind our back and stopping the retry loop from
+// burning the radio while nobody is looking. A handshake also gets a timeout
+// now (CONNECT_TIMEOUT_MS): one that never answers used to hold `connecting`
+// forever and swallow every wake after it.
 
 import type { LiveTurn } from '@shared/types';
 import { createSseParser } from './sse';
@@ -53,6 +66,16 @@ export const RECONNECT_MAX_MS = 10_000;
  * missed heartbeats plus slack is a connection that is not coming back.
  */
 export const STALL_MS = 60_000;
+
+/**
+ * How long a connect may sit without response headers. Generous, because a
+ * phone on a bad link really can take ten seconds to get a handshake through —
+ * but finite, because a request that never comes back would otherwise leave
+ * `connecting` true for the life of the process, and every wake would defer to
+ * it (see retryNow). Firing lands in the same failed-connect path a refused
+ * network does: unreachable, then the backoff.
+ */
+export const CONNECT_TIMEOUT_MS = 15_000;
 
 /** The delay before attempt N (1-based), capped. Exported for its test. */
 export function reconnectDelay(attempt: number): number {
@@ -112,17 +135,34 @@ export interface EventStream {
   stop(): void;
   /**
    * Reconnect now instead of waiting out the backoff, if nothing is open. This
-   * is what an app coming back to the foreground calls, and what a successful
-   * RPC calls: the server answered, so a stream that is still down is down for
-   * a reason that will not fix itself by waiting.
+   * is what a successful RPC calls: the server answered, so a stream that is
+   * still down is down for a reason that will not fix itself by waiting.
    *
    * "Nothing is open" includes a connect that has been made but not yet
    * answered. An RPC finishing while the /events request is still in the air is
    * the ORDINARY case on a slow link — every screen makes one — and treating it
    * as a reason to start over would abort the handshake it was waiting for and
    * do it again, forever. See the `connecting` guard below.
+   *
+   * NOT what the foreground calls — that is reconnect(), because after a
+   * suspension "open" is exactly what cannot be trusted (see the header).
    */
   retryNow(): void;
+  /**
+   * Drop whatever is open or in flight and connect again now, with the bookmark
+   * and a fresh backoff. The app coming back to the foreground calls this. The
+   * old reader's abort is not counted as a failure — it is superseded, not
+   * dropped — so the status the screens see goes streaming → not → streaming
+   * with no "offline" in between unless the new connect actually cannot be made.
+   */
+  reconnect(): void;
+  /**
+   * Drop the socket and stop reconnecting, keeping the bookmark. The app going
+   * to the background calls this: iOS is about to sever the socket anyway, and
+   * a retry loop running under a locked screen is radio spent on nobody. Undone
+   * by reconnect() (or start()).
+   */
+  sleep(): void;
   streaming(): boolean;
 }
 
@@ -144,6 +184,15 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
   let stallTimer: ReturnType<typeof setTimeout> | null = null;
   /** The last frame id actually delivered — see the header. In memory only. */
   let lastEventId: string | null = null;
+  /**
+   * Asleep on purpose (the app is in the background): no socket, no retries,
+   * bookmark kept. Distinct from `closed`, which forgets the bookmark and means
+   * unpaired or torn down.
+   */
+  let dormant = false;
+  let connectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When the last block of any kind arrived — for the log line on reconnect. */
+  let lastBlockAt = 0;
 
   const setStreaming = (next: boolean): void => {
     if (streaming === next) return;
@@ -175,8 +224,14 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
     }, STALL_MS);
   };
 
+  const clearConnectTimer = (): void => {
+    if (connectTimer === null) return;
+    clearTimeout(connectTimer);
+    connectTimer = null;
+  };
+
   const scheduleReconnect = (): void => {
-    if (closed) return;
+    if (closed || dormant) return;
     clearRetry();
     attempt += 1;
     retryTimer = setTimeout(() => {
@@ -240,6 +295,7 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
   const parser = createSseParser((block) => {
     // Every block counts as a sign of life, including the keepalive comment —
     // that is the only thing an idle stream sends.
+    lastBlockAt = Date.now();
     armStall();
     if (!block.data) return;
     if (block.event) {
@@ -253,8 +309,13 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
   });
 
   async function connect(): Promise<void> {
-    if (closed) return;
+    if (closed || dormant) return;
     clearRetry();
+    // A stall timer armed for the stream this one replaces must not be able to
+    // abort the new socket: it checks its generation, but clearing it here is
+    // what makes that check unnecessary rather than merely sufficient.
+    clearStall();
+    clearConnectTimer();
     const endpoint = deps.endpoint();
     if (!endpoint) return; // unpaired: nothing to connect to, and no error either
     controller?.abort();
@@ -266,6 +327,13 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
     parser.reset();
 
     let res: StreamingResponse;
+    connectTimer = setTimeout(() => {
+      connectTimer = null;
+      if (mine !== generation) return;
+      log('the event stream handshake timed out', { connectTimeoutMs: CONNECT_TIMEOUT_MS });
+      // Same road out as a refused network: the fetch rejects, below.
+      mineController.abort();
+    }, CONNECT_TIMEOUT_MS);
     try {
       res = await deps.fetch(`${endpoint.serverUrl}/events`, {
         method: 'GET',
@@ -283,6 +351,7 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
       // connect that replaced this one, and clearing it here would open the door
       // this flag exists to hold shut.
       if (mine !== generation) return;
+      clearConnectTimer();
       connecting = false;
       // A connect that could not be made at all. This — not a stream ending —
       // is what "offline" means.
@@ -294,6 +363,7 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
     if (mine !== generation) return;
     // The handshake is over either way: the server answered this request, so
     // whatever happens next is no longer "an attempt in flight".
+    clearConnectTimer();
     connecting = false;
 
     if (res.status !== 200 || !res.body) {
@@ -346,15 +416,18 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
     start(): void {
       if (!closed) return;
       closed = false;
+      dormant = false;
       attempt = 0;
       void connect();
     },
     stop(): void {
       closed = true;
+      dormant = false;
       generation += 1;
       connecting = false;
       clearRetry();
       clearStall();
+      clearConnectTimer();
       controller?.abort();
       controller = null;
       // The bookmark goes with the stream it belonged to. stop() means unpairing
@@ -369,13 +442,41 @@ export function createEventStream(deps: EventStreamDeps): EventStream {
       // Open, or on its way to being open: either way there is nothing here to
       // improve on, and interrupting an attempt that is merely slow is how a
       // phone on a bad link ends up connecting forever without ever finishing.
-      if (closed || streaming || connecting) return;
+      // Asleep: the background is not the time, and reconnect() is the way back.
+      if (closed || dormant || streaming || connecting) return;
       // Nothing is in flight, so this is a genuine fresh start: the caller has
-      // evidence the server is answering (an RPC just did, or the app came
-      // back), which is exactly the situation the accumulated backoff was a
-      // guess about and is now wrong about.
+      // evidence the server is answering (an RPC just did), which is exactly the
+      // situation the accumulated backoff was a guess about and is now wrong
+      // about.
       attempt = 0;
       void connect();
+    },
+    reconnect(): void {
+      if (closed) return;
+      const quietForMs = lastBlockAt ? Date.now() - lastBlockAt : null;
+      log('reconnecting on wake', { wasStreaming: streaming, connecting, quietForMs });
+      dormant = false;
+      // connect() aborts the old controller and bumps the generation itself, so
+      // the parked read() rejects into a branch that recognizes it as superseded
+      // and counts nothing. The backoff is reset because the app coming to the
+      // front is new evidence: whatever the link was doing before, it is being
+      // looked at now.
+      attempt = 0;
+      void connect();
+    },
+    sleep(): void {
+      if (closed) return;
+      dormant = true;
+      generation += 1;
+      connecting = false;
+      clearRetry();
+      clearStall();
+      clearConnectTimer();
+      controller?.abort();
+      controller = null;
+      // The bookmark stays: this is a pause, and the next connect should ask for
+      // what it missed rather than pretend it saw nothing.
+      setStreaming(false);
     },
     streaming: () => streaming
   };

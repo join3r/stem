@@ -1,27 +1,46 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createConnection, type ConnectionStatus } from '../src/transport/connection';
+import { createConnection, RECONNECT_GRACE_MS, type ConnectionStatus } from '../src/transport/connection';
 import type { StreamingFetch } from '../src/transport/stream';
 
 // The object the screens hold: pairing state, connection state, and who hears
 // which push. Driven over the same fake socket the reader's own test uses.
 
-function harness(): { fetch: StreamingFetch; send(text: string): void; refuseNext(status: number): void } {
+function harness(): {
+  fetch: StreamingFetch;
+  send(text: string): void;
+  /** Sever the open socket the way a NAT or the OS does — the reader sees an error. */
+  reset(): void;
+  refuseNext(status: number): void;
+  /** Every connect from now on fails to be made at all (or stops failing). */
+  failAll(on: boolean): void;
+  /** The request headers of each connect that was answered, in order. */
+  headers: Record<string, string>[];
+  callCount(): number;
+} {
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
   let status = 200;
+  let failing = false;
+  let calls = 0;
+  const headers: Record<string, string>[] = [];
   const fetch: StreamingFetch = async (_url, init) => {
+    calls += 1;
+    if (failing) throw new TypeError('Network request failed');
     if (status !== 200) {
       const refusal = status;
       status = 200;
       return { status: refusal, body: null };
     }
+    headers.push(init.headers);
+    let mine!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({
       start(c) {
+        mine = c;
         controller = c;
       }
     });
     init.signal.addEventListener('abort', () => {
       try {
-        controller?.error(new Error('aborted'));
+        mine.error(new Error('aborted'));
       } catch {
         // already closed
       }
@@ -31,9 +50,21 @@ function harness(): { fetch: StreamingFetch; send(text: string): void; refuseNex
   return {
     fetch,
     send: (text) => controller?.enqueue(new TextEncoder().encode(text)),
+    reset: () => {
+      try {
+        controller?.error(new Error('connection reset'));
+      } catch {
+        // already closed
+      }
+    },
     refuseNext: (next) => {
       status = next;
-    }
+    },
+    failAll: (on) => {
+      failing = on;
+    },
+    headers,
+    callCount: () => calls
   };
 }
 
@@ -50,7 +81,13 @@ describe('createConnection', () => {
   it('starts knowing nothing, and refuses to call anything', async () => {
     const net = harness();
     const connection = createConnection({ streamingFetch: net.fetch });
-    expect(connection.status()).toEqual({ paired: false, reachable: false, streaming: false, unauthorized: false });
+    expect(connection.status()).toEqual({
+      paired: false,
+      reachable: false,
+      streaming: false,
+      unauthorized: false,
+      reconnecting: false
+    });
     await expect(connection.rpc('chats:list')).rejects.toThrow('not paired');
   });
 
@@ -218,7 +255,7 @@ describe('createConnection and the offline cache', () => {
     connection.setEndpoint(endpoint);
     await settle();
 
-    await expect(connection.rpc('chats:open', 'a')).rejects.toThrow(/could not reach/);
+    await expect(connection.rpc('chats:open', 'a')).rejects.toThrow(/Could not reach/);
     connection.stop();
   });
 
@@ -245,6 +282,145 @@ describe('createConnection and the offline cache', () => {
     // the next one's name.
     connection.setEndpoint(null);
     expect(cache.cancel).toHaveBeenCalled();
+    connection.stop();
+  });
+});
+
+// A drop is a reconnect first and an outage second — see the header of
+// ../src/transport/connection.ts. What used to flip the whole app to Offline on
+// one failed fetch now opens a grace, and only a grace that runs out with the
+// failures still coming says offline.
+describe('createConnection and the reconnect grace', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const failingRpc = (async () => {
+    throw new TypeError('Network request failed');
+  }) as typeof globalThis.fetch;
+
+  async function connected(net: ReturnType<typeof harness>, extra: Parameters<typeof createConnection>[0] = { streamingFetch: net.fetch }) {
+    const seen: ConnectionStatus[] = [];
+    const connection = createConnection({ ...extra, streamingFetch: net.fetch });
+    connection.onStatus((status) => seen.push({ ...status }));
+    connection.start();
+    connection.setEndpoint(endpoint);
+    await settle();
+    expect(connection.status()).toMatchObject({ streaming: true, reachable: true, reconnecting: false });
+    // What was seen while connecting is not what these tests are about.
+    seen.length = 0;
+    return { connection, seen };
+  }
+
+  it('wake() always opens a fresh stream from the bookmark, and tells the screens', async () => {
+    const net = harness();
+    const { connection } = await connected(net);
+    net.send('id: e.7\ndata: {"channel":"chats:changed","payload":null}\n\n');
+    await settle();
+    const woke = vi.fn();
+    connection.onWake(woke);
+
+    connection.wake();
+    await settle();
+    expect(woke).toHaveBeenCalledTimes(1);
+    expect(net.headers).toHaveLength(2);
+    expect(net.headers[1]['last-event-id']).toBe('e.7');
+    expect(connection.status()).toMatchObject({ streaming: true, reachable: true, reconnecting: false });
+    connection.stop();
+  });
+
+  it('calls a dropped stream reconnecting first, and offline only after the grace', async () => {
+    const net = harness();
+    const { connection, seen } = await connected(net);
+
+    net.failAll(true);
+    net.reset();
+    await settle();
+    expect(connection.status()).toMatchObject({ streaming: false, reachable: true, reconnecting: true });
+    // The backoff runs and every attempt fails; still not offline.
+    await vi.advanceTimersByTimeAsync(RECONNECT_GRACE_MS - 100);
+    expect(connection.status()).toMatchObject({ reachable: true, reconnecting: true });
+    expect(seen.some((s) => !s.reachable)).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(connection.status()).toMatchObject({ streaming: false, reachable: false, reconnecting: false });
+    // And it stays offline rather than blinking back to "reconnecting" on
+    // every retry.
+    await vi.advanceTimersByTimeAsync(RECONNECT_GRACE_MS);
+    expect(connection.status()).toMatchObject({ reachable: false, reconnecting: false });
+
+    // The server is back: the next attempt opens a stream and that is that.
+    net.failAll(false);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(connection.status()).toMatchObject({ streaming: true, reachable: true, reconnecting: false });
+    connection.stop();
+  });
+
+  it('never shows offline for a drop that reconnects inside the grace', async () => {
+    const net = harness();
+    const { connection, seen } = await connected(net);
+    net.reset();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(connection.status()).toMatchObject({ streaming: true, reconnecting: false });
+    expect(seen.some((s) => !s.reachable)).toBe(false);
+    connection.stop();
+  });
+
+  it('does not let one RPC nothing answered flip the app offline under a live stream', async () => {
+    const net = harness();
+    const { connection } = await connected(net, { streamingFetch: net.fetch, fetch: failingRpc });
+    await expect(connection.rpc('chats:list')).rejects.toThrow(/Could not reach/);
+    expect(connection.status()).toMatchObject({ streaming: true, reachable: true, reconnecting: false });
+    connection.stop();
+  });
+
+  it('still answers from the cache while the link is only reconnecting', async () => {
+    const net = harness();
+    const cache = {
+      record: vi.fn(),
+      replay: vi.fn(() => ({ chats: [], offline: true })),
+      schedulePrefetch: vi.fn(),
+      cancel: vi.fn(),
+      clear: vi.fn(),
+      close: vi.fn()
+    };
+    const { connection } = await connected(net, { streamingFetch: net.fetch, fetch: failingRpc, cache });
+    net.failAll(true);
+    net.reset();
+    await settle();
+    expect(connection.status()).toMatchObject({ reachable: true, reconnecting: true });
+    // "Nothing answered" is a fact about the call, whatever the status has
+    // concluded so far.
+    await expect(connection.rpc('chats:list')).resolves.toMatchObject({ offline: true });
+    connection.stop();
+  });
+
+  it('sleep() means asleep, and wake() starts over with a fresh grace', async () => {
+    const net = harness();
+    const { connection, seen } = await connected(net);
+    connection.sleep();
+    await settle();
+    expect(connection.status()).toMatchObject({ streaming: false, reachable: true, reconnecting: false });
+    const attempts = net.callCount();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(net.callCount()).toBe(attempts);
+    expect(seen.some((s) => !s.reachable)).toBe(false);
+
+    connection.wake();
+    await settle();
+    expect(connection.status()).toMatchObject({ streaming: true, reachable: true, reconnecting: false });
+    connection.stop();
+  });
+
+  it('starts a new server in the connecting grace, not offline', async () => {
+    const net = harness();
+    net.failAll(true);
+    const connection = createConnection({ streamingFetch: net.fetch });
+    connection.start();
+    connection.setEndpoint(endpoint);
+    await settle();
+    expect(connection.status()).toMatchObject({ paired: true, reachable: false, reconnecting: true });
+    await vi.advanceTimersByTimeAsync(RECONNECT_GRACE_MS + 50);
+    expect(connection.status()).toMatchObject({ reachable: false, reconnecting: false });
     connection.stop();
   });
 });

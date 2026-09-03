@@ -33,9 +33,15 @@ export const RPC_TIMEOUT_MS = 10 * 60_000;
 
 /** Nothing answered. Distinct from a refusal so the UI can say which happened. */
 export class UnreachableError extends Error {
+  /** What the platform said, for the log. Not for the screen: it is a Swift stack location. */
+  readonly detail: string;
   constructor(serverUrl: string, cause: unknown) {
-    super(`could not reach ${serverUrl}: ${String((cause as Error)?.message ?? cause)}`);
+    // The message is what a banner shows, so it is a sentence about the server
+    // and not the platform's exception text ("UnexpectedException … at
+    // ExpoModulesCore/Promise.swift:56" was the banner before this).
+    super(`Could not reach ${serverUrl.replace(/^https?:\/\//, '')}.`);
     this.name = 'UnreachableError';
+    this.detail = String((cause as Error)?.message ?? cause);
   }
 }
 

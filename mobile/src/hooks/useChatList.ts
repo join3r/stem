@@ -20,12 +20,29 @@
 //                  what is displayed may be wrong rather than merely old.
 //
 // A reconnect refetches too, but only from the second one on — the first is the
-// stream opening after the load that pairing already triggered.
+// stream opening after the load that pairing already triggered. And the app
+// coming to the front (onWake) refetches, debounced into the reconnect's own.
+//
+// Who asked matters (ReadCause in ../chat/reads.ts): `refresh` is the user's
+// pull and fails out loud; `revalidate` and every reason above are the phone
+// keeping itself current, and one of those failing to reach a server that is
+// being reconnected to at that very moment is not worth a banner.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isSettledMethod } from '@shared/settledTurns';
 import type { ChatListResult } from '@shared/types';
-import { IDLE_READ, isCurrent, readIdle, readSettled, readStarted, type ReadState } from '../chat/reads';
+import {
+  IDLE_READ,
+  isCurrent,
+  readAbandoned,
+  readIdle,
+  readSettled,
+  readStarted,
+  shouldAbandon,
+  type ReadCause,
+  type ReadState
+} from '../chat/reads';
+import { isUnreachable } from '../transport/connection';
 import { useTransport } from '../transport/provider';
 
 /** Long enough to swallow a burst of terminal events, short enough to feel live. */
@@ -38,7 +55,10 @@ export interface ChatListState {
   /** The last failure, or null. Kept alongside `list`, not instead of it: a stale
    * list plus "couldn't refresh" beats an empty screen. */
   error: string | null;
+  /** The user asked (pull-to-refresh). Fails out loud. */
   refresh: () => void;
+  /** The screen came back into view. Fails quietly while the link is reconnecting. */
+  revalidate: () => void;
   /**
    * Adopt a list the caller already has. The Inbox mutators (`inbox:setArchived`
    * and friends) answer with the fresh ChatListResult precisely so acting on a
@@ -71,29 +91,37 @@ export function useChatList(): ChatListState {
     timer.current = null;
   }, []);
 
-  const fetchNow = useCallback(async () => {
-    cancelPending();
-    if (!connection.status().paired) {
-      applyRead(readIdle);
-      return;
-    }
-    applyRead(readStarted);
-    const mine = readRef.current.request;
-    try {
-      const answer = await connection.rpc('chats:list');
-      if (!isCurrent(readRef.current, mine)) return;
-      setList(answer);
-      applyRead((prev) => readSettled(prev, mine, null));
-    } catch (e) {
-      applyRead((prev) => readSettled(prev, mine, e));
-    }
-  }, [applyRead, cancelPending, connection]);
+  const fetchNow = useCallback(
+    async (cause: ReadCause) => {
+      cancelPending();
+      if (!connection.status().paired) {
+        applyRead(readIdle);
+        return;
+      }
+      applyRead(readStarted);
+      const mine = readRef.current.request;
+      try {
+        const answer = await connection.rpc('chats:list');
+        if (!isCurrent(readRef.current, mine)) return;
+        setList(answer);
+        applyRead((prev) => readSettled(prev, mine, null));
+      } catch (e) {
+        if (shouldAbandon(cause, isUnreachable(e), connection.status().reachable)) {
+          applyRead((prev) => readAbandoned(prev, mine));
+          return;
+        }
+        applyRead((prev) => readSettled(prev, mine, e));
+      }
+    },
+    [applyRead, cancelPending, connection]
+  );
 
+  // Every scheduled read is the phone's own idea.
   const schedule = useCallback(() => {
     cancelPending();
     timer.current = setTimeout(() => {
       timer.current = null;
-      void fetchNow();
+      void fetchNow('background');
     }, REFETCH_DEBOUNCE_MS);
   }, [cancelPending, fetchNow]);
 
@@ -107,7 +135,9 @@ export function useChatList(): ChatListState {
       setList(null);
       return;
     }
-    void fetchNow();
+    // The first load is the user's: there is nothing on screen yet, so a failure
+    // has to be said, or the screen is empty for no stated reason.
+    void fetchNow('user');
   }, [status.paired, applyRead, fetchNow, cancelPending]);
 
   useEffect(() => {
@@ -121,14 +151,18 @@ export function useChatList(): ChatListState {
 
   useEffect(() => {
     const offResync = connection.onResync(() => {
-      void fetchNow();
+      void fetchNow('background');
     });
+    // Debounced rather than immediate: the wake also reopens the stream, whose
+    // rising edge schedules a read of its own, and one read is enough.
+    const offWake = connection.onWake(schedule);
     const offChanged = connection.onPush('chats:changed', schedule);
     const offBackend = connection.onBackendEvent((event) => {
       if (isSettledMethod(event.method)) schedule();
     });
     return () => {
       offResync();
+      offWake();
       offChanged();
       offBackend();
     };
@@ -148,5 +182,8 @@ export function useChatList(): ChatListState {
     [applyRead, cancelPending]
   );
 
-  return { list, loading: read.loading, error: read.error, refresh: fetchNow, replace };
+  const refresh = useCallback(() => void fetchNow('user'), [fetchNow]);
+  const revalidate = useCallback(() => void fetchNow('background'), [fetchNow]);
+
+  return { list, loading: read.loading, error: read.error, refresh, revalidate, replace };
 }

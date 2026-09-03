@@ -11,7 +11,7 @@
 // the screen, so the rows just start at the top.
 
 import { Redirect, useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -32,6 +32,9 @@ import {
   type Settings,
   type ToggleSetting
 } from '../../../src/settings/registry';
+import { shouldAbandon, type ReadCause } from '../../../src/chat/reads';
+import { useForegroundRefetch } from '../../../src/hooks/useForegroundRefetch';
+import { isUnreachable } from '../../../src/transport/connection';
 import { useTransport } from '../../../src/transport/provider';
 import { describeConnection } from '../../../src/ui/connection';
 import { useTheme, type Theme } from '../../../src/ui/theme';
@@ -50,32 +53,67 @@ export default function SettingsScreen(): ReactElement {
   const [models, setModels] = useState<ModelSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // The pull spinner shows for a PULL only — see the chat list for why a
+  // spinner bound to every quiet reload gets stuck open.
+  const [pulling, setPulling] = useState(false);
+  useEffect(() => {
+    if (!loading) setPulling(false);
+  }, [loading]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    // Its own request with its own failure: the model rows degrade to showing
-    // the stored id, they don't take the rest of the settings down with them.
-    void connection
-      .rpc('backend:listModels')
-      .then(setModels)
-      .catch(() => undefined);
-    try {
-      setSettings(await connection.rpc('settings:get'));
-      setError(null);
-    } catch (e) {
-      setError(String((e as Error)?.message ?? e));
-    } finally {
-      setLoading(false);
-    }
-  }, [connection]);
+  const load = useCallback(
+    async (cause: ReadCause) => {
+      setLoading(true);
+      // Its own request with its own failure: the model rows degrade to showing
+      // the stored id, they don't take the rest of the settings down with them.
+      void connection
+        .rpc('backend:listModels')
+        .then(setModels)
+        .catch(() => undefined);
+      try {
+        setSettings(await connection.rpc('settings:get'));
+        setError(null);
+      } catch (e) {
+        // A focus or wake that could not reach a server the transport is still
+        // reconnecting to is not news; the rows on screen stay and the dot says
+        // what is happening. A pull, or a real answer, is (../../../src/chat/reads.ts).
+        if (!shouldAbandon(cause, isUnreachable(e), connection.status().reachable)) {
+          setError(String((e as Error)?.message ?? e));
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [connection]
+  );
 
   // On focus, not on mount: the desk edits the same document, and coming back
-  // to the tab is when stale answers would otherwise show.
+  // to the tab is when stale answers would otherwise show. And on wake, for the
+  // same reason with the phone in place of the tab.
   useFocusEffect(
     useCallback(() => {
-      void load();
+      void load('background');
     }, [load])
   );
+  useForegroundRefetch(
+    useCallback(() => {
+      void load('background');
+    }, [load])
+  );
+  // And when the stream comes back after a drop: the rows may be missing or the
+  // banner stale from a load that failed while the server was away, and this tab
+  // has no push to tell it the server is back — the stream opening is that push.
+  // Not on an opening that coincides with the focus load above — but a tab that
+  // mounted while the server was away has never seen one, and for it the first
+  // opening IS the recovery.
+  const skipMountEdge = useRef(status.streaming);
+  useEffect(() => {
+    if (!status.streaming) return;
+    if (skipMountEdge.current) {
+      skipMountEdge.current = false;
+      return;
+    }
+    void load('background');
+  }, [status.streaming, load]);
 
   const save = useCallback(
     async (run: () => Promise<Settings>) => {
@@ -83,7 +121,7 @@ export default function SettingsScreen(): ReactElement {
         setSettings(await run());
       } catch (e) {
         Alert.alert('That didn’t go through', String((e as Error)?.message ?? e));
-        void load();
+        void load('user');
       }
     },
     [load]
@@ -144,10 +182,20 @@ export default function SettingsScreen(): ReactElement {
       <SectionList
         sections={sections}
         keyExtractor={(row) => row.key}
-        contentInsetAdjustmentBehavior="automatic"
+        // "never": there is no navigation bar over this list, and "automatic"
+        // borrowed the root stack's header inset for a moment after a thread
+        // was popped — a blank band the height of a nav bar above the first row.
+        contentInsetAdjustmentBehavior="never"
         stickySectionHeadersEnabled={false}
         refreshControl={
-          <RefreshControl refreshing={loading && settings !== null} onRefresh={() => void load()} tintColor={theme.dim} />
+          <RefreshControl
+            refreshing={pulling}
+            onRefresh={() => {
+              setPulling(true);
+              void load('user');
+            }}
+            tintColor={theme.dim}
+          />
         }
         ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: theme.line }]} />}
         ListHeaderComponent={

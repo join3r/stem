@@ -7,6 +7,7 @@ const status = (patch: Partial<Parameters<typeof describeConnection>[0]> = {}): 
   reachable: true,
   streaming: true,
   unauthorized: false,
+  reconnecting: false,
   ...patch
 });
 
@@ -47,5 +48,28 @@ describe('relativeTime', () => {
   it('does not render a future timestamp as the future', () => {
     // Server and phone clocks disagree by a second or two all the time.
     expect(relativeTime(secondsAgo(-4), now)).toBe('now');
+  });
+});
+
+// The dim state between Live and Offline — see the grace in
+// ../src/transport/connection.ts. It exists so the first second after an unlock
+// is not painted as an outage.
+describe('describeConnection while reconnecting', () => {
+  it('is dim, and says whether the server has ever answered', () => {
+    expect(describeConnection(status({ streaming: false, reconnecting: true }))).toEqual({
+      label: 'Reconnecting',
+      tone: 'dim'
+    });
+    expect(describeConnection(status({ streaming: false, reconnecting: true, reachable: false }))).toEqual({
+      label: 'Connecting',
+      tone: 'dim'
+    });
+  });
+
+  it('is outranked by a live stream and by a dead pairing', () => {
+    expect(describeConnection(status({ reconnecting: true })).label).toBe('Live');
+    expect(describeConnection(status({ streaming: false, reconnecting: true, unauthorized: true })).label).toBe(
+      'Pairing rejected'
+    );
   });
 });

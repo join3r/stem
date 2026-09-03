@@ -40,8 +40,19 @@ import {
   type ThreadState
 } from '@shared/chatState';
 import type { ChatMessage } from '@shared/types';
-import { IDLE_READ, isCurrent, readIdle, readSettled, readStarted, type ReadState } from '../chat/reads';
-import { applyStartTurnResult, interruptTarget } from '../chat/turns';
+import {
+  IDLE_READ,
+  isCurrent,
+  readAbandoned,
+  readIdle,
+  readSettled,
+  readStarted,
+  shouldAbandon,
+  type ReadCause,
+  type ReadState
+} from '../chat/reads';
+import { applyStartTurnResult, interruptTarget, settleAgainstSnapshot } from '../chat/turns';
+import { isUnreachable } from '../transport/connection';
 import { createEventBatcher } from '../transport/eventBatcher';
 import { useTransport } from '../transport/provider';
 import { useLiveTurns } from './useLiveTurns';
@@ -113,31 +124,57 @@ export function useThread(threadId: string): ThreadView {
   const liveTurnRef = useRef<string | null>(liveTurnId);
   liveTurnRef.current = liveTurnId;
 
-  const load = useCallback(async () => {
-    if (!status.paired) {
-      // There is nothing to ask yet, and that is not a failure — but it is not a
-      // read in progress either. Leaving `loading` set here is what made a cold
-      // launch straight into a thread (a notification tap, a deep link) spin
-      // forever: the Keychain had not answered when this first ran, and nothing
-      // ever ran it again. Pairing is this callback's dependency now, so the
-      // effect below re-runs and turns this into a real read the moment a
-      // credential exists.
-      applyRead(readIdle);
-      return;
-    }
-    applyRead(readStarted);
-    const mine = readRef.current.request;
-    const stateAtRequest = stateRef.current;
-    try {
-      const history = await connection.rpc('chats:open', threadId);
-      if (!isCurrent(readRef.current, mine)) return;
-      setTitle(history.title);
-      apply((liveState) => mergeHydratedThread(history.messages, liveState, stateAtRequest));
-      applyRead((prev) => readSettled(prev, mine, null));
-    } catch (e) {
-      applyRead((prev) => readSettled(prev, mine, e));
-    }
-  }, [apply, applyRead, connection, status.paired, threadId]);
+  // A background read that could not reach the server, or that the cache
+  // answered for it, leaves the transcript of unknown age. Rather than retry on
+  // a timer, the next stream opening (the link is demonstrably back) reads once
+  // more — see the effect on `status.streaming` below.
+  const needsFreshRead = useRef(false);
+
+  const load = useCallback(
+    async (cause: ReadCause) => {
+      if (!status.paired) {
+        // There is nothing to ask yet, and that is not a failure — but it is not a
+        // read in progress either. Leaving `loading` set here is what made a cold
+        // launch straight into a thread (a notification tap, a deep link) spin
+        // forever: the Keychain had not answered when this first ran, and nothing
+        // ever ran it again. Pairing is this callback's dependency now, so the
+        // effect below re-runs and turns this into a real read the moment a
+        // credential exists.
+        applyRead(readIdle);
+        return;
+      }
+      applyRead(readStarted);
+      const mine = readRef.current.request;
+      const stateAtRequest = stateRef.current;
+      try {
+        const history = await connection.rpc('chats:open', threadId);
+        if (!isCurrent(readRef.current, mine)) return;
+        setTitle(history.title);
+        if (history.offline && stateRef.current.hydrated) {
+          // The cache spoke for the server, and there is already a transcript
+          // on screen — one that may hold a bubble the cache has never seen (a
+          // message sent seconds before the phone went to sleep). A copy that
+          // is stale by definition does not replace it; the next stream opening
+          // reads the real thing.
+          needsFreshRead.current = true;
+          applyRead((prev) => readSettled(prev, mine, null));
+          return;
+        }
+        apply((liveState) => mergeHydratedThread(history.messages, liveState, stateAtRequest));
+        applyRead((prev) => readSettled(prev, mine, null));
+        // The cache spoke for an empty screen. Fine to show, not fine to stop at.
+        needsFreshRead.current = history.offline === true;
+      } catch (e) {
+        if (shouldAbandon(cause, isUnreachable(e), connection.status().reachable)) {
+          needsFreshRead.current = true;
+          applyRead((prev) => readAbandoned(prev, mine));
+          return;
+        }
+        applyRead((prev) => readSettled(prev, mine, e));
+      }
+    },
+    [apply, applyRead, connection, status.paired, threadId]
+  );
 
   // Opening a different thread is a different conversation, not a refresh: drop
   // the old slice before the new transcript arrives so no bubble from the
@@ -147,8 +184,15 @@ export function useThread(threadId: string): ThreadView {
     stateRef.current = EMPTY_STATE;
     setState(EMPTY_STATE);
     setTitle('');
-    void load();
+    needsFreshRead.current = false;
+    void load('user');
   }, [applyRead, load]);
+
+  useEffect(() => {
+    if (!status.streaming || !needsFreshRead.current) return;
+    needsFreshRead.current = false;
+    void load('background');
+  }, [status.streaming, load]);
 
   useEffect(() => {
     const batcher = createEventBatcher((event) =>
@@ -168,11 +212,23 @@ export function useThread(threadId: string): ThreadView {
     });
     // Resync means the stream could not be resumed, so the deltas that would
     // have completed this transcript are gone. Re-reading it is the only honest
-    // answer, and the same one every other screen gives.
-    const offResync = connection.onResync(() => void load());
+    // answer, and the same one every other screen gives. Wake is the phone
+    // saying the same thing about itself — it was not watching — and gets the
+    // same read.
+    const offResync = connection.onResync(() => void load('background'));
+    const offWake = connection.onWake(() => void load('background'));
+    // The snapshot is the only thing that can tell a turn still running from one
+    // that finished while the phone was asleep; see settleAgainstSnapshot. Any
+    // frames the batcher holds are older than the snapshot and go first.
+    const offSnapshot = connection.onLiveTurns((snapshot) => {
+      batcher.flush();
+      apply((prev) => settleAgainstSnapshot(prev, snapshot, threadId, pending.current !== null));
+    });
     return () => {
       offEvent();
       offResync();
+      offWake();
+      offSnapshot();
       batcher.flush();
     };
   }, [apply, connection, load, threadId]);
@@ -286,6 +342,6 @@ export function useThread(threadId: string): ThreadView {
     blocked,
     send,
     interrupt: () => void interrupt(),
-    reload: () => void load()
+    reload: () => void load('user')
   };
 }

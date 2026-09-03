@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveTurn } from '@shared/types';
 import {
+  CONNECT_TIMEOUT_MS,
   createEventStream,
   reconnectDelay,
   RECONNECT_BASE_MS,
@@ -44,7 +45,14 @@ function harness(): {
     if (held) {
       const wait = held;
       held = null;
-      await wait;
+      // A real fetch rejects when its signal aborts, however long the handshake
+      // has been hanging; the fake has to, or a timeout could never land.
+      await Promise.race([
+        wait,
+        new Promise<never>((_, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+        })
+      ]);
     }
     if (thrown) {
       const error = thrown;
@@ -383,6 +391,107 @@ describe('createEventStream', () => {
     await settle();
     expect(net.sockets).toHaveLength(2);
     expect(net.sockets[1].headers['last-event-id']).toBeUndefined();
+    stream.stop();
+  });
+});
+
+// The foreground and the background. iOS suspends the process with the socket
+// parked in read(); what comes back is a reader that believes it is streaming
+// over a connection that may be long dead, and a wake that only reconnects "if
+// nothing is open" does nothing. See the RESUME paragraph in ../src/transport/stream.ts.
+describe('createEventStream across a suspension', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('reconnect() replaces an open stream and resumes from the bookmark, counting no failure', async () => {
+    const net = harness();
+    const { seen, stream } = start(net);
+    await settle();
+    net.sockets[0].send('id: e1.4\ndata: {"channel":"a","payload":null}\n\n');
+    await settle();
+
+    stream.reconnect();
+    await settle();
+    expect(net.sockets).toHaveLength(2);
+    expect(net.sockets[1].headers['last-event-id']).toBe('e1.4');
+    expect(seen.streaming).toEqual([true, false, true]);
+    // The old socket's abort is superseded, not dropped: never "unreachable".
+    expect(seen.reachable).toEqual([true, true]);
+    stream.stop();
+  });
+
+  it('reconnect() does not defer to a handshake still in the air', async () => {
+    const net = harness();
+    net.holdNext();
+    const { seen, stream } = start(net);
+    await settle();
+    expect(net.callCount()).toBe(1);
+
+    // retryNow() would wait for it (rightly, for an RPC). The foreground cannot:
+    // that handshake may belong to a network the phone left an hour ago.
+    stream.reconnect();
+    await settle();
+    expect(net.callCount()).toBe(2);
+    expect(net.sockets).toHaveLength(1);
+    expect(seen.streaming).toEqual([true]);
+    expect(seen.reachable).toEqual([true]);
+    stream.stop();
+  });
+
+  it('gives up on a handshake that never answers, and treats it as a failed connect', async () => {
+    const net = harness();
+    net.holdNext();
+    const { seen, stream } = start(net);
+    await settle();
+    expect(seen.reachable).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(CONNECT_TIMEOUT_MS + 5);
+    expect(seen.reachable).toEqual([false]);
+    // And the ordinary backoff follows, so it is not stuck "connecting" forever.
+    await vi.advanceTimersByTimeAsync(reconnectDelay(1) + 5);
+    expect(net.callCount()).toBe(2);
+    expect(net.sockets).toHaveLength(1);
+    stream.stop();
+  });
+
+  it('sleep() drops the socket, stops retrying, and keeps the bookmark for the wake', async () => {
+    const net = harness();
+    const { seen, stream } = start(net);
+    await settle();
+    net.sockets[0].send('id: e1.9\ndata: {"channel":"a","payload":null}\n\n');
+    await settle();
+
+    stream.sleep();
+    await settle();
+    expect(seen.streaming).toEqual([true, false]);
+    // A minute in the background: no attempts, nothing counted.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(net.callCount()).toBe(1);
+    expect(seen.reachable).toEqual([true]);
+    // retryNow() (an RPC path) does not wake a sleeping stream either.
+    stream.retryNow();
+    await settle();
+    expect(net.callCount()).toBe(1);
+
+    stream.reconnect();
+    await settle();
+    expect(net.sockets).toHaveLength(2);
+    expect(net.sockets[1].headers['last-event-id']).toBe('e1.9');
+    stream.stop();
+  });
+
+  it('lets no stall timer from before the wake touch the stream after it', async () => {
+    const net = harness();
+    const { seen, stream } = start(net);
+    await settle();
+    // Almost stalled, then the app comes back: the new stream must get its own
+    // full STALL_MS, not the second the old timer had left.
+    await vi.advanceTimersByTimeAsync(STALL_MS - 1_000);
+    stream.reconnect();
+    await settle();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(net.sockets).toHaveLength(2);
+    expect(seen.streaming).toEqual([true, false, true]);
     stream.stop();
   });
 });
