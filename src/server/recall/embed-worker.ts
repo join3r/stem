@@ -43,6 +43,18 @@ export type WorkerOutMessage =
 const RUN_BATCH = 8;
 // Download progress is per-chunk chatty; cap status posts to ~4/s.
 const PROGRESS_THROTTLE_MS = 250;
+// No ORT memory arena, for every model this process loads. Electron's malloc is
+// PartitionAlloc, which refuses a single allocation past ~2 GB; ORT's BFCArena
+// grows by doubling, so a model whose weights plus working set pass ~1.3 GB
+// asks for exactly such a block and ORT aborts (SIGTRAP, no message, no error
+// status — the worker just exits; issue #10). Qwen3-Reranker-0.6B does this on
+// EVERY Mac, 8 GB or 64 GB, at both q8 (1.2 GB) and q4 (995 MB), while the same
+// file loads fine under a plain Node binary. With the arena off ORT mallocs
+// per tensor and stays under the cap. Measured 2026-09-03 (system Node, M-series):
+// reranker 101 → 100 ms/pair, embedder 52 → 48 ms/text, RSS lower for both — the
+// arena buys nothing here, so it is off for the embedder too rather than one
+// model at a time.
+const SESSION_OPTIONS = { enableCpuMemArena: false } as const;
 
 type Extractor = (
   texts: string[],
@@ -199,6 +211,7 @@ async function load(nextSpec: LocalEmbedModelSpec, cacheDir: string): Promise<vo
     const cached = applyHubAccess(env, cacheDir, nextSpec.repo, nextSpec.dtype);
     const pipe = (await pipeline('feature-extraction', nextSpec.repo, {
       dtype: nextSpec.dtype,
+      session_options: SESSION_OPTIONS,
       progress_callback: progressAggregator(cached, postStatus)
     })) as unknown as Extractor;
     // Probe with a tiny input: verifies the model produces vectors, reports the
@@ -246,6 +259,7 @@ async function loadRerank(nextSpec: LocalRerankModelSpec, cacheDir: string): Pro
     const loader = nextSpec.scoring === 'causal-yes-no' ? AutoModelForCausalLM : AutoModelForSequenceClassification;
     const model = (await loader.from_pretrained(nextSpec.repo, {
       dtype: nextSpec.dtype,
+      session_options: SESSION_OPTIONS,
       progress_callback: onProgress
     })) as unknown as Reranker['model'];
     const next: Reranker = { tokenizer, model, scoring: nextSpec.scoring };
