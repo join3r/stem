@@ -37,3 +37,5 @@ Not a feature you see in Stem — notes for building it and for running it somew
 - [Windows development](windows-dev.md) — portable Node, no admin rights, `npm run dev`. Experimental.
 - [Running on a server](running-on-a-server.md) — Docker and Caddy on your own domain, with
   the Mac as a client. The move itself, backups, upgrades, and what to do when it will not start.
+- [Running on a LAN or Tailscale](running-on-tailscale.md) — the same containers, no public
+  hostname: Caddy stays HTTP, Tailscale Serve is HTTPS, Funnel is optional and public.

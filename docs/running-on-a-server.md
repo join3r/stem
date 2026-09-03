@@ -7,6 +7,11 @@ server instead, so the same chats, memory and skills are there from whichever ma
 you open the app on — and so a scheduled task at three in the morning runs whether your
 laptop is shut or not.
 
+If the server should **not** have a public hostname — a VM on your LAN, Tailscale
+Serve for HTTPS, no router ports, no Let's Encrypt — that path is
+[Running on a LAN or Tailscale](running-on-tailscale.md). The containers, the
+archive and the pairing codes are the same; only how TLS is obtained changes.
+
 What you end up with:
 
 - **Two containers.** `stem` is Stem itself; `caddy` is the front door that terminates

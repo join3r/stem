@@ -17,9 +17,15 @@ npm run typecheck
 
 ## Pairing
 
-On the desktop: **Settings → Devices → Pair a phone**. Scan the QR with the app's own
-scanner, or type the address and the eight-character code by hand. The code is spent
-once and expires in ten minutes.
+On the desktop: **Settings → Server → Devices → Pair a phone**. Scan the QR with the
+app's own scanner, or type the address and the eight-character code by hand. The code
+is spent once and expires in ten minutes.
+
+The address is whatever the desktop uses to reach the Stem server:
+`https://stem.example.com` on a public deployment, or
+`https://stem.tailxxxxx.ts.net` when [Tailscale Serve](../docs/running-on-tailscale.md)
+is the front door. The phone needs a route to that name (the tailnet, or the LAN).
+`http://` works if you type the scheme; `https://` is what you want once Serve is up.
 
 ## Running in Expo Go
 
