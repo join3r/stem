@@ -2822,9 +2822,12 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 /* Rows reuse the inbox-row look; mail adds a from-line above the subject. */
 .mail-row .mail-from { display: block; font-size: var(--fs-11); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mail-row.unread .mail-from { color: var(--ink); }
-/* A pill, not a "· needs you" suffix: it stays on the from-line at any width
-   instead of wrapping behind a lone separator dot. */
-.mail-needs-you { display: inline-block; margin-left: var(--sp-3); padding: 0 6px; border-radius: var(--radius-pill); background: var(--sel); color: var(--accent); font-size: var(--fs-10); font-weight: 600; line-height: 15px; font-style: normal; vertical-align: 1px; }
+/* The generic .row-main em is a block (a second line under a row title). On the
+   from-line these are inline tags, so the rule below wins back inline flow —
+   without it every status wrapped onto its own line behind a lone "·". */
+.mail-row .mail-from em { display: inline; font-size: inherit; overflow-wrap: normal; }
+/* "needs you" is a pill, not a suffix: it stays on the from-line at any width. */
+.mail-row .mail-from .mail-needs-you { display: inline-block; margin-left: var(--sp-3); padding: 0 6px; border-radius: var(--radius-pill); background: var(--sel); color: var(--accent); font-size: var(--fs-10); font-weight: 600; line-height: 15px; vertical-align: 1px; }
 .mail-aborted { color: var(--muted); font-style: normal; }
 .mail-sent-icon { margin-right: 2px; opacity: 0.7; }
 
