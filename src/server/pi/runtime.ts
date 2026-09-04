@@ -2492,11 +2492,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           cwd = clamped.cwd;
           device = pin.device?.trim() || undefined;
         }
+        // The persona's model rides along whenever its pinned agent is the one
+        // running (always, under the mail clamp; in a chat only if the call did
+        // not name a different agent). The tool call itself has no model arg.
+        const model =
+          pin?.model?.trim() && agent.toLowerCase() === pin.agent.trim().toLowerCase() ? pin.model.trim() : undefined;
         const result = await bridge.handleHarnessRequest({
           agent,
           prompt: req.prompt ?? '',
           cwd,
           device,
+          model,
           freshSession: req.fresh_session === true,
           itemId: typeof req.item_id === 'string' && req.item_id ? req.item_id : undefined,
           threadId: turn?.threadId ?? '',

@@ -1319,7 +1319,7 @@ export type DeviceHarnessRequest =
       cwd: string;
       /** A session the device minted earlier, to resume; absent starts fresh. */
       sessionId?: string;
-      /** Model pin from the server's harness settings; absent = agent default. */
+      /** Model pin from the driving persona; absent = agent default. */
       model?: string;
     }
   | {
@@ -1341,7 +1341,7 @@ export type DeviceHarnessRequest =
       /**
        * Enumerate the models the agent offers on THIS device — a read-only
        * probe (start/reuse a session, read its advertised model list), never a
-       * turn. Answers a settings picker; the switch on that machine still gates
+       * turn. Answers the persona editor; the switch on that machine still gates
        * it, so a device that runs no coding agents answers with a refusal.
        */
       op: 'models';
@@ -2038,6 +2038,14 @@ export interface PersonaHarnessPin {
    * accepts labels). Absent = Stem's server, the default host.
    */
   device?: string;
+  /**
+   * Model the pinned agent runs, as that agent names it (e.g.
+   * `claude-fable-5-1[1m]`, `claude-haiku-4-5`) — chosen from the live list
+   * the agent advertises on the pinned host. Absent = the agent's own default
+   * on that machine. Travels explicitly because acpx hides the machine's own
+   * Claude Code config from Stem-run sessions.
+   */
+  model?: string;
 }
 
 export interface Persona {
@@ -2638,12 +2646,11 @@ export interface HarnessSettings {
   enabled: boolean;
   /**
    * Per-agent overrides. `command` replaces acpx's built-in registry entry
-   * (claude, opencode, …); `model` pins the model the agent runs (an alias or
-   * full id, e.g. "fable" or "claude-fable-5") — needed because acpx isolates
-   * claude sessions from ~/.claude/settings.json, so a model pinned there
-   * never reaches the spawned agent. Either field may appear alone.
+   * (claude, opencode, …). Which MODEL an agent runs is not a setting here:
+   * it belongs to the persona that drives the agent (PersonaHarnessPin.model),
+   * so two personas can run the same agent on different models.
    */
-  agents: Record<string, { command?: string; model?: string }>;
+  agents: Record<string, { command?: string }>;
 }
 
 /**
@@ -2655,7 +2662,7 @@ export type HarnessModelListing =
   | { ok: true; models: string[]; currentModelId?: string }
   | { ok: false; error: string };
 
-/** The model probe as the settings picker receives it (host listing + context). */
+/** The model probe as the persona editor receives it (host listing + context). */
 export type HarnessModelsResult =
   | { ok: true; agent: string; models: string[]; currentModelId?: string; hostLabel: string }
   | { ok: false; error: string };

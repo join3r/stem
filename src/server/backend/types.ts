@@ -80,6 +80,12 @@ export interface HarnessRequest {
   prompt: string;
   cwd?: string;
   device?: string;
+  /**
+   * Model the agent runs, injected by PiRuntime from the driving persona's
+   * pin (never from the tool payload — the assistant does not pick models).
+   * Absent = the agent's own default on the host.
+   */
+  model?: string;
   freshSession?: boolean;
   /**
    * The tool call's own id in the turn strip, passed through so live progress

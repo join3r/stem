@@ -583,8 +583,8 @@ function registerIpc(): void {
     return updateHarnessSettings(patch);
   });
   registerServer('harness:listModels', async (_e, input?: { agent?: string; host?: string }) => {
-    // The settings picker's live probe: which models the agent offers on the
-    // host that would run it. Never rejects; the picker renders the error.
+    // The persona editor's live probe: which models the agent offers on the
+    // host the persona is pinned to. Never rejects; the editor renders the error.
     if (!harness) return { ok: false, error: 'Coding agents are not set up on this Stem.' };
     return harness.service.listModels(input ?? {});
   });

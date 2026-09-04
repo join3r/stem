@@ -208,10 +208,11 @@ export class HarnessService implements HarnessBridge {
       if (guard.blocked) return { ok: false, error: guard.reason ?? 'Blocked by the read-only folder guard.' };
     }
 
-    // A per-agent model pin from settings rides every ensure and turn: agents
-    // don't reliably inherit the user's own model config (acpx hides user
-    // settings from claude sessions), so the pin travels explicitly.
-    const model = settings.agents?.[agent]?.model?.trim() || undefined;
+    // The persona's model pin rides every ensure and turn: agents don't
+    // reliably inherit the user's own model config (acpx hides user settings
+    // from claude sessions), so the pin travels explicitly. No persona pin =
+    // whatever the agent defaults to on that host.
+    const model = req.model?.trim() || undefined;
 
     // Session continuity: the mapping is a cache of the host's truth.
     const key = { threadId: req.threadId, host: hostKey, agent, cwd };

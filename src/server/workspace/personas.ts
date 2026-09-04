@@ -106,7 +106,8 @@ function coerceHarness(raw: unknown): PersonaHarnessPin | undefined {
   // blank pinned cwd as "no cwd" (thread scratch dir).
   const cwd = typeof r.cwd === 'string' ? r.cwd.trim() : '';
   const device = typeof r.device === 'string' ? r.device.trim() : '';
-  return { agent: r.agent.trim(), cwd, ...(device ? { device } : {}) };
+  const model = typeof r.model === 'string' ? r.model.trim().slice(0, 100) : '';
+  return { agent: r.agent.trim(), cwd, ...(device ? { device } : {}), ...(model ? { model } : {}) };
 }
 
 /** Reshape one stored/submitted persona; null when it isn't one. */

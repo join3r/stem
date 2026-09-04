@@ -234,6 +234,11 @@ describe('save', () => {
       cwd: '/src/stem',
       device: 'dev-1'
     });
+    // The model rides the pin (a persona picks its agent's model); blank = agent default, dropped.
+    await savePersona(persona({ harness: { agent: 'claude', cwd: '/src/stem', model: ' claude-haiku-4-5 ' } }));
+    expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '/src/stem', model: 'claude-haiku-4-5' });
+    await savePersona(persona({ harness: { agent: 'claude', cwd: '/src/stem', model: '  ' } }));
+    expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '/src/stem' });
   });
 });
 

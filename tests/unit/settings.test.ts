@@ -872,3 +872,22 @@ describe('chats settings', () => {
   });
 });
 
+
+describe('harness agents setting', () => {
+  it('keeps command overrides and drops the retired per-agent model pin on read', async () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        harness: {
+          enabled: true,
+          agents: { claude: { model: 'claude-fable-5' }, opencode: { command: 'opencode acp', model: 'x' } }
+        }
+      })
+    );
+    const s = await readSettings();
+    expect(s.harness.enabled).toBe(true);
+    // Models live on persona pins now (PersonaHarnessPin.model); a stored
+    // global pin must not leak into runs through some other path.
+    expect(s.harness.agents).toEqual({ opencode: { command: 'opencode acp' } });
+  });
+});

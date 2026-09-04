@@ -2934,6 +2934,8 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .persona-harness .persona-cwd:disabled { opacity: 0.5; }
 .persona-cwd-row { display: flex; align-items: center; gap: var(--sp-3); }
 .persona-cwd-row .persona-cwd { flex: 1; }
+.persona-model { display: flex; flex-direction: column; gap: var(--sp-1); }
+.persona-model-hint { font-size: var(--fs-12); color: var(--muted); }
 .persona-cap { display: flex; align-items: flex-start; gap: var(--sp-4); font-size: var(--fs-12); color: var(--muted); cursor: pointer; }
 .persona-cap input { margin-top: var(--sp-1); }
 

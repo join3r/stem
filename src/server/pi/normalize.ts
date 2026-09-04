@@ -1,5 +1,5 @@
 import type { PiEvent } from './rpc';
-import type { ActivityItem, SourceRef, TurnUsage } from '../../shared/types';
+import type { ActivityItem, PersonaHarnessPin, SourceRef, TurnUsage } from '../../shared/types';
 import { stripCiteMarkers } from '../../shared/citations';
 import { WEB_ACCESS_TOOL_NAMES } from '../../shared/activity';
 import { SECRET_ENVELOPE_KEY, toolArgsOf } from './protocol';
@@ -135,11 +135,12 @@ export interface TurnContext {
   /** The persona this delivery runs as (the mail bridge's authoritative sender). */
   personaId?: string;
   /**
-   * The turn's persona coding-harness pin (agent + cwd + optional device),
-   * when the persona has one. Fills coding_agent's agent/cwd/device defaults —
-   * explicit tool arguments win.
+   * The turn's persona coding-harness pin (agent + cwd + optional device and
+   * model), when the persona has one. In a chat it fills coding_agent's
+   * agent/cwd/device defaults — explicit tool arguments win; in a mail delivery
+   * it is the clamp. The model rides along whenever the pinned agent runs.
    */
-  personaHarness?: { agent: string; cwd: string; device?: string };
+  personaHarness?: PersonaHarnessPin;
   /** The raw user message that started this turn — intent context for the exec safety judge. */
   userText?: string;
   phase: 'pending' | 'thinking' | 'tool' | 'answer';

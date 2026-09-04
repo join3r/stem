@@ -522,18 +522,18 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
   const harness: HarnessSettings = {
     enabled: typeof rawHarness.enabled === 'boolean' ? rawHarness.enabled : DEFAULTS.harness.enabled,
     // Same laundering stance as the exec allowlists: only string fields
-    // survive, trimmed and capped; an entry needs at least one of them.
+    // survive, trimmed and capped. A stored `model` (the pre-2026-09-04
+    // global pin) is dropped on read: models live on persona pins now.
     agents: (() => {
       const raw = rawHarness.agents && typeof rawHarness.agents === 'object' ? rawHarness.agents : {};
-      const agents: Record<string, { command?: string; model?: string }> = {};
+      const agents: Record<string, { command?: string }> = {};
       for (const [rawName, value] of Object.entries(raw)) {
         if (Object.keys(agents).length >= 25) break;
         const name = rawName.trim();
-        const fields = value && typeof value === 'object' ? (value as { command?: unknown; model?: unknown }) : {};
+        const fields = value && typeof value === 'object' ? (value as { command?: unknown }) : {};
         const command = typeof fields.command === 'string' && fields.command.trim() ? fields.command.trim().slice(0, 500) : undefined;
-        const model = typeof fields.model === 'string' && fields.model.trim() ? fields.model.trim().slice(0, 100) : undefined;
-        if (!name || name.length > 64 || (!command && !model)) continue;
-        agents[name] = { ...(command ? { command } : {}), ...(model ? { model } : {}) };
+        if (!name || name.length > 64 || !command) continue;
+        agents[name] = { command };
       }
       return agents;
     })()

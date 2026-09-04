@@ -3,6 +3,7 @@ import { Copy, FolderSearch, Plus, Trash2 } from 'lucide-react';
 import type {
   ClientInfo,
   DeviceInfo,
+  HarnessModelsResult,
   ModelSummary,
   Persona,
   PersonaHarnessPin,
@@ -46,11 +47,8 @@ function summaryLabel(
     const where = p.harness.device
       ? ` on ${devices.find((d) => d.id === p.harness?.device)?.label ?? p.harness.device}`
       : '';
-    parts.push(
-      p.harness.cwd
-        ? `${p.harness.agent}${where} in ${p.harness.cwd}`
-        : `${p.harness.agent}${where}`
-    );
+    const agent = p.harness.model ? `${p.harness.agent} (${p.harness.model})` : p.harness.agent;
+    parts.push(p.harness.cwd ? `${agent}${where} in ${p.harness.cwd}` : `${agent}${where}`);
   }
   if (p.createdBy) {
     parts.push(`created by ${personas.find((x) => x.id === p.createdBy)?.name ?? p.createdBy}`);
@@ -80,6 +78,7 @@ function sameEdit(a: Persona, b: Persona): boolean {
     (a.harness?.agent ?? '') === (b.harness?.agent ?? '') &&
     (a.harness?.cwd ?? '') === (b.harness?.cwd ?? '') &&
     (a.harness?.device ?? '') === (b.harness?.device ?? '') &&
+    (a.harness?.model ?? '') === (b.harness?.model ?? '') &&
     (a.canManagePersonas ?? false) === (b.canManagePersonas ?? false) &&
     (a.memory ?? true) === (b.memory ?? true) &&
     (a.recall ?? true) === (b.recall ?? true) &&
@@ -582,6 +581,15 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                           </option>
                         ))}
                     </select>
+                    <HarnessModelSelect
+                      pin={p.harness}
+                      onChange={(model) =>
+                        setDraft({
+                          ...p,
+                          harness: p.harness ? { ...p.harness, model } : undefined
+                        })
+                      }
+                    />
                     <div className="persona-cwd-row">
                       <input
                         className="vfield persona-cwd"
@@ -753,6 +761,97 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
             />
           );
         })()}
+    </div>
+  );
+}
+
+// One listing per (agent, host) for the life of this window: a probe may
+// cold-start the agent on that machine, so rows sharing a pin share the answer
+// and Refresh is the only way to ask again.
+const modelProbeCache = new Map<string, HarnessModelsResult>();
+
+/**
+ * The model a persona's pinned coding agent runs, chosen from what that agent
+ * advertises ON THE PINNED HOST (a paired computer's Claude Code lists its
+ * own lineup; the server's lists the server's). Empty = the agent's own
+ * default there. Disabled until the row has an agent to ask.
+ */
+function HarnessModelSelect({
+  pin,
+  onChange
+}: {
+  pin: PersonaHarnessPin | undefined;
+  onChange: (model: string | undefined) => void;
+}) {
+  const agent = pin?.agent.trim().toLowerCase() ?? '';
+  const host = pin?.device?.trim() || 'server';
+  const key = `${agent}\n${host}`;
+  const [listing, setListing] = useState<HarnessModelsResult | 'loading' | null>(null);
+
+  const probe = () => {
+    setListing('loading');
+    window.stem
+      .listHarnessModels({ agent, host })
+      .catch((e: unknown): HarnessModelsResult => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+      .then((res) => {
+        if (res.ok) modelProbeCache.set(key, res);
+        setListing(res);
+      });
+  };
+
+  useEffect(() => {
+    if (!agent) {
+      setListing(null);
+      return;
+    }
+    const cached = modelProbeCache.get(key);
+    if (cached) setListing(cached);
+    else probe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- probe when the (agent, host) pair changes
+  }, [key]);
+
+  const listed = listing && listing !== 'loading' && listing.ok ? listing : null;
+  const current = pin?.model ?? '';
+  return (
+    <div className="persona-model">
+      <select
+        className="vfield"
+        aria-label="Model the coding agent runs"
+        value={current}
+        disabled={!pin}
+        onChange={(e) => onChange(e.target.value || undefined)}
+      >
+        <option value="">{pin ? `${pin.agent}’s own default` : 'Agent’s own default'}</option>
+        {current && !listed?.models.includes(current) && (
+          <option value={current}>{current} (not offered there)</option>
+        )}
+        {listed?.models.map((id) => (
+          <option key={id} value={id}>
+            {id}
+          </option>
+        ))}
+      </select>
+      {pin && (
+        <div className="persona-model-hint">
+          {listing === 'loading' && 'Asking which models it offers…'}
+          {listed && (
+            <>
+              Models offered by {listed.agent} on {listed.hostLabel}.{' '}
+              <button type="button" className="link-btn" onClick={probe}>
+                Refresh
+              </button>
+            </>
+          )}
+          {listing && listing !== 'loading' && !listing.ok && (
+            <>
+              Could not list models: {listing.error}{' '}
+              <button type="button" className="link-btn" onClick={probe}>
+                Try again
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

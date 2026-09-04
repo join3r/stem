@@ -214,22 +214,20 @@ describe('sessions', () => {
     );
   });
 
-  it('carries the settings model pin on the ensure, the retry, and the turn', async () => {
+  it("carries the request's (persona) model pin on the ensure, the retry, and the turn", async () => {
     await rememberSession({ threadId: 'thread-1', host: 'server', agent: 'claude', cwd: scratch, sessionId: 'stale' });
     const host = scriptedHost({
       ensure: (spec) =>
         spec.sessionId ? { ok: false, error: 'unknown session' } : { ok: true, sessionId: 'session-new' }
     });
-    const { service } = makeService(host, {
-      settings: async () => ({ enabled: true, agents: { claude: { model: 'claude-fable-5' } } })
-    });
-    const res = await service.handleHarnessRequest(REQ);
+    const { service } = makeService(host);
+    const res = await service.handleHarnessRequest({ ...REQ, model: 'claude-haiku-4-5' });
     expect(res.ok).toBe(true);
-    expect(host.ensures.map((e) => e.model)).toEqual(['claude-fable-5', 'claude-fable-5']);
-    expect(host.turns[0]).toMatchObject({ model: 'claude-fable-5' });
+    expect(host.ensures.map((e) => e.model)).toEqual(['claude-haiku-4-5', 'claude-haiku-4-5']);
+    expect(host.turns[0]).toMatchObject({ model: 'claude-haiku-4-5' });
   });
 
-  it('sends no model when settings pin none for the agent', async () => {
+  it('sends no model when the request carries none (the agent runs its own default)', async () => {
     const host = scriptedHost({});
     const { service } = makeService(host, {
       settings: async () => ({ enabled: true, agents: { claude: { command: 'my-claude acp' } } })

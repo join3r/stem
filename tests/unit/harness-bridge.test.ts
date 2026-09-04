@@ -291,6 +291,48 @@ describe('runtime side', () => {
     expect(refused.error).toContain('pinned');
   });
 
+  it("carries the persona's model pin only when the pinned agent is the one running", async () => {
+    const seen: HarnessRequest[] = [];
+    const { internal, worker, sent } = runtimeWithBridge({
+      handleHarnessRequest: async (req) => {
+        seen.push(req);
+        return { ok: true, text: 'done' };
+      },
+      abortThread: () => {},
+      settleAll: () => {}
+    });
+    worker.currentTurn = newTurnContext('t', 'turn-1');
+    worker.currentTurn.personaHarness = { agent: 'claude', cwd: '/repo', model: 'claude-haiku-4-5' };
+    // A chat turn with no agent named: the pin fills agent AND model.
+    internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ prompt: 'go' }));
+    await settleSends(sent);
+    expect(seen[0]).toMatchObject({ agent: 'claude', model: 'claude-haiku-4-5' });
+
+    // A chat turn that names a different agent: a claude model id means nothing to it.
+    sent.length = 0;
+    internal.handleHarnessBridgeRequest(worker, 'elicit-2', JSON.stringify({ agent: 'opencode', prompt: 'go' }));
+    await settleSends(sent);
+    expect(seen[1].agent).toBe('opencode');
+    expect(seen[1].model).toBeUndefined();
+
+    // Under the mail clamp the pinned agent always runs, so the model always rides.
+    sent.length = 0;
+    worker.currentTurn.isMail = true;
+    worker.currentTurn.isScheduled = true;
+    internal.handleHarnessBridgeRequest(worker, 'elicit-3', JSON.stringify({ agent: 'opencode', prompt: 'go' }));
+    await settleSends(sent);
+    expect(seen[2]).toMatchObject({ agent: 'claude', model: 'claude-haiku-4-5', cwd: '/repo' });
+
+    // The tool payload itself cannot pick a model.
+    sent.length = 0;
+    worker.currentTurn.personaHarness = undefined;
+    worker.currentTurn.isMail = false;
+    worker.currentTurn.isScheduled = false;
+    internal.handleHarnessBridgeRequest(worker, 'elicit-4', JSON.stringify({ agent: 'claude', prompt: 'go', model: 'claude-opus-5' }));
+    await settleSends(sent);
+    expect(seen[3].model).toBeUndefined();
+  });
+
   it('answers honestly when no bridge is wired', async () => {
     const { internal, worker, sent } = runtimeWithBridge(null);
     internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ agent: 'claude', prompt: 'go' }));
