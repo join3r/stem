@@ -37,7 +37,7 @@ export interface SchedulerOptions {
    */
   isUserActive?: () => boolean;
   /** Abort an in-flight turn (wired to runtime.interruptTurn) for preemption. */
-  interrupt?: (turnId: string) => Promise<void>;
+  interrupt?: (turnId: string, reason?: string) => Promise<void>;
   /**
    * A run settled without calling `notify_user`: it found nothing worth raising.
    * `before` and `at` bracket the run in the thread's own mtime terms, so the host
@@ -57,6 +57,8 @@ export interface SchedulerOptions {
 const MAX_TIMER_MS = 6 * 60 * 60 * 1000; // 6h
 // A run that never settles must not wedge the scheduler forever.
 const RUN_TIMEOUT_MS = 15 * 60 * 1000; // 15m
+/** Named cause for the abort a preempt sends — the user did not press Stop. */
+const PREEMPT_REASON = 'the scheduled run yielded to the user';
 // Treat a task as due if its time has arrived within this slop (timers can fire a
 // hair early; cron is minute-resolution so this is harmless).
 const DUE_SLOP_MS = 1000;
@@ -110,7 +112,7 @@ export class TaskScheduler {
     // turnId may still be null while startTurn is building the prompt; runTask
     // checks the flag right after it resolves and interrupts then.
     if (run.turnId && this.opts.interrupt) {
-      void this.opts.interrupt(run.turnId).catch((err) =>
+      void this.opts.interrupt(run.turnId, PREEMPT_REASON).catch((err) =>
         // The abort is the whole point of preempting: it is what frees the
         // foreground gate. An abort that failed leaves the scheduler's turn
         // running against the backend while the user waits behind it, and the
@@ -544,7 +546,7 @@ export class TaskScheduler {
         if (run.preempted && this.opts.interrupt) {
           // Same as preemptForUser: an abort that fails is a scheduled turn the
           // user's turn now queues behind, with nothing anywhere saying so.
-          void this.opts.interrupt(turnId).catch((err) =>
+          void this.opts.interrupt(turnId, PREEMPT_REASON).catch((err) =>
             degrade('tasks', 'left a preempted run holding the foreground gate', err)
           );
         }
@@ -579,7 +581,7 @@ export class TaskScheduler {
               noteTurnStart(task.threadId, retry.turnId);
               if (run.preempted && this.opts.interrupt) {
                 // As above: a failed abort holds the gate against the user.
-                void this.opts.interrupt(retry.turnId).catch((err) =>
+                void this.opts.interrupt(retry.turnId, PREEMPT_REASON).catch((err) =>
                   degrade('tasks', 'left a preempted run holding the foreground gate', err)
                 );
               }
@@ -714,7 +716,7 @@ export class TaskScheduler {
         if (this.opts.interrupt) {
           // If the abort itself fails, that is exactly what happens: the queue has
           // moved on, the row reads failed, and the turn is still running.
-          void this.opts.interrupt(turnId).catch((err) =>
+          void this.opts.interrupt(turnId, 'the scheduled run timed out').catch((err) =>
             degrade('tasks', 'left a timed-out run occupying the foreground gate', err)
           );
         }

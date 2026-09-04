@@ -55,8 +55,11 @@ export type HarnessTurnResult =
 export interface HarnessTurnHandle {
   /** Never rejects; every failure settles as `{ok: false}`. */
   result: Promise<HarnessTurnResult>;
-  /** Graceful ACP turn cancel, idempotent. The session stays usable. */
-  cancel(): void;
+  /**
+   * Graceful ACP turn cancel, idempotent. The session stays usable. `reason`
+   * is forwarded to the agent as the cancel's stated cause (advisory).
+   */
+  cancel(reason?: string): void;
 }
 
 export interface HarnessRunTurnInput {

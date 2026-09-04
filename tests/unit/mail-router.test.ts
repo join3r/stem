@@ -71,6 +71,8 @@ interface TurnScript {
 }
 
 interface FakeBackend {
+  /** Turn ids the router asked to interrupt. */
+  interrupted: string[];
   backend: ChatBackend;
   starts: StartTurnInput[];
   /** Script the next turn(s); the last entry repeats when the list runs dry. */
@@ -89,6 +91,7 @@ function fakeBackend(): FakeBackend {
   const fake: FakeBackend = {
     backend: emitter as unknown as ChatBackend,
     starts: [],
+    interrupted: [],
     script: { mode: 'ok', reply: 'the reply' },
     scripts: [],
     scriptsByPersona: {}
@@ -141,8 +144,9 @@ function fakeBackend(): FakeBackend {
       messages: (transcripts.get(threadId) ?? []).map((m, i) => ({ id: String(i), ...m }))
     }),
     interruptTurn: async (turnId: string) => {
-      // Mirrors the real backend closely enough for stop/timeout tests: the
+      // Mirrors the real backend closely enough for stop tests: the
       // interrupted turn settles as aborted.
+      fake.interrupted.push(turnId);
       emitter.emit('event', {
         method: 'turn/aborted',
         params: { turn: { id: turnId } },
@@ -1449,6 +1453,44 @@ describe('persona management from the bridge', () => {
 // regression this pins: an idle extra worker's routine retirement mid-delivery
 // used to fail the delivery — the user got "run failed: the backend process
 // exited" while the real reply, completed minutes later, was silently dropped.
+// A delivery has no wall clock of its own. It settles when its turn does —
+// completed, failed, aborted, or the carrying worker dying — and nothing else.
+// The 30-minute clamp this replaces killed a coding-agent run (an iOS archive
+// plus upload) mid-flight on 2026-09-03 and mailed the user "the run timed
+// out", with the coding_agent tool reading it as a user cancellation.
+describe('mail delivery has no wall clock', () => {
+  it('a turn still running after hours is still working, then its reply lands', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let release!: () => void;
+      const fake = fakeBackend();
+      fake.script = {
+        mode: 'ok',
+        reply: 'built and uploaded',
+        // The turn's tool phase parks until the test lets it go.
+        bridge: () => new Promise<void>((resolve) => (release = resolve))
+      };
+      const router = makeRouter(fake);
+      await router.compose({ to: ['verifier'], subject: 's', body: 'ship it' });
+      // The fake's own dispatch tick, then three hours of nothing.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(fake.starts).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+      const midway = await readMail();
+      expect(midway.conversations[0].status).toBe('working');
+      expect(midway.items).toHaveLength(1);
+      expect(fake.interrupted).toEqual([]);
+
+      release();
+      const mail = await settledMail();
+      expect(mail.items[1].body).toBe('built and uploaded');
+      expect(mail.conversations[0].status).toBe('idle');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('mail delivery vs pool worker exits', () => {
   const exitEvent = (params: Record<string, unknown>) => ({
     method: 'process/exit',

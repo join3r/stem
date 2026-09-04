@@ -112,10 +112,16 @@ export type HarnessBridgeResult = { ok: true; text: string } | { ok: false; erro
 export interface HarnessBridge {
   /** Run one full harness turn (gate → session → turn → result text). */
   handleHarnessRequest(req: HarnessRequest): Promise<HarnessBridgeResult>;
-  /** Cancel live harness turns + pending cards for one thread (turn interrupted). */
-  abortThread(threadId: string): void;
+  /**
+   * Cancel live harness turns + pending cards for one thread. `reason` says
+   * who or what stopped it when it was NOT the user (a scheduler timeout, a
+   * deleted chat, a dead worker) — the run's result text repeats it, so the
+   * assistant and the run row never claim a cancellation the user did not make.
+   * Absent means the user pressed Stop.
+   */
+  abortThread(threadId: string, reason?: string): void;
   /** Cancel everything (the backend process died/restarted). */
-  settleAll(): void;
+  settleAll(reason?: string): void;
 }
 
 /**
@@ -219,7 +225,12 @@ export interface ChatBackend extends EventEmitter {
   // turns
   createThread(model?: string): Promise<string>;
   startTurn(input: StartTurnInput): Promise<StartTurnResult>;
-  interruptTurn(turnId: string): Promise<void>;
+  /**
+   * Stop a turn. `reason` names a non-user cause (the scheduler's timeout, a
+   * chat deletion) so anything the abort reaches — a coding-agent run above
+   * all — reports that instead of "cancelled by the user". Absent = the user.
+   */
+  interruptTurn(turnId: string, reason?: string): Promise<void>;
   listModels(): Promise<ModelSummary[]>;
 
   // recall seam (one-shot completion used by Stem Recall distillation).

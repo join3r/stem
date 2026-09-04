@@ -202,7 +202,7 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
     return { threadId, turnId };
   }
 
-  async interruptTurn(turnId: string): Promise<void> {
+  async interruptTurn(turnId: string, _reason?: string): Promise<void> {
     const turn = this.activeTurn;
     if (!turn || turn.turnId !== turnId) return;
     this.clearActiveTimer();

@@ -43,7 +43,7 @@ export function initTaskScheduler(deps: {
     // Scheduled runs defer while the user is active, and an in-flight scheduled
     // run yields (preemptForUser) when the user sends a message.
     isUserActive: deps.isUserActive,
-    interrupt: (turnId) => deps.runtime.interruptTurn(turnId),
+    interrupt: (turnId, reason) => deps.runtime.interruptTurn(turnId, reason),
     // A persona run that settled ok reflects into the persona's memory, the
     // same pass a mail delivery gets (mail/reflect.ts never rejects).
     reflect: (args) => reflectOnDelivery(deps.runtime, args),

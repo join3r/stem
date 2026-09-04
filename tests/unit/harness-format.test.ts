@@ -109,6 +109,19 @@ describe('result text', () => {
     expect(text).toContain('continues the same conversation');
   });
 
+  it('a run Stem stopped on its own names the cause, not the user', () => {
+    const text = formatRunResult({
+      agent: 'claude',
+      summary: newTurnSummary(),
+      status: 'cancelled',
+      hostLabel: 'this server',
+      cancelReason: 'the chat was deleted'
+    });
+    expect(text).toContain('stopped by Stem: the chat was deleted');
+    expect(text).not.toContain('by the user');
+    expect(text).toContain('continues the same conversation');
+  });
+
   it('a failed run names the host and the error', () => {
     const text = formatRunResult({
       agent: 'opencode',

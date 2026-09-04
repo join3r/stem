@@ -44,6 +44,7 @@ interface ScriptedHost extends HarnessHost {
   turns: HarnessRunTurnInput[];
   sinks: HarnessTurnSink[];
   cancelled: number;
+  cancelReasons: (string | undefined)[];
 }
 
 function scriptedHost(script: {
@@ -57,6 +58,7 @@ function scriptedHost(script: {
     turns: [],
     sinks: [],
     cancelled: 0,
+    cancelReasons: [],
     label: () => script.label ?? 'this server',
     available: () => script.available ?? true,
     async ensureSession(spec) {
@@ -70,8 +72,9 @@ function scriptedHost(script: {
         Promise.resolve({ ok: true, stopReason: 'end_turn', text: 'done' } satisfies HarnessTurnResult)) as Promise<HarnessTurnResult>;
       return {
         result,
-        cancel: () => {
+        cancel: (reason) => {
           host.cancelled += 1;
+          host.cancelReasons.push(reason);
         }
       };
     },
@@ -387,6 +390,26 @@ describe('approvals', () => {
     expect(decision).toEqual({ expired: true });
     expect(host.cancelled).toBe(1);
     expect(res.ok && res.text).toContain('cancelled by the user');
+    expect((await readHarnessRuns())[0].status).toBe('cancelled');
+  });
+
+  it('an abort with a reason names it instead of blaming the user', async () => {
+    // A scheduler timeout, a deleted chat, a dead worker: Stem stopped the
+    // run, nobody pressed Stop. The tool text must say which.
+    const host = scriptedHost({
+      turn: async (_input, sink) => {
+        await sink.onPermission({ permissionId: 'perm-1', title: 'xcodebuild archive', options: OPTIONS });
+        return { ok: true, stopReason: 'cancelled', text: '' };
+      }
+    });
+    const { service, approvals } = makeService(host);
+    const pending = service.handleHarnessRequest(REQ);
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    service.abortThread('thread-1', 'the scheduled run timed out');
+    const res = await pending;
+    expect(host.cancelReasons).toEqual(['the scheduled run timed out']);
+    expect(res.ok && res.text).toContain('stopped by Stem: the scheduled run timed out');
+    expect(res.ok && res.text).not.toContain('by the user');
     expect((await readHarnessRuns())[0].status).toBe('cancelled');
   });
 });

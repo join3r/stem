@@ -37,8 +37,8 @@ interface LiveTurn {
   sink: HarnessTurnSink;
   /** Session identifiers acpx may cite on a permission request for this turn. */
   sessionIds: Set<string>;
-  cancel: (() => void) | null;
-  cancelWanted: boolean;
+  cancel: ((reason?: string) => void) | null;
+  cancelWanted: string | false;
 }
 
 export interface HarnessRuntimeConfig {
@@ -200,10 +200,13 @@ export class LocalHarnessHost implements HarnessHost {
         requestId: input.turnId,
         timeoutMs: input.maxTurnMs ?? DEFAULT_MAX_TURN_MS
       });
-      // quiet: a cancel that raced the turn's own end has nothing to cancel;
-      // the result below reports whichever won.
-      live.cancel = () => void turn.cancel({ reason: 'stopped from Stem' }).catch(() => undefined);
-      if (live.cancelWanted) live.cancel();
+      live.cancel = (reason) => {
+        const why = reason ?? 'stopped from Stem';
+        // quiet: a cancel that raced the turn's own end has nothing to cancel;
+        // the result below reports whichever won.
+        void turn.cancel({ reason: why }).catch(() => undefined);
+      };
+      if (live.cancelWanted !== false) live.cancel(live.cancelWanted);
 
       let text = '';
       const pump = (async () => {
@@ -232,11 +235,11 @@ export class LocalHarnessHost implements HarnessHost {
 
     return {
       result,
-      cancel: () => {
+      cancel: (reason) => {
         const turn = this.liveTurns.get(input.turnId);
         if (!turn) return;
-        turn.cancelWanted = true;
-        turn.cancel?.();
+        turn.cancelWanted = reason ?? 'stopped from Stem';
+        turn.cancel?.(reason);
       }
     };
   }

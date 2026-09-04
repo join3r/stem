@@ -105,6 +105,12 @@ interface PendingApproval {
 interface RunningTurn {
   threadId: string;
   handle: HarnessTurnHandle;
+  /**
+   * Why Stem cancelled this turn, when it was not the user: set by abortThread
+   * / settleAll before the cancel goes out, read when the cancelled result
+   * comes back so the tool text names the real cause.
+   */
+  cancelReason?: string;
 }
 
 export class HarnessService implements HarnessBridge {
@@ -290,7 +296,8 @@ export class HarnessService implements HarnessBridge {
           )
       }
     );
-    this.running.set(runId, { threadId: req.threadId, handle });
+    const running: RunningTurn = { threadId: req.threadId, handle };
+    this.running.set(runId, running);
 
     try {
       const result = await handle.result;
@@ -306,7 +313,8 @@ export class HarnessService implements HarnessBridge {
         summary,
         status: status === 'ok' ? 'ok' : status === 'cancelled' ? 'cancelled' : 'failed',
         hostLabel: host.label(),
-        ...(!result.ok ? { error: result.error } : {})
+        ...(!result.ok ? { error: result.error } : {}),
+        ...(status === 'cancelled' && running.cancelReason ? { cancelReason: running.cancelReason } : {})
       });
       return status === 'failed' ? { ok: false, error: text } : { ok: true, text };
     } finally {
@@ -317,19 +325,28 @@ export class HarnessService implements HarnessBridge {
     }
   }
 
-  /** Cancel this thread's live harness turn(s) and dismiss its pending cards. */
-  abortThread(threadId: string): void {
+  /**
+   * Cancel this thread's live harness turn(s) and dismiss its pending cards.
+   * `reason` is the non-user cause (see HarnessBridge.abortThread); without it
+   * the result reads as the user's Stop.
+   */
+  abortThread(threadId: string, reason?: string): void {
     for (const [id, approval] of this.pending) {
       if (approval.threadId === threadId) this.settleApproval(id, 'dismissed');
     }
     for (const run of this.running.values()) {
-      if (run.threadId === threadId) run.handle.cancel();
+      if (run.threadId !== threadId) continue;
+      if (reason) run.cancelReason = reason;
+      run.handle.cancel(reason);
     }
   }
 
-  settleAll(): void {
+  settleAll(reason?: string): void {
     for (const id of [...this.pending.keys()]) this.settleApproval(id, 'dismissed');
-    for (const run of this.running.values()) run.handle.cancel();
+    for (const run of this.running.values()) {
+      if (reason) run.cancelReason = reason;
+      run.handle.cancel(reason);
+    }
   }
 
   /** Answer a pending card (IPC entry point). False for unknown/expired ids. */

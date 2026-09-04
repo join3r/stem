@@ -1380,7 +1380,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return false;
   }
 
-  async interruptTurn(turnId: string): Promise<void> {
+  async interruptTurn(turnId: string, reason?: string): Promise<void> {
     // A start still in flight for this id owns the cancellation: its token knows
     // whether the prompt is already out (abort pi) or not yet (abandon the start
     // before it touches pi at all). Checked before the live-turn match because
@@ -1392,7 +1392,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
     const live = this.workers.find((w) => w.proc && w.currentTurn?.turnId === turnId);
     if (live) {
-      this.abortLiveTurn(live, live.currentTurn!);
+      this.abortLiveTurn(live, live.currentTurn!, reason);
       return;
     }
     // Neither live nor starting. Either the start RPC hasn't arrived yet (Stop
@@ -1411,10 +1411,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /** Abort the streaming turn: pi's abort reaches the extension tool, but the
    * actual child process of any command it is running lives in main — stop both. */
-  private abortLiveTurn(worker: PiWorker, turn: TurnContext): void {
+  private abortLiveTurn(worker: PiWorker, turn: TurnContext, reason?: string): void {
     turn.aborted = true;
     this.execBridge?.abortThread(turn.threadId);
-    this.harnessBridge?.abortThread(turn.threadId);
+    this.harnessBridge?.abortThread(turn.threadId, reason);
     worker.proc?.send({ type: 'abort' });
   }
 
@@ -2008,7 +2008,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // would stall until the whole LLM turn finishes. pi emits `done` on abort,
     // which resolves the gate and lets the delete proceed promptly.
     const streaming = this.turnWorker(threadId);
-    if (streaming) await this.interruptTurn(streaming.currentTurn!.turnId);
+    if (streaming) await this.interruptTurn(streaming.currentTurn!.turnId, 'the chat was deleted');
     await this.withThreadWorker(threadId, async (w) => {
       const file = await this.resolveSessionFile(threadId);
       if (w.activeThreadId === threadId) {
@@ -2288,7 +2288,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     this.execBridge?.settleAll();
     // Harness: same argument — cancel live coding-agent turns and dismiss their
     // cards; the sessions themselves survive on disk for the next call.
-    this.harnessBridge?.settleAll();
+    this.harnessBridge?.settleAll('the backend restarted');
   }
 
   /**
@@ -2312,7 +2312,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         if (cardThread === threadId) settle({ approved: false });
       }
       this.execBridge?.abortThread(threadId);
-      this.harnessBridge?.abortThread(threadId);
+      this.harnessBridge?.abortThread(threadId, 'the backend process died');
     }
   }
 

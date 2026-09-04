@@ -103,9 +103,6 @@ import {
 // it on every hop back (implicit replies, assemblies) would stack the same
 // text into its thread once per hop.
 
-/** A delivery that never settles must not wedge its conversation forever. */
-const DELIVERY_TIMEOUT_MS = 30 * 60 * 1000; // 30m — mail is async; be generous.
-
 /**
  * Parallel deliveries per conversation. Bounds how much of the worker pool one
  * conversation's fan-out can occupy — the pool itself (bound 6) still serves
@@ -168,9 +165,8 @@ interface JoinState {
   /** Branch persona id -> display name, removed as each branch settles. */
   awaiting: Map<string, string>;
   buffered: { name: string; body: string; note?: string }[];
-  /** Failures/timeouts/detours, appended to the assembly mail. */
+  /** Failures/detours, appended to the assembly mail. */
   notes: string[];
-  timer: NodeJS.Timeout;
 }
 
 export interface MailRouterOptions {
@@ -425,11 +421,8 @@ export class MailRouter {
       if (left > 0) this.pending.set(conversationId, left);
       else this.pending.delete(conversationId);
     }
-    for (const [key, join] of this.joins) {
-      if (key.startsWith(`${conversationId}\n`)) {
-        clearTimeout(join.timer);
-        this.joins.delete(key);
-      }
+    for (const key of [...this.joins.keys()]) {
+      if (key.startsWith(`${conversationId}\n`)) this.joins.delete(key);
     }
     await Promise.all(
       active.map(([turnId]) =>
@@ -955,19 +948,13 @@ export class MailRouter {
       sourceItemId,
       awaiting: new Map(branchIds.map((id) => [id, nameOf(id)])),
       buffered: [],
-      notes: [],
-      // The backstop for a branch that wanders off (delegates onward and never
-      // reports back): individual deliveries already time out on their own.
-      timer: setTimeout(() => {
-        for (const name of join.awaiting.values()) {
-          join.notes.push(`${name} never replied before the wave timed out.`);
-        }
-        join.awaiting.clear();
-        this.maybeAssemble(conversationId, join);
-      }, DELIVERY_TIMEOUT_MS)
+      notes: []
+      // No wall clock on the wave either: a branch settles when its delivery
+      // does — reply, failure, or the settleBranchFailure note — and a delivery
+      // is bounded by its turn, not by a timer. A join that assembled at 30
+      // minutes was answering the user without its slowest branch (a coding
+      // run) and then labelling the real reply late.
     };
-    // A backstop must never be what keeps the process alive.
-    join.timer.unref?.();
     this.joins.set(`${conversationId}\n${senderId}`, join);
   }
 
@@ -993,7 +980,6 @@ export class MailRouter {
   private maybeAssemble(conversationId: string, join: JoinState): void {
     this.updateActivityDetail(conversationId);
     if (join.awaiting.size) return;
-    clearTimeout(join.timer);
     this.joins.delete(`${conversationId}\n${join.senderId}`);
     const sections = join.buffered.map(
       (b) => `--- from ${b.name}${b.note ? ` (${b.note})` : ''} ---\n${b.body}`
@@ -1099,8 +1085,8 @@ export class MailRouter {
 
       // Two harnessed deliveries must never work the same repo tree at once
       // (same device, either cwd inside the other) — this waits until the tree
-      // is free. Before waitForSettle on purpose: waiting for the lock must not
-      // eat into the turn's settle timeout.
+      // is free. Before waitForSettle on purpose: the wait belongs to queueing,
+      // not to the turn.
       releaseRepoLock = await repoLocks.acquire(persona.harness);
       // The wait can outlive a user Stop — nothing should start a turn for a
       // conversation the user already stopped while it queued for the tree.
@@ -1109,7 +1095,7 @@ export class MailRouter {
       // The turn id is minted up front and the settle subscription opens
       // BEFORE starting the turn: an instantly-failing turn can settle in the
       // gap between startTurn resolving and a later subscription, and a missed
-      // settle wedges the conversation for the whole timeout.
+      // settle wedges the conversation for good.
       this.turnInitiators.set(turnId, from);
       this.turnEpochs.set(turnId, epoch);
       this.turnSources.set(turnId, sourceItemId);
@@ -1399,7 +1385,6 @@ export class MailRouter {
       finish = (status, error) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
         this.opts.runtime.off('event', onEvent);
         resolve({ status, ...(error ? { error } : {}) });
       };
@@ -1411,7 +1396,7 @@ export class MailRouter {
         // delivery, and the real reply (which completed minutes later) was
         // silently dropped. An unattributed exit (an older backend) still fails
         // conservatively: a false failure costs a "run failed" mail; a missed
-        // real one wedges the conversation for the whole timeout.
+        // real one wedges the conversation for good.
         if (event.method === 'process/exit') {
           const p = event.params as { threadId?: string | null } | undefined;
           const attributed = !!p && 'threadId' in p;
@@ -1429,12 +1414,11 @@ export class MailRouter {
         else if (event.method === 'turn/failed') finish('failed', typeof p?.error === 'string' ? p.error : undefined);
         else if (event.method === 'turn/aborted') finish('failed', 'the turn was aborted');
       };
-      const timeout = setTimeout(() => {
-        void this.opts.runtime.interruptTurn(turnId).catch((err) =>
-          degrade('mail', 'left a timed-out delivery running', err)
-        );
-        finish('failed', 'the run timed out');
-      }, DELIVERY_TIMEOUT_MS);
+      // No wall clock here, deliberately. A delivery is bounded by the turn it
+      // waits on — a coding-agent run may take hours — and every way that turn
+      // can end (completed, failed, aborted, worker death) is heard above. The
+      // 30-minute clamp this once carried killed a legitimate iOS build mid-run
+      // and reported it as a cancellation.
       this.opts.runtime.on('event', onEvent);
     });
     return { done, abandon: () => finish('failed', 'the turn never started') };

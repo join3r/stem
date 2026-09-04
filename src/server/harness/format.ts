@@ -90,6 +90,8 @@ export interface HarnessResultInput {
   status: 'ok' | 'failed' | 'cancelled';
   hostLabel: string;
   error?: string;
+  /** For a cancelled run: what stopped it, when it was not the user. */
+  cancelReason?: string;
 }
 
 /**
@@ -98,9 +100,13 @@ export interface HarnessResultInput {
  * continuity note that tells the model how to keep the conversation going.
  */
 export function formatRunResult(input: HarnessResultInput): string {
-  const { agent, summary, status, hostLabel, error } = input;
+  const { agent, summary, status, hostLabel, error, cancelReason } = input;
   if (status === 'cancelled') {
-    return `The ${agent} run was cancelled by the user. The session survives: calling coding_agent again with the same agent and cwd continues the same conversation.`;
+    // Only a Stop the user pressed reads as theirs. Anything Stem did on its
+    // own — a scheduler timeout, a deleted chat, a dead worker — is named, so
+    // the model never tells the user they cancelled something they did not.
+    const cause = cancelReason ? `stopped by Stem: ${cancelReason}` : 'cancelled by the user';
+    return `The ${agent} run was ${cause}. The session survives: calling coding_agent again with the same agent and cwd continues the same conversation.`;
   }
   if (status === 'failed') {
     return `The ${agent} run failed on ${hostLabel}: ${error || 'unknown error'}`;
