@@ -115,7 +115,7 @@ function makeService(
   const approvals: HarnessApprovalRequest[] = [];
   const resolved: string[] = [];
   const service = new HarnessService({
-    settings: async () => ({ enabled: true }),
+    settings: async () => ({}),
     // Manual mode by default (backend/fake.ts precedent): approval-queue tests
     // get their cards without an LLM judge in the way.
     readSettings: async () => serverSettings(),
@@ -133,13 +133,6 @@ function makeService(
 const REQ = { agent: 'claude', prompt: 'add a --version flag', threadId: 'thread-1' };
 
 describe('gates', () => {
-  it('refuses when the settings switch is off, naming where to turn it on', async () => {
-    const { service } = makeService(scriptedHost({}), { settings: async () => ({ enabled: false }) });
-    const res = await service.handleHarnessRequest(REQ);
-    expect(res).toMatchObject({ ok: false });
-    expect(!res.ok && res.error).toContain('Settings');
-  });
-
   it('refuses scheduled runs with the explanatory sentence', async () => {
     const host = scriptedHost({});
     const { service } = makeService(host);
@@ -230,7 +223,7 @@ describe('sessions', () => {
   it('sends no model when the request carries none (the agent runs its own default)', async () => {
     const host = scriptedHost({});
     const { service } = makeService(host, {
-      settings: async () => ({ enabled: true, agents: { claude: { command: 'my-claude acp' } } })
+      settings: async () => ({ agents: { claude: { command: 'my-claude acp' } } })
     });
     await service.handleHarnessRequest(REQ);
     expect(host.ensures[0].model).toBeUndefined();

@@ -202,14 +202,6 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         save: (c, v) => c.rpc('settings:updateExec', { approvalMode: v as ExecApprovalMode })
       },
       {
-        kind: 'toggle',
-        key: 'harness-enabled',
-        label: 'Coding agents',
-        hint: 'Let Stem drive an external coding agent with your logins and disk',
-        read: (s) => s.harness.enabled,
-        save: (c, enabled) => c.rpc('settings:updateHarness', { enabled })
-      },
-      {
         kind: 'choice',
         key: 'skills-mode',
         label: 'Skill writing',

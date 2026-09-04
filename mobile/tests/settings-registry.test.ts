@@ -21,7 +21,7 @@ describe('mobileGroups', () => {
 
   it('offers the server settings a phone can meaningfully change', () => {
     const offered = new Set(mobileGroups().flatMap((g) => g.settings.map((s) => s.key)));
-    for (const key of ['web-search', 'subjects', 'tasks-notify', 'exec-enabled', 'exec-approval', 'harness-enabled']) {
+    for (const key of ['web-search', 'subjects', 'tasks-notify', 'exec-enabled', 'exec-approval']) {
       expect(offered.has(key)).toBe(true);
     }
   });

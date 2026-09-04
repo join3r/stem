@@ -28,7 +28,7 @@ GATED('a real claude turn through the local host', () => {
       const host = new LocalHarnessHost({ stateDir });
       const updates: string[] = [];
       const service = new HarnessService({
-        settings: async () => ({ enabled: true }),
+        settings: async () => ({}),
         // Manual mode + an always-unsure judge: any real escalation still cards
         // (and fails this unattended test loudly) instead of auto-running.
         readSettings: async () =>

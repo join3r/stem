@@ -578,8 +578,9 @@ function registerIpc(): void {
     return updateExecSettings(patch);
   });
   registerServer('settings:updateHarness', async (_e, patch: Partial<HarnessSettings>) => {
-    // Just persist — the HarnessService reads the switch fresh from settings on
-    // each coding_agent request, so the change applies to the next call.
+    // Just persist — the HarnessService reads the registry overrides fresh on
+    // each coding_agent request, so the change applies to the next call. No
+    // enable switch lives here: coding is a persona-pin capability.
     return updateHarnessSettings(patch);
   });
   registerServer('harness:listModels', async (_e, input?: { agent?: string; host?: string }) => {
@@ -833,8 +834,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   setPendingApprovalsSource(() => execService?.pendingApprovals() ?? []);
   setPendingHarnessApprovalsSource(() => harness?.service.pendingApprovals() ?? []);
 
-  // Coding agents (the coding_agent tool): the HarnessService owns the settings
-  // gate, session continuity and the blocking harness turn; its approval cards
+  // Coding agents (the coding_agent tool): the HarnessService owns the host
+  // resolution, session continuity and the blocking harness turn; its approval cards
   // ride the same rails as exec's.
   harness = initHarness({
     runtime,

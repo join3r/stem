@@ -2638,12 +2638,12 @@ export interface ExecSettings {
 /**
  * Coding agents (the coding_agent tool): Stem driving an external harness —
  * Claude Code, OpenCode, anything acpx's ACP registry can spawn — as a blocking
- * tool call. Off by default: a coding agent is an agent with the user's login
- * and their disk, and turning that on is the user's call, not an install's.
+ * tool call. There is no global switch: the capability is a persona's harness
+ * pin (PersonaHarnessPin), granted in the persona editor, and a turn that runs
+ * as no pinned persona has no coding agent at all. What lives here is only the
+ * registry plumbing.
  */
 export interface HarnessSettings {
-  /** Master switch for the coding_agent tool. */
-  enabled: boolean;
   /**
    * Per-agent overrides. `command` replaces acpx's built-in registry entry
    * (claude, opencode, …). Which MODEL an agent runs is not a setting here:
@@ -3206,7 +3206,7 @@ export interface AppSettings {
   mail: MailSettings;
   /** Command execution (run_command) policy: enable switch, judge model, learned allowlist. */
   exec: ExecSettings;
-  /** Coding agents (coding_agent): enable switch + acpx registry overrides. */
+  /** Coding agents (coding_agent): acpx registry overrides; the capability itself is a persona pin. */
   harness: HarnessSettings;
   retrieval: RetrievalSettings;
   /** Escape-to-retract behavior in the main composer. */
@@ -3993,7 +3993,7 @@ export interface StemApi {
    * The models the coding agent offers, probed live from the host that would
    * run it — an available paired computer that runs coding agents, else this
    * server. `host` forces a specific one ('server' or a device id/name); absent
-   * auto-picks. Feeds the model picker under Settings → Chat → Coding agents.
+   * auto-picks. Feeds the model picker in the persona editor.
    */
   listHarnessModels(input?: { agent?: string; host?: string }): Promise<HarnessModelsResult>;
   /** A command needs the user's decision; fired so the UI can show the exec approval card. */

@@ -30,7 +30,7 @@ import type {
 import { recordRunStart, settleRun, type HarnessRunStatus } from './records';
 import { forgetSession, lookupSession, rememberSession } from './sessions';
 
-// Orchestrates one coding_agent request end to end: settings gate → scheduled
+// Orchestrates one coding_agent request end to end: settings read → scheduled
 // refusal → host resolution → cwd resolve + protected-roots guard → session
 // ensure (the mapping is a cache; the host's answer wins) → recall preamble →
 // the blocking turn, with events feeding the live row and escalations feeding
@@ -47,7 +47,7 @@ export type HarnessProgressUpdate = HarnessProgress;
 
 export interface HarnessServiceDeps {
   /** The harness section of settings, read fresh per request. */
-  settings: () => Promise<{ enabled: boolean; agents?: Record<string, { command?: string; model?: string }> }>;
+  settings: () => Promise<{ agents?: Record<string, { command?: string; model?: string }> }>;
   /**
    * Full settings, read fresh per permission ask: the Stem-wide approval mode
    * (exec.approvalMode — exec.enabled gates only the run_command tool), the
@@ -134,13 +134,11 @@ export class HarnessService implements HarnessBridge {
     if (!agent) return { ok: false, error: 'Name the coding agent to run (e.g. "claude" or "opencode").' };
     if (!prompt) return { ok: false, error: 'Provide a prompt for the coding agent.' };
 
+    // No global switch: whether this turn may run a coding agent at all was
+    // decided upstream by the persona pin (the bridge in pi/runtime.ts). This
+    // read latches the registry overrides for the host below.
     const settings = await this.deps.settings();
-    if (!settings.enabled) {
-      return {
-        ok: false,
-        error: 'Coding agents are disabled. The user can enable them in Settings → Chat → Coding agents.'
-      };
-    }
+    void settings;
     // Mail deliveries are autonomous too, but they are the carve-out: the
     // assisted approval tiers answer the cards, and an unanswered/refused one
     // comes back as a tool error to a persona whose brief is to mail the user
@@ -337,7 +335,7 @@ export class HarnessService implements HarnessBridge {
    * `host` names one ('server', or a paired computer by id/name); absent
    * auto-picks: the first paired computer that announced it runs coding
    * agents AND is connected right now, else this server. Feeds the picker
-   * under Settings → Chat → Coding agents; never rejects.
+   * in the persona editor; never rejects.
    */
   async listModels(input: { agent?: string; host?: string } = {}): Promise<HarnessModelsResult> {
     const agent = (input.agent ?? 'claude').trim().toLowerCase() || 'claude';

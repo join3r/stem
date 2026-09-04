@@ -114,12 +114,12 @@ const DEFAULTS: ServerSettings = {
     windowsShell: 'git-bash',
     gitBashPath: null
   },
-  // Coding agents (coding_agent): OFF by default — an external coding agent
-  // runs with the user's own logins and disk, and switching that on is the
-  // user's decision, not an install default. agents holds acpx registry
-  // overrides (name -> command); empty means the built-in registry.
+  // Coding agents (coding_agent): no global switch. The capability is a
+  // persona's harness pin, granted per persona in the editor (2026-09-04; the
+  // "Delegate coding work" switch this used to hold is gone and a stored value
+  // is ignored on read). agents holds acpx registry overrides
+  // (name -> command); empty means the built-in registry.
   harness: {
-    enabled: false,
     agents: {}
   },
   // Embeddings + reranker for relevance-ranking facts at inject time. Embeddings
@@ -520,7 +520,6 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
   };
   const rawHarness = (parsed?.harness ?? {}) as Partial<HarnessSettings>;
   const harness: HarnessSettings = {
-    enabled: typeof rawHarness.enabled === 'boolean' ? rawHarness.enabled : DEFAULTS.harness.enabled,
     // Same laundering stance as the exec allowlists: only string fields
     // survive, trimmed and capped. A stored `model` (the pre-2026-09-04
     // global pin) is dropped on read: models live on persona pins now.

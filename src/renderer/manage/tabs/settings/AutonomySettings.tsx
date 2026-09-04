@@ -4,7 +4,6 @@ import type {
   DeviceInfo,
   ExecHostShellInfo,
   ExecSettings,
-  HarnessSettings,
   ScratchUsageRow,
   WindowsShell
 } from '../../../../shared/types';
@@ -58,7 +57,6 @@ function scratchLabel(row: ScratchUsageRow): string {
  */
 export function AutonomySections() {
   const [exec, setExec] = useState<ExecSettings | null>(null);
-  const [harness, setHarness] = useState<HarnessSettings | null>(null);
   const [allowInput, setAllowInput] = useState('');
   // The OS of the machine that RUNS commands, plus the Git Bash it found there.
   // Asked of the server, not of this window: with Stem on a box somewhere,
@@ -85,7 +83,6 @@ export function AutonomySections() {
   useEffect(() => {
     void window.stem.getSettings().then((s) => {
       setExec(s.exec);
-      setHarness(s.harness);
       setBashPathDraft(s.exec.gitBashPath ?? '');
     });
     // Its own request: a disk walk should not hold up the settings the rest of
@@ -111,11 +108,6 @@ export function AutonomySections() {
         setBashPathDraft(s.exec.gitBashPath ?? '');
       }
     });
-  }
-
-  function updateHarness(patch: Partial<HarnessSettings>) {
-    setHarness((cur) => (cur ? { ...cur, ...patch } : cur)); // optimistic; reconcile below
-    window.stem.updateHarnessSettings(patch).then((s) => setHarness(s.harness));
   }
 
   async function chooseWindowsShell(next: WindowsShell) {
@@ -269,8 +261,9 @@ export function AutonomySections() {
 
         {/* The approval mode and allowlist govern commands wherever they run —
             Stem's own run_command tool AND commands a coding agent asks to
-            run — so they stay visible when only coding agents are on. */}
-        {exec && (exec.enabled || harness?.enabled) && (
+            run. A code persona can always bring a command, so this block never
+            hides behind the command-execution switch. */}
+        {exec && (
           <>
             <ValueRow
               label={
@@ -505,45 +498,24 @@ export function AutonomySections() {
         )}
       </div>
 
-      <div className="grp-head">Coding agents</div>
-      <div className="group">
-        <ValueRow
-          label={<strong>Delegate coding work</strong>}
-          hint={
-            <>
-              Let Stem drive an external coding agent (Claude Code, OpenCode){' '}
-              <InfoTip label="What coding agents do">
-                With this on, Stem can hand real coding work to a coding agent installed on this
-                machine, watch it, and relay its questions to you. The agent works with your own
-                logins and files; its commands follow the approval mode above — safe ones run,
-                flagged ones pause on a card — and folders you marked read-only stay protected.
-                Off by default so switching it on is your decision.
-              </InfoTip>
-            </>
-          }
-        >
-          <button
-            className={`switch${harness?.enabled ? ' on' : ''}`}
-            role="switch"
-            aria-checked={harness?.enabled ?? false}
-            aria-label="Delegate coding work"
-            onClick={() => harness && updateHarness({ enabled: !harness.enabled })}
-          />
-        </ValueRow>
-
-        {/* THIS computer's consent to run coding agents the server sends it.
-            Only offered when the server is elsewhere, for the exec-host reason:
-            on a local install the switch above already governs the only machine
-            there is. Client-local state, never on the wire. */}
-        {remote && harnessHostEnabled !== null && (
+      {/* Coding agents have no Stem-wide switch: which persona may drive one, on
+          which computer and in which folder, is that persona's setup under
+          Manage → Personas. The only setting here is THIS computer's consent to
+          run agents the server sends it — offered when the server is elsewhere,
+          for the exec-host reason: on a local install the server machine is the
+          only one there is. Client-local state, never on the wire. */}
+      {remote && harnessHostEnabled !== null && (
+        <>
+          <div className="grp-head">Coding agents</div>
+          <div className="group">
           <ValueRow
             label={<strong>Run coding agents on this computer</strong>}
             hint={
               <>
                 Let your Stem server drive a coding agent installed here{' '}
                 <InfoTip label="What switching this on means">
-                  With this on, the assistant can target this computer by name and a coding agent
-                  (Claude Code, OpenCode) runs here with this machine's own logins and files. Its
+                  With this on, a persona pinned to this computer in Manage → Personas can run its
+                  coding agent (Claude Code, OpenCode) here, with this machine's own logins and files. Its
                   commands follow the server's approval mode — safe ones run, flagged ones pause on
                   a card. Switching this off stops new runs immediately. Leave it off if this Stem
                   server isn't yours alone.
@@ -563,8 +535,9 @@ export function AutonomySections() {
               }
             />
           </ValueRow>
-        )}
-      </div>
+          </div>
+        </>
+      )}
     </>
   );
 }

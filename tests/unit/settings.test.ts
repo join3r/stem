@@ -885,7 +885,9 @@ describe('harness agents setting', () => {
       })
     );
     const s = await readSettings();
-    expect(s.harness.enabled).toBe(true);
+    // The global enable switch is gone (coding is a persona-pin capability);
+    // a stored value is dropped rather than resurrected.
+    expect(s.harness).not.toHaveProperty('enabled');
     // Models live on persona pins now (PersonaHarnessPin.model); a stored
     // global pin must not leak into runs through some other path.
     expect(s.harness.agents).toEqual({ opencode: { command: 'opencode acp' } });

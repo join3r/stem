@@ -1,5 +1,6 @@
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { PersonaHarnessPin } from '../../shared/types';
 import { host } from '../host';
 import { stemGuideIndex } from '../recall/stem-guide';
 import { agentsMdPath, filesRoot, legacyCodexHome, piHome, skillsRoot, workspaceRoot } from './paths';
@@ -37,12 +38,6 @@ Writing to an existing name replaces its body, so always send the FULL body, nev
 You can schedule a conversation to re-run automatically. When the user asks for something recurring or deferred — "every morning summarize my unread email", "check this page hourly and tell me if X changes", "remind me / look into this tomorrow at 9" — call \`schedule_task\` with a prompt describing the run plus either a \`cron\` expression (recurring, 5 fields, local time) or an \`at\` ISO datetime (one-time). The task is bound to the current chat, and each run appends a new turn here. Use \`list_tasks\` / \`cancel_task\` to review or remove tasks you created.
 
 Each scheduled run is autonomous: no one is watching the reply as it streams, so do the work and then, only if the run produced something the user genuinely needs to know right now (a watched condition became true, an error needs attention), call \`notify_user\` with a short, specific message to raise a prominent alert. If there's nothing noteworthy, just finish — silence is correct, and a silent run leaves the chat exactly where the user filed it (archived stays archived, read stays read), so a watch task only resurfaces on the run that actually has something to say. \`notify_user\` is what brings the chat back to their attention, so use it when — and only when — the run earned it. Don't call \`notify_user\` during ordinary interactive chats; there, reply normally.
-
-## Delegating coding work
-
-When the user asks for real software work — building a feature, fixing a bug in a project, refactoring, writing tests across files — delegate it to an external coding agent with the \`coding_agent\` tool rather than assembling files by hand, if the user has enabled coding agents in Settings (the tool tells you when they haven't). Small one-file edits and quick scripts don't need it.
-
-One call is one exchange: your prompt goes in, and the call blocks until the agent finishes its turn — often many minutes. The agent keeps its own conversation per chat + agent + folder, so calling again CONTINUES it: review what it did, steer it, or ask for the next step in follow-up calls, staying in the loop between exchanges. Its questions come back as the tool result — answer from this conversation's context when you confidently can, otherwise relay them to the user and call again with their answer. Risky actions pause on an approval card for the user; that is normal, not an error. Never use it in scheduled runs — it is refused there because nobody is present to answer.
 
 ## Files
 
@@ -180,6 +175,28 @@ export function whereSkillsRun(): string {
  * The system prompt, built at spawn: the static instructions with the deployment
  * section spliced in before the output-format rules.
  */
+/**
+ * The coding-agent brief appended to a CODE persona's role prompt — a persona
+ * whose editor pin names the agent and folder it drives. Only such personas
+ * get the `coding_agent` tool at all (the pin is the capability; see
+ * pi/runtime.ts's harness bridge), so the base instructions above never mention
+ * it: an unpinned chat has no coding agent to be told about, and telling it
+ * anyway is how "build the iOS app" turned into a Claude Code launch from a
+ * plain chat. Spawn-time like the rest of the role prompt.
+ */
+export function codingDelegationInstructions(pin: PersonaHarnessPin): string {
+  const where = pin.cwd.trim()
+    ? `in \`${pin.cwd.trim()}\`${pin.device ? ' on the paired computer this persona is pinned to' : ''}`
+    : pin.device
+      ? 'on the paired computer this persona is pinned to (its working folder is not set yet — ask the user to set it in the persona editor before delegating)'
+      : "in this chat's scratch folder";
+  return `## Delegating coding work
+
+You are a code persona: you drive the \`${pin.agent}\` coding agent ${where}. When the task is real software work — building a feature, fixing a bug, refactoring, writing tests across files — delegate it with the \`coding_agent\` tool rather than assembling files by hand. Small one-file edits and quick scripts don't need it. The agent, computer and folder are fixed by this persona's setup; \`cwd\` may only name a folder inside the pinned one.
+
+One call is one exchange: your prompt goes in, and the call blocks until the agent finishes its turn — often many minutes. The agent keeps its own conversation per chat, so calling again CONTINUES it: review what it did, steer it, or ask for the next step in follow-up calls, staying in the loop between exchanges. Its questions come back as the tool result — answer from this conversation's context when you confidently can, otherwise relay them to the user and call again with their answer. Risky actions pause on an approval card for the user; that is normal, not an error. Never use it in scheduled runs — it is refused there because nobody is present to answer.`;
+}
+
 export function stemAssistantInstructions(): string {
   return `${BASE_INSTRUCTIONS}\n${whereYouAreRunning()}\n${OUTPUT_FORMAT_INSTRUCTIONS}`;
 }

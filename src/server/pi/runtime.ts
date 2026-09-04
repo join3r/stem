@@ -42,7 +42,7 @@ import { stripCiteMarkers } from '../../shared/citations';
 import { log } from '../log';
 import { degrade } from '../degrade';
 import { isContextOverflowError } from '../backend/overflow';
-import { PLAIN_MD_DIRECTIVE, stemAssistantInstructions } from '../workspace/bootstrap';
+import { PLAIN_MD_DIRECTIVE, codingDelegationInstructions, stemAssistantInstructions } from '../workspace/bootstrap';
 import { readSettings } from '../workspace/settings';
 import { resolveHostShell } from '../exec/git-bash';
 import { clampPinnedCwd } from '../harness/pin';
@@ -1082,8 +1082,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // different one (the persona was edited) is stale: replace it rather
         // than serve the mail on yesterday's prompt. proc is nulled BEFORE the
         // dispose so the exit handler reads it as deliberate, not a crash.
-        w.personaPrompt = input.persona.prompt;
-        if (w.proc?.running && w.spawnedPersonaPrompt !== input.persona.prompt) {
+        // A code persona's brief (which agent, where) rides the role prompt, so
+        // editing the pin re-spawns the worker exactly like editing the prompt.
+        w.personaPrompt = input.persona.harness
+          ? `${input.persona.prompt}\n\n${codingDelegationInstructions(input.persona.harness)}`
+          : input.persona.prompt;
+        if (w.proc?.running && w.spawnedPersonaPrompt !== w.personaPrompt) {
           const stale = w.proc;
           w.proc = null;
           w.activeThreadId = null;
@@ -1224,10 +1228,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           {
             mail: turn.isMail === true,
             scheduled: turn.isScheduled === true,
-            // coding_agent in a mail delivery belongs to code personas only —
-            // the tool reads this to refuse up front instead of wasting a
-            // round-trip on the bridge's refusal (which stays the boundary).
-            coding: turn.isMail !== true || !!turn.personaHarness,
+            // coding_agent belongs to code personas only, in every kind of
+            // turn — the pin is the capability. The tool reads this to refuse
+            // up front instead of wasting a round-trip on the bridge's refusal
+            // (which stays the boundary).
+            coding: !!turn.personaHarness,
             // Mirrors buildMessage's recall gate: a recall-off persona (or a
             // private chat) gets neither the injected block nor the search
             // tools that would reproduce it on demand.
@@ -2437,8 +2442,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /**
    * Handle the coding_agent tool's ctx.ui.input round-trip (sentinel
-   * HARNESS_BRIDGE_TITLE). The placeholder is a JSON { agent, prompt, cwd?,
-   * device?, fresh_session? } payload; we run it through the wired
+   * HARNESS_BRIDGE_TITLE). The placeholder is a JSON { prompt, cwd?,
+   * fresh_session? } payload (agent and device come from the persona pin, never
+   * the tool call); we run it through the wired
    * HarnessBridge with the CURRENT turn's threadId + scheduled flag (only main
    * knows both) and answer with a JSON result string the tool returns. The
    * response can be HOURS away — one whole external coding-agent turn — so it
@@ -2457,46 +2463,36 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const bridge = this.harnessBridge;
         if (!bridge) return respond({ ok: false, error: 'Coding agents are unavailable.' });
         const req = JSON.parse(payload ?? '{}') as {
-          agent?: string;
           prompt?: string;
           cwd?: string;
-          device?: string;
           fresh_session?: boolean;
           item_id?: string;
         };
-        // In a live chat the persona pin (there is none) plays no part and the
-        // tool args pass through. In a MAIL delivery the pin is the boundary,
-        // not a default: coding_agent belongs to code personas only, and a code
-        // persona's runs are clamped to its pinned agent, device, and folder —
-        // an autonomous caller must not be able to hop machines or escape its
-        // repo by naming them in the tool call (the turn-context gate refuses
-        // the tool up front; this is the enforcement behind it).
+        // The persona pin is the boundary in EVERY kind of turn — chat, mail,
+        // schedule: coding_agent belongs to code personas only (2026-09-04; it
+        // used to be mail-only, and plain chats launched Claude Code off a
+        // global switch). A code persona's runs are clamped to its pinned
+        // agent, device, and folder — the caller cannot hop machines or escape
+        // its repo by naming them in the tool call (the turn-context gate
+        // refuses the tool up front; this is the enforcement behind it).
         const pin = turn?.personaHarness;
-        let agent = (req.agent ?? '').trim() || (pin?.agent ?? '');
-        let cwd = typeof req.cwd === 'string' && req.cwd.trim() ? req.cwd : pin?.cwd?.trim() || undefined;
-        let device =
-          typeof req.device === 'string' && req.device.trim() ? req.device : pin?.device?.trim() || undefined;
-        if (turn?.isMail) {
-          if (!pin?.agent?.trim()) {
-            return respond({
-              ok: false,
-              error:
-                'Coding agents are reserved for code personas — personas with a coding setup (agent + working ' +
-                'folder) pinned in the persona editor. This persona has none, so do not retry; if the task ' +
-                'needs code changes, say so in your reply and let the sender route it to a code persona.'
-            });
-          }
-          const clamped = clampPinnedCwd(typeof req.cwd === 'string' ? req.cwd : undefined, pin);
-          if (!clamped.ok) return respond({ ok: false, error: clamped.error });
-          agent = pin.agent.trim();
-          cwd = clamped.cwd;
-          device = pin.device?.trim() || undefined;
+        if (!pin?.agent?.trim()) {
+          return respond({
+            ok: false,
+            error:
+              'Coding agents are reserved for code personas — personas with a coding setup (agent + working ' +
+              'folder) pinned in the persona editor (Manage → Personas). This conversation runs as none, so ' +
+              'do not retry; tell the user which code persona should take the task, or that one needs creating.'
+          });
         }
-        // The persona's model rides along whenever its pinned agent is the one
-        // running (always, under the mail clamp; in a chat only if the call did
-        // not name a different agent). The tool call itself has no model arg.
-        const model =
-          pin?.model?.trim() && agent.toLowerCase() === pin.agent.trim().toLowerCase() ? pin.model.trim() : undefined;
+        const clamped = clampPinnedCwd(typeof req.cwd === 'string' ? req.cwd : undefined, pin);
+        if (!clamped.ok) return respond({ ok: false, error: clamped.error });
+        const agent = pin.agent.trim();
+        const cwd = clamped.cwd;
+        const device = pin.device?.trim() || undefined;
+        // The persona's model rides along: the pinned agent is always the one
+        // running. The tool call itself has no model arg.
+        const model = pin.model?.trim() || undefined;
         const result = await bridge.handleHarnessRequest({
           agent,
           prompt: req.prompt ?? '',

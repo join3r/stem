@@ -466,11 +466,9 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
 }
 
 /** Why the safety check isn't running, or null when it is. */
-function judgeIdleReason(s: { exec: ExecSettings; harness: { enabled: boolean } }): string | null {
-  // The judge serves both command execution and coding agents; it is idle only
-  // when neither can bring it a command.
-  if (!s.exec.enabled && !s.harness.enabled)
-    return 'not running — command execution and coding agents are off under Chat';
+function judgeIdleReason(s: { exec: ExecSettings }): string | null {
+  // The judge serves both command execution and coding agents. A code persona
+  // can always bring it a command, so only the approval mode can idle it.
   if (s.exec.approvalMode === 'manual') return 'not running — approval mode is Manual';
   if (s.exec.approvalMode === 'yolo') return 'not running — approval mode is Yolo';
   return null;

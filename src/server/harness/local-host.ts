@@ -365,7 +365,7 @@ function askFromRequest(req: AcpPermissionRequest): HarnessPermissionAsk {
  * EVERY launch, against 0.6 s with the audit off; the adapter itself boots in
  * 0.1 s). An audit is meaningless for a launcher, so it is off here. The ranges
  * mirror acpx's (a test pins them to the installed acpx), and a command the
- * user set in Settings → App → Coding agents still wins.
+ * user set in settings.json (harness.agents.<name>.command) still wins.
  */
 export const STEM_AGENT_COMMAND_DEFAULTS: Readonly<Record<string, readonly string[]>> = {
   claude: ['npx', '-y', '--no-audit', '--no-fund', '@agentclientprotocol/claude-agent-acp@^0.60.0'],

@@ -1,16 +1,17 @@
 import type { PersonaHarnessPin } from '../../shared/types';
 
-// The persona-pin clamp for coding_agent inside mail deliveries. A persona's
-// harness pin is not a default there but the boundary: the pinned agent and
-// device are used verbatim (whatever the tool call named), and a requested cwd
-// is honored only inside the pinned folder. Interactive chats never pass
-// through here — the clamp exists because a mail persona is an autonomous
-// caller, and "any consenting device, any folder" was the hole it closed.
+// The persona-pin clamp for coding_agent. A persona's harness pin is not a
+// default but the boundary: the pinned agent and device are used verbatim, and
+// a requested cwd is honored only inside the pinned folder. Every turn kind
+// passes through here since 2026-09-04 (mail deliveries did from the start; a
+// mail persona is an autonomous caller, and "any consenting device, any
+// folder" was the hole the clamp closed) — a chat run as a code persona is
+// bounded the same way, and a chat run as no code persona has no tool at all.
 
 export type ClampedCwd = { ok: true; cwd?: string } | { ok: false; error: string };
 
 /**
- * Resolve the cwd a mail persona's coding_agent call may use under its pin.
+ * Resolve the cwd a code persona's coding_agent call may use under its pin.
  * String-based on purpose: the pinned folder can live on a paired computer
  * whose path shapes (windows drives, backslashes) this process must not
  * normalize through its own path module.

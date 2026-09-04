@@ -6,8 +6,10 @@
 //    JSON answer as the tool result;
 //  - the runtime side (PiRuntime.handleHarnessBridgeRequest): the payload is
 //    routed to the wired HarnessBridge with the CURRENT turn's threadId and
-//    scheduled flag injected — never trusted from the payload — and the answer
-//    goes to the process that ASKED, not to a replacement.
+//    scheduled flag injected — never trusted from the payload — the persona
+//    pin decides whether the tool exists at all and clamps agent, device and
+//    cwd in every turn kind, and the answer goes to the process that ASKED,
+//    not to a replacement.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,7 +77,10 @@ describe('extension side', () => {
     expect(tool.description).toContain('continues the SAME');
     const { asks, ctx } = scriptedCtx(() => JSON.stringify({ ok: true, text: 'flag added' }));
     const result = await tool.execute!('call-1', {
-      agent: 'claude',
+      // Neither is a parameter any more: the persona pin fixes them. A model
+      // that names them anyway must not smuggle them across the bridge.
+      agent: 'opencode',
+      device: 'OtherMac',
       prompt: 'add a flag',
       cwd: '/tmp/proj',
       fresh_session: true
@@ -83,7 +88,6 @@ describe('extension side', () => {
     expect(asks).toHaveLength(1);
     expect(asks[0].title).toBe(HARNESS_BRIDGE_TITLE);
     expect(JSON.parse(asks[0].payload)).toEqual({
-      agent: 'claude',
       prompt: 'add a flag',
       cwd: '/tmp/proj',
       fresh_session: true,
@@ -105,10 +109,10 @@ describe('extension side', () => {
   it('validates its inputs before raising anything', async () => {
     const tool = await registeredCodingAgent();
     const { asks, ctx } = scriptedCtx(() => '');
-    const noAgent = await tool.execute!('c', { prompt: 'go' }, undefined, undefined, ctx);
-    const noPrompt = await tool.execute!('c', { agent: 'claude' }, undefined, undefined, ctx);
-    expect(noAgent.isError).toBe(true);
+    const noPrompt = await tool.execute!('c', {}, undefined, undefined, ctx);
+    const blankPrompt = await tool.execute!('c', { prompt: '   ' }, undefined, undefined, ctx);
     expect(noPrompt.isError).toBe(true);
+    expect(blankPrompt.isError).toBe(true);
     expect(asks).toHaveLength(0);
   });
 
@@ -122,9 +126,10 @@ describe('extension side', () => {
     expect(b.isError).toBe(true);
   });
 
-  it('refuses up front when the turn-context gate says coding is off (unpinned mail persona)', async () => {
+  it('refuses up front when the turn-context gate says coding is off (no code persona, any turn kind)', async () => {
     const gatePath = join(configDir, 'turn-context.json');
-    writeFileSync(gatePath, JSON.stringify({ mail: true, scheduled: true, coding: false }));
+    // A plain live chat: the gate alone must keep the tool shut.
+    writeFileSync(gatePath, JSON.stringify({ mail: false, scheduled: false, coding: false }));
     try {
       const tool = await registeredCodingAgent();
       const { asks, ctx } = scriptedCtx(() => JSON.stringify({ ok: true, text: 'never' }));
@@ -218,10 +223,11 @@ describe('runtime side', () => {
     });
     worker.currentTurn = newTurnContext('the-real-thread', 'turn-1');
     worker.currentTurn.isScheduled = true;
+    worker.currentTurn.personaHarness = { agent: 'claude', cwd: '' };
     internal.handleHarnessBridgeRequest(
       worker,
       'elicit-1',
-      JSON.stringify({ agent: 'claude', prompt: 'go', threadId: 'forged-thread', isScheduled: false })
+      JSON.stringify({ prompt: 'go', threadId: 'forged-thread', isScheduled: false })
     );
     await settleSends(sent);
     expect(seen[0]).toMatchObject({ agent: 'claude', threadId: 'the-real-thread', isScheduled: true });
@@ -229,7 +235,7 @@ describe('runtime side', () => {
     expect(sent[0].id).toBe('elicit-1');
   });
 
-  it('refuses a mail turn whose persona has no coding pin, before the bridge', async () => {
+  it('refuses any turn run as no code persona — a live chat included — before the bridge', async () => {
     const seen: HarnessRequest[] = [];
     const { internal, worker, sent } = runtimeWithBridge({
       handleHarnessRequest: async (req) => {
@@ -240,8 +246,8 @@ describe('runtime side', () => {
       settleAll: () => {}
     });
     worker.currentTurn = newTurnContext('t', 'turn-1');
-    worker.currentTurn.isMail = true;
-    worker.currentTurn.isScheduled = true;
+    // A live chat with no persona at all — the case that used to launch
+    // Claude Code off the global settings switch.
     internal.handleHarnessBridgeRequest(
       worker,
       'elicit-1',
@@ -252,9 +258,19 @@ describe('runtime side', () => {
     const answer = JSON.parse(sent[0].value) as { ok: boolean; error?: string };
     expect(answer.ok).toBe(false);
     expect(answer.error).toContain('code personas');
+
+    // A mail delivery as an unpinned persona: same refusal.
+    sent.length = 0;
+    worker.currentTurn.isMail = true;
+    worker.currentTurn.isScheduled = true;
+    worker.currentTurn.personaId = 'critic';
+    internal.handleHarnessBridgeRequest(worker, 'elicit-2', JSON.stringify({ prompt: 'go' }));
+    await settleSends(sent);
+    expect(seen).toHaveLength(0);
+    expect(JSON.parse(sent[0].value)).toMatchObject({ ok: false });
   });
 
-  it('clamps a pinned mail persona to its pin: agent and device forced, cwd bounded', async () => {
+  it('clamps a code persona to its pin in a mail delivery: agent and device forced, cwd bounded', async () => {
     const seen: HarnessRequest[] = [];
     const { internal, worker, sent } = runtimeWithBridge({
       handleHarnessRequest: async (req) => {
@@ -291,7 +307,7 @@ describe('runtime side', () => {
     expect(refused.error).toContain('pinned');
   });
 
-  it("carries the persona's model pin only when the pinned agent is the one running", async () => {
+  it('clamps a code persona the same way in a live chat, and its model pin always rides', async () => {
     const seen: HarnessRequest[] = [];
     const { internal, worker, sent } = runtimeWithBridge({
       handleHarnessRequest: async (req) => {
@@ -303,39 +319,35 @@ describe('runtime side', () => {
     });
     worker.currentTurn = newTurnContext('t', 'turn-1');
     worker.currentTurn.personaHarness = { agent: 'claude', cwd: '/repo', model: 'claude-haiku-4-5' };
-    // A chat turn with no agent named: the pin fills agent AND model.
+    // A chat turn as a code persona: the pin fills agent, cwd AND model.
     internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ prompt: 'go' }));
     await settleSends(sent);
-    expect(seen[0]).toMatchObject({ agent: 'claude', model: 'claude-haiku-4-5' });
+    expect(seen[0]).toMatchObject({ agent: 'claude', cwd: '/repo', model: 'claude-haiku-4-5' });
+    expect(seen[0].device).toBeUndefined();
 
-    // A chat turn that names a different agent: a claude model id means nothing to it.
+    // Naming another agent, machine or model in the payload changes nothing:
+    // the chat is bounded by the pin exactly like a mail delivery.
     sent.length = 0;
-    internal.handleHarnessBridgeRequest(worker, 'elicit-2', JSON.stringify({ agent: 'opencode', prompt: 'go' }));
+    internal.handleHarnessBridgeRequest(
+      worker,
+      'elicit-2',
+      JSON.stringify({ agent: 'opencode', device: 'OtherMac', model: 'claude-opus-5', prompt: 'go', cwd: 'packages/x' })
+    );
     await settleSends(sent);
-    expect(seen[1].agent).toBe('opencode');
-    expect(seen[1].model).toBeUndefined();
+    expect(seen[1]).toMatchObject({ agent: 'claude', cwd: '/repo/packages/x', model: 'claude-haiku-4-5' });
+    expect(seen[1].device).toBeUndefined();
 
-    // Under the mail clamp the pinned agent always runs, so the model always rides.
+    // A cwd outside the pin is refused in a chat too.
     sent.length = 0;
-    worker.currentTurn.isMail = true;
-    worker.currentTurn.isScheduled = true;
-    internal.handleHarnessBridgeRequest(worker, 'elicit-3', JSON.stringify({ agent: 'opencode', prompt: 'go' }));
+    internal.handleHarnessBridgeRequest(worker, 'elicit-3', JSON.stringify({ prompt: 'go', cwd: '/etc' }));
     await settleSends(sent);
-    expect(seen[2]).toMatchObject({ agent: 'claude', model: 'claude-haiku-4-5', cwd: '/repo' });
-
-    // The tool payload itself cannot pick a model.
-    sent.length = 0;
-    worker.currentTurn.personaHarness = undefined;
-    worker.currentTurn.isMail = false;
-    worker.currentTurn.isScheduled = false;
-    internal.handleHarnessBridgeRequest(worker, 'elicit-4', JSON.stringify({ agent: 'claude', prompt: 'go', model: 'claude-opus-5' }));
-    await settleSends(sent);
-    expect(seen[3].model).toBeUndefined();
+    expect(seen).toHaveLength(2);
+    expect(JSON.parse(sent[0].value)).toMatchObject({ ok: false });
   });
 
   it('answers honestly when no bridge is wired', async () => {
     const { internal, worker, sent } = runtimeWithBridge(null);
-    internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ agent: 'claude', prompt: 'go' }));
+    internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ prompt: 'go' }));
     await settleSends(sent);
     expect(JSON.parse(sent[0].value)).toMatchObject({ ok: false });
   });
@@ -350,7 +362,9 @@ describe('runtime side', () => {
       abortThread: () => {},
       settleAll: () => {}
     });
-    internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ agent: 'claude', prompt: 'go' }));
+    worker.currentTurn = newTurnContext('t', 'turn-1');
+    worker.currentTurn.personaHarness = { agent: 'claude', cwd: '' };
+    internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ prompt: 'go' }));
     // The pi child restarts while the harness turn runs; the reply must not
     // land on the new process's unrelated elicitation table.
     worker.proc = { send: () => {} };
