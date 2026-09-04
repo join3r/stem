@@ -214,6 +214,8 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   // The second string is the harness's own optionId; the service checks it
   // against the card's options rather than any fixed vocabulary.
   'harness:resolveApproval': [a.string, a.string],
+  // The persona editor's model probe: { agent?, host? } (a device id/label or 'server').
+  'harness:listModels': [a.optional(a.object)],
   // A thread id or the literal 'unfiled'. The handler validates the id shape
   // itself before it reaches a path (see workspace/paths.ts isScratchId).
   'exec:clearScratch': [a.string],
