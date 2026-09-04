@@ -6,7 +6,8 @@ import type {
   HarnessApprovalRequest,
   HarnessProgress,
   HostShell,
-  ServerSettings
+  ServerSettings,
+  HarnessModelsResult
 } from '../../shared/types';
 import type { HarnessBridge, HarnessBridgeResult, HarnessRequest } from '../backend/types';
 import { degrade } from '../degrade';
@@ -58,6 +59,11 @@ export interface HarnessServiceDeps {
   localHost: () => HarnessHost;
   /** The device path: null when that machine never announced (or switched off). */
   deviceHost?: (deviceId: string, label: string) => Promise<HarnessHost | null>;
+  /**
+   * Every device's last coding-agent announcement — what listModels walks to
+   * auto-pick the host a settings probe should ask. Absent = no devices.
+   */
+  announcedHosts?: () => Promise<Array<{ deviceId: string; enabled: boolean }>>;
   emitApprovalRequest: (request: HarnessApprovalRequest) => void;
   emitApprovalResolved: (id: string) => void;
   emitApprovalArmed?: (armed: HarnessApprovalArmed) => void;
@@ -323,6 +329,52 @@ export class HarnessService implements HarnessBridge {
       // One final row update so the last state isn't a stale mid-turn detail.
       if (this.deps.onProgress) pushProgress(true);
     }
+  }
+
+  /**
+   * The models an agent offers, probed live from the host that would run it.
+   * `host` names one ('server', or a paired computer by id/name); absent
+   * auto-picks: the first paired computer that announced it runs coding
+   * agents AND is connected right now, else this server. Feeds the picker
+   * under Settings → Chat → Coding agents; never rejects.
+   */
+  async listModels(input: { agent?: string; host?: string } = {}): Promise<HarnessModelsResult> {
+    const agent = (input.agent ?? 'claude').trim().toLowerCase() || 'claude';
+    const wanted = input.host?.trim();
+    let host: HarnessHost | null = null;
+    if (wanted && wanted !== 'server') {
+      const target = await (this.deps.resolveDevice ?? resolveHarnessTarget)(wanted);
+      if (!target.ok) return { ok: false, error: target.error };
+      const deviceHost = (await this.deps.deviceHost?.(target.deviceId, target.label)) ?? null;
+      if (!deviceHost) {
+        return { ok: false, error: `“${target.label}” does not run coding agents for this Stem.` };
+      }
+      if (!deviceHost.available()) {
+        return { ok: false, error: `“${target.label}” is not connected right now.` };
+      }
+      host = deviceHost;
+    } else if (!wanted) {
+      for (const entry of (await this.deps.announcedHosts?.()) ?? []) {
+        if (!entry.enabled) continue;
+        const target = await (this.deps.resolveDevice ?? resolveHarnessTarget)(entry.deviceId);
+        if (!target.ok) continue;
+        const deviceHost = (await this.deps.deviceHost?.(target.deviceId, target.label)) ?? null;
+        if (deviceHost?.available()) {
+          host = deviceHost;
+          break;
+        }
+      }
+    }
+    host ??= this.deps.localHost();
+    const listing = await host.listModels(agent);
+    if (!listing.ok) return listing;
+    return {
+      ok: true,
+      agent,
+      models: listing.models,
+      ...(listing.currentModelId ? { currentModelId: listing.currentModelId } : {}),
+      hostLabel: host.label()
+    };
   }
 
   /**

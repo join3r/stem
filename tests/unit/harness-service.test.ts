@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { HarnessApprovalRequest, ServerSettings } from '../../src/shared/types';
+import type { HarnessApprovalRequest, HarnessModelListing, ServerSettings } from '../../src/shared/types';
 import type {
   HarnessEnsureResult,
   HarnessHost,
@@ -45,11 +45,13 @@ interface ScriptedHost extends HarnessHost {
   sinks: HarnessTurnSink[];
   cancelled: number;
   cancelReasons: (string | undefined)[];
+  modelProbes: string[];
 }
 
 function scriptedHost(script: {
   ensure?: (spec: HarnessSessionSpec) => HarnessEnsureResult;
   turn?: (input: HarnessRunTurnInput, sink: HarnessTurnSink) => Promise<HarnessTurnResult>;
+  models?: (agent: string) => HarnessModelListing;
   label?: string;
   available?: boolean;
 }): ScriptedHost {
@@ -59,8 +61,13 @@ function scriptedHost(script: {
     sinks: [],
     cancelled: 0,
     cancelReasons: [],
+    modelProbes: [],
     label: () => script.label ?? 'this server',
     available: () => script.available ?? true,
+    async listModels(agent) {
+      host.modelProbes.push(agent);
+      return script.models?.(agent) ?? { ok: true, models: ['claude-fable-5-1[1m]', 'claude-sonnet-5'] };
+    },
     async ensureSession(spec) {
       host.ensures.push(spec);
       return script.ensure?.(spec) ?? { ok: true, sessionId: spec.sessionId ?? 'fresh-session' };
@@ -656,5 +663,64 @@ describe('results', () => {
     expect((await readHarnessRuns())[0]).toMatchObject({ status: 'ok', costUsd: 0.31 });
     expect(updates.length).toBeGreaterThan(0);
     expect(updates[updates.length - 1]).toContain('$0.31');
+  });
+});
+
+describe('listModels', () => {
+  it('asks this server when no paired computer runs coding agents', async () => {
+    const host = scriptedHost({ models: () => ({ ok: true, models: ['claude-fable-5-1[1m]', 'claude-haiku-4-5'], currentModelId: 'claude-fable-5-1[1m]' }) });
+    const { service } = makeService(host);
+    const res = await service.listModels({});
+    expect(host.modelProbes).toEqual(['claude']);
+    expect(res).toEqual({
+      ok: true,
+      agent: 'claude',
+      models: ['claude-fable-5-1[1m]', 'claude-haiku-4-5'],
+      currentModelId: 'claude-fable-5-1[1m]',
+      hostLabel: 'this server'
+    });
+  });
+
+  it('auto-picks the first CONNECTED paired computer that announced coding agents', async () => {
+    const server = scriptedHost({ label: 'this server' });
+    const asleep = scriptedHost({ label: 'sleepy-mac', available: false });
+    const mac = scriptedHost({ label: 'join3r-macbook', models: () => ({ ok: true, models: ['claude-sonnet-5'] }) });
+    const { service } = makeService(server, {
+      announcedHosts: async () => [
+        { deviceId: 'dev-off', enabled: false },
+        { deviceId: 'dev-asleep', enabled: true },
+        { deviceId: 'dev-mac', enabled: true }
+      ],
+      resolveDevice: async (id) => ({ ok: true, deviceId: id, label: id === 'dev-mac' ? 'join3r-macbook' : 'sleepy-mac' }),
+      deviceHost: async (id) => (id === 'dev-mac' ? mac : id === 'dev-asleep' ? asleep : null)
+    });
+    const res = await service.listModels({});
+    expect(res).toMatchObject({ ok: true, hostLabel: 'join3r-macbook', models: ['claude-sonnet-5'] });
+    expect(server.modelProbes).toEqual([]);
+    expect(asleep.modelProbes).toEqual([]);
+    expect(mac.modelProbes).toEqual(['claude']);
+  });
+
+  it('a named host is honoured, and a disconnected one is refused rather than substituted', async () => {
+    const server = scriptedHost({});
+    const asleep = scriptedHost({ label: 'sleepy-mac', available: false });
+    const { service } = makeService(server, {
+      resolveDevice: async (id) => ({ ok: true, deviceId: id, label: 'sleepy-mac' }),
+      deviceHost: async () => asleep
+    });
+    const res = await service.listModels({ host: 'sleepy-mac' });
+    expect(res).toMatchObject({ ok: false });
+    expect(!res.ok && res.error).toContain('not connected');
+    expect(server.modelProbes).toEqual([]);
+    // 'server' pins the local host even when devices exist.
+    const local = await service.listModels({ host: 'server' });
+    expect(local).toMatchObject({ ok: true, hostLabel: 'this server' });
+  });
+
+  it('relays the host\'s own failure text', async () => {
+    const host = scriptedHost({ models: () => ({ ok: false, error: 'claude did not advertise any models' }) });
+    const { service } = makeService(host);
+    const res = await service.listModels({});
+    expect(res).toEqual({ ok: false, error: 'claude did not advertise any models' });
   });
 });

@@ -75,6 +75,8 @@ export function initHarness(deps: {
       if (!entry?.enabled) return null;
       return new DeviceHarnessHost(harnessDeviceRouter(), deviceId, label, entry.platform);
     },
+    announcedHosts: async () =>
+      Object.values(await harnessDeviceRouter().hosts()).map((e) => ({ deviceId: e.deviceId, enabled: e.enabled })),
     readSettings,
     judge: new SafetyJudge({ runtime: () => deps.runtime }).judge,
     emitApprovalRequest: deps.emitApprovalRequest,

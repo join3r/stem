@@ -281,6 +281,13 @@ export function createDesktopHarnessHost(deps: HarnessHostDeps): DesktopHarnessH
           });
           return;
         }
+        if (request.op === 'models') {
+          // A read-only probe of the adapter's advertised models; the switch
+          // above still gates it because it starts the agent here.
+          const listing = await acpxHost().listModels(request.agent);
+          deliverResult(request.requestId, listing);
+          return;
+        }
         if (request.op === 'ensure') {
           const ensured = await acpxHost().ensureSession({
             agent: request.agent,

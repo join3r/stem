@@ -9,6 +9,7 @@ import type {
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { harnessSessionsDir } from '../workspace/paths';
+import type { HarnessModelListing } from '../../shared/types';
 import type { HarnessEvent } from './format';
 import type {
   HarnessEnsureResult,
@@ -29,6 +30,13 @@ import type {
 
 /** A turn with no self-bound: the client-side ceiling, not a per-call knob. */
 export const DEFAULT_MAX_TURN_MS = 2 * 60 * 60_000;
+
+/**
+ * A model probe that has not answered in this long is given up: an adapter that
+ * cannot authenticate can sit on session/new indefinitely, and the settings
+ * picker waiting on it must not.
+ */
+const MODEL_PROBE_TIMEOUT_MS = 45_000;
 
 /** ACP option kinds a card decision can translate to an acpx outcome. */
 const DECISION_KINDS = new Set(['allow_once', 'allow_always', 'reject_once', 'reject_always']);
@@ -163,6 +171,50 @@ export class LocalHarnessHost implements HarnessHost {
       // quiet: the returned error IS the answer — the service turns it into
       // the tool result the assistant reads.
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async listModels(agent: string): Promise<HarnessModelListing> {
+    // One long-lived probe session per agent, keyed so repeat queries reuse
+    // the warm session instead of paying the adapter's cold start each time.
+    // No model pin rides it on purpose — the point is the FULL advertised
+    // list — and no mode is set: nothing ever prompts in this session.
+    const probe = (async (): Promise<HarnessModelListing> => {
+      const runtime = await this.runtime();
+      if (!runtime.getStatus) return { ok: false, error: 'This acpx runtime cannot report the agent\'s models.' };
+      const handle = await runtime.ensureSession({
+        sessionKey: `models-probe-${agent}`,
+        agent,
+        mode: 'persistent',
+        cwd: this.options.stateDir ?? harnessSessionsDir()
+      });
+      const status = await runtime.getStatus({ handle });
+      const models = status.models?.availableModelIds ?? [];
+      if (!models.length) {
+        return { ok: false, error: `${agent} did not advertise any models — is it installed and signed in here?` };
+      }
+      const current = status.models?.currentModelId;
+      return { ok: true, models, ...(current ? { currentModelId: current } : {}) };
+    })();
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<HarnessModelListing>((resolve) => {
+      timer = setTimeout(
+        () =>
+          resolve({
+            ok: false,
+            error: `${agent} did not answer the model probe within ${Math.round(MODEL_PROBE_TIMEOUT_MS / 1000)}s.`
+          }),
+        MODEL_PROBE_TIMEOUT_MS
+      );
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([probe, timeout]);
+    } catch (e) {
+      // quiet: the returned error IS the answer — the picker shows it.
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      clearTimeout(timer);
     }
   }
 

@@ -1,4 +1,4 @@
-import type { HarnessApprovalContent, HarnessApprovalOption } from '../../shared/types';
+import type { HarnessApprovalContent, HarnessApprovalOption, HarnessModelListing } from '../../shared/types';
 import type { HarnessEvent } from './format';
 
 // The host-agnostic contract between HarnessService and whatever actually runs
@@ -84,5 +84,10 @@ export interface HarnessHost {
   available(): boolean;
   ensureSession(spec: HarnessSessionSpec): Promise<HarnessEnsureResult>;
   runTurn(input: HarnessRunTurnInput, sink: HarnessTurnSink): HarnessTurnHandle;
+  /**
+   * The models `agent` offers on this host, read from a session's advertised
+   * list — a probe, never a turn. Never rejects; failures settle as {ok: false}.
+   */
+  listModels(agent: string): Promise<HarnessModelListing>;
   close(): Promise<void>;
 }

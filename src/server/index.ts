@@ -582,6 +582,12 @@ function registerIpc(): void {
     // each coding_agent request, so the change applies to the next call.
     return updateHarnessSettings(patch);
   });
+  registerServer('harness:listModels', async (_e, input?: { agent?: string; host?: string }) => {
+    // The settings picker's live probe: which models the agent offers on the
+    // host that would run it. Never rejects; the picker renders the error.
+    if (!harness) return { ok: false, error: 'Coding agents are not set up on this Stem.' };
+    return harness.service.listModels(input ?? {});
+  });
   registerServer('exec:resolveApproval', async (_e, id: string, decision: ExecDecision) => {
     // The boolean matters: false means the card had already expired (or was
     // answered on another surface) and the tool call went on without this

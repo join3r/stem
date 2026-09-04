@@ -1334,6 +1334,18 @@ export type DeviceHarnessRequest =
       model?: string;
       /** Enforced by the CLIENT (it owns the adapter); default ~2h there. */
       maxTurnMs?: number;
+    }
+  | {
+      /** Unguessable and single-use, like the other ops. */
+      requestId: string;
+      /**
+       * Enumerate the models the agent offers on THIS device — a read-only
+       * probe (start/reuse a session, read its advertised model list), never a
+       * turn. Answers a settings picker; the switch on that machine still gates
+       * it, so a device that runs no coding agents answers with a refusal.
+       */
+      op: 'models';
+      agent: string;
     };
 
 export interface DeviceHarnessCancel {
@@ -1349,6 +1361,7 @@ export interface DeviceHarnessCancel {
 export type DeviceHarnessResult =
   | { ok: true; sessionId: string }
   | { ok: true; stopReason: 'end_turn' | 'cancelled' | 'max_turn'; text: string; finalSeq: number }
+  | { ok: true; models: string[]; currentModelId?: string }
   | { ok: false; error: string };
 
 /**
@@ -2632,6 +2645,20 @@ export interface HarnessSettings {
    */
   agents: Record<string, { command?: string; model?: string }>;
 }
+
+/**
+ * What one host answered a model probe with — the agent's advertised model
+ * ids (verbatim, e.g. `claude-fable-5-1[1m]`) and whichever it treats as
+ * current. Host-level: the service wraps it with the agent and host label.
+ */
+export type HarnessModelListing =
+  | { ok: true; models: string[]; currentModelId?: string }
+  | { ok: false; error: string };
+
+/** The model probe as the settings picker receives it (host listing + context). */
+export type HarnessModelsResult =
+  | { ok: true; agent: string; models: string[]; currentModelId?: string; hostLabel: string }
+  | { ok: false; error: string };
 
 /** One chat's scratch folder in Settings → Chat → Command execution → Scratch files. */
 export interface ScratchUsageRow {
@@ -3955,6 +3982,13 @@ export interface StemApi {
   /** Patch the command-execution policy (enable switch, judge model, allowlist). */
   updateExecSettings(patch: Partial<ExecSettings>): Promise<AppSettings>;
   updateHarnessSettings(patch: Partial<HarnessSettings>): Promise<AppSettings>;
+  /**
+   * The models the coding agent offers, probed live from the host that would
+   * run it — an available paired computer that runs coding agents, else this
+   * server. `host` forces a specific one ('server' or a device id/name); absent
+   * auto-picks. Feeds the model picker under Settings → Chat → Coding agents.
+   */
+  listHarnessModels(input?: { agent?: string; host?: string }): Promise<HarnessModelsResult>;
   /** A command needs the user's decision; fired so the UI can show the exec approval card. */
   onExecApproval(listener: (request: ExecApprovalRequest) => void): () => void;
   /** Fired when an exec approval is answered or expires. */

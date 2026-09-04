@@ -15,7 +15,8 @@ import {
   type DeviceHarnessPermissionAsk,
   type DeviceHarnessPermissionDecision,
   type DeviceHarnessRequest,
-  type DeviceHarnessResult
+  type DeviceHarnessResult,
+  type HarnessModelListing
 } from '../../shared/types';
 import type { HarnessEvent } from './format';
 import type {
@@ -44,6 +45,8 @@ import type {
 
 /** Availability probe: an ensure that got no answer in this long is refused. */
 const ENSURE_TIMEOUT_MS = 30_000;
+/** A model probe may cold-start the adapter on the device; a little more patience. */
+const MODELS_TIMEOUT_MS = 60_000;
 /** After `run` goes out, the first event/heartbeat must arrive within this. */
 const FIRST_LIFE_TIMEOUT_MS = 30_000;
 /** Rolling idle bound; the client heartbeats every 15s, so 90s means gone. */
@@ -57,6 +60,13 @@ interface PendingEnsure {
   kind: 'ensure';
   deviceId: string;
   settle(result: HarnessEnsureResult): void;
+  timer: NodeJS.Timeout;
+}
+
+interface PendingModels {
+  kind: 'models';
+  deviceId: string;
+  settle(result: HarnessModelListing): void;
   timer: NodeJS.Timeout;
 }
 
@@ -76,7 +86,7 @@ interface PendingTurn {
   decided: Map<string, DeviceHarnessPermissionDecision>;
 }
 
-type Pending = PendingEnsure | PendingTurn;
+type Pending = PendingEnsure | PendingModels | PendingTurn;
 
 export interface HarnessHostStore {
   read(): Promise<Record<string, DeviceHarnessHostEntry>>;
@@ -97,6 +107,8 @@ export interface HarnessDeviceRouter {
   hosts(): Promise<Record<string, DeviceHarnessHostEntry>>;
   isAvailable(deviceId: string): boolean;
   ensure(deviceId: string, label: string, spec: HarnessSessionSpec): Promise<HarnessEnsureResult>;
+  /** Probe the models `agent` offers on the device (read-only; see the 'models' op). */
+  listModels(deviceId: string, label: string, agent: string): Promise<HarnessModelListing>;
   runTurn(deviceId: string, label: string, input: HarnessRunTurnInput, sink: HarnessTurnSink): HarnessTurnHandle;
   /** `harnessHost:result` — answer one held ensure/run. */
   settle(deviceId: string, requestId: string, result: unknown): boolean;
@@ -202,6 +214,29 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
       });
     },
 
+    listModels(deviceId, label, agent) {
+      const requestId = mintRequestId();
+      const frame: DeviceHarnessRequest = { requestId, op: 'models', agent };
+      const reached = deps.pushTo(deviceId, HARNESS_REQUEST_FRAME, frame);
+      if (reached === 0) {
+        return Promise.resolve({
+          ok: false as const,
+          error: `“${label}” disconnected from Stem before the coding agent could be asked.`
+        });
+      }
+      return new Promise<HarnessModelListing>((resolve) => {
+        const timer = setTimeout(() => {
+          pending.delete(requestId);
+          resolve({
+            ok: false,
+            error: `“${label}” did not list its models within ${Math.round(MODELS_TIMEOUT_MS / 1000)}s — it may be asleep or still starting the agent.`
+          });
+        }, MODELS_TIMEOUT_MS);
+        timer.unref?.();
+        pending.set(requestId, { kind: 'models', deviceId, settle: resolve, timer });
+      });
+    },
+
     runTurn(deviceId, label, input, sink) {
       // The turnId is server-minted (it is the runId), so a cancel can only
       // ever name a turn this server started.
@@ -282,6 +317,19 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
         clearTimeout(held.timer);
         if (value && value.ok === true && typeof (value as { sessionId?: unknown }).sessionId === 'string') {
           held.settle({ ok: true, sessionId: (value as { sessionId: string }).sessionId });
+        } else {
+          held.settle({ ok: false, error: errorText(value, 'The computer answered with nothing usable.') });
+        }
+        return true;
+      }
+      if (held.kind === 'models') {
+        pending.delete(requestId);
+        clearTimeout(held.timer);
+        const listing = value as { ok?: unknown; models?: unknown; currentModelId?: unknown } | null;
+        if (listing && listing.ok === true && Array.isArray(listing.models)) {
+          const models = listing.models.filter((m): m is string => typeof m === 'string' && m.trim().length > 0);
+          const current = typeof listing.currentModelId === 'string' ? listing.currentModelId : undefined;
+          held.settle({ ok: true, models, ...(current ? { currentModelId: current } : {}) });
         } else {
           held.settle({ ok: false, error: errorText(value, 'The computer answered with nothing usable.') });
         }
@@ -386,7 +434,7 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
     async forget(deviceId) {
       for (const [requestId, held] of pending) {
         if (held.deviceId !== deviceId) continue;
-        if (held.kind === 'ensure') {
+        if (held.kind === 'ensure' || held.kind === 'models') {
           pending.delete(requestId);
           clearTimeout(held.timer);
           held.settle({ ok: false, error: 'The computer was unpaired from this Stem.' });
@@ -406,7 +454,7 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
 
     close() {
       for (const [requestId, held] of pending) {
-        if (held.kind === 'ensure') {
+        if (held.kind === 'ensure' || held.kind === 'models') {
           clearTimeout(held.timer);
           held.settle({ ok: false, error: 'Stem stopped while the coding agent was starting.' });
         } else {
@@ -449,6 +497,10 @@ export class DeviceHarnessHost implements HarnessHost {
 
   runTurn(input: HarnessRunTurnInput, sink: HarnessTurnSink): HarnessTurnHandle {
     return this.router.runTurn(this.deviceId, this.deviceLabel, input, sink);
+  }
+
+  listModels(agent: string): Promise<HarnessModelListing> {
+    return this.router.listModels(this.deviceId, this.deviceLabel, agent);
   }
 
   async close(): Promise<void> {

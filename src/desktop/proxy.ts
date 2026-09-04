@@ -709,13 +709,17 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     const frame = data as Partial<DeviceHarnessRequest> | null;
     if (!frame || typeof frame.requestId !== 'string' || !frame.requestId) return null;
     if (typeof frame.agent !== 'string' || !frame.agent) return null;
-    if (typeof frame.cwd !== 'string' || !frame.cwd) return null;
+    // The model probe names no folder: it reads the agent's advertised list
+    // and spawns nothing that works in one.
+    if (frame.op === 'models') return { requestId: frame.requestId, op: 'models', agent: frame.agent };
+    const located = frame as Partial<Extract<DeviceHarnessRequest, { op: 'ensure' | 'run' }>>;
+    if (typeof located.cwd !== 'string' || !located.cwd) return null;
     if (frame.op === 'ensure') {
       return {
         requestId: frame.requestId,
         op: 'ensure',
         agent: frame.agent,
-        cwd: frame.cwd,
+        cwd: located.cwd,
         ...(typeof frame.sessionId === 'string' && frame.sessionId ? { sessionId: frame.sessionId } : {}),
         ...(typeof frame.model === 'string' && frame.model ? { model: frame.model } : {})
       };
@@ -728,7 +732,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         requestId: frame.requestId,
         op: 'run',
         agent: frame.agent,
-        cwd: frame.cwd,
+        cwd: located.cwd,
         sessionId: run.sessionId,
         prompt: run.prompt,
         ...(typeof run.model === 'string' && run.model ? { model: run.model } : {}),

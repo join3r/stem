@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type {
+  HarnessModelsResult,
   DeviceInfo,
   ExecHostShellInfo,
   ExecSettings,
@@ -76,6 +77,17 @@ export function AutonomySections() {
   const remote = useRemoteServer();
   const [execHostEnabled, setExecHostEnabled] = useState<boolean | null>(null);
   const [harnessHostEnabled, setHarnessHostEnabled] = useState<boolean | null>(null);
+  // The model picker's live probe: which models the coding agent offers on the
+  // host that would run it. Probed once when the section is shown and on
+  // Refresh — never on a timer, since the probe may cold-start the agent.
+  const [agentModels, setAgentModels] = useState<HarnessModelsResult | 'loading' | null>(null);
+  const probeModels = () => {
+    setAgentModels('loading');
+    window.stem
+      .listHarnessModels({ agent: 'claude' })
+      .then(setAgentModels)
+      .catch((e: unknown) => setAgentModels({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+  };
   // Labels for the per-device allowlist groups. Devices that were unpaired keep
   // their entries readable (and deletable) under the raw id.
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
@@ -111,6 +123,25 @@ export function AutonomySections() {
         setBashPathDraft(s.exec.gitBashPath ?? '');
       }
     });
+  }
+
+  useEffect(() => {
+    if (harness?.enabled && agentModels === null) probeModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- probe once per enable
+  }, [harness?.enabled]);
+
+  /** Pin (or unpin, with '') the model the claude agent runs. */
+  function chooseClaudeModel(model: string) {
+    if (!harness) return;
+    const agents = { ...harness.agents };
+    const claude = { ...(agents.claude ?? {}) };
+    if (model) claude.model = model;
+    else delete claude.model;
+    if (claude.command || claude.model) agents.claude = claude;
+    else delete agents.claude;
+    // The patch carries the WHOLE agents map: the server merges at the top
+    // level only, so a partial map would drop the other agents' entries.
+    updateHarness({ agents });
   }
 
   function updateHarness(patch: Partial<HarnessSettings>) {
@@ -530,6 +561,58 @@ export function AutonomySections() {
             onClick={() => harness && updateHarness({ enabled: !harness.enabled })}
           />
         </ValueRow>
+
+        {/* Which model Claude Code runs. Probed live from the host that would
+            run it, so the list is whatever that machine's agent actually offers
+            (and stays current as its lineup changes). Empty = no pin: Claude
+            Code uses its own default. The pin is a server setting because the
+            adapter hides the machine's own Claude Code config from Stem-run
+            sessions — see HarnessSettings.agents. */}
+        {harness?.enabled && (
+          <ValueRow
+            label={<strong>Claude Code model</strong>}
+            hint={
+              <>
+                {agentModels === 'loading' && 'Asking the coding agent which models it offers…'}
+                {agentModels && agentModels !== 'loading' && agentModels.ok && (
+                  <>
+                    Models offered by Claude Code on {agentModels.hostLabel}.{' '}
+                    <button type="button" className="link" onClick={probeModels}>
+                      Refresh
+                    </button>
+                  </>
+                )}
+                {agentModels && agentModels !== 'loading' && !agentModels.ok && (
+                  <>
+                    Could not list models: {agentModels.error}{' '}
+                    <button type="button" className="link" onClick={probeModels}>
+                      Try again
+                    </button>
+                  </>
+                )}
+                {agentModels === null && 'Which model Claude Code runs when Stem delegates to it.'}
+              </>
+            }
+          >
+            <RowSelect
+              ariaLabel="Claude Code model"
+              value={harness.agents.claude?.model ?? ''}
+              options={[
+                { value: '', label: 'Claude Code default' },
+                ...(agentModels && agentModels !== 'loading' && agentModels.ok
+                  ? agentModels.models.map((id) => ({ value: id, label: id }))
+                  : []),
+                // A pin the probe did not list (set by hand, or the lineup
+                // moved on) stays selectable so the control never lies.
+                ...(harness.agents.claude?.model &&
+                !(agentModels && agentModels !== 'loading' && agentModels.ok && agentModels.models.includes(harness.agents.claude.model))
+                  ? [{ value: harness.agents.claude.model, label: `${harness.agents.claude.model} (not offered here)` }]
+                  : [])
+              ]}
+              onChange={chooseClaudeModel}
+            />
+          </ValueRow>
+        )}
 
         {/* THIS computer's consent to run coding agents the server sends it.
             Only offered when the server is elsewhere, for the exec-host reason:
