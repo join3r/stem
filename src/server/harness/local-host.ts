@@ -356,6 +356,32 @@ function askFromRequest(req: AcpPermissionRequest): HarnessPermissionAsk {
   };
 }
 
+/**
+ * Stem's own launch commands for acpx's npx-hosted adapters. acpx's registry
+ * runs `npx -y <package>@<range>`, and npm follows every such install-or-refresh
+ * with a security audit — a POST to registry.npmjs.org's advisories endpoint
+ * that hangs for minutes where that endpoint is unreachable (measured
+ * 2026-09-04 on the user's Mac: 100+ s before the adapter even started, on
+ * EVERY launch, against 0.6 s with the audit off; the adapter itself boots in
+ * 0.1 s). An audit is meaningless for a launcher, so it is off here. The ranges
+ * mirror acpx's (a test pins them to the installed acpx), and a command the
+ * user set in Settings → App → Coding agents still wins.
+ */
+export const STEM_AGENT_COMMAND_DEFAULTS: Readonly<Record<string, readonly string[]>> = {
+  claude: ['npx', '-y', '--no-audit', '--no-fund', '@agentclientprotocol/claude-agent-acp@^0.60.0'],
+  codex: ['npx', '-y', '--no-audit', '--no-fund', '@agentclientprotocol/codex-acp@^1.1.5']
+};
+
+/** The acpx registry overrides: Stem's defaults underneath the user's own commands. */
+export function agentCommandOverrides(user?: Record<string, string>): Record<string, string | string[]> {
+  const merged: Record<string, string | string[]> = {};
+  for (const [agent, argv] of Object.entries(STEM_AGENT_COMMAND_DEFAULTS)) merged[agent] = [...argv];
+  for (const [agent, command] of Object.entries(user ?? {})) {
+    if (command.trim()) merged[agent.trim().toLowerCase()] = command;
+  }
+  return merged;
+}
+
 async function createRealRuntime(config: HarnessRuntimeConfig): Promise<AcpRuntime> {
   // Lazy and dynamic on purpose: acpx is external in the build (it spawns
   // adapter CLIs and resolves package-relative paths), and nothing on the
@@ -366,9 +392,7 @@ async function createRealRuntime(config: HarnessRuntimeConfig): Promise<AcpRunti
   return createAcpRuntime({
     cwd: config.stateDir,
     sessionStore: createFileSessionStore({ stateDir: config.stateDir }),
-    agentRegistry: createAgentRegistry(
-      config.agentCommands ? { overrides: config.agentCommands } : undefined
-    ),
+    agentRegistry: createAgentRegistry({ overrides: agentCommandOverrides(config.agentCommands) }),
     // For agents without their own mode story (anything but claude): reads
     // auto-approve, writes and commands land on onPermissionRequest (the card),
     // and this resolver is only the fallback when no live turn claims the ask.

@@ -811,6 +811,8 @@ function HarnessModelSelect({
   }, [key]);
 
   const listed = listing && listing !== 'loading' && listing.ok ? listing : null;
+  // Claude Code advertises a literal "default" entry; that is the empty option.
+  const offered = listed?.models.filter((id) => id !== 'default') ?? [];
   const current = pin?.model ?? '';
   return (
     <div className="persona-model">
@@ -822,10 +824,10 @@ function HarnessModelSelect({
         onChange={(e) => onChange(e.target.value || undefined)}
       >
         <option value="">{pin ? `${pin.agent}’s own default` : 'Agent’s own default'}</option>
-        {current && !listed?.models.includes(current) && (
+        {current && !offered.includes(current) && (
           <option value={current}>{current} (not offered there)</option>
         )}
-        {listed?.models.map((id) => (
+        {offered.map((id) => (
           <option key={id} value={id}>
             {id}
           </option>

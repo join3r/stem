@@ -10,7 +10,13 @@ import type {
   AcpRuntimeEvent,
   AcpRuntimeTurnResult
 } from 'acpx/runtime';
-import { LocalHarnessHost, type HarnessRuntimeConfig } from '../../src/server/harness/local-host';
+import { readFile, readdir } from 'node:fs/promises';
+import {
+  LocalHarnessHost,
+  STEM_AGENT_COMMAND_DEFAULTS,
+  agentCommandOverrides,
+  type HarnessRuntimeConfig
+} from '../../src/server/harness/local-host';
 import type { HarnessPermissionAsk, HarnessPermissionDecision, HarnessTurnSink } from '../../src/server/harness/host';
 
 interface FakeRuntimeScript {
@@ -290,5 +296,35 @@ describe('permission routing', () => {
     const onPermission = vi.fn();
     void onPermission;
     expect(permission()(ask('nobody'))).toBeUndefined();
+  });
+});
+
+describe('Stem agent command defaults', () => {
+  it("track the adapter package ranges of the installed acpx (drift tripwire)", async () => {
+    // acpx's registry is not exported; read its bundle. If this fails, acpx
+    // bumped an adapter range — mirror it in STEM_AGENT_COMMAND_DEFAULTS.
+    const dir = new URL('../../node_modules/acpx/dist/', import.meta.url);
+    let source = '';
+    for (const file of (await readdir(dir)).filter((f) => f.endsWith('.js'))) {
+      source += await readFile(new URL(file, dir), 'utf8');
+    }
+    const block = source.match(/ACP_ADAPTER_PACKAGE_RANGES = \{([^}]*)\}/);
+    expect(block).toBeTruthy();
+    const ranges = Object.fromEntries([...block![1].matchAll(/(\w+): "([^"]+)"/g)].map((m) => [m[1], m[2]]));
+    for (const [agent, argv] of Object.entries(STEM_AGENT_COMMAND_DEFAULTS)) {
+      expect(ranges[agent], `acpx range for ${agent}`).toBeTruthy();
+      expect(argv.at(-1)).toMatch(new RegExp(`@${ranges[agent].replace(/[.^]/g, '\\$&')}$`));
+      // The whole point: npm's post-install audit must not run on launch.
+      expect(argv).toContain('--no-audit');
+    }
+  });
+
+  it('puts the defaults under the user\'s own commands', () => {
+    const merged = agentCommandOverrides({ Claude: 'my-claude acp', gemini: 'gemini --acp', blank: '  ' });
+    expect(merged.claude).toBe('my-claude acp');
+    expect(merged.codex).toEqual([...STEM_AGENT_COMMAND_DEFAULTS.codex]);
+    expect(merged.gemini).toBe('gemini --acp');
+    expect(merged.blank).toBeUndefined();
+    expect(agentCommandOverrides().claude).toEqual([...STEM_AGENT_COMMAND_DEFAULTS.claude]);
   });
 });
