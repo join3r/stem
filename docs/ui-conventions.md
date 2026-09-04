@@ -154,6 +154,7 @@ token layer. Both are transparent-bodied so native vibrancy/blur shows through.
 | `.mp-pop` (`--z-popover`) | The filterable model picker popover (sits above context menus). |
 | `.drop-overlay` / `.drop-zone` / `.drop-band` (`--z-overlay`) | Drag-to-place overlay; `.dz-glyph` are the decorative destination glyphs (keep their own radius). |
 | `.mcp-approval-backdrop` / `.mcp-approval-card` (`--z-modal`) | Assistant-proposed MCP change confirm dialog. Every modal in Stem reuses this pair — delete-thread, release notes, skills reset, "Pair a phone" — adding only a width class of its own. |
+| `.chat-approval` / `.chat-approval-card` | The permission card (run_command, coding agents) pinned above the composer of the chat that asked — outside the scroller, on the transcript's column, amber-edged. Not a modal: a question about one chat belongs in that chat. `.approval-notice` is the bar over any OTHER chat that points at it; `.chat-status.waiting` is the sidebar dot. |
 | `.pair-phone-card` / `.pair-qr-plate` / `.pair-qr` / `.pair-code` | Settings → Server → Devices → "Pair a phone": the QR, its fixed-color plate (see above), and the code in reading-aloud form. |
 
 Pick the matching `--z-*` rung for anything that floats; don't invent a magic z-index.

@@ -16,6 +16,13 @@ Maintainer notes:
 
 ### Changed
 
+- **Permission cards live in the chat that asked.** When a command or a coding agent needs your
+  go-ahead, the card now appears above the message box of that conversation instead of as a
+  dialog over whatever chat you happened to have open — which made it look like a question about
+  the wrong chat. If you are elsewhere, a bar at the top of the window names the chat and opens
+  it, and its row in the sidebar gets an amber dot. A coding agent's buttons now just say Reject,
+  Always allow and Allow; the rule "Always allow" would teach the agent is spelled out beside them
+  instead of stretched across a button.
 - **Themes ship with Stem.** The theme picker now lists themes bundled with the app (TokyoNight
   Storm to start) alongside any in your own themes folder; a file of yours with the same name wins.
   Saving a theme file applies it at once, in every window — the Reload button is gone. A theme can

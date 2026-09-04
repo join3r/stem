@@ -27,6 +27,8 @@ import type { ActivityItem, ChatMessage, EscapeAction, ModelSummary, TurnAttachm
 import { formatSystemVersion } from '../../shared/sys-version';
 import { ActivityRows, SourcesList } from './ActivityRows';
 import { Composer, type ComposerHandle } from './Composer';
+import { ApprovalCard } from '../manage/ApprovalCard';
+import type { PendingApproval } from '../manage/approvalQueue';
 import { MdxView } from './MdxView';
 import { StreamingMdxView } from './StreamingMdxView';
 import { HoverTip } from '../ui/InfoTip';
@@ -132,6 +134,9 @@ interface ChatViewProps {
   /** The thread the composer's `/learn` saves a skill from. Passed only by the main
    *  window; null while the chat is still an unsent draft. */
   threadId?: string | null;
+  /** Permission asks raised by this chat's turn, oldest first. The head renders
+   *  as a card pinned above the composer — the turn waits on it. */
+  approvals?: PendingApproval[];
   onChangeEffort: (effort: string) => void;
   /** Switch the model the next turn runs on (the composer's effort control opens the picker). */
   onSelectModel: (id: string) => void;
@@ -323,6 +328,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   onToggleDraftPrivate,
   showContextMeter = true,
   threadId,
+  approvals,
   onChangeEffort,
   onSelectModel,
   onChangeSpeed,
@@ -707,6 +713,17 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         )}
         <div ref={endRef} />
       </div>
+
+      {/* Outside the scroller on purpose: a card that could scroll off the
+          bottom is a turn that silently hangs. */}
+      {approvals && approvals.length > 0 && (
+        <ApprovalCard
+          key={`${approvals[0].kind}:${approvals[0].request.id}`}
+          approval={approvals[0]}
+          variant="inline"
+          queued={approvals.length - 1}
+        />
+      )}
 
       <Composer
         ref={ref as React.Ref<ComposerHandle>}

@@ -46,6 +46,8 @@ export interface ChatListProps {
   statuses: Record<string, ThreadStatus>;
   /** Thread ids that own at least one scheduled task → show a clock badge. */
   scheduledThreadIds?: ReadonlySet<string>;
+  /** Thread ids whose turn is waiting on a permission card → the row's dot says so. */
+  approvalThreadIds?: ReadonlySet<string>;
   onOpen: (threadId: string) => void;
   /** Open a fresh draft targeted at this folder (null = root). */
   onNewChat: (folderId: string | null) => void;
@@ -447,6 +449,9 @@ export function ChatList(props: ChatListProps) {
     const isEditing = editing?.kind === 'chat' && editing.id === chat.threadId;
     const status = props.statuses[chat.threadId] ?? 'idle';
     const unread = isUnread(chat, data.inbox, status === 'running');
+    // A turn stopped on a permission card is the one state the user must go and
+    // do something about, so it outranks the running pulse on the dot.
+    const waiting = props.approvalThreadIds?.has(chat.threadId) ?? false;
     const subject = chat.subject ?? chat.title;
     return (
       <div
@@ -473,7 +478,9 @@ export function ChatList(props: ChatListProps) {
         }}
       >
         <span className="row-icon chat">
-          {status === 'idle' ? (
+          {waiting ? (
+            <span className="chat-status waiting" title="Asks for permission" aria-label="Asks for permission" />
+          ) : status === 'idle' ? (
             <MessageSquare size={13} />
           ) : (
             <span className={`chat-status ${status}`} title={STATUS_LABEL[status]} aria-label={STATUS_LABEL[status]} />

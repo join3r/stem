@@ -6,8 +6,9 @@ import { EffortModelControl } from '../ui/EffortModelControl';
 import { McpApprovalCard } from '../manage/McpApprovalCard';
 import { InstructionsApprovalCard } from '../manage/InstructionsApprovalCard';
 import { SkillApprovalCard } from '../manage/SkillApprovalCard';
-import { ExecApprovalCard } from '../manage/ExecApprovalCard';
-import { HarnessApprovalCard } from '../manage/HarnessApprovalCard';
+import { ApprovalCard, MissedApprovalDialog } from '../manage/ApprovalCard';
+import { approvalKey, approvalsElsewhere, approvalsForThread } from '../manage/approvalQueue';
+import { useApprovals } from '../manage/approvalStore';
 import { NOTE_CONFIRM_MS, detectNoteTrigger, useNoteMode } from '../noteMode';
 import { EMPTY_STATE, appendSystemMessage, type ThreadState } from '../chatState';
 import {
@@ -53,6 +54,14 @@ export function QuickChat() {
   const chatState = useThreadStates(core.store)[QC_KEY] ?? EMPTY_STATE;
   const [threadId, setThreadId] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
+
+  // Permission asks. This thread's own ride inside the expanded ChatView like in
+  // the main window; an ask from any other thread has no chat here to sit in and
+  // stays a dialog — the overlay is opened for one question and dismissed, so a
+  // notice bar pointing at a chat it cannot open would be no help.
+  const { pending: pendingApprovals } = useApprovals();
+  const ownApprovals = approvalsForThread(pendingApprovals, threadId);
+  const otherApprovals = approvalsElsewhere(pendingApprovals, threadId);
 
   const [input, setInput] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -514,6 +523,7 @@ export function QuickChat() {
           serviceTier={serviceTier}
           format={format}
           draftFolderName={null}
+          approvals={ownApprovals}
           showContextMeter={false}
             onChangeEffort={setEffort}
             onSelectModel={onSelectModel}
@@ -527,8 +537,15 @@ export function QuickChat() {
         <McpApprovalCard />
         <InstructionsApprovalCard />
         <SkillApprovalCard />
-        <ExecApprovalCard />
-        <HarnessApprovalCard />
+        {otherApprovals[0] && (
+          <ApprovalCard
+            key={approvalKey(otherApprovals[0])}
+            approval={otherApprovals[0]}
+            variant="modal"
+            queued={otherApprovals.length - 1}
+          />
+        )}
+        <MissedApprovalDialog />
       </div>
     );
   }
@@ -620,8 +637,16 @@ export function QuickChat() {
       <McpApprovalCard />
       <InstructionsApprovalCard />
       <SkillApprovalCard />
-      <ExecApprovalCard />
-      <HarnessApprovalCard />
+      {/* The compact bar has no chat pane, so even this thread's ask is a dialog here. */}
+      {pendingApprovals[0] && (
+        <ApprovalCard
+          key={approvalKey(pendingApprovals[0])}
+          approval={pendingApprovals[0]}
+          variant="modal"
+          queued={pendingApprovals.length - 1}
+        />
+      )}
+      <MissedApprovalDialog />
     </div>
   );
 }

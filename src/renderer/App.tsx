@@ -27,8 +27,9 @@ import { McpApprovalCard } from './manage/McpApprovalCard';
 import { InstructionsApprovalCard } from './manage/InstructionsApprovalCard';
 import { SkillApprovalCard } from './manage/SkillApprovalCard';
 import { SkillsResetDialog } from './manage/SkillsResetDialog';
-import { ExecApprovalCard } from './manage/ExecApprovalCard';
-import { HarnessApprovalCard } from './manage/HarnessApprovalCard';
+import { ApprovalNotice, MissedApprovalDialog } from './manage/ApprovalCard';
+import { approvalsElsewhere, approvalsForThread } from './manage/approvalQueue';
+import { useApprovals } from './manage/approvalStore';
 import { DeleteThreadDialog } from './DeleteThreadDialog';
 import { CHATS_TAB_IDS, CHATS_TAB_KEY, type ChatsTab } from './chats/ChatList';
 import {
@@ -321,6 +322,30 @@ export default function App() {
 
   // Thread ids that own at least one scheduled task → a clock badge on those chat rows.
   const scheduledThreadIds = useMemo(() => new Set(tasks.map((t) => t.threadId)), [tasks]);
+
+  // Permission asks (run_command, coding agents). The active chat shows its own
+  // as a card above the composer; every other chat gets a notice bar and a dot
+  // on its sidebar row, so the ask is answered where the turn is waiting.
+  const { pending: pendingApprovals } = useApprovals();
+  const activeApprovals = useMemo(
+    () => approvalsForThread(pendingApprovals, activeThreadId),
+    [pendingApprovals, activeThreadId]
+  );
+  const otherApprovals = useMemo(
+    () => approvalsElsewhere(pendingApprovals, activeThreadId),
+    [pendingApprovals, activeThreadId]
+  );
+  const approvalThreadIds = useMemo(
+    () => new Set(pendingApprovals.map((a) => a.request.threadId)),
+    [pendingApprovals]
+  );
+  const approvalChatTitle = useCallback(
+    (threadId: string) => {
+      const chat = displayList.chats.find((c) => c.threadId === threadId);
+      return chat ? (chat.subject ?? chat.title) : null;
+    },
+    [displayList]
+  );
 
   // ---- the Inbox's Return-to-chat row ----
   /** An ordinary chat became the centre pane. Sets/replaces the target only if
@@ -1689,6 +1714,11 @@ export default function App() {
         )}
       <div className={`app${showInspector ? '' : ' no-inspector'}`}>
         <main className="conversation">
+          <ApprovalNotice
+            approvals={otherApprovals}
+            titleFor={approvalChatTitle}
+            onOpen={(threadId) => void openChat(threadId)}
+          />
           {mailView?.kind === 'compose' && (
             <MailComposeView
               ref={mailPaneRef}
@@ -1752,6 +1782,7 @@ export default function App() {
           draftPrivate={activeThreadId === null && draftPrivate}
           onToggleDraftPrivate={activeThreadId === null ? toggleDraftPrivate : undefined}
           threadId={activeThreadId}
+          approvals={activeApprovals}
           onChangeEffort={setEffort}
           onSelectModel={onSelectModel}
           onChangeSpeed={setServiceTier}
@@ -1774,6 +1805,7 @@ export default function App() {
             onDismissInboxReturn={dismissInboxReturn}
             statuses={threadStatuses}
             scheduledThreadIds={scheduledThreadIds}
+            approvalThreadIds={approvalThreadIds}
             models={models}
             modelId={modelId}
             onSelectModel={onSelectModel}
@@ -1817,8 +1849,7 @@ export default function App() {
           Quick Chat overlay is the wrong place for: it is opened for one question
           and dismissed. It waits here until the main window is opened. */}
       <SkillsResetDialog />
-      <ExecApprovalCard />
-      <HarnessApprovalCard />
+      <MissedApprovalDialog />
       {pendingDelete && (
         <DeleteThreadDialog
           title={pendingDelete.title}

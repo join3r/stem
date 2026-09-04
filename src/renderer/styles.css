@@ -662,6 +662,8 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .chat-status.running { animation: stem-dot-pulse 1.2s ease-in-out infinite; }
 .chat-status.done { background: var(--accent); }
 .chat-status.error { background: var(--danger); }
+/* A turn stopped on a permission card: amber, steady — a thing to go and do. */
+.chat-status.waiting { background: var(--warn); }
 @keyframes stem-dot-pulse {
   0%, 100% { opacity: 0.35; }
   50%      { opacity: 1; }
@@ -3042,6 +3044,7 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mcp-approval-detail code { font-size: var(--fs-12); }
 .mcp-approval-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--sp-4);
   margin-top: var(--sp-7);
@@ -3193,6 +3196,64 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   max-height: 160px;
   overflow-y: auto;
 }
+
+/* The permission card pinned above the composer of the chat that asked. Outside
+   the scroller, on the transcript's column, with the composer's own top rule so
+   it reads as part of the input area: "answer this, then carry on". */
+.conversation .chat { height: auto; flex: 1 1 auto; }
+.chat-approval {
+  flex: none;
+  padding: 0 var(--sp-12) var(--sp-6);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.chat-approval-card {
+  max-width: var(--measure);
+  margin-inline: auto;
+  padding: var(--sp-7) var(--sp-8);
+  border: 0.5px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--warn) 6%, var(--surface));
+  font-size: var(--fs-13);
+}
+.chat-approval-card .mcp-approval-head { margin-bottom: var(--sp-4); }
+.chat-approval-card .mcp-approval-head .row-icon { color: var(--warn); }
+.chat-approval-card .exec-approval-command { max-height: 120px; }
+.chat-approval-card .mcp-approval-actions { margin-top: var(--sp-5); }
+.chat-approval-card p.muted { margin: 0 0 var(--sp-3); }
+.approval-queued { font-size: var(--fs-12); }
+/* The rule "Always allow" would teach the agent: a path or a glob, so it wraps
+   anywhere rather than pushing the card wide. */
+.harness-approval-scope code { overflow-wrap: anywhere; }
+
+/* Some other chat is waiting on an answer: the bar that gets you there. */
+.approval-notice {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-8);
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  border-bottom: 0.5px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+  color: var(--ink);
+  font-size: var(--fs-12);
+}
+.approval-notice svg { flex: none; color: var(--warn); }
+.approval-notice-msg { flex: 1; min-width: 0; }
+.approval-notice-btn {
+  flex: none;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  font-size: var(--fs-12);
+  padding: var(--sp-2) var(--sp-6);
+  border-radius: var(--radius);
+  border: none;
+  background: var(--warn);
+  color: #fff;
+}
+.approval-notice-btn:hover { background: color-mix(in srgb, var(--warn) 85%, black); }
 
 /* coding_agent approval card: old/new file text when the ask carries a diff. */
 .harness-approval-diff .harness-diff-old {
