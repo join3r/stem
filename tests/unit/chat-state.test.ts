@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BackendEventEnvelope, MessageMeta, ThreadStatus } from '../../src/shared/types';
 import {
   EMPTY_STATE,
+  TURN_INTERRUPTED_MESSAGE,
   applyBackendEventToThread,
   applyProcessExitToThread,
   backendEventThreadId,
@@ -149,12 +150,40 @@ describe('chatState reducer', () => {
     expect(droppedText).toContain('WebSocket error');
     expect(droppedText).toMatch(/saved|Tasks tab/);
 
-    // Completed/aborted turns do NOT grow a bubble.
+    // Successfully completed turns do not grow a system bubble.
     const completed = applyBackendEventToThread(
       running,
       event('turn/completed', { threadId: 't1', turn: { id: 'turn1', status: 'completed' } })
     )!;
     expect(completed.messages).toHaveLength(0);
+  });
+
+  it.each(['', 'Partial answer'])('shows an interruption with a recoverable prompt and preserves partial text: %s', (partial) => {
+    const running = {
+      ...EMPTY_STATE,
+      running: true,
+      activeTurnId: 'turn1',
+      messages: [
+        { id: 'user-turn1', role: 'user' as const, content: 'Question', turnId: 'turn1' },
+        ...(partial ? [{ id: 'assistant-turn1', role: 'assistant' as const, content: partial, turnId: 'turn1' }] : [])
+      ]
+    };
+    const aborted = event('turn/aborted', { threadId: 't1', turn: { id: 'turn1', status: 'aborted' } });
+    const settled = applyBackendEventToThread(running, aborted)!;
+    expect(settled.messages.at(-1)).toEqual({
+      id: 'system-turn1', role: 'system', content: TURN_INTERRUPTED_MESSAGE, turnId: 'turn1'
+    });
+    expect(settled.messages.slice(0, -1)).toEqual(running.messages);
+    expect(settled.running).toBe(false);
+    expect(applyBackendEventToThread(settled, aborted)!.messages).toEqual(settled.messages);
+  });
+
+  it('keeps the aborted turn identity when settlement arrives before the start response', () => {
+    const settled = applyBackendEventToThread(
+      EMPTY_STATE,
+      event('turn/aborted', { threadId: 't1', turn: { id: 'turn1', status: 'aborted' } })
+    )!;
+    expect(settled.messages.at(-1)).toMatchObject({ role: 'system', turnId: 'turn1' });
   });
 
   it('stamps a post-run compaction row onto the settled bubble', () => {

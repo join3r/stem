@@ -57,7 +57,6 @@ import {
   EMPTY_STATE,
   appendSystemMessage,
   mergeDraftIntoReal,
-  mergeHydratedThread,
   mergeQuickChatHandoff,
   type ThreadState
 } from './chatState';
@@ -74,6 +73,7 @@ import {
   type SessionCore
 } from './session/turns';
 import { useThreadStates } from './session/store';
+import { createHistoryRefresher, mergeRefreshedThread } from './session/history';
 import { deletePendingIfCurrent, rekeyPendingIfCurrent } from './pendingTurn';
 import { RequestGate } from './requestGate';
 import { dismissTaskAlert, enqueueTaskAlert } from './taskAlerts';
@@ -200,11 +200,6 @@ export default function App() {
   // Navigation state the event pipeline and IPC continuations need synchronously.
   const activeThreadIdRef = useRef(activeThreadId);
   activeThreadIdRef.current = activeThreadId;
-  // Threads whose next open must reload from disk: a scheduled run streamed into a
-  // thread the user never opened this session, so any slice built from background
-  // events is partial (just the run, no prior history). Forcing a reload rebuilds
-  // the full transcript — including the run, collapsed via its persisted marker.
-  const forceReloadRef = useRef<Set<string>>(new Set());
   // Bumped every time the DRAFT slice is reset (New chat / Quick Chat). Captured
   // at send time so a turn that resolves late only adopts its real thread id when
   // the draft it was sent for is still the current one — otherwise the user has
@@ -218,6 +213,14 @@ export default function App() {
   // Threads deleted this session — late backend events for them are ignored so a
   // dying turn can't resurrect a removed chat's slice.
   const deletedThreadsRef = useRef(new Set<string>());
+  const refreshThreadHistory = useMemo(
+    () => createHistoryRefresher(
+      core.store,
+      (id) => window.stem.readChatHistory(id),
+      (id) => deletedThreadsRef.current.has(id)
+    ),
+    [core]
+  );
 
   // The currently visible slice. DRAFT when no real thread is open yet.
   const activeKey = activeThreadId ?? DRAFT;
@@ -691,6 +694,10 @@ export default function App() {
       routeEvent: (threadId) =>
         threadId && !deletedThreadsRef.current.has(threadId) ? threadId : null,
       settledStatus: (method, id) => {
+        // This callback runs inside the terminal-event reducer. Wait until it
+        // has cleared `running`, then fetch the persisted user message too:
+        // another device's user bubble is absent from the normal event stream.
+        if (id) queueMicrotask(() => void refreshThreadHistory(id));
         // A settled turn bumps the thread's mtime, which is what the Inbox reads as
         // "something happened here". If it happened in the chat you're looking at —
         // window focused, so you're actually seeing the answer — stamp it read so
@@ -729,7 +736,7 @@ export default function App() {
       }
     });
     return events.detach;
-  }, [core, handlePossibleAuthFailure, refreshChats, applyServerList]);
+  }, [core, handlePossibleAuthFailure, refreshChats, applyServerList, refreshThreadHistory]);
 
   // Scheduled tasks: keep the list in sync (drives chat badges + the Tasks tab),
   // insert a collapsed run row into an open thread when a run starts, and raise the
@@ -738,13 +745,9 @@ export default function App() {
     window.stem.listTasks().then(setTasks);
     const offChanged = window.stem.onTasksChanged(setTasks);
     const offRun = window.stem.onScheduledRun((run) => {
-      // If the thread isn't loaded, don't seed a partial slice from background events —
-      // mark it so the next open reloads the full transcript from disk (where the run
-      // is persisted with its collapse marker).
-      if (!core.store.getThread(run.threadId)) {
-        forceReloadRef.current.add(run.threadId);
-        return;
-      }
+      // Unloaded threads get their full transcript, including the persisted
+      // collapse marker, when opened.
+      if (!core.store.getThread(run.threadId)) return;
       setThread(run.threadId, (s) => {
         const id = `user-sched-${run.turnId}`;
         if (s.messages.some((m) => m.id === id)) return {};
@@ -1092,23 +1095,16 @@ export default function App() {
         );
       }
       const existing = core.store.getThread(threadId);
-      // A scheduled run streamed into this thread while it was never open → its slice
-      // is partial. Reload from disk unless a turn is actively streaming (which we'd
-      // clobber); clear the flag once consumed.
-      const forceReload = forceReloadRef.current.has(threadId) && !existing?.running;
-      // A slice that already holds the whole transcript (hydrated from disk, or
-      // complete by construction) is just switched to — re-reading it would
-      // clobber an in-flight stream for nothing. A slice WITHOUT the flag was
-      // seeded from background events (a turn run from another device or a
-      // schedule landed in a thread this window never opened) and starts at that
-      // turn, so it must go through the disk read below — mergeHydratedThread
-      // lays its live tail over the full transcript, streaming included.
-      // Opening clears the unread (done) dot.
-      if (!forceReload && existing?.hydrated && (existing.running || existing.messages.length > 0)) {
+      // Show a loaded transcript immediately, even on a slow/offline connection.
+      // Hydrated means complete at the last read, not current across devices:
+      // refresh settled slices in the background without another navigation.
+      // Live slices refresh on settlement; partial slices need the full read below.
+      if (existing?.hydrated) {
         if (!openGateRef.current.isCurrent(request)) return;
         setActiveThreadId(threadId);
         if (userNavigation) noteChatOpened(threadId);
         setThread(threadId, (s) => ({ status: s.status === 'done' ? 'idle' : s.status }));
+        void refreshThreadHistory(threadId);
         return;
       }
       const history = await window.stem.openChat(threadId);
@@ -1118,13 +1114,12 @@ export default function App() {
         // An entire turn can start and settle while the disk read is pending, so
         // `running` alone cannot identify a raced live slice. Compare against the
         // state captured when the request began and merge any newer events.
-        [history.threadId]: mergeHydratedThread(history.messages, prev[history.threadId], existing)
+        [history.threadId]: mergeRefreshedThread(history, prev[history.threadId], existing)
       }));
-      if (forceReload) forceReloadRef.current.delete(threadId);
       setActiveThreadId(history.threadId);
       if (userNavigation) noteChatOpened(history.threadId);
     },
-    [core, setThread, mutateInbox, updatedAtMap, noteChatOpened]
+    [core, setThread, mutateInbox, updatedAtMap, noteChatOpened, refreshThreadHistory]
   );
 
   // Reading is what marks a thread read, and "reading" means the thread is on
@@ -1161,17 +1156,14 @@ export default function App() {
 
   // ---- Coming back after the event stream was away ----
   //
-  // Two pushes, in this order, and the order is what makes them work together.
-  //
-  // The live-turn snapshot lands first and settles what is and is not running.
-  // Only then does the resync handler run, so `openChat` reads a `running` flag
-  // that is already correct — and its own rule, never reload a thread from disk
-  // while a turn is streaming into it, then does the right thing in both cases:
-  // a settled thread is reread in full, and a live one is left to the stream
-  // rather than clobbered by a file that does not have the answer in it yet.
-  // Refetching first is the version of this that quietly drops the end of a
-  // reply that is still being written.
-  useEffect(() => window.stem?.onLiveTurns((turns) => applyLiveTurns(core, turns)), [core]);
+  // Reconcile the running flags before refreshing the visible transcript. A
+  // snapshot also arrives after reconnects whose event gap could be replayed
+  // (and therefore do not emit resync).
+  useEffect(() => window.stem?.onLiveTurns((turns) => {
+    applyLiveTurns(core, turns);
+    const open = activeThreadIdRef.current;
+    if (open) void refreshThreadHistory(open);
+  }), [core, refreshThreadHistory]);
 
   useEffect(
     () =>
@@ -1183,10 +1175,9 @@ export default function App() {
         void refreshChats();
         const open = activeThreadIdRef.current;
         if (!open) return;
-        forceReloadRef.current.add(open);
-        void openChat(open, false);
+        void refreshThreadHistory(open);
       }),
-    [refreshChats, openChat]
+    [refreshChats, refreshThreadHistory]
   );
 
   // The same job, for coming back from being offline rather than from a gap in
@@ -1205,9 +1196,17 @@ export default function App() {
     void refreshChats();
     const open = activeThreadIdRef.current;
     if (!open) return;
-    forceReloadRef.current.add(open);
-    void openChat(open, false);
-  }, [offline, refreshChats, openChat]);
+    void refreshThreadHistory(open);
+  }, [offline, refreshChats, refreshThreadHistory]);
+
+  useEffect(() => {
+    const refreshVisible = () => {
+      const open = activeThreadIdRef.current;
+      if (open) void refreshThreadHistory(open);
+    };
+    window.addEventListener('focus', refreshVisible);
+    return () => window.removeEventListener('focus', refreshVisible);
+  }, [refreshThreadHistory]);
 
   // Folder mutations return the fresh list; apply it (through the guard that
   // re-applies any optimistic inbox patches still in flight).

@@ -39,6 +39,7 @@ import {
   providerName
 } from '../../shared/providers';
 import { stripCiteMarkers } from '../../shared/citations';
+import { TURN_INTERRUPTED_MESSAGE, turnFailureMessage } from '../../shared/chatState';
 import { log } from '../log';
 import { degrade } from '../degrade';
 import { isContextOverflowError } from '../backend/overflow';
@@ -1391,6 +1392,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // before it touches pi at all). Checked before the live-turn match because
     // the turn can be live while its start RPC has not returned.
     const pending = this.pendingStarts.get(turnId);
+    log('pi.interrupt', 'turn interruption requested', {
+      turnId,
+      reason: reason ?? 'unspecified',
+      pendingStart: !!pending,
+      live: this.workers.some((w) => w.proc && w.currentTurn?.turnId === turnId)
+    });
     if (pending) {
       pending.cancel();
       return;
@@ -1418,6 +1425,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * actual child process of any command it is running lives in main — stop both. */
   private abortLiveTurn(worker: PiWorker, turn: TurnContext, reason?: string): void {
     turn.aborted = true;
+    turn.abortRequested = true;
     this.execBridge?.abortThread(turn.threadId);
     this.harnessBridge?.abortThread(turn.threadId, reason);
     worker.proc?.send({ type: 'abort' });
@@ -1797,6 +1805,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     let title = 'New chat';
     const messages: ChatMessage[] = [];
     let lastUserId = '';
+    let pendingFailure: ChatMessage | undefined;
     // Persisted answer-time breakdowns + tool activity, keyed by the final
     // assistant entry id.
     const timings = getTurnTimingsByThread(threadId);
@@ -1830,6 +1839,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           role?: string;
           content?: unknown;
           usage?: PiUsage;
+          stopReason?: string;
+          errorMessage?: string;
           toolCallId?: string;
           isError?: boolean;
           provider?: string;
@@ -1883,6 +1894,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
       const { text: content, images, scheduled } = this.contentToParts(entry.message.content);
       if (role === 'user') {
+        if (pendingFailure) messages.push(pendingFailure);
+        pendingFailure = undefined;
         lastUserId = entry.id ?? lastUserId;
         pendingActivity = [];
         if (content.trim() || images.length)
@@ -1945,8 +1958,28 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             ...(sources ? { sources } : {})
           });
         }
+        // A provider error can be retried within the same user turn. Only
+        // expose its last outcome; a later clean assistant message recovers it.
+        pendingFailure = entry.message.stopReason === 'error'
+          ? {
+              id: `system-${lastUserId || entry.id}`,
+              role: 'system',
+              content: turnFailureMessage(entry.message.errorMessage),
+              ...(lastUserId ? { turnId: lastUserId } : {})
+            }
+          : undefined;
+        if (entry.message.stopReason === 'aborted') {
+          // pi persists the stopped assistant entry even before its first text
+          // token. Rebuild the same notice as the live reducer on every device.
+          const turnId = lastUserId || entry.id;
+          const id = `system-${turnId}`;
+          if (!messages.some((m) => m.id === id)) {
+            messages.push({ id, role: 'system', content: TURN_INTERRUPTED_MESSAGE, ...(turnId ? { turnId } : {}) });
+          }
+        }
       }
     }
+    if (pendingFailure) messages.push(pendingFailure);
     if (unparsed > 0) {
       degrade('pi.thread', `dropped ${unparsed} unreadable lines from the transcript`, unparsedError);
     }
@@ -3136,6 +3169,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * work until agent_settled (see onPiEvent). */
   private settleTurn(worker: PiWorker, turn: TurnContext, now: number): void {
     turn.endedAt = now;
+    if (turn.aborted) {
+      log('pi.interrupt', 'turn ended aborted', {
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        workerId: worker.id,
+        cause: turn.abortRequested ? 'stem-interrupt-request' : 'unknown',
+        hadAssistantText: !!turn.assistantText.trim(),
+        elapsedMs: turn.startedAt === undefined ? undefined : now - turn.startedAt
+      });
+    }
     // A turn that produced no capturable assistant event still records its user
     // message — unless it ended tainted, in which case the held-back prompt is
     // simply dropped (memorize:false must keep the whole turn out of Recall).
@@ -4041,13 +4084,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private async readActiveMessages(worker: PiWorker): Promise<{ title: string; messages: ChatMessage[] }> {
     const res = await worker.proc!.request({ type: 'get_messages' });
     const raw =
-      (res.data as { messages?: { role?: string; content?: unknown; provider?: string; model?: string }[] } | undefined)
+      (res.data as { messages?: { role?: string; content?: unknown; provider?: string; model?: string; stopReason?: string; errorMessage?: string }[] } | undefined)
         ?.messages ?? [];
     const messages: ChatMessage[] = [];
+    let pendingFailure: ChatMessage | undefined;
     for (const m of raw) {
       const { text: content, images, scheduled } = this.contentToParts(m.content);
-      if (!content.trim() && !images.length) continue;
-      if (m.role === 'user')
+      if (m.role === 'user' && !content.trim() && !images.length) continue;
+      if (m.role === 'user') {
+        if (pendingFailure) messages.push(pendingFailure);
+        pendingFailure = undefined;
         messages.push({
           id: `user-${messages.length}`,
           role: 'user',
@@ -4055,7 +4101,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           ...(images.length ? { attachments: images } : {}),
           ...(scheduled ? { scheduled } : {})
         });
-      else if (m.role === 'assistant') {
+      } else if (m.role === 'assistant') {
         // Same hover label as readThread: pi's message objects carry provider+model;
         // effort mirrors the live session's current thinking level (no per-message
         // record here, but this path only serves the just-created active session).
@@ -4064,14 +4110,23 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           model || worker.currentThinking
             ? { ...(model ? { model } : {}), ...(worker.currentThinking ? { effort: worker.currentThinking } : {}) }
             : undefined;
-        messages.push({
-          id: `assistant-${messages.length}`,
-          role: 'assistant',
-          content,
-          ...(meta ? { meta } : {})
-        });
+        if (content.trim()) {
+          messages.push({
+            id: `assistant-${messages.length}`,
+            role: 'assistant',
+            content,
+            ...(meta ? { meta } : {})
+          });
+        }
+        pendingFailure = m.stopReason === 'error'
+          ? { id: `system-${messages.length}`, role: 'system', content: turnFailureMessage(m.errorMessage) }
+          : undefined;
+        if (m.stopReason === 'aborted') {
+          messages.push({ id: `system-${messages.length}`, role: 'system', content: TURN_INTERRUPTED_MESSAGE });
+        }
       }
     }
+    if (pendingFailure) messages.push(pendingFailure);
     const state = await worker.proc!.request({ type: 'get_state' });
     const title = ((state.data as { sessionName?: string } | undefined)?.sessionName || 'New chat').trim() || 'New chat';
     return { title, messages };

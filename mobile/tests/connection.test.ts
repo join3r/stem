@@ -148,6 +148,84 @@ describe('createConnection', () => {
     connection.stop();
   });
 
+  it('seeds a newly opened screen from the snapshot and all events received since it', async () => {
+    const net = harness();
+    const connection = createConnection({ streamingFetch: net.fetch });
+    connection.setEndpoint(endpoint);
+    await settle();
+    net.send('event: snapshot\ndata: {"liveTurns":[{"threadId":"finished","turnId":"old"},{"threadId":"thinking","turnId":"quiet"}]}\n\n');
+    net.send('id: e.1\ndata: {"channel":"backend:event","payload":{"method":"turn/completed","params":{"threadId":"finished","turn":{"id":"old"}}}}\n\n');
+    net.send('id: e.2\ndata: {"channel":"backend:event","payload":{"method":"item/started","params":{"threadId":"new","turnId":"current"}}}\n\n');
+    await settle();
+
+    const listener = vi.fn();
+    const off = connection.subscribeLiveTurns(listener);
+    const snapshotsOnly = vi.fn();
+    connection.onLiveTurns(snapshotsOnly);
+    expect(listener).toHaveBeenCalledExactlyOnceWith([
+      { threadId: 'thinking', turnId: 'quiet' },
+      { threadId: 'new', turnId: 'current' }
+    ]);
+
+    // Repeated tokens do not publish a changed running set on every frame.
+    net.send('id: e.3\ndata: {"channel":"backend:event","payload":{"method":"item/agentMessage/delta","params":{"threadId":"new","turnId":"current","delta":"hello"}}}\n\n');
+    await settle();
+    expect(listener).toHaveBeenCalledTimes(1);
+    // A transcript uses this separate channel to settle against authoritative
+    // reconnect snapshots, never a possibly incomplete event-derived map.
+    net.send('id: e.4\ndata: {"channel":"backend:event","payload":{"method":"turn/aborted","params":{"threadId":"new","turn":{"id":"current"}}}}\n\n');
+    await settle();
+    expect(listener).toHaveBeenLastCalledWith([{ threadId: 'thinking', turnId: 'quiet' }]);
+    expect(snapshotsOnly).not.toHaveBeenCalled();
+    off();
+    connection.stop();
+  });
+
+  it('keeps running turns while asleep and replaces them when the next snapshot arrives', async () => {
+    const net = harness();
+    const connection = createConnection({ streamingFetch: net.fetch });
+    connection.setEndpoint(endpoint);
+    await settle();
+    net.send('event: snapshot\ndata: {"liveTurns":[{"threadId":"t1","turnId":"u1"}]}\n\n');
+    await settle();
+    connection.sleep();
+
+    const listener = vi.fn();
+    connection.subscribeLiveTurns(listener);
+    expect(listener).toHaveBeenLastCalledWith([{ threadId: 't1', turnId: 'u1' }]);
+    connection.wake();
+    await settle();
+    net.send('event: snapshot\ndata: {"liveTurns":[]}\n\n');
+    await settle();
+    expect(listener).toHaveBeenLastCalledWith([]);
+    connection.stop();
+  });
+
+  it('clears retained running turns on server changes and unpairing', async () => {
+    const net = harness();
+    const connection = createConnection({ streamingFetch: net.fetch });
+    connection.setEndpoint(endpoint);
+    await settle();
+    net.send('event: snapshot\ndata: {"liveTurns":[{"threadId":"old","turnId":"u1"}]}\n\n');
+    await settle();
+
+    const listener = vi.fn();
+    connection.subscribeLiveTurns(listener);
+    connection.setEndpoint({ serverUrl: 'https://other.example', token: 'other' });
+    expect(listener).toHaveBeenLastCalledWith([]);
+    const newScreen = vi.fn();
+    connection.subscribeLiveTurns(newScreen);
+    expect(newScreen).toHaveBeenCalledExactlyOnceWith([]);
+
+    await settle();
+    net.send('event: snapshot\ndata: {"liveTurns":[{"threadId":"other","turnId":"u2"}]}\n\n');
+    await settle();
+    connection.setEndpoint(null);
+    expect(listener).toHaveBeenLastCalledWith([]);
+    expect(newScreen).toHaveBeenLastCalledWith([]);
+    connection.stop();
+  });
+
   it('says so when the server will not have this device, and stops saying it once it does', async () => {
     const net = harness();
     net.refuseNext(401);

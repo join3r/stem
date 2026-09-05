@@ -54,8 +54,21 @@ describe('applyLiveTurnEvent', () => {
     }
   });
 
-  it('clears everything when an event names no thread — the backend is gone', () => {
+  it('clears everything for an unattributed backend exit', () => {
     const live = applyLiveTurnEvent(new Map([['t1', 'u1']]), event('process/exit', {}));
     expect(live.size).toBe(0);
+  });
+
+  it('preserves live turns on diagnostics and exits of idle workers', () => {
+    const live = new Map([['t1', 'u1']]);
+    expect(applyLiveTurnEvent(live, event('process/stderr', { text: 'diagnostic' }))).toBe(live);
+    expect(applyLiveTurnEvent(live, event('process/exit', { threadId: null, code: 0 }))).toBe(live);
+  });
+
+  it('clears only the turn carried by the worker that exited', () => {
+    const live = new Map([['t1', 'u1'], ['t2', 'u2']]);
+    const next = applyLiveTurnEvent(live, event('process/exit', { threadId: 't1', code: 1 }));
+    expect([...next]).toEqual([['t2', 'u2']]);
+    expect(applyLiveTurnEvent(next, event('process/exit', { threadId: 'other' }))).toBe(next);
   });
 });

@@ -33,9 +33,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   EMPTY_STATE,
   appendSystemMessage,
-  applyBackendEventToThread,
-  applyProcessExitToThread,
-  backendEventThreadId,
   mergeHydratedThread,
   type ThreadState
 } from '@shared/chatState';
@@ -52,8 +49,8 @@ import {
   type ReadState
 } from '../chat/reads';
 import { applyStartTurnResult, interruptTarget, settleAgainstSnapshot } from '../chat/turns';
+import { createThreadEvents } from '../chat/events';
 import { isUnreachable } from '../transport/connection';
-import { createEventBatcher } from '../transport/eventBatcher';
 import { useTransport } from '../transport/provider';
 import { useLiveTurns } from './useLiveTurns';
 
@@ -147,7 +144,7 @@ export function useThread(threadId: string): ThreadView {
       const mine = readRef.current.request;
       const stateAtRequest = stateRef.current;
       try {
-        const history = await connection.rpc('chats:open', threadId);
+        const history = await connection.rpc(cause === 'background' ? 'chats:history' : 'chats:open', threadId);
         if (!isCurrent(readRef.current, mine)) return;
         setTitle(history.title);
         if (history.offline && stateRef.current.hydrated) {
@@ -195,21 +192,14 @@ export function useThread(threadId: string): ThreadView {
   }, [status.streaming, load]);
 
   useEffect(() => {
-    const batcher = createEventBatcher((event) =>
-      apply((prev) => applyBackendEventToThread(prev, event) ?? prev)
-    );
-    const offEvent = connection.onBackendEvent((event) => {
-      const eventThread = backendEventThreadId(event);
-      // A thread-less event is the backend itself going away, and it ends every
-      // turn there is — including this one, whether or not it was named.
-      if (eventThread === undefined) {
-        batcher.flush();
-        apply(applyProcessExitToThread);
-        return;
-      }
-      if (eventThread !== threadId) return;
-      batcher.push(event);
+    const events = createThreadEvents({
+      threadId,
+      read: () => stateRef.current,
+      apply,
+      sending: () => pending.current !== null,
+      refresh: () => void load('background')
     });
+    const offEvent = connection.onBackendEvent(events.deliver);
     // Resync means the stream could not be resumed, so the deltas that would
     // have completed this transcript are gone. Re-reading it is the only honest
     // answer, and the same one every other screen gives. Wake is the phone
@@ -221,7 +211,7 @@ export function useThread(threadId: string): ThreadView {
     // that finished while the phone was asleep; see settleAgainstSnapshot. Any
     // frames the batcher holds are older than the snapshot and go first.
     const offSnapshot = connection.onLiveTurns((snapshot) => {
-      batcher.flush();
+      events.flush();
       apply((prev) => settleAgainstSnapshot(prev, snapshot, threadId, pending.current !== null));
     });
     return () => {
@@ -229,7 +219,7 @@ export function useThread(threadId: string): ThreadView {
       offResync();
       offWake();
       offSnapshot();
-      batcher.flush();
+      events.flush();
     };
   }, [apply, connection, load, threadId]);
 

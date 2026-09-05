@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalPolicyPath, pathInsideAny, PiRuntime } from '../../src/server/pi/runtime';
 import type { PiWorker } from '../../src/server/pi/worker';
 import { newTurnContext } from '../../src/server/pi/normalize';
+import { TURN_INTERRUPTED_MESSAGE, turnFailureMessage } from '../../src/shared/chatState';
+import * as logger from '../../src/server/log';
 import { PiProcess, stderrReason } from '../../src/server/pi/rpc';
 import { updateDefaultModel } from '../../src/server/workspace/settings';
 import { removeChat, setChatPrivate } from '../../src/server/workspace/chats';
@@ -711,6 +713,106 @@ describe('stopping a turn before its start completes', () => {
     const result = await runtime.startTurn({ input: 'remember that I like tea', turnId: TURN_ID });
     expect(result).toEqual({ handled: true, canceled: true });
     expect(result.rememberedPath).toBeUndefined();
+  });
+});
+
+describe('interrupted reply recovery', () => {
+  it.each(['', 'Partial reply'])('reopens an aborted reply with its user message and notice: %s', async (partial) => {
+    const { runtime, sessions } = await tempRuntime();
+    const lines = [
+      { type: 'session', id: 'aborted-session', timestamp: '2026-09-05T07:31:51.000Z', cwd: '/tmp' },
+      { type: 'message', id: 'user-entry', message: { role: 'user', content: [{ type: 'text', text: 'Question' }] } },
+      { type: 'message', id: 'assistant-entry', message: {
+        role: 'assistant', content: partial ? [{ type: 'text', text: partial }] : [], stopReason: 'aborted', errorMessage: 'Request was aborted'
+      } }
+    ];
+    await writeFile(join(sessions, 'aborted.jsonl'), lines.map((line) => JSON.stringify(line)).join('\n'));
+    const { messages } = await runtime.readThread('aborted-session');
+    expect(messages[0]).toMatchObject({ role: 'user', content: 'Question', turnId: 'user-entry' });
+    expect(messages.at(-1)).toEqual({ id: 'system-user-entry', role: 'system', content: TURN_INTERRUPTED_MESSAGE, turnId: 'user-entry' });
+    expect(messages.filter((m) => m.role === 'assistant').map((m) => m.content)).toEqual(partial ? [partial] : []);
+    expect(messages).toHaveLength(partial ? 3 : 2);
+  });
+
+  it('shows the interrupted reply from a fresh in-memory session before its file exists', async () => {
+    const { runtime } = await tempRuntime();
+    const worker = workerOf(runtime);
+    worker.activeThreadId = 'fresh';
+    worker.proc = {
+      running: true,
+      request: async (command) => command.type === 'get_messages'
+        ? { success: true, data: { messages: [
+          { role: 'user', content: [{ type: 'text', text: 'Question' }] },
+          { role: 'assistant', content: [], stopReason: 'aborted' }
+        ] } }
+        : { success: true, data: { sessionName: 'Fresh chat' } }
+    };
+    const { title, messages } = await runtime.readThread('fresh');
+    expect(title).toBe('Fresh chat');
+    expect(messages).toHaveLength(2);
+    expect(messages.at(-1)).toMatchObject({ role: 'system', content: TURN_INTERRUPTED_MESSAGE });
+  });
+
+  it.each([false, true])('logs observed abort without inventing a cause (requested=%s)', async (requested) => {
+    const { runtime } = await tempRuntime();
+    const worker = workerOf(runtime);
+    worker.currentTurn = newTurnContext('thread', 'turn');
+    worker.proc = { send: vi.fn() };
+    const logSpy = vi.spyOn(logger, 'log').mockImplementation(() => undefined);
+    try {
+      if (requested) await runtime.interruptTurn('turn', 'client requested interruption');
+      const internal = runtime as unknown as { onPiEvent(worker: FakeWorker, event: Record<string, unknown>): void };
+      internal.onPiEvent(worker, { type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'aborted' } });
+      internal.onPiEvent(worker, { type: 'agent_end' });
+      expect(logSpy).toHaveBeenCalledWith('pi.interrupt', 'turn ended aborted', expect.objectContaining({
+        threadId: 'thread', turnId: 'turn', cause: requested ? 'stem-interrupt-request' : 'unknown', hadAssistantText: false
+      }));
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+});
+
+describe('failed reply history recovery', () => {
+  it.each([false, true])('retains only unrecovered provider failures in persisted history (recovered=%s)', async (recovered) => {
+    const { runtime, sessions } = await tempRuntime();
+    const lines = [
+      { type: 'session', id: 'failure-session', cwd: '/tmp' },
+      { type: 'message', id: 'u1', message: { role: 'user', content: 'First question' } },
+      { type: 'message', id: 'a1', message: { role: 'assistant', content: 'Partial reply', stopReason: 'error', errorMessage: 'WebSocket error' } },
+      ...(recovered ? [{ type: 'message', id: 'a2', message: { role: 'assistant', content: 'Recovered reply', stopReason: 'stop' } }] : []),
+      { type: 'message', id: 'u2', message: { role: 'user', content: 'Second question' } },
+      { type: 'message', id: 'a3', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'first failure' } },
+      { type: 'message', id: 'a4', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '401 Unauthorized' } }
+    ];
+    await writeFile(join(sessions, 'failed.jsonl'), lines.map((line) => JSON.stringify(line)).join('\n'));
+    const { messages } = await runtime.readThread('failure-session');
+    expect(messages.filter((m) => m.role === 'system')).toEqual([
+      ...(recovered ? [] : [{ id: 'system-u1', role: 'system', content: turnFailureMessage('WebSocket error'), turnId: 'u1' }]),
+      { id: 'system-u2', role: 'system', content: '401 Unauthorized', turnId: 'u2' }
+    ]);
+    expect(messages.some((m) => m.content === 'Partial reply')).toBe(true);
+    if (!recovered) expect(messages.findIndex((m) => m.id === 'system-u1')).toBeLessThan(messages.findIndex((m) => m.id === 'user-u2'));
+  });
+
+  it.each([false, true])('retains only unrecovered failures from fresh in-memory history (recovered=%s)', async (recovered) => {
+    const { runtime } = await tempRuntime();
+    const worker = workerOf(runtime);
+    worker.activeThreadId = 'fresh-failure';
+    worker.proc = {
+      running: true,
+      request: async (command) => command.type === 'get_messages'
+        ? { success: true, data: { messages: [
+          { role: 'user', content: 'Question' },
+          { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'WebSocket error' },
+          ...(recovered ? [{ role: 'assistant', content: 'Recovered', stopReason: 'stop' }] : [])
+        ] } }
+        : { success: true, data: { sessionName: 'Fresh chat' } }
+    };
+    const { messages } = await runtime.readThread('fresh-failure');
+    expect(messages).toHaveLength(2);
+    if (recovered) expect(messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Recovered' });
+    else expect(messages.at(-1)).toMatchObject({ role: 'system', content: turnFailureMessage('WebSocket error') });
   });
 });
 

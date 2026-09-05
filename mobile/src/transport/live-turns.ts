@@ -38,14 +38,20 @@ export function liveTurnList(live: LiveTurnMap): LiveTurn[] {
  * re-render on every streamed token — which is most of the events there are.
  */
 export function applyLiveTurnEvent(live: Map<string, string>, event: BackendEventEnvelope): Map<string, string> {
-  const params = event.params as { threadId?: string; turnId?: string } | undefined;
+  const params = event.params as { threadId?: string | null; turnId?: string } | undefined;
   const threadId = params?.threadId;
-  // No thread means a process-level event (process/exit): the backend is gone
-  // and no turn survived it, so everything clears. Applied to ANY thread-less
-  // event, not just that one, because noteTurnEvent() on the server does the
-  // same — and this map is only useful while it agrees with the one the next
-  // snapshot will overwrite it with.
-  if (!threadId) return live.size === 0 ? live : new Map();
+  if (event.method === 'process/exit') {
+    // Pool workers report their own thread, or null when they were idle. Only
+    // an older, unattributed backend exit means all running turns are gone.
+    if (params && 'threadId' in params && threadId == null) return live;
+    if (!threadId) return live.size === 0 ? live : new Map();
+    if (!live.has(threadId)) return live;
+    const next = new Map(live);
+    next.delete(threadId);
+    return next;
+  }
+  // Diagnostics such as process/stderr say nothing about whether a turn ended.
+  if (!threadId) return live;
   // The same two methods the desktop's follow-me pill treats as "this thread is
   // working": the first item of a turn, or its first token.
   if (event.method === 'item/started' || event.method === 'item/agentMessage/delta') {

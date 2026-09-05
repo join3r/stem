@@ -161,6 +161,8 @@ type TurnSettledMethod = 'turn/completed' | 'turn/failed' | 'turn/aborted';
 const TRANSPORT_ERROR =
   /websocket|socket hang ?up|econnreset|econnrefused|etimedout|network error|fetch failed|stream (?:closed|ended|error)|connection (?:closed|reset|refused|error)|terminated|premature close/i;
 
+export const TURN_INTERRUPTED_MESSAGE = 'The reply was interrupted. You can edit and resend your message.';
+
 export function turnFailureMessage(error?: string): string {
   const trimmed = error?.trim();
   if (!trimmed) return 'The reply failed. Try sending the message again.';
@@ -401,21 +403,22 @@ export function applyBackendEventToThread(
     case 'turn/aborted': {
       const p = event.params as TurnCompletedParams;
       const method = event.method as TurnSettledMethod;
-      // A failed turn carries its failure text — surface it as a system bubble
-      // instead of silently stopping (auth expiry, provider errors, …). Stamp the
-      // turn id so the bubble can offer Retry — but only when a user message
+      // Failed and interrupted turns need a visible system bubble even when the
+      // model produced no text. An interruption always keeps its turn identity
+      // because the start response can arrive later. For other failures, expose
+      // Retry only when a user message
       // actually carries this turn (synthetic failures like the Quick Chat
       // hand-off mint an id no message has; Retry could never map those back).
       const canRetry = state.messages.some((m) => m.role === 'user' && m.turnId === p.turn.id);
       const settled =
-        method === 'turn/failed'
+        method === 'turn/failed' || method === 'turn/aborted'
           ? [
-              ...stampActivity(state.messages, p.turn.id, state.activities),
+              ...stampActivity(state.messages, p.turn.id, state.activities).filter((m) => m.id !== `system-${p.turn.id}`),
               {
                 id: `system-${p.turn.id}`,
                 role: 'system' as const,
-                ...(canRetry ? { turnId: p.turn.id } : {}),
-                content: turnFailureMessage(p.error)
+                ...(canRetry || method === 'turn/aborted' ? { turnId: p.turn.id } : {}),
+                content: method === 'turn/aborted' ? TURN_INTERRUPTED_MESSAGE : turnFailureMessage(p.error)
               }
             ]
           : stampActivity(state.messages, p.turn.id, state.activities);

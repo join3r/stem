@@ -9,14 +9,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_STATE,
-  applyBackendEventToThread,
-  applyProcessExitToThread,
-  backendEventThreadId,
   mergeHydratedThread,
   type ThreadState
 } from '@shared/chatState';
 import type { BackendEventEnvelope, ChatMessage } from '@shared/types';
-import { createEventBatcher, type Scheduler } from '../src/transport/eventBatcher';
+import { type Scheduler } from '../src/transport/eventBatcher';
+import { createThreadEvents } from '../src/chat/events';
 
 const event = (method: string, params: unknown): BackendEventEnvelope => ({
   method,
@@ -25,23 +23,21 @@ const event = (method: string, params: unknown): BackendEventEnvelope => ({
 });
 
 /** The screen's own handler, minus React: filter, batch, fold. */
-function thread(threadId: string, schedule: Scheduler) {
-  let state: ThreadState = EMPTY_STATE;
-  const batcher = createEventBatcher((e) => {
-    state = applyBackendEventToThread(state, e) ?? state;
-  }, schedule);
+function thread(threadId: string, schedule: Scheduler, initial: ThreadState = EMPTY_STATE) {
+  let state = initial;
+  let refreshes = 0;
+  const events = createThreadEvents({
+    threadId,
+    read: () => state,
+    apply: (update) => { state = update(state); },
+    sending: () => false,
+    refresh: () => { refreshes++; },
+    schedule
+  });
   return {
-    deliver(e: BackendEventEnvelope): void {
-      const id = backendEventThreadId(e);
-      if (id === undefined) {
-        batcher.flush();
-        state = applyProcessExitToThread(state);
-        return;
-      }
-      if (id !== threadId) return;
-      batcher.push(e);
-    },
-    flush: () => batcher.flush(),
+    deliver: events.deliver,
+    flush: events.flush,
+    get refreshes(): number { return refreshes; },
     get state(): ThreadState {
       return state;
     }
@@ -69,6 +65,35 @@ const text = (messages: ChatMessage[]): [string, string][] =>
   messages.map((m) => [m.role, m.content] as [string, string]);
 
 describe('folding a live turn', () => {
+  it('refreshes the history when another device aborts without an answer', () => {
+    const clock = manualScheduler();
+    const t = thread('t1', clock.schedule, { ...EMPTY_STATE, hydrated: true });
+    t.deliver(event('turn/aborted', { threadId: 't1', turn: { id: 'remote-turn' } }));
+    expect(t.refreshes).toBe(1);
+    expect(t.state.running).toBe(false);
+  });
+
+  it('keeps a local turn notice without a redundant history read', () => {
+    const clock = manualScheduler();
+    const t = thread('t1', clock.schedule, {
+      ...EMPTY_STATE, running: true,
+      messages: [{ id: 'u1', role: 'user', content: 'hello', turnId: 'local-turn' }]
+    });
+    t.deliver(event('turn/aborted', { threadId: 't1', turn: { id: 'local-turn' } }));
+    expect(t.refreshes).toBe(0);
+  });
+
+  it('does not treat diagnostics or another worker exit as this turn stopping', () => {
+    const clock = manualScheduler();
+    const t = thread('t1', clock.schedule, { ...EMPTY_STATE, running: true, activeTurnId: 'u1' });
+    t.deliver(event('process/stderr', { text: 'diagnostic' }));
+    t.deliver(event('process/exit', { threadId: 't2' }));
+    t.deliver(event('process/exit', { threadId: null }));
+    expect(t.state.running).toBe(true);
+    t.deliver(event('process/exit', { threadId: 't1' }));
+    expect(t.state.running).toBe(false);
+  });
+
   it('assembles a reply out of deltas and settles it', () => {
     const clock = manualScheduler();
     const t = thread('t1', clock.schedule);

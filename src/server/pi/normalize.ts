@@ -40,6 +40,8 @@ export interface TurnContext {
   pendingJoin: boolean;
   errored: boolean;
   aborted: boolean;
+  /** True only when Stem sent an explicit cancellation to pi. */
+  abortRequested?: boolean;
   errorMessage?: string;
   /**
    * Per-turn latency marks (ms epoch / durations), populated by PiRuntime — NOT by

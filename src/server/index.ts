@@ -452,9 +452,10 @@ function registerIpc(): void {
     }
     return started;
   });
-  registerServer('backend:interruptTurn', (_e, turnId: string) => {
+  registerServer('backend:interruptTurn', (e, turnId: string) => {
     lastInteractiveAt = Date.now();
-    return runtime!.interruptTurn(turnId);
+    log('pi.interrupt', 'client requested interruption', { turnId, deviceId: e?.deviceId ?? 'local' });
+    return runtime!.interruptTurn(turnId, 'client requested interruption');
   });
   // Mint an empty thread up front. Quick Chat is the only caller: it pre-creates
   // the thread before its first prompt so the turn's events route to the overlay

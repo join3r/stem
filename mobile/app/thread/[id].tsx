@@ -20,7 +20,7 @@
 // change shape to gain a picker, so none was faked.
 
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type Ref } from 'react';
 import {
   ActivityIndicator,
   AppState,
@@ -37,6 +37,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { activityLabel } from '@shared/activity';
 import type { ActivityItem, ChatMessage } from '@shared/types';
 import type { Persona } from '@shared/types';
+import { messageToResend } from '../../src/chat/resend';
 import { useChatPersonas } from '../../src/hooks/useChatPersonas';
 import { useThread } from '../../src/hooks/useThread';
 import { useTransport } from '../../src/transport/provider';
@@ -56,6 +57,7 @@ export default function ThreadScreen(): ReactElement {
   const theme = useTheme();
   const thread = useThread(threadId);
   const [draft, setDraft] = useState('');
+  const composerInput = useRef<TextInput>(null);
   // Who the next send runs as. Screen-local and per-send on the wire — the
   // server pins nothing to the thread, so the desk (or a later visit) sending
   // plain into the same thread is normal, exactly like scheduled persona runs.
@@ -136,6 +138,13 @@ export default function ThreadScreen(): ReactElement {
   }, [draft, personaId, thread]);
 
   const canSend = draft.trim().length > 0 && !thread.blocked && !thread.running && !thread.sending;
+  const resend = messageToResend(thread.state.messages);
+  const canRestore = !!resend && !draft && !thread.running && !thread.sending;
+  const restoreMessage = useCallback(() => {
+    if (!resend || !canRestore) return;
+    setDraft(resend.content);
+    requestAnimationFrame(() => composerInput.current?.focus());
+  }, [canRestore, resend]);
 
   // What a <Quiz> or <Form> in a reply may do: exactly what the composer does,
   // and only when the composer itself could. `running` is the flag those
@@ -201,7 +210,13 @@ export default function ThreadScreen(): ReactElement {
             />
           }
           renderItem={({ item }) => (
-            <Bubble message={item} theme={theme} streaming={item.id === thread.state.streamingId} />
+            <Bubble
+              message={item}
+              theme={theme}
+              streaming={item.id === thread.state.streamingId}
+              onRestore={resend && item.id === thread.state.messages.at(-1)?.id ? restoreMessage : undefined}
+              canRestore={canRestore}
+            />
           )}
         />
       </MdxActionContext.Provider>
@@ -217,6 +232,7 @@ export default function ThreadScreen(): ReactElement {
         personas={personas}
         personaId={personaId}
         onSelectPersona={setPersonaId}
+        inputRef={composerInput}
       />
     </View>
   );
@@ -225,11 +241,15 @@ export default function ThreadScreen(): ReactElement {
 function Bubble({
   message,
   theme,
-  streaming
+  streaming,
+  onRestore,
+  canRestore
 }: {
   message: ChatMessage;
   theme: Theme;
   streaming: boolean;
+  onRestore?: () => void;
+  canRestore: boolean;
 }): ReactElement {
   if (message.role === 'user') {
     return (
@@ -245,6 +265,16 @@ function Bubble({
     return (
       <View style={[styles.systemBubble, { borderColor: theme.line }]}>
         <Text style={[styles.systemText, { color: theme.bad }]}>{message.content}</Text>
+        {onRestore ? (
+          <Pressable
+            onPress={onRestore}
+            disabled={!canRestore}
+            accessibilityRole="button"
+            style={styles.restore}
+          >
+            <Text style={{ color: canRestore ? theme.accent : theme.dim }}>Edit and resend</Text>
+          </Pressable>
+        ) : null}
       </View>
     );
   }
@@ -320,7 +350,8 @@ function Composer({
   blocked,
   personas,
   personaId,
-  onSelectPersona
+  onSelectPersona,
+  inputRef
 }: {
   theme: Theme;
   value: string;
@@ -333,6 +364,7 @@ function Composer({
   personas: Persona[];
   personaId: string | null;
   onSelectPersona: (personaId: string | null) => void;
+  inputRef: Ref<TextInput>;
 }): ReactElement {
   // The home indicator's corner radii eat into the last dozen points of the
   // screen, so the composer stands on the safe-area inset while the keyboard is
@@ -352,6 +384,7 @@ function Composer({
       <PersonaChips personas={personas} selected={personaId} onSelect={onSelectPersona} theme={theme} />
       <View style={styles.composerRow}>
         <TextInput
+          ref={inputRef}
           style={[styles.input, { backgroundColor: theme.card, borderColor: theme.line, color: theme.text }]}
           value={value}
           onChangeText={onChange}
@@ -407,6 +440,7 @@ const styles = StyleSheet.create({
     paddingVertical: 9
   },
   systemText: { fontSize: 14, lineHeight: 20 },
+  restore: { alignSelf: 'flex-start', paddingVertical: 12 },
   activityBlock: { gap: 3, marginBottom: 8 },
   activityRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   activityDot: { width: 6, height: 6, borderRadius: 3 },

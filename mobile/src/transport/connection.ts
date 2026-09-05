@@ -36,6 +36,7 @@
 import type { BackendEventEnvelope, LiveTurn } from '@shared/types';
 import type { OfflineCache } from '../offline/cache';
 import type { ChannelArgs, ChannelName, ChannelResult } from './channels';
+import { applyLiveTurnEvent, liveTurnList, liveTurnsFromSnapshot } from './live-turns';
 import { rpc, rpcRaw, UnreachableError, type Endpoint } from './rpc';
 import { createEventStream, type EventStream, type StreamingFetch } from './stream';
 
@@ -113,8 +114,10 @@ export interface Connection {
    * contract, and it is why the server sends this instead of a partial replay.
    */
   onResync(listener: () => void): Unsubscribe;
-  /** What was running when the stream opened; see LiveTurn in shared/types.ts. */
+  /** Authoritative snapshots received when the stream opens; used to reconcile transcripts. */
   onLiveTurns(listener: (liveTurns: LiveTurn[]) => void): Unsubscribe;
+  /** Current running turns, delivered immediately and whenever snapshots/events change them. */
+  subscribeLiveTurns(listener: (liveTurns: LiveTurn[]) => void): Unsubscribe;
   /**
    * The app is in front again and whatever is on screen is of unknown age.
    * Screens holding server data refetch it QUIETLY — spinner if they like, no
@@ -180,6 +183,11 @@ export function createConnection(deps: ConnectionDeps): Connection {
   const statusListeners = emitter<ConnectionStatus>();
   const resyncListeners = emitter<void>();
   const liveTurnListeners = emitter<LiveTurn[]>();
+  const liveStateListeners = emitter<LiveTurn[]>();
+  // Screens can mount long after the connection's snapshot arrived. Keep its
+  // current answer here, including the events since that snapshot, so opening
+  // a running chat can offer Stop before the model produces another token.
+  let liveTurns = new Map<string, string>();
   const wakeListeners = emitter<void>();
   const pushListeners = new Map<string, ReturnType<typeof emitter<unknown>>>();
 
@@ -284,9 +292,22 @@ export function createConnection(deps: ConnectionDeps): Connection {
     endpoint: () => endpoint,
     fetch: deps.streamingFetch,
     log: deps.log,
-    onPush: (channel, payload) => pushListeners.get(channel)?.emit(payload),
+    onPush: (channel, payload) => {
+      const previous = liveTurns;
+      if (channel === 'backend:event') {
+        liveTurns = applyLiveTurnEvent(liveTurns, payload as BackendEventEnvelope);
+      }
+      // Deliver the event to transcripts before publishing its running-state
+      // change; a failure's explanation belongs to the event itself.
+      pushListeners.get(channel)?.emit(payload);
+      if (liveTurns !== previous) liveStateListeners.emit(liveTurnList(liveTurns));
+    },
     onResync: () => resyncListeners.emit(undefined),
-    onSnapshot: (liveTurns) => liveTurnListeners.emit(liveTurns),
+    onSnapshot: (snapshot) => {
+      liveTurns = liveTurnsFromSnapshot(snapshot);
+      liveStateListeners.emit(liveTurnList(liveTurns));
+      liveTurnListeners.emit(liveTurnList(liveTurns));
+    },
     onReachable: noteTransport,
     // A connect that got as far as a stream is a connect the credential passed,
     // so this is also where a stale `unauthorized` is cleared — and the moment
@@ -325,6 +346,11 @@ export function createConnection(deps: ConnectionDeps): Connection {
       onPush('backend:event', (payload) => listener(payload as BackendEventEnvelope)),
     onResync: (listener) => resyncListeners.add(listener),
     onLiveTurns: (listener) => liveTurnListeners.add(listener),
+    subscribeLiveTurns: (listener) => {
+      const off = liveStateListeners.add(listener);
+      listener(liveTurnList(liveTurns));
+      return off;
+    },
     onWake: (listener) => wakeListeners.add(listener),
     async rpc<C extends ChannelName>(channel: C, ...args: ChannelArgs<C>): Promise<ChannelResult<C>> {
       if (!endpoint) throw new Error('This phone is not paired with a Stem server yet.');
@@ -355,6 +381,8 @@ export function createConnection(deps: ConnectionDeps): Connection {
     },
     setEndpoint(next) {
       endpoint = next;
+      liveTurns = new Map();
+      liveStateListeners.emit([]);
       endGrace();
       patchStatus({
         paired: next !== null,

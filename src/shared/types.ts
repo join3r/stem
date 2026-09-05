@@ -3803,6 +3803,8 @@ export interface StemApi {
   /** Cross-language (Slovak/English) search — expands the query, then matches. */
   searchChats(query: string): Promise<ChatSearchHit[]>;
   openChat(threadId: string): Promise<ChatHistory>;
+  /** Refresh a transcript without opening/prewarming its backend session. */
+  readChatHistory(threadId: string): Promise<ChatHistory>;
   /** Drop the given turn and every later turn from the thread (retry/edit re-run). */
   rollbackToTurn(threadId: string, turnId: string): Promise<void>;
   /** Branch the thread into a new chat, trimmed to end at the given turn. */
