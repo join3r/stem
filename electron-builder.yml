@@ -69,28 +69,26 @@ files:
   # 0.5.0 failed sign-in with "Cannot find package '@earendil-works/pi-ai'"
   # (GitHub issue #12). The duplicate SDK trees the old exclusions were meant
   # to drop are already deduped by the collector; nothing here saves size.
-  # onnxruntime-node ships one fat package covering every platform/arch it supports
-  # (~500MB unpacked) and electron-builder copies all of it. The GPU execution
-  # providers are never opened: recall/embed-worker.ts passes no `device` to
-  # transformers.js, so it asks for the CPU provider and the rest are never
+  # onnxruntime-node's unreachable platform/arch binaries are removed after the
+  # copy by scripts/prune-onnxruntime.mjs (afterPack below). The GPU execution
+  # providers are never opened either: recall/embed-worker.ts passes no `device`
+  # to transformers.js, so it asks for the CPU provider and the rest are never
   # dlopen'd. libonnxruntime_providers_cuda.so exists for linux/x64 alone and is
-  # 327MB — the whole reason the v0.2.0 x64 AppImage came out at twice the size of
-  # the arm64 one (433MB vs 216MB). The per-platform `files` below drop the
-  # unreachable arch dirs; the loader only ever resolves
-  # bin/napi-v3/${process.platform}/${process.arch}.
+  # 327MB — the whole reason the v0.2.0 x64 AppImage came out at twice the size
+  # of the arm64 one (433MB vs 216MB).
   - '!node_modules/onnxruntime-node/bin/napi-v3/*/*/libonnxruntime_providers_*'
+
+# NEVER add a platform-specific `files:` list under mac:/linux:. Top-level
+# `files` is normalised into one filter object; a platform list stays a plain
+# array of strings and becomes a second matcher, and a matcher holding only
+# `!…` patterns gets `**/*` prepended — every release up to 0.5.1 carried the
+# whole repository (src/, tests/, mobile/, docs/, Dockerfile, …) inside the app
+# because of two such lists. Target-specific trimming lives in the hook instead.
+afterPack: scripts/prune-onnxruntime.mjs
 
 mac:
   target: [dmg, zip]
   category: public.app-category.productivity
-  # Appended to the top-level `files` (electron-builder merges platform-specific
-  # patterns rather than replacing them). Spelled out per platform on purpose:
-  # electron-builder's ${platform} macro expands to the *host* (process.platform),
-  # so a cross-build would strip the wrong dirs, while ${arch} is the build target
-  # and is correct here — `dist:mac` builds x64 and arm64 in one invocation.
-  files:
-    - '!node_modules/onnxruntime-node/bin/napi-v3/{linux,win32}/**'
-    - '!node_modules/onnxruntime-node/bin/napi-v3/darwin/!(${arch})/**'
   # Unsigned for now (no Apple Developer ID) — recipients right-click-open or
   # clear quarantine; notarization is a later follow-up.
   identity: null
@@ -98,9 +96,6 @@ mac:
 linux:
   target: [AppImage, deb]
   executableName: stem
-  files: # see the note under `mac`
-    - '!node_modules/onnxruntime-node/bin/napi-v3/{darwin,win32}/**'
-    - '!node_modules/onnxruntime-node/bin/napi-v3/linux/!(${arch})/**'
   # 1024px source; electron-builder derives the icon size set.
   icon: build/icon.png
   category: Utility

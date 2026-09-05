@@ -21,12 +21,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run dist:linux
-      # The artifact tree is what electron-builder's module collector produced, not
-      # a copy of node_modules — issue #12 shipped an AppImage whose pi could not
-      # import its own dependencies. Load the packaged pi with plain node before
-      # the tree is sealed into the AppImage.
-      - name: Packaged pi resolves its dependencies
-        run: node release/linux*-unpacked/resources/app/node_modules/@earendil-works/pi-coding-agent/dist/cli.js --version
+      # The artifact tree is what electron-builder's matchers and module collector
+      # produced, not a copy of the checkout — issue #12 shipped an AppImage whose
+      # pi could not import its own dependencies, and every release up to 0.5.1
+      # carried the repository's src/ and tests/ (see the NEVER note in
+      # electron-builder.yml). Check both before the tree is sealed into the AppImage.
+      - name: Packaged app is sound
+        run: |
+          app=$(echo release/linux*-unpacked/resources/app)
+          node "$app/node_modules/@earendil-works/pi-coding-agent/dist/cli.js" --version
+          for stray in src tests mobile docs scripts Dockerfile; do
+            if [ -e "$app/$stray" ]; then echo "::error::$stray/ leaked into the packaged app"; exit 1; fi
+          done
+          ls "$app/node_modules/onnxruntime-node/bin/napi-v3"
       # latest-linux.yml is the AppImage's update feed: a running Stem polls it
       # on this release to learn a newer one exists (src/desktop/updates.ts).
       - uses: actions/upload-artifact@v4
@@ -49,12 +56,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run dist:linux -- --arm64
-      # The artifact tree is what electron-builder's module collector produced, not
-      # a copy of node_modules — issue #12 shipped an AppImage whose pi could not
-      # import its own dependencies. Load the packaged pi with plain node before
-      # the tree is sealed into the AppImage.
-      - name: Packaged pi resolves its dependencies
-        run: node release/linux*-unpacked/resources/app/node_modules/@earendil-works/pi-coding-agent/dist/cli.js --version
+      # The artifact tree is what electron-builder's matchers and module collector
+      # produced, not a copy of the checkout — issue #12 shipped an AppImage whose
+      # pi could not import its own dependencies, and every release up to 0.5.1
+      # carried the repository's src/ and tests/ (see the NEVER note in
+      # electron-builder.yml). Check both before the tree is sealed into the AppImage.
+      - name: Packaged app is sound
+        run: |
+          app=$(echo release/linux*-unpacked/resources/app)
+          node "$app/node_modules/@earendil-works/pi-coding-agent/dist/cli.js" --version
+          for stray in src tests mobile docs scripts Dockerfile; do
+            if [ -e "$app/$stray" ]; then echo "::error::$stray/ leaked into the packaged app"; exit 1; fi
+          done
+          ls "$app/node_modules/onnxruntime-node/bin/napi-v3"
       # An arm64 build writes latest-linux-arm64.yml — same feed, per-arch name,
       # so the two lanes never collide on one file.
       - uses: actions/upload-artifact@v4

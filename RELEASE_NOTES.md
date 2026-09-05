@@ -12,6 +12,14 @@ Maintainer notes:
   date, tag.
 -->
 
+## 0.5.2 — Unreleased
+
+### Fixed
+
+- **Downloads carry only the app.** Every installer so far also packed Stem's own source tree,
+  tests and mobile project inside the app folder, none of which the app reads. They are gone, and
+  building the macOS app from a checkout with the phone project set up no longer fails partway.
+
 ## 0.5.1 — 2026-09-05
 
 ### Fixed
