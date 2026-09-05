@@ -12,9 +12,45 @@ Maintainer notes:
   date, tag.
 -->
 
-## 0.5.1 — Unreleased
+## 0.5.1 — 2026-09-05
+
+### Fixed
+
+- **Linux builds can sign in.** Every AppImage and deb so far, and the macOS disk image, failed
+  the provider sign-in with "Cannot find package '@earendil-works/pi-ai'": packaging dropped part
+  of the assistant engine. If you installed Stem from a download and never got past sign-in, this
+  is the release that works.
+- **Stopped and failed replies look the same everywhere.** A reply you stopped, or one the
+  provider rejected, showed its notice only in the window where it happened; other devices and a
+  reopened chat showed a blank turn or one still "thinking". The notice now sits in the transcript
+  itself, and the phone offers to resend the last message that did not get through.
+- **Chats stay current across devices.** Opening a chat you had continued on another device
+  showed the old copy until you left and came back. Open chats now refresh in the background, and
+  again when the connection returns.
+- **The phone wakes up cleanly.** Coming back from a locked phone left the connection looking open
+  while nothing arrived, a reply that finished while you were away stayed "Thinking…" forever, and
+  a single missed request in the first second after unlock painted every screen red. Waking now
+  reconnects, settles finished turns, and stays quiet about a hiccup that fixes itself.
+- **The Qwen3 reranker loads.** Picking the Qwen3 reranker in Memory crashed the model worker
+  three times and settled on "worker keeps crashing", however much RAM the Mac had. It loads now,
+  at no cost in speed.
+- **Coding agents start in seconds.** Launching Claude Code through Stem could take over a minute
+  per start, and the model list in the persona editor timed out, because npm ran a network check
+  on every launch. Stem now launches it without the check.
+- **Long coding runs finish.** A persona's coding-agent run used to be stopped at 30 minutes, mid
+  task if need be. It now runs until it is done. When Stem itself stops a run (a schedule timed out,
+  the chat was deleted, the server restarted), the result now says so instead of "cancelled by the
+  user".
+- **Memory → Review setup lands on the ranking controls.** The link expanded the collapsed
+  section but left you looking at the fact list above it.
 
 ### Changed
+
+- **Coding agents belong to code personas.** The Stem-wide "Delegate coding work" switch is gone.
+  A plain chat no longer has a coding agent; only a persona with a pinned coding agent can launch
+  one, and the same rule holds in chats, mail and schedules. The pin now also chooses the model the
+  agent runs, picked in the persona editor from what the agent offers on that computer, so the
+  short-lived model picker in Settings → App is gone too.
 
 - **Permission cards live in the chat that asked.** When a command or a coding agent needs your
   go-ahead, the card now appears above the message box of that conversation instead of as a
