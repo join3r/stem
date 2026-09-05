@@ -58,22 +58,17 @@ files:
   # in its `files` list for the npm/GitHub page). pi loads its *.ts sources; the
   # marketing assets are pure weight in every artifact.
   - '!node_modules/pi-web-access/*.{mp4,png}'
-  # pi-web-access peer-depends on @earendil-works/pi-ai + pi-tui, so npm installs
-  # them (and their SDK trees: anthropic, bedrock, genai, mistral, otel, …) at the
-  # top level — ~100MB that is never loaded twice over. pi's extension loader
-  # ALIASES both specifiers to its own bundled copies
-  # (pi-coding-agent/dist/core/extensions/loader.js), and pi-coding-agent carries
-  # its whole dependency tree nested under itself, so nothing ever resolves these
-  # top-level duplicates. Kept in the dev tree (npm install stays vanilla), dropped
-  # from the artifact.
-  - '!node_modules/@earendil-works/{pi-ai,pi-tui}/**'
-  - '!node_modules/{@anthropic-ai,@aws,@aws-crypto,@aws-sdk,@smithy}/**'
-  - '!node_modules/{@google,@mistralai,@opentelemetry}/**'
-  - '!node_modules/{openai,zod,zod-to-json-schema,partial-json,json-schema-to-ts,ts-algebra}/**'
-  - '!node_modules/{gaxios,gcp-metadata,google-auth-library,google-logging-utils,json-bigint}/**'
-  - '!node_modules/{jwa,jws,ecdsa-sig-formatter,buffer-equal-constant-time,bignumber.js,bowser}/**'
-  - '!node_modules/{node-fetch,fetch-blob,formdata-polyfill,node-domexception,data-uri-to-buffer}/**'
-  - '!node_modules/{web-streams-polyfill,p-retry,ws,marked,get-east-asian-width}/**'
+  # NOTE: never exclude pi's dependency tree here (@earendil-works/pi-ai, pi-tui,
+  # the provider SDKs it carries: anthropic, aws, google, mistral, openai, …).
+  # electron-builder 26 does not copy node_modules as laid out on disk: its
+  # collector walks the production graph (peer-only installs such as the
+  # top-level pi-ai/pi-tui that pi-web-access pulls in are not part of it) and
+  # RE-HOISTS everything it can, so pi-coding-agent's nested copies land at
+  # node_modules/@earendil-works/pi-ai in the artifact. A `!node_modules/...`
+  # pattern on that path deleted pi's only copy — every Linux AppImage/deb up to
+  # 0.5.0 failed sign-in with "Cannot find package '@earendil-works/pi-ai'"
+  # (GitHub issue #12). The duplicate SDK trees the old exclusions were meant
+  # to drop are already deduped by the collector; nothing here saves size.
   # onnxruntime-node ships one fat package covering every platform/arch it supports
   # (~500MB unpacked) and electron-builder copies all of it. The GPU execution
   # providers are never opened: recall/embed-worker.ts passes no `device` to
