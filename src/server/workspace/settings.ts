@@ -317,6 +317,7 @@ function coerceReranker(
       : def.mode;
   return {
     mode,
+    ...(r.factModel === 'gte-memory-20260905-epoch2' ? { factModel: r.factModel } : {}),
     // Catalog ∪ imported: the set is only closed until someone brings their own
     // weights, and an id that names neither would leave the stage pointing at a
     // model nothing can describe.

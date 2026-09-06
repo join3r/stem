@@ -1919,6 +1919,7 @@ export interface MemoryRebuildStatus {
  * folder but share a kind (the folder's label lands in `detail`).
  */
 export type ActivityKind =
+  | 'models.factRerank'
   | 'memory.distill'
   | 'memory.summaries'
   | 'memory.relationCheck'
@@ -2871,6 +2872,8 @@ export type LocalRerankModelId = 'bge-reranker-v2-m3' | 'qwen3-reranker-0.6b';
  */
 export interface RerankerSettings {
   mode: RerankerMode;
+  /** Experimental model selection for facts and skills; configured/absent uses the normal reranker. */
+  factModel?: 'configured' | 'gte-memory-20260905-epoch2';
   /** Catalog id or imported {@link CustomRerankModel} id; see EmbeddingsSettings.localModel. */
   localModel: string;
   /** Remote-endpoint fields (used when mode === 'remote'). */
@@ -2890,6 +2893,14 @@ export interface LocalRerankStatus {
   error?: string;
   /** See LocalEmbedStatus.purgedCorruptCache. */
   purgedCorruptCache?: boolean;
+}
+
+/** Availability and lifecycle of the optional GTE model on this host. */
+export interface FactRerankStatus {
+  installed: boolean;
+  /** This host can fetch the pinned public model when selected. */
+  downloadable?: boolean;
+  status: LocalRerankStatus;
 }
 
 /**
@@ -4075,6 +4086,8 @@ export interface StemApi {
   getLocalRerankStatus(): Promise<LocalRerankStatus>;
   /** Fired whenever the local reranker model's status changes (incl. download progress). */
   onLocalRerankStatus(listener: (status: LocalRerankStatus) => void): () => void;
+  getFactRerankStatus(): Promise<FactRerankStatus>;
+  onFactRerankStatus(listener: (status: FactRerankStatus) => void): () => void;
   /** Last known verdicts on the remote retrieval endpoints (mode === 'remote'). */
   getRemoteRetrievalHealth(): Promise<RemoteRetrievalHealth>;
   /** Fired whenever a remote retrieval endpoint's verdict changes. */

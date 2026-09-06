@@ -617,6 +617,23 @@ describe('reranker settings migration + coercion', () => {
       expect((await readSettings()).retrieval.reranker.localModel).toBe(id);
     }
   });
+
+  it('persists the explicit GTE fact choice and clears it when Qwen is selected', async () => {
+    await updateRetrievalSettings({ reranker: {
+      mode: 'local', localModel: 'qwen3-reranker-0.6b', factModel: 'gte-memory-20260905-epoch2'
+    } });
+    expect((await readSettings()).retrieval.reranker).toMatchObject({
+      factModel: 'gte-memory-20260905-epoch2', localModel: 'qwen3-reranker-0.6b'
+    });
+    await updateRetrievalSettings({ reranker: { localModel: 'qwen3-reranker-0.6b', factModel: 'configured' } });
+    expect((await readSettings()).retrieval.reranker.factModel).toBeUndefined();
+    expect(JSON.parse(readFileSync(path, 'utf8')).retrieval.reranker.factModel).toBeUndefined();
+  });
+
+  it('does not enable GTE for legacy settings or an unrecognized fact model', async () => {
+    writeFileSync(path, JSON.stringify({ retrieval: { reranker: { factModel: 'unknown-model' } } }));
+    expect((await readSettings()).retrieval.reranker.factModel).toBeUndefined();
+  });
 });
 
 // Models the user imported that Stem has no catalog entry for. Two things are

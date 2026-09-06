@@ -52,6 +52,9 @@ services:
       # would run at 9 UTC — the wrong hour for most of the world, silently. Set
       # TZ in .env to your own zone (e.g. Europe/Bratislava).
       TZ: ${TZ:-UTC}
+      # Optional offline GTE folder, mounted read-only at this container path.
+      # Empty uses on-demand download; the model picker controls selection.
+      STEM_GTE_FACT_MODEL_DIR: ${STEM_GTE_FACT_MODEL_DIR:-}
       # Push notifications to the iOS app. Empty on a deployment that has no
       # phone, which switches the feature off entirely (src/server/push/apns.ts)
       # — passing them through costs nothing and keeps the .env the one place

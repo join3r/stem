@@ -13,6 +13,10 @@ import { updateDefaultModel } from '../../src/server/workspace/settings';
 import { removeChat, setChatPrivate } from '../../src/server/workspace/chats';
 import { settingsStorePath } from '../../src/server/workspace/paths';
 import { recallStore } from '../../src/server/recall/store';
+import * as factRetrieval from '../../src/server/recall/retrieval';
+import * as recallInjection from '../../src/server/recall/inject';
+import * as workspaceMemory from '../../src/server/workspace/memory';
+import { formatFactQuery } from '../../src/server/recall/fact-query';
 
 const cleanup: string[] = [];
 
@@ -1348,6 +1352,83 @@ describe('skills in the activity strip', () => {
     // Started then completed, so the reducer needs no special case for a row
     // that was never running in the first place.
     expect(events.map((e) => e.method)).toEqual(['item/started', 'item/completed']);
+  });
+});
+
+describe('fact pilot history at prompt preparation', () => {
+  const factClient: factRetrieval.FactRerankClient = {
+    factQuery: formatFactQuery,
+    available: async () => true,
+    rerank: async () => []
+  };
+  type Build = (
+    input: Parameters<PiRuntime['startTurn']>[0], threadId: string,
+    turn: { isPrivate?: boolean } | null, turnId: string, worker: PiWorker
+  ) => Promise<{ message: string }>;
+  function fakeWorker(threadId: string, text: string) {
+    const request = vi.fn(async () => ({ success: true, data: {
+      entries: [{ id: 'prior', parentId: null, type: 'message', message: { role: 'user', content: text } }],
+      leafId: 'prior'
+    } }));
+    return { worker: { activeThreadId: threadId, proc: { request } } as unknown as PiWorker, request };
+  }
+
+  it('reads only the leased active worker before passing prior text to fact retrieval', async () => {
+    const { runtime } = await tempRuntime();
+    const build = (runtime as unknown as { buildMessage: Build }).buildMessage.bind(runtime);
+    const a = fakeWorker('a', 'I am planning a garden.'), b = fakeWorker('b', 'I am fixing a bicycle.');
+    const enabled = vi.spyOn(workspaceMemory, 'isRecallEnabled').mockReturnValue(true);
+    const resolve = vi.spyOn(factRetrieval, 'getFactRerankClient').mockResolvedValue(factClient);
+    const inject = vi.spyOn(recallInjection, 'buildRecallContext').mockResolvedValue(null);
+    try {
+      await build({ input: 'Which tools are useful?' }, 'a', null, 'current', a.worker);
+      expect(a.request).toHaveBeenCalledExactlyOnceWith({ type: 'get_entries' }, 2_000);
+      expect(b.request).not.toHaveBeenCalled();
+      expect(inject).toHaveBeenLastCalledWith('Which tools are useful?', expect.objectContaining({
+        factReranker: factClient, previousUserMessages: ['I am planning a garden.']
+      }));
+      await build({ input: 'Which tools are useful?' }, 'b', null, 'current-b', b.worker);
+      expect(inject).toHaveBeenLastCalledWith('Which tools are useful?', expect.objectContaining({
+        previousUserMessages: ['I am fixing a bicycle.']
+      }));
+    } finally { enabled.mockRestore(); resolve.mockRestore(); inject.mockRestore(); }
+  });
+
+  it('does not fetch history for normal Qwen, private/recall-off, automated, or mismatched sessions', async () => {
+    const { runtime } = await tempRuntime();
+    const build = (runtime as unknown as { buildMessage: Build }).buildMessage.bind(runtime);
+    const w = fakeWorker('a', 'Previous text');
+    const enabled = vi.spyOn(workspaceMemory, 'isRecallEnabled').mockReturnValue(true);
+    const resolve = vi.spyOn(factRetrieval, 'getFactRerankClient').mockResolvedValue(null);
+    const inject = vi.spyOn(recallInjection, 'buildRecallContext').mockResolvedValue(null);
+    try {
+      await build({ input: 'Normal Qwen message' }, 'a', null, 'current', w.worker);
+      resolve.mockResolvedValue(factClient);
+      await build({ input: 'Private message' }, 'a', { isPrivate: true }, 'current', w.worker);
+      await build({ input: 'Cold reader', persona: { id: 'critic', prompt: 'Review.', recall: false } }, 'a', null, 'current', w.worker);
+      enabled.mockReturnValue(false);
+      await build({ input: 'Recall disabled' }, 'a', null, 'current', w.worker);
+      enabled.mockReturnValue(true);
+      await build({ input: 'Other session' }, 'other', null, 'current', w.worker);
+      await build({ input: 'Scheduled message', scheduled: { at: new Date().toISOString(), taskId: 'task' } }, 'a', null, 'current', w.worker);
+      await build({ input: 'Mail message', mail: { conversationId: 'mail', subject: 'Test', from: 'writer', participants: [] } }, 'a', null, 'current', w.worker);
+      expect(w.request).not.toHaveBeenCalled();
+      expect(inject).toHaveBeenCalledTimes(4); // normal, mismatch, scheduled, mail
+    } finally { enabled.mockRestore(); resolve.mockRestore(); inject.mockRestore(); }
+  });
+
+  it('uses current-message-only retrieval when the history RPC fails', async () => {
+    const { runtime } = await tempRuntime();
+    const build = (runtime as unknown as { buildMessage: Build }).buildMessage.bind(runtime);
+    const w = fakeWorker('a', 'Previous text');
+    w.request.mockRejectedValue(new Error('synthetic history failure'));
+    const enabled = vi.spyOn(workspaceMemory, 'isRecallEnabled').mockReturnValue(true);
+    const resolve = vi.spyOn(factRetrieval, 'getFactRerankClient').mockResolvedValue(factClient);
+    const inject = vi.spyOn(recallInjection, 'buildRecallContext').mockResolvedValue(null);
+    try {
+      await build({ input: 'Current text' }, 'a', null, 'current', w.worker);
+      expect(inject).toHaveBeenLastCalledWith('Current text', expect.objectContaining({ previousUserMessages: [] }));
+    } finally { enabled.mockRestore(); resolve.mockRestore(); inject.mockRestore(); }
   });
 });
 

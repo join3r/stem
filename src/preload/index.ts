@@ -28,6 +28,7 @@ import type {
   LocalProviderId,
   LocalProviderSettings,
   LocalRerankStatus,
+  FactRerankStatus,
   RemoteRetrievalHealth,
   McpAdminProposal,
   McpHostLocalState,
@@ -487,6 +488,12 @@ const api: StemApi = {
     return () => ipcRenderer.removeListener('embeddings:localStatus', handler);
   },
   getLocalRerankStatus: () => ipcRenderer.invoke('reranker:localStatus'),
+  getFactRerankStatus: () => ipcRenderer.invoke('reranker:factStatus'),
+  onFactRerankStatus: (listener: (status: FactRerankStatus) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, status: FactRerankStatus) => listener(status);
+    ipcRenderer.on('reranker:factStatus', handler);
+    return () => ipcRenderer.removeListener('reranker:factStatus', handler);
+  },
   onLocalRerankStatus: (listener: (status: LocalRerankStatus) => void) => {
     const handler = (_e: unknown, status: LocalRerankStatus) => listener(status);
     ipcRenderer.on('reranker:localStatus', handler);

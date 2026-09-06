@@ -3,7 +3,8 @@
 // framing of the rendered block. Uses a throwaway skills dir (STEM_SKILLS_DIR)
 // and a fake embedder, mirroring skills-usage.test.ts and recall-v3.test.ts —
 // nothing here needs a model.
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setRetrievalClients } from '../../src/server/recall/retrieval';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -99,8 +100,31 @@ beforeEach(() => {
   mkdirSync(skillsDir, { recursive: true });
 });
 afterAll(() => rmSync(skillsDir, { recursive: true, force: true }));
+afterEach(() => setRetrievalClients({}));
 
 describe('selectSkills — ranking and gating', () => {
+  it('uses the selected GTE model and its skill floor without adding fact-query context', async () => {
+    const { client } = fakeEmbeddings({ deploy: 0.95, gardening: 0.9 });
+    const baseline = { ...fakeRerank({ gardening: 4 }), rerank: vi.fn() };
+    const gte = {
+      modelId: 'gte-memory-20260905-epoch2',
+      available: async () => true,
+      minRelevantScore: async () => -3.9743599891662598,
+      factGateScore: async () => -1.6370911598205566,
+      factQuery: vi.fn(() => { throw new Error('Skills must retain their original query'); }),
+      rerank: vi.fn(async (_query: string, docs: string[]) => docs.map((doc, index) => ({
+        index, score: doc.startsWith('deploy\n') ? -3 : -5
+      })))
+    };
+    setRetrievalClients({ rerank: baseline, factRerank: async () => gte });
+    const result = await selectSkills(QUERY, [skill('deploy'), skill('gardening')], { embeddings: client });
+    expect(result.inlined.map((s) => s.slug)).toEqual(['deploy']);
+    expect(gte.rerank).toHaveBeenCalledTimes(2);
+    expect(gte.rerank.mock.calls.every(([query]) => query === QUERY)).toBe(true);
+    expect(gte.factQuery).not.toHaveBeenCalled();
+    expect(baseline.rerank).not.toHaveBeenCalled();
+  });
+
   it('inlines what the cross-encoder accepts and indexes the rest', async () => {
     const { client } = fakeEmbeddings({ deploy: 0.95, release: 0.88, gardening: 0.9 });
     const sel = await selectSkills(QUERY, [skill('gardening'), skill('release'), skill('deploy')], {

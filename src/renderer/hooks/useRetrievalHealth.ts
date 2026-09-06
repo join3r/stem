@@ -1,5 +1,36 @@
 import { useEffect, useState } from 'react';
-import type { LocalEmbedStatus, LocalRerankStatus, RemoteRetrievalHealth } from '../../shared/types';
+import type { FactRerankStatus, LocalEmbedStatus, LocalRerankStatus, RemoteRetrievalHealth } from '../../shared/types';
+
+/** The optional installed facts model. Older servers do not expose this API. */
+export function useFactRerankStatus(): FactRerankStatus | null {
+  const [status, setStatus] = useState<FactRerankStatus | null>(null);
+  useEffect(() => {
+    // During a development renderer reload the preload can still be older.
+    if (!window.stem.onFactRerankStatus || !window.stem.getFactRerankStatus) {
+      setStatus({ installed: false, status: { model: 'gte-memory-20260905-epoch2', state: 'idle' } });
+      return;
+    }
+    let active = true;
+    let receivedEvent = false;
+    const off = window.stem.onFactRerankStatus((next) => {
+      receivedEvent = true;
+      if (active) setStatus(next);
+    });
+    window.stem.getFactRerankStatus().then((next) => {
+      if (active && !receivedEvent) setStatus(next);
+    }).catch(() => {
+      if (active && !receivedEvent) setStatus({
+        installed: false,
+        status: { model: 'gte-memory-20260905-epoch2', state: 'idle' }
+      });
+    });
+    return () => {
+      active = false;
+      off();
+    };
+  }, []);
+  return status;
+}
 
 /** One broken retrieval stage: what failed, and whether it was the user's own
  *  server endpoint (mode 'remote') rather than a built-in model. */
@@ -30,6 +61,7 @@ export interface RetrievalHealth {
  * points at.
  */
 export function useRetrievalHealth(): RetrievalHealth {
+  const facts = useFactRerankStatus();
   const [embed, setEmbed] = useState<LocalEmbedStatus | null>(null);
   const [rerank, setRerank] = useState<LocalRerankStatus | null>(null);
   const [remote, setRemote] = useState<RemoteRetrievalHealth | null>(null);
@@ -57,6 +89,6 @@ export function useRetrievalHealth(): RetrievalHealth {
     return null;
   };
   const embedFailure = failure(embed, remote?.embeddings);
-  const rerankFailure = failure(rerank, remote?.reranker);
+  const rerankFailure = failure(facts?.status ?? null, undefined) ?? failure(rerank, remote?.reranker);
   return { embed: embedFailure, rerank: rerankFailure, broken: embedFailure !== null || rerankFailure !== null };
 }

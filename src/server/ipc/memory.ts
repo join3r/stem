@@ -50,10 +50,12 @@ import type {
 } from '../../shared/types';
 import { recallStore } from '../recall/store';
 import * as activity from '../activity';
+import { getFactRerankStatus } from '../recall/retrieval';
 const { getAutoResolvedConflicts, getEpisodicStats, getActiveFactIds, getFactsByIds, getFactDetails, getMemoryConflicts, setFactPinned: storeSetFactPinned, confirmFact: storeConfirmFact, resolveMemoryConflict: storeResolveMemoryConflict, restoreSupersededFact: storeRestoreSupersededFact } = recallStore;
 
 /** The Memory tab's surface: facts, episodic store, rebuild, and retrieval status. */
 export function registerMemoryIpc(deps: IpcDeps): void {
+  registerServer('reranker:factStatus', () => getFactRerankStatus());
   registerServer('memory:get', () => getMemorySettings());
   registerServer('memory:setEnabled', async (_e, enabled: boolean) => {
     const settings = await setMemoryEnabled(enabled);

@@ -10,6 +10,8 @@ export interface LocalRerankModelSpec {
   id: string;
   /** HF repo with transformers.js-compatible ONNX weights. */
   repo: string;
+  /** Absolute model directory for an offline experimental GTE export. */
+  localPath?: string;
   /** Quantization passed to transformers.js `dtype`. */
   dtype: LocalModelDtype;
   approxSizeMB: number;
@@ -26,8 +28,10 @@ export interface LocalRerankModelSpec {
    *   because it is the Qwen3-Reranker contract, but the instruct line is data:
    *   it states THIS deployment's relevance question and was fixed when the
    *   floors were measured — changing it invalidates them.
+   * - 'gte-scalar': an offline GTE export loaded through PreTrainedModel;
+   *   one untruncated text_pair per pass, returning one finite raw logit.
    */
-  scoring: 'classifier' | 'causal-yes-no';
+  scoring: 'classifier' | 'causal-yes-no' | 'gte-scalar';
   /** Task instruction for 'causal-yes-no' scoring; ignored by classifiers. */
   instruct?: string;
   /**
@@ -55,7 +59,11 @@ export interface LocalRerankModelSpec {
   factGateScore: number;
 }
 
-export const RERANK_CATALOG: Record<LocalRerankModelId, LocalRerankModelSpec> = {
+// The experimental GTE mode is not a selectable catalog/import scoring mode.
+export const RERANK_CATALOG: Record<
+  LocalRerankModelId,
+  LocalRerankModelSpec & { scoring: 'classifier' | 'causal-yes-no' }
+> = {
   // Multilingual cross-encoder (XLM-R based). Verified 2026-07-04 against the
   // live fact set: promotes the cross-lingual (Slovak query → English facts)
   // matches that cosine ranking misses, ~22 ms/pair on an M4 Max at q8.

@@ -61,6 +61,7 @@ import { createHttpRerankClient } from './recall/rerank';
 import { resolveEmbedSpec } from './recall/embed-catalog';
 import type { EmbedWorkerManager } from './recall/embed-manager';
 import { resolveRerankSpec } from './recall/rerank-catalog';
+import { getFactRerankClient, getFactRerankStatus, retryFactRerank } from './recall/retrieval';
 import type { ScanWorkerManager } from './recall/scan-manager';
 import type { RemoteHealthTracker } from './recall/remote-health';
 import { backfillChatIndex, reindexChatThread } from './chatsearch/index-sync';
@@ -643,6 +644,7 @@ function registerIpc(): void {
     // real request hasn't judged yet.
     if (patch.embeddings) remoteHealth?.reset('embeddings');
     if (patch.reranker) remoteHealth?.reset('reranker');
+    if (patch.reranker || patch.embeddings) emit('reranker:factStatus', await getFactRerankStatus());
     return next;
   });
   registerServer('settings:testRetrieval', async (_e, stage: RetrievalStage): Promise<RetrievalTestResult> => {
@@ -678,6 +680,23 @@ function registerIpc(): void {
     if (stage === 'reranker' && retrieval.reranker.mode !== 'remote') {
       const rr = retrieval.reranker;
       if (rr.mode === 'off') return { ok: false, detail: 'Reranker is off.' };
+      if (rr.factModel === 'gte-memory-20260905-epoch2') {
+        retryFactRerank();
+        const pilot = await getFactRerankStatus();
+        if (!pilot.installed && !pilot.downloadable) return { ok: false, detail: 'Stem GTE Memory is unavailable on this Stem host.' };
+        if (pilot.status.state === 'error') return { ok: false, detail: pilot.status.error ?? 'Stem GTE Memory failed to load.' };
+        if (pilot.status.state !== 'ready') return { ok: true, detail: 'Preparing Stem GTE Memory; wait for Ready before comparing.' };
+        const client = await getFactRerankClient();
+        if (client?.modelId !== 'gte-memory-20260905-epoch2') {
+          return { ok: false, detail: 'Stem GTE Memory is not active. Check the selected model and try again.' };
+        }
+        try {
+          const ranked = await client.rerank('pets', ['I have a dog', 'the sky is blue'], 2);
+          return { ok: true, detail: `ranked ${ranked.length} · ${Date.now() - startedAt} ms · Stem GTE Memory` };
+        } catch (error) {
+          return { ok: false, detail: error instanceof Error ? error.message : 'GTE rerank failed' };
+        }
+      }
       // Local mode: Test doubles as the "start/retry the download" button, same
       // contract as the embeddings branch above.
       if (!embedManager) return { ok: false, detail: 'Embedding worker not started yet.' };
@@ -1106,6 +1125,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
       stopScratchSweeper();
       embedManager?.dispose();
       scanManager?.dispose();
+      retrieval.disposeFactPilot();
       closeFolderIndexes();
       // Before the transport goes: every held MCP call is waiting on a control
       // frame's answer coming back over a socket that is about to be destroyed,

@@ -91,12 +91,12 @@ export function RecallRecommendation({
     <div className="callout callout-info release-notes-recommend" role="note" aria-label="Recommended memory setup">
       <p>
         <strong>Memory search has a new recommended setup.</strong> This version ships the Qwen3 Embedding
-        0.6B and Qwen3 Reranker 0.6B models, which chose the right facts best in both of our measurements.
+        0.6B and Qwen3 Reranker 0.6B models as the default recall setup.
         Your Stem still uses {describe(retrieval)}, because an update never changes a setting you made.
         {embedRemoteQwen3 && (
           <>
             {' '}
-            Your endpoint's Qwen3 measured the same as the built-in one, so this switch gains no quality; it
+            This switches embeddings from your endpoint to the built-in Qwen3 model. It
             stops memory search depending on that server, and re-indexes your memory once.
           </>
         )}

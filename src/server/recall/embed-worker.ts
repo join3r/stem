@@ -1,8 +1,9 @@
 import { rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { applyPrefixes } from './embed-catalog';
 import type { LocalEmbedModelSpec } from './embed-catalog';
 import type { LocalRerankModelSpec } from './rerank-catalog';
+import { readGteScalarScore, validateGtePairTokens } from './rerank-score';
 import { modelPresent, pathAppearsInMessage } from './embed-files';
 import { createEmbedQueue } from './embed-queue';
 import type { EmbedKind } from './embeddings';
@@ -62,16 +63,18 @@ type Extractor = (
 ) => Promise<{ dims: number[]; data: Float32Array }>;
 
 interface RerankTokenizerOutput extends Record<string, unknown> {
+  input_ids: { dims: number[]; data: ArrayLike<number | bigint> };
   attention_mask: { data: ArrayLike<number | bigint> };
 }
 
 /**
- * Tokenizer + model pair for the reranker. Two shapes share it:
+ * Tokenizer + model pair for the reranker. Three shapes share it:
  * - classifier: sequence-classification head, tokenized with text_pair, one
  *   logit per pair at logits[row].
  * - causal-yes-no: a causal LM fed the Qwen3-Reranker chat template as a
  *   single text per pair; the score is read from the vocab logits at each
  *   row's last real token (yesId/noId set only for this kind).
+ * - gte-scalar: a local export with one raw scalar per untruncated pair.
  */
 interface Reranker {
   tokenizer: (
@@ -96,6 +99,21 @@ const QWEN3_RERANK_SUFFIX = '<|im_end|>\n<|im_start|>assistant\n<think>\n\n</thi
 
 function formatCausalRerankPair(instruct: string, query: string, doc: string): string {
   return `${QWEN3_RERANK_PREFIX}<Instruct>: ${instruct}\n<Query>: ${query}\n<Document>: ${doc}${QWEN3_RERANK_SUFFIX}`;
+}
+
+// IPC requests may overlap. Keep the GTE working set bounded across requests,
+// as well as across the documents within a single request.
+let gteInferenceChain: Promise<void> = Promise.resolve();
+
+function scoreGtePair(reranker: Reranker, query: string, doc: string): Promise<number> {
+  const run = gteInferenceChain.then(async () => {
+    const inputs = reranker.tokenizer([query], { text_pair: [doc], padding: true, truncation: false });
+    validateGtePairTokens(inputs.input_ids);
+    const { logits } = await reranker.model(inputs);
+    return readGteScalarScore(logits);
+  });
+  gteInferenceChain = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 // Under Electron's utilityProcess this is the real parentPort. Under the
@@ -247,23 +265,45 @@ async function loadRerank(nextSpec: LocalRerankModelSpec, cacheDir: string): Pro
   }
   rerankSpec = nextSpec;
   postRerankStatus({ state: 'loading' });
+  let gteModel: Reranker['model'] | null = null;
   try {
-    const { AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM, env } = await import(
+    const isGte = nextSpec.scoring === 'gte-scalar';
+    if (isGte && (!nextSpec.localPath || !isAbsolute(nextSpec.localPath))) {
+      throw new Error('GTE requires an absolute localPath');
+    }
+    if (isGte && nextSpec.dtype !== 'q8') throw new Error('GTE requires q8 weights');
+    const { AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM, PreTrainedModel, env } = await import(
       '@huggingface/transformers'
     );
-    const cached = applyHubAccess(env, cacheDir, nextSpec.repo, nextSpec.dtype);
+    // The pilot validates these local artifacts before sending the spec. Never
+    // fall back to Hub files, relabel model_type, or purge its supplied directory.
+    let cached: boolean;
+    if (isGte) {
+      env.cacheDir = cacheDir;
+      env.allowRemoteModels = false;
+      cached = true;
+    } else {
+      cached = applyHubAccess(env, cacheDir, nextSpec.repo, nextSpec.dtype);
+    }
+    const modelSource = isGte ? nextSpec.localPath! : nextSpec.repo;
     const onProgress = progressAggregator(cached, postRerankStatus);
-    const tokenizer = (await AutoTokenizer.from_pretrained(nextSpec.repo, {
+    const tokenizer = (await AutoTokenizer.from_pretrained(modelSource, {
+      ...(isGte ? { local_files_only: true } : {}),
       progress_callback: onProgress
     })) as unknown as Reranker['tokenizer'];
-    const loader = nextSpec.scoring === 'causal-yes-no' ? AutoModelForCausalLM : AutoModelForSequenceClassification;
-    const model = (await loader.from_pretrained(nextSpec.repo, {
+    const loader = isGte ? PreTrainedModel
+      : nextSpec.scoring === 'causal-yes-no' ? AutoModelForCausalLM : AutoModelForSequenceClassification;
+    const model = (await loader.from_pretrained(modelSource, {
+      ...(isGte ? { local_files_only: true } : {}),
       dtype: nextSpec.dtype,
       session_options: SESSION_OPTIONS,
       progress_callback: onProgress
     })) as unknown as Reranker['model'];
+    if (isGte) gteModel = model;
     const next: Reranker = { tokenizer, model, scoring: nextSpec.scoring };
-    if (nextSpec.scoring === 'causal-yes-no') {
+    if (isGte) {
+      await scoreGtePair(next, 'ping', 'pong');
+    } else if (nextSpec.scoring === 'causal-yes-no') {
       const enc = tokenizer as unknown as { encode?: (t: string) => number[] };
       next.yesId = enc.encode?.('yes')[0];
       next.noId = enc.encode?.('no')[0];
@@ -286,10 +326,17 @@ async function loadRerank(nextSpec: LocalRerankModelSpec, cacheDir: string): Pro
     // of the process, to the reranker's own stage marker.
     const message = err instanceof Error ? err.message : String(err);
     reranker = null;
+    try {
+      await gteModel?.dispose?.();
+    } catch {
+      // Keep the original load/validation failure as the reported error.
+    }
     postRerankStatus({
       state: 'error',
       error: message,
-      purgedCorruptCache: purgeIfCorrupt(message, nextSpec.repo, cacheDir) || undefined
+      purgedCorruptCache: nextSpec.scoring !== 'gte-scalar'
+        ? purgeIfCorrupt(message, nextSpec.repo, cacheDir) || undefined
+        : undefined
     });
   }
 }
@@ -340,7 +387,9 @@ async function rerank(id: number, query: string, docs: string[], topN: number): 
     const scores: number[] = [];
     for (let i = 0; i < docs.length; i += RUN_BATCH) {
       const batch = docs.slice(i, i + RUN_BATCH);
-      if (reranker.scoring === 'causal-yes-no') {
+      if (reranker.scoring === 'gte-scalar') {
+        for (const doc of batch) scores.push(await scoreGtePair(reranker, query, doc));
+      } else if (reranker.scoring === 'causal-yes-no') {
         // ONE PAIR PER FORWARD PASS, not an oversight: this ONNX export (GQA
         // fused for transformers.js v4) mis-attends across padding on the
         // bundled 3.8.1 runtime — a mixed-length batch shifts EVERY row's

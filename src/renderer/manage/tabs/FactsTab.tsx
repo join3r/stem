@@ -35,7 +35,7 @@ import { useOffline } from '../../hooks/useServerReachable';
 import { useRemoteServer } from '../../hooks/useRemoteServer';
 import { ImportModelDialog } from '../ImportModelDialog';
 import { ServerFolderPicker } from '../ServerFolderPicker';
-import { useRetrievalHealth } from '../../hooks/useRetrievalHealth';
+import { useFactRerankStatus, useRetrievalHealth } from '../../hooks/useRetrievalHealth';
 import { HoverTip, InfoTip } from '../../ui/InfoTip';
 import { ModelPicker } from '../../ui/ModelPicker';
 import { createJobStore, holdFullSpin, useJob, type ActiveFactsViewProps } from './shared';
@@ -78,9 +78,11 @@ const EMBED_MODES: { id: EmbeddingsMode; label: string; hint: string }[] = [
 
 // The curated local rerankers, mirrored from server/recall/rerank-catalog.ts.
 const LOCAL_RERANK_MODELS: { id: LocalRerankModelId; label: string; detail: string }[] = [
-  { id: 'qwen3-reranker-0.6b', label: 'Qwen3 Reranker 0.6B', detail: '~1.2 GB · multilingual · best recall measured' },
-  { id: 'bge-reranker-v2-m3', label: 'BGE Reranker v2 M3', detail: '~570 MB · multilingual · fastest' }
+  { id: 'qwen3-reranker-0.6b', label: 'Qwen3 Reranker 0.6B', detail: '~1.2 GB · multilingual' },
+  { id: 'bge-reranker-v2-m3', label: 'BGE Reranker v2 M3', detail: '~570 MB · multilingual' }
 ];
+
+const GTE_FACT_MODEL = 'gte-memory-20260905-epoch2';
 
 /**
  * An imported model as a picker entry. Its size came off the disk it was copied
@@ -433,12 +435,14 @@ function EmbeddingsFields({
 // cosine ranking misses.
 function RerankerFields({
   value,
+  embeddings,
   custom,
   onPatch,
   onRetrieval,
   remoteError
 }: {
   value: RerankerSettings;
+  embeddings: EmbeddingsSettings;
   /** Rerankers the user imported — they join the picker below the curated ones. */
   custom: CustomRerankModel[];
   onPatch: (patch: Partial<RerankerSettings>) => void;
@@ -450,10 +454,22 @@ function RerankerFields({
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<RetrievalTestResult | null>(null);
   const [status, setStatus] = useState<LocalRerankStatus | null>(null);
+  const factStatus = useFactRerankStatus();
   useEffect(() => setLocal(value), [value]);
   useEffect(() => {
-    window.stem.getLocalRerankStatus().then(setStatus);
-    return window.stem.onLocalRerankStatus(setStatus);
+    let active = true;
+    let receivedEvent = false;
+    const off = window.stem.onLocalRerankStatus((next) => {
+      receivedEvent = true;
+      if (active) setStatus(next);
+    });
+    window.stem.getLocalRerankStatus().then((next) => {
+      if (active && !receivedEvent) setStatus(next);
+    }).catch(() => {});
+    return () => {
+      active = false;
+      off();
+    };
   }, []);
 
   async function runTest() {
@@ -469,6 +485,9 @@ function RerankerFields({
   }
 
   const mode = value.mode;
+  const gteSelected = value.factModel === GTE_FACT_MODEL;
+  const gteEmbedding = embeddings.mode === 'local' && embeddings.localModel === 'qwen3-embedding-0.6b';
+  const gteAvailable = (factStatus?.installed === true || factStatus?.downloadable === true) && gteEmbedding;
 
   return (
     <div className="set-block fg-divider">
@@ -506,10 +525,12 @@ function RerankerFields({
           <select
             className="ifield"
             aria-label="Local reranker model"
-            value={value.localModel}
+            value={gteSelected ? GTE_FACT_MODEL : value.localModel}
             onChange={(e) => {
               setTest(null);
-              onPatch({ localModel: e.target.value });
+              onPatch(e.target.value === GTE_FACT_MODEL
+                ? { localModel: 'qwen3-reranker-0.6b', factModel: GTE_FACT_MODEL }
+                : { localModel: e.target.value, factModel: 'configured' });
             }}
           >
             {[...LOCAL_RERANK_MODELS, ...custom.map(customOption)].map((m) => (
@@ -517,8 +538,28 @@ function RerankerFields({
                 {m.label} ({m.detail})
               </option>
             ))}
+            <option value={GTE_FACT_MODEL} disabled={!gteAvailable}>
+              Stem GTE Memory (~342 MB · best measured recall · fastest measured · CS/SK/DE/EN){!gteAvailable ? ' — unavailable' : ''}
+            </option>
           </select>
-          <LocalStatusLine status={status} />
+          {gteSelected ? (
+            <>
+              <p className="muted">
+                Trained for Czech, Slovak, German, and English. Best recall and fastest reranking
+                measured in Stem benchmarks. Experimental.
+              </p>
+              {!factStatus ? <p className="muted">Checking GTE availability…</p>
+                : !factStatus.installed && !factStatus.downloadable ? <p className="retrieval-status-error">Stem GTE Memory is unavailable on the connected host. Update Stem to download this model.</p>
+                  : !gteEmbedding ? <p className="retrieval-status-error">Stem GTE Memory requires built-in Qwen3 Embedding 0.6B. Choose that embedding model to use GTE.</p>
+                    : factStatus.status.state === 'idle' ? <p className="muted">Starting Stem GTE Memory…</p>
+                      : <LocalStatusLine status={factStatus.status} />}
+            </>
+          ) : <LocalStatusLine status={status?.model === value.localModel ? status : { state: 'loading' }} />}
+          {!gteSelected && !gteAvailable && (
+            <p className="muted">{!factStatus ? 'Checking GTE availability…' : !factStatus.installed && !factStatus.downloadable
+              ? 'Update the connected Stem host to download Stem GTE Memory.'
+              : 'To try Stem GTE Memory, select built-in Qwen3 Embedding 0.6B above.'}</p>
+          )}
           <ImportedModels stage="rerank" models={custom} onRetrieval={onRetrieval} />
         </>
       )}
@@ -562,11 +603,11 @@ function RerankerFields({
             className="retrieval-test-btn"
             onClick={runTest}
             disabled={testing}
-            title={testing ? 'Testing…' : 'Test connection'}
+            title={testing ? 'Testing…' : mode === 'local' ? 'Test model' : 'Test connection'}
             aria-label="Test reranker"
           >
             <Plug size={14} />
-            <span>{testing ? 'Testing…' : 'Test connection'}</span>
+            <span>{testing ? 'Testing…' : mode === 'local' ? 'Test model' : 'Test connection'}</span>
           </button>
           {!testing && test && (
             <span className={`retrieval-test-status ${test.ok ? 'ok' : 'err'}`} title={test.detail}>
@@ -580,15 +621,7 @@ function RerankerFields({
   );
 }
 
-/**
- * The measured-best retrieval setup, stated where it can be seen. The verdict
- * itself lives in shared/recall-recommended.ts (the post-update popup reads the
- * same one); this row only words it. The recommendation is the built-in Qwen3
- * pair and nothing external: a Qwen3 on the user's own endpoint tied, so the
- * hint for it says "same quality, no server needed" rather than "better". The
- * row sits outside the collapsed advanced section on purpose — a recommendation
- * hidden behind "advanced" reaches nobody who hasn't already found it.
- */
+/** Show the selected recall setup outside the collapsed advanced section. */
 function RecallQualityRow({
   retrieval,
   onReview
@@ -597,41 +630,47 @@ function RecallQualityRow({
   onReview: () => void;
 }) {
   const { embedOk: embedBest, rerankOk: rerankBest, embedRemoteQwen3 } = recallSetupStatus(retrieval);
+  if (retrieval.reranker.mode === 'local' && retrieval.reranker.factModel === GTE_FACT_MODEL) {
+    return (
+      <div className="group-row">
+        <span className="row-main">
+          <strong>Recall quality</strong>
+          <em>Stem GTE Memory — best measured recall · fastest measured</em>
+        </span>
+        <button className="link-btn" onClick={onReview}>Compare models</button>
+      </div>
+    );
+  }
   const rerankOn = retrieval.reranker.mode !== 'off';
   const best = embedBest && rerankBest;
   const hint = best
-    ? 'Best measured setup — Qwen3 Embedding 0.6B with the Qwen3 reranker'
+    ? 'Default setup — Qwen3 Embedding 0.6B with the Qwen3 reranker'
     : embedBest && !rerankOn
-      ? 'Reranker is off — it measured best at choosing which facts to send'
+      ? 'Reranker is off'
       : embedBest
-        ? 'Qwen3 Reranker 0.6B measures best — switch the reranker model'
+        ? 'Compare reranker models for your conversations'
         : embedRemoteQwen3
           ? rerankBest
-            ? 'Same quality as the built-in Qwen3 Embedding 0.6B, which needs no server'
-            : 'The built-in Qwen3 Embedding 0.6B measured the same and needs no server; the Qwen3 reranker measured best'
+            ? 'Qwen3 embeddings from your endpoint with the Qwen3 reranker'
+            : 'Qwen3 embeddings from your endpoint; compare reranker models below'
           : rerankOn
-            ? 'Best measured: the built-in Qwen3 Embedding 0.6B'
-            : 'Best measured: the built-in Qwen3 Embedding 0.6B with the Qwen3 reranker';
+            ? 'Compare embedding models for your conversations'
+            : 'Compare embedding and reranker models for your conversations';
   return (
     <div className="group-row">
       <span className="row-main">
         <strong>
           Recall quality{' '}
-          <InfoTip label="How this was measured">
-            Benchmarked twice on real conversations with hand-labeled relevance (60 turns over 369
-            facts, then 77 turns over 915): the built-in Qwen3 Embedding 0.6B feeding the Qwen3
-            Reranker 0.6B chose the right facts best — ahead of the E5 and Gemma models, similarity
-            thresholds, wider candidate pools, an external memory system, and a 4B Qwen3 embedder
-            served from Ollama, which it tied on both runs. There is no bigger model worth running
-            for this. The reranker is what catches cross-language and association matches, like a
-            Slovak question finding an English fact; the Qwen3 reranker separates those from noise
-            markedly better than BGE.
+          <InfoTip label="About recall ranking">
+            Embeddings find candidate facts, and the reranker checks their relevance to your message.
+            Compare models using your own conversations; Test model measures a small reranking probe,
+            while full reply timing also includes the LLM and any tools.
           </InfoTip>
         </strong>
         <em>{hint}</em>
       </span>
       {best ? (
-        <span className="retrieval-test-status ok" title="This is the configuration that measured best">
+        <span className="retrieval-test-status ok" title="The default configuration is selected">
           <Check size={12} /> in use
         </span>
       ) : (
@@ -1322,6 +1361,7 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
               />
               <RerankerFields
                 value={retrieval.reranker}
+                embeddings={retrieval.embeddings}
                 custom={retrieval.customRerankModels}
                 onPatch={patchReranker}
                 onRetrieval={setRetrieval}

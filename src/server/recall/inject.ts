@@ -4,7 +4,8 @@ import { COSINE_FLOORS, cosineFloorsFor } from './embed-scale';
 import { hybridSearchSummaries } from './search-core';
 import { searchFolderDocs, type FolderDocHit } from '../folder-index';
 import { scanSummariesOffThread } from './scan';
-import { getEmbeddingsClient, getRerankClient } from './retrieval';
+import { getEmbeddingsClient, getFactRerankClient, type FactRerankClient } from './retrieval';
+import { log } from '../log';
 import { degrade } from '../degrade';
 import { INLINE_FACT_EMBED_MAX, embedMissingFactVectors } from './embed-facts';
 import type { EmbeddingsClient } from './embeddings';
@@ -322,10 +323,11 @@ async function chooseFacts(
   userText: string,
   getQueryEmbedding: QueryEmbedGetter,
   timings?: RecallTimings,
-  factsGeneration = getFactsGeneration()
+  factsGeneration = getFactsGeneration(),
+  rr: FactRerankClient | null = null
 ): Promise<{ facts: Fact[]; tier: FactTier }> {
   const all = getInjectableFacts();
-  const limit = getMaxRelevantFacts();
+  const limit = Math.min(getMaxRelevantFacts(), rr?.maxFacts ?? Number.POSITIVE_INFINITY);
   const pinned = all
     .filter((f) => f.pinned)
     .slice(0, MAX_PINNED_FACTS)
@@ -372,7 +374,6 @@ async function chooseFacts(
 
   let relevant: Fact[] | null = null;
   let tier: FactTier = 'none';
-  const rr = getRerankClient();
   if (rr && pool.length > 0 && (await rr.available())) {
     if (getFactsGeneration() !== factsGeneration) return { facts: [], tier: 'none' };
     const rrStart = Date.now();
@@ -380,6 +381,9 @@ async function chooseFacts(
       // Score the whole pool (topN = pool size): the floor decides how many
       // survive, not a preset count.
       const ranked = await rr.rerank(userText, pool.map((f) => f.text), pool.length);
+      // The GTE pilot's measured policy breaks equal-logit ties by fact id,
+      // not by semantic/usage rank or a sensitivity-adjusted score.
+      if (rr.factQuery) ranked.sort((a, b) => b.score - a.score || (pool[a.index]?.id ?? 0) - (pool[b.index]?.id ?? 0));
       if (getFactsGeneration() !== factsGeneration) return { facts: [], tier: 'none' };
       const floor = (await rr.factGateScore?.()) ?? null;
       const admitted: Fact[] = [];
@@ -444,10 +448,19 @@ async function chooseFacts(
  * injection. Powers the Memory UI's "what would be injected for this draft" preview.
  */
 export async function previewFacts(userText: string): Promise<{ facts: Fact[]; tier: FactTier }> {
-  return chooseFacts(userText, makeQueryEmbedder(userText));
+  const rr = await getFactRerankClient();
+  const result = await chooseFacts(userText, makeQueryEmbedder(userText), undefined, getFactsGeneration(), rr);
+  if (rr?.modelId) log('recall', 'experimental fact preview', {
+    model: rr.modelId, tier: result.tier, selected: result.facts.length
+  });
+  return result;
 }
 
 export interface BuildContextOptions {
+  /** Snapshot resolved for this turn; a warming pilot resolves to the normal backend. */
+  factReranker?: FactRerankClient | null;
+  /** Clean prior human messages from the active session branch; used only by the fact pilot. */
+  previousUserMessages?: readonly string[];
   /** The current chat — its hits are excluded (already in context). */
   currentThreadId?: string | null;
   /** Optional sink: filled with the per-stage latency breakdown of this call. */
@@ -484,8 +497,18 @@ export async function buildRecallContext(
   // episodic semantic leg — whichever needs it first pays the single embed.
   const getQueryEmbedding = makeQueryEmbedder(userText, timings);
 
+  const factReranker = options.factReranker !== undefined ? options.factReranker : await getFactRerankClient();
+  const factQuery = factReranker?.factQuery?.(userText, options.previousUserMessages ?? []) ?? userText;
+  // Context belongs only to the fact trial. Episodes and folder documents keep
+  // the current-message embedding and query they used before the pilot.
+  const getFactEmbedding = factQuery === userText ? getQueryEmbedding : makeQueryEmbedder(factQuery, timings);
+
   const factsStart = Date.now();
-  let { facts, tier } = await chooseFacts(userText, getQueryEmbedding, timings, factsGeneration);
+  let { facts, tier } = await chooseFacts(factQuery, getFactEmbedding, timings, factsGeneration, factReranker);
+  if (factReranker?.modelId) log('recall', 'experimental fact selection', {
+    model: factReranker.modelId, tier, selected: facts.length,
+    contextual: factQuery !== userText
+  });
   if (timings) timings.facts = Date.now() - factsStart;
 
   // Episodic recall, summaries first: rolling thread summaries carry what a

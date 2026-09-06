@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { host } from '../host';
 import { readSettings, saveCustomModel } from '../workspace/settings';
 import { embedModelsDir, embedSocketPath, recallDbPath } from '../workspace/paths';
@@ -14,6 +15,8 @@ import { createEmbedWorkerManager, type EmbedWorkerManager } from '../recall/emb
 import { createEmbeddingsRouter, createLocalEmbeddingsClient } from '../recall/embed-local';
 import { resolveRerankSpec } from '../recall/rerank-catalog';
 import { createLocalRerankClient, createRerankRouter } from '../recall/rerank-local';
+import { createGteFactPilot, GTE_FACT_PILOT_ID } from '../recall/gte-fact-pilot';
+import { ensureGteModel } from '../recall/gte-model-download';
 import { createRemoteHealthTracker, type RemoteHealthTracker } from '../recall/remote-health';
 import { spawnEmbedWorker } from '../recall/embed-worker-host';
 import { createScanWorkerManager, type ScanWorkerManager } from '../recall/scan-manager';
@@ -29,6 +32,7 @@ export interface RetrievalRuntime {
   scanManager: ScanWorkerManager;
   /** Verdict cache for the user's remote retrieval endpoints (mode === 'remote'). */
   remoteHealth: RemoteHealthTracker;
+  disposeFactPilot(): void;
 }
 
 /**
@@ -39,7 +43,7 @@ export interface RetrievalRuntime {
  * `endByKind` no-ops, which is the correct "no work happened" outcome.
  */
 function trackModelStatus(
-  kind: 'models.embed' | 'models.rerank',
+  kind: 'models.embed' | 'models.rerank' | 'models.factRerank',
   label: string,
   status: { state: string; progressPct?: number; dim?: number; error?: string }
 ): void {
@@ -175,6 +179,46 @@ export function initRetrieval(deps: {
   const getRetrieval = async () => (await readSettings()).retrieval;
   const getEmbedSettings = async () => (await getRetrieval()).embeddings;
   const getRerankSettings = async () => (await getRetrieval()).reranker;
+  // The retrieval host owns the download, whether it is a desktop or shared
+  // server. Preserve the trial's explicit read-only/offline model override.
+  const gteOverride = process.env.STEM_GTE_FACT_MODEL_DIR?.trim();
+  const gteDirectory = gteOverride || join(embedModelsDir(), GTE_FACT_PILOT_ID);
+  const factManager = !deps.e2e
+    ? createEmbedWorkerManager({ spawn: spawnEmbedWorker, cacheDir: embedModelsDir }) : null;
+  const factPilot = factManager ? createGteFactPilot({
+    directory: gteDirectory,
+    manager: factManager,
+    getSettings: getRetrieval,
+    ...(gteOverride ? {} : { prepare: ensureGteModel }),
+    onProgress() {
+      void factPilot?.status().then((value) => {
+        deps.emit('reranker:factStatus', value);
+        trackModelStatus('models.factRerank', 'Preparing Stem GTE Memory', value.status);
+      });
+    },
+    onFailure(error) {
+      log('retrieval', 'GTE fact pilot unavailable; using configured reranker', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      activity.fail('models.factRerank', error, 'Experimental memory model unavailable');
+      void factPilot?.status().then((status) => deps.emit('reranker:factStatus', status));
+    }
+  }) : null;
+  if (factManager) {
+    let previous = '';
+    factManager.onRerankStatus((status) => {
+      void factPilot?.status().then((value) => deps.emit('reranker:factStatus', value));
+      trackModelStatus('models.factRerank', 'Preparing experimental memory model', status);
+      const key = `${status.state}:${status.error ?? ''}`;
+      if (key === previous) return;
+      previous = key;
+      log('retrieval', `GTE fact pilot ${status.state}`, {
+        model: status.model, scope: 'facts and skills',
+        ...(status.error ? { error: status.error } : {})
+      });
+    });
+    host().onShutdown(() => factPilot?.dispose());
+  }
   const localEmbeddings = createLocalEmbeddingsClient(getRetrieval, embedManager);
   // Remote endpoints have no lifecycle to stream the way the local worker does,
   // so their health is the recorded outcome of the requests recall makes anyway
@@ -189,6 +233,10 @@ export function initRetrieval(deps: {
     for (const stage of ['embeddings', 'reranker'] as const) logRemoteHealth(stage, health[stage]);
   });
   setRetrievalClients({
+    ...(factPilot ? {
+      factRerank: () => factPilot.resolve(), factStatus: () => factPilot.status(),
+      retryFactRerank: () => factPilot.retry()
+    } : {}),
     embeddings: createEmbeddingsRouter({
       getMode: async () => (await getEmbedSettings()).mode,
       local: localEmbeddings,
@@ -287,8 +335,9 @@ export function initRetrieval(deps: {
       void getRetrieval().then((r) => {
         if (r.embeddings.mode === 'local') embedManager.ensure(resolveEmbedSpec(r));
         if (r.reranker.mode === 'local') embedManager.ensureRerank(resolveRerankSpec(r));
+        void factPilot?.resolve();
       });
     }, 1_500);
   }
-  return { embedManager, scanManager, remoteHealth };
+  return { embedManager, scanManager, remoteHealth, disposeFactPilot: () => factPilot?.dispose() };
 }

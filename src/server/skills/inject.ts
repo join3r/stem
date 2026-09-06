@@ -1,5 +1,5 @@
 import { degrade } from '../degrade';
-import { getEmbeddingsClient, getRerankClient } from '../recall/retrieval';
+import { getEmbeddingsClient, getSkillRerankClient } from '../recall/retrieval';
 import type { EmbeddingsClient } from '../recall/embeddings';
 import type { RerankClient } from '../recall/rerank';
 import { dot, magnitude } from '../recall/vector';
@@ -310,7 +310,7 @@ export async function selectSkills(
   // gate had: usage reorders candidates, it never admits or ejects one.
   const shortlist = scored.slice(0, DEFAULT_SHORTLIST_SIZE);
   let cut: CutResult = { inlined: [], reason: 'no-rerank-score' };
-  const rr = opts.rerank !== undefined ? opts.rerank : getRerankClient();
+  const rr = opts.rerank !== undefined ? opts.rerank : await getSkillRerankClient();
   if (rr && shortlist.length > 0) {
     try {
       // A floor of null means a backend whose score scale we cannot know (any

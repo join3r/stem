@@ -53,6 +53,8 @@ import { autoTitle, nameThread, nameThreadIfDue as nameIfDue, type SubjectDeps }
 import { isChatPrivate, setChatPrivate, setNaming } from '../workspace/chats';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
 import { buildRecallContext, type RecallTimings } from '../recall/inject';
+import { getFactRerankClient } from '../recall/retrieval';
+import { previousFactUserMessages } from '../recall/fact-query';
 import { reconcileExplicitFact } from '../recall/reconcile';
 import { buildFilesContext } from '../files/inject';
 import { buildConnectedFoldersContext } from '../connected-folders/inject';
@@ -1248,7 +1250,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         );
 
         const buildStart = Date.now();
-        const { message, images } = await this.buildMessage(input, threadId, turn, turnId);
+        const { message, images } = await this.buildMessage(input, threadId, turn, turnId, w);
         turn.buildMs = Date.now() - buildStart;
         // Canceled while the prompt was being prepared (gates, recall build) —
         // abandon before pi sees anything. finishTurn drops the claim taken above.
@@ -3769,7 +3771,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     input: StartTurnInput,
     threadId: string,
     turn: TurnContext | null,
-    turnId?: string
+    turnId?: string,
+    worker?: PiWorker
   ): Promise<{ message: string; images: PiImageContent[] }> {
     const recallTimings: RecallTimings | undefined = turn?.recall;
     const blocks: string[] = [];
@@ -3799,6 +3802,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // outright rather than emptied, so nothing about the user rides along
     // with the material (Persona.recall explains why Critic needs this).
     if (isRecallEnabled() && input.persona?.recall !== false && !turn?.isPrivate) {
+      const factReranker = await getFactRerankClient();
+      let previousUserMessages: string[] = [];
+      if (factReranker?.factQuery && !input.scheduled && !input.mail && worker?.proc && worker.activeThreadId === threadId) {
+        try {
+          // The leased worker has already activated this session and has not
+          // received the current prompt yet. Follow its actual branch, not the
+          // flat disk transcript (which can include abandoned sibling turns).
+          const snapshot = await worker.proc.request({ type: 'get_entries' }, 2_000);
+          if (worker.activeThreadId === threadId) previousUserMessages = previousFactUserMessages(snapshot.data);
+        } catch (error) {
+          degrade('recall.factContext', 'used only the current message for fact retrieval', error);
+        }
+      }
       const chosen: { facts: Fact[]; tier: FactTier } = { facts: [], tier: 'all' };
       const flags: { privateDocsInjected?: boolean } = {};
       const injectedDocs: InjectedDocRef[] = [];
@@ -3807,7 +3823,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         timings: recallTimings,
         chosen,
         flags,
-        injectedDocs
+        injectedDocs,
+        factReranker,
+        previousUserMessages
       });
       if (recall) blocks.push(recall);
       // Documents from a memorize:false folder were injected: taint the turn the
