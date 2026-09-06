@@ -280,6 +280,10 @@ function updateLine(u: UpdateStatus): string {
     case 'ready':
       return `Stem ${u.available} is downloaded — it installs when you restart`;
     case 'error':
+      // A newer build is known but the download or the swap failed (the
+      // AppImage sits somewhere this user can't write, most often): the page
+      // is the way out, and the button beside this line opens it.
+      if (u.available) return `Stem ${u.available} couldn't be installed automatically (${u.error}) — get it from the release page`;
       return `The last check didn't get through — it'll try again later`;
     default:
       if (u.available) return `Stem ${u.available} is available`;
@@ -338,7 +342,7 @@ function AboutSection() {
               <button className="retrieval-test-btn" onClick={() => void window.stem.installUpdate()}>
                 Restart now
               </button>
-            ) : update.available && update.mode === 'manual' ? (
+            ) : update.available && (update.mode === 'manual' || update.state === 'error') ? (
               <button
                 className="retrieval-test-btn"
                 onClick={() => void window.stem.installUpdate()}

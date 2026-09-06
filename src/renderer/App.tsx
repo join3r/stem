@@ -45,6 +45,7 @@ import { MailComposeView, MailConversationView, type MailViewHandle } from './ma
 import { ActivityIndicator } from './ui/ActivityIndicator';
 import { TaskAlertModal } from './TaskAlertModal';
 import { ReleaseNotesModal } from './ReleaseNotesModal';
+import { UpdateModal } from './UpdateModal';
 import { RecallRecommendation } from './RecallRecommendation';
 import { RECALL_DEFAULTS_RELEASE, recommendedRetrievalPatch } from '../shared/recall-recommended';
 import { DropOverlay } from './files/DropOverlay';
@@ -157,6 +158,10 @@ export default function App() {
   // dismissal holds for this run; the update itself waits in Settings → App.
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  // The version the popup has already interrupted for this launch. It opens
+  // once per launch per version — every launch, until the update is done — and
+  // never over the release notes, which are read first.
+  const [updatePromptedFor, setUpdatePromptedFor] = useState<string | null>(null);
   // The dialog only opens when the preference is on (main withholds `unseen`
   // otherwise), so `true` is the state it opens in — not an assumption.
   const [releaseNotesShowOnUpdate, setReleaseNotesShowOnUpdate] = useState(true);
@@ -837,7 +842,7 @@ export default function App() {
                 delete next[DRAFT];
               }
               const messages = merged.messages.map((m) => {
-                if (m.id === userMsgId) return { ...m, turnId: result.turnId ?? undefined };
+                if (m.id === userMsgId) return { ...m, turnId: m.turnId ?? result.turnId ?? undefined, runtimeTurnId: result.turnId ?? undefined };
                 if (result.turnId && m.id === `assistant-${result.turnId}` && !m.meta) {
                   return { ...m, meta: core.turnMeta.get(result.turnId) };
                 }
@@ -891,7 +896,7 @@ export default function App() {
             setThread(sendKey, (s) => ({
               activeTurnId: alreadySettled ? null : result.turnId ?? null,
               messages: s.messages.map((m) =>
-                m.id === userMsgId ? { ...m, turnId: result.turnId ?? undefined } : m
+                m.id === userMsgId ? { ...m, turnId: m.turnId ?? result.turnId ?? undefined, runtimeTurnId: result.turnId ?? undefined } : m
               )
             }));
           }
@@ -1690,6 +1695,21 @@ export default function App() {
           </button>
         </div>
       )}
+      {update &&
+        onboardingCompleted &&
+        !releaseNotes &&
+        update.available !== null &&
+        update.available !== updatePromptedFor &&
+        (update.state === 'ready' || (update.mode === 'manual' && !!update.available)) && (
+          <UpdateModal
+            update={update}
+            onInstall={() => {
+              setUpdatePromptedFor(update.available);
+              void window.stem.installUpdate();
+            }}
+            onLater={() => setUpdatePromptedFor(update.available)}
+          />
+        )}
       {update &&
         !updateDismissed &&
         (update.state === 'ready' || (update.mode === 'manual' && !!update.available)) && (

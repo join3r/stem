@@ -110,6 +110,10 @@ export function createUpdates(deps: UpdatesDeps): Updates {
     error: null
   };
 
+  // The one line a bug report needs first: which of the three paths this
+  // install is on, and what it thinks it is running.
+  log('updates', 'updater ready', { mode, appVersion: current.appVersion });
+
   let timer: NodeJS.Timeout | null = null;
   let closed = false;
   /** One check at a time; a click during the scheduled run joins it. */
@@ -143,13 +147,21 @@ export function createUpdates(deps: UpdatesDeps): Updates {
           downloadUrl: `${REPO_URL}/releases/tag/v${info.version}`
         });
       });
-      autoUpdater.on('update-downloaded', () => set({ state: 'ready' }));
+      autoUpdater.on('update-downloaded', (info) => {
+        log('updates', 'update downloaded', { version: info.version });
+        set({ state: 'ready' });
+      });
       // A download can fail long after checkForUpdates resolved, and an
       // unlistened 'error' on an emitter takes the process down. Same shape as
-      // a failed check: a fact for Settings, retried on the next tick.
+      // a failed check: a fact for Settings, retried on the next tick. An
+      // install can fail too — the AppImage sits in a folder this user cannot
+      // write, most often — and that one is worth more than a log line: the
+      // build is still `available`, so Settings falls back to offering the page.
       autoUpdater.on('error', (e) => {
         log('updates', 'auto-update failed', { error: e.message });
-        if (current.state === 'downloading') set({ state: 'error', error: e.message });
+        if (current.state === 'downloading' || current.state === 'ready') {
+          set({ state: 'error', error: e.message });
+        }
       });
       return autoUpdater;
     });
@@ -162,7 +174,12 @@ export function createUpdates(deps: UpdatesDeps): Updates {
     // this check could act on before a restart consumes what it has.
     if (current.state === 'ready') return;
     set({ state: 'checking', error: null });
-    await updater.checkForUpdates();
+    const result = await updater.checkForUpdates();
+    log('updates', 'checked (auto)', {
+      current: current.appVersion,
+      latest: result?.updateInfo.version ?? null,
+      downloading: current.state === 'downloading'
+    });
     // Nothing newer: checkForUpdates resolved without the events above firing.
     if (current.state === 'checking') set({ state: 'idle', available: null, downloadUrl: null });
   }
@@ -172,6 +189,7 @@ export function createUpdates(deps: UpdatesDeps): Updates {
   async function checkManual(): Promise<void> {
     set({ state: 'checking', error: null });
     const latest = await latestRelease();
+    log('updates', 'checked (manual)', { current: current.appVersion, latest: latest.version });
     if (compareVersions(latest.version, current.appVersion) > 0) {
       set({ state: 'idle', available: latest.version, downloadUrl: latest.url });
     } else {
@@ -211,24 +229,34 @@ export function createUpdates(deps: UpdatesDeps): Updates {
     if (updates.checkAutomatically) await check();
   }
 
+  const status = (): UpdateStatus => ({ ...current });
+
   return {
     start() {
       if (mode === 'none') return;
       timer = setInterval(() => void tick(), CHECK_EVERY_MS);
       setTimeout(() => void tick(), FIRST_CHECK_DELAY_MS);
     },
-    status: () => ({ ...current }),
+    status,
     check,
     async install() {
       if (mode === 'auto' && current.state === 'ready') {
         // quitAndInstall swaps the file first and quits second, so the graceful
         // shutdown in index.ts (before-quit → drain → app.exit) keeps working
         // exactly as it does for an ordinary quit.
+        log('updates', 'installing', { version: current.available });
         const updater = await loadAutoUpdater();
         updater.quitAndInstall(false, true);
-        return;
+        // A failed swap never throws: electron-updater reports it on 'error'
+        // (handled above, synchronously) and stays put. The user clicked to
+        // update, so hand them the page rather than a button that did nothing.
+        // (Read through a call: the narrowing above still believes `ready`.)
+        if (status().state !== 'error' || !current.downloadUrl) return;
+        log('updates', 'falling back to the release page');
       }
-      if (mode === 'manual' && current.downloadUrl) deps.openExternal(current.downloadUrl);
+      // The `manual` path — and `auto` after a download or install that failed,
+      // where the release page is the one thing that still works.
+      if (current.downloadUrl) deps.openExternal(current.downloadUrl);
     },
     close() {
       closed = true;
