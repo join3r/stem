@@ -99,6 +99,7 @@ export function createGteModelDownloader(deps: {
               report(completedBytes + received);
               callback(null, chunk);
             } catch (error) {
+              // quiet: fail the stream callback so pipeline rejects and the caller reports preparation failure.
               callback(error instanceof Error ? error : new Error(String(error)));
             }
           }

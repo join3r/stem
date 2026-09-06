@@ -315,6 +315,62 @@ describe('MCP router protected-roots guard', () => {
   });
 });
 
+describe('MCP tool discovery', () => {
+  it('pages complete schemas within the response budget without executing tools or bypassing approval', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stem-mcp-discovery-'));
+    cleanup.push(root);
+    const configPath = join(root, 'mcp.json');
+    await writeFile(configPath, JSON.stringify({ servers: { logs: { url: 'https://mcp.test', trusted: false } } }));
+    process.env.STEM_MCP_CONFIG = configPath;
+    const schema = { type: 'object', properties: { query: { type: 'string', description: 'x'.repeat(4600) } }, required: ['query'] };
+    const tools = Array.from({ length: 7 }, (_, i) => ({ name: `query_logs_${i}`, description: 'Search logs', inputSchema: schema }));
+    tools[6] = { ...tools[6], inputSchema: { ...schema, properties: { query: { type: 'string', description: 'y'.repeat(8000) } } } };
+    const methods: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body ?? '{}')) as { id?: number; method?: string };
+      methods.push(request.method ?? '');
+      const result = request.method === 'tools/list' ? { tools } : {};
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }), {
+        status: 200, headers: { 'content-type': 'application/json' }
+      });
+    }));
+    type RegisteredTool = { name: string; execute: (...args: unknown[]) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }> };
+    const registered: RegisteredTool[] = [];
+    await stemMcpBridge({
+      registerTool: (tool: RegisteredTool) => registered.push(tool),
+      on: () => {}, getActiveTools: () => [], setActiveTools: () => {}
+    });
+    await mcpConnectionsSettledForTests();
+    const find = registered.find(t => t.name === 'find_tools')!;
+    const first = await find.execute('find-1', { query: '', server: 'logs', limit: 5 });
+    expect(first.content[0].text!.length).toBeLessThanOrEqual(14000);
+    const page = JSON.parse(first.content[0].text!);
+    expect(page).toMatchObject({ totalMatches: 7, nextOffset: 5 });
+    expect(page.tools).toHaveLength(5);
+    expect(page.tools[0].inputSchema).toEqual(schema);
+    expect(page.tools[4].inputSchema).toBeUndefined();
+    expect(page.tools[4].schemaDeferred).toContain('budget');
+
+    const second = JSON.parse((await find.execute('find-2', { query: '', server: 'logs', offset: page.nextOffset })).content[0].text!);
+    expect(second.nextOffset).toBeNull();
+    expect(second.tools.map((t: { name: string }) => t.name)).toEqual(['query_logs_5', 'query_logs_6']);
+    expect(second.tools[1].inputSchema).toBeUndefined();
+    expect(second.tools[1].schemaDeferred).toContain('Large');
+    const describe = registered.find(t => t.name === 'describe_tool')!;
+    const full = JSON.parse((await describe.execute('describe', { server: 'logs', tool: 'query_logs_6' })).content[0].text!);
+    expect(full.inputSchema).toEqual(tools[6].inputSchema);
+    expect(methods).not.toContain('tools/call');
+
+    const confirm = vi.fn().mockResolvedValue(false);
+    const invoke = registered.find(t => t.name === 'invoke_tool')!;
+    const rejected = await invoke.execute('invoke', { server: 'logs', tool: page.tools[0].name, args: { query: 'errors' } }, undefined, undefined, { ui: { confirm } });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(rejected.content[0].text).toBe('Denied by user.');
+    expect(methods).not.toContain('tools/call');
+    expect((await find.execute('missing', { query: 'logs', server: 'unknown' })).isError).toBe(true);
+  });
+});
+
 describe('MCP tool-result size cap', () => {
   it('passes small results through untouched, non-text blocks included', () => {
     const image = { type: 'image', data: 'x'.repeat(2 * MCP_RESULT_BUDGET), mimeType: 'image/png' };
@@ -435,7 +491,7 @@ describe('non-blocking MCP connect', () => {
     release();
     await mcpConnectionsSettledForTests();
     expect(JSON.parse(await readFile(join(root, 'mcp-status.json'), 'utf8')).slowpoke.status).toBe('ready');
-    expect(JSON.parse(await readFile(join(root, 'mcp-catalog.json'), 'utf8')).text).toContain('slow_tool');
+    expect(JSON.parse(await readFile(join(root, 'mcp-catalog.json'), 'utf8')).text).toContain('### slowpoke (1 tool)');
   });
 });
 

@@ -433,7 +433,7 @@ const FOLDER_DOCS_TOOL = {
 const GUIDE_TOOL = {
   name: 'read_stem_guide',
   description:
-    "Read a page of Stem's own user guide — the documentation for the app you are running inside. Use it whenever the user asks how Stem works, how to do something in the app, what a feature does, where a setting lives, which keyboard shortcut to press, or what changed in a recent version: the guide is the authority on all of that, and the app's UI is not something you can see. Returns the page as Markdown. Pages are small, so reading one is cheap; read the `guide` index when unsure which page covers the question, or read two pages together when a question spans both.",
+    "Read Stem documentation or assistant procedures as Markdown. For questions about Stem's UI, settings, shortcuts, features or releases, use the relevant user-guide page; read `guide` first if unsure. For specialized actions, `assistant-*` pages cover managing integrations, skills, schedules, preferences, files, web sources and server execution. Read `output-format` before using rich-output components for their exact syntax. Read only pages relevant to the task; multiple pages may be read together.",
   inputSchema: {
     type: 'object',
     properties: {

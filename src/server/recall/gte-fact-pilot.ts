@@ -107,6 +107,7 @@ export function createGteFactPilot(deps: {
       const eligible = gteFactPilotEligible(await deps.getSettings());
       if (active() && eligible) deps.manager.ensureRerank(spec);
     })().catch((error) => {
+      // quiet: active failures go to onFailure (log/activity/UI); cancelled generations no longer own the selection.
       if (active()) {
         preparation = undefined;
         progressPct = undefined;

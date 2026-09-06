@@ -694,6 +694,7 @@ function registerIpc(): void {
           const ranked = await client.rerank('pets', ['I have a dog', 'the sky is blue'], 2);
           return { ok: true, detail: `ranked ${ranked.length} · ${Date.now() - startedAt} ms · Stem GTE Memory` };
         } catch (error) {
+          // quiet: return the probe failure to the settings UI that requested it.
           return { ok: false, detail: error instanceof Error ? error.message : 'GTE rerank failed' };
         }
       }

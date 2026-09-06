@@ -329,7 +329,7 @@ async function loadRerank(nextSpec: LocalRerankModelSpec, cacheDir: string): Pro
     try {
       await gteModel?.dispose?.();
     } catch {
-      // Keep the original load/validation failure as the reported error.
+      // quiet: cleanup must not replace the original load failure reported below.
     }
     postRerankStatus({
       state: 'error',

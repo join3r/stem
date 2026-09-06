@@ -91,11 +91,12 @@ describe('the device half of the tool catalog', () => {
     });
     expect(block.anyAway).toBe(false);
     expect(block.text).toContain('### files (2 tools) — runs on “Ada’s MacBook”');
-    expect(block.text).toContain('  - tool_0: Does thing 0. — (path, limit?)');
+    expect(block.text).toContain('Search to discover');
+    expect(block.text).not.toContain('(path, limit?)');
     expect(block.text).not.toContain('NOT connected');
   });
 
-  it('keeps an unavailable server’s TOOLS listed, and marks the machine', () => {
+  it('keeps an unavailable integration discoverable, and marks the machine', () => {
     // The one this whole step exists for. Dropping the section would leave the
     // assistant unable to see a capability it has, and unable to tell the user
     // which computer to wake — it would simply say it cannot do the thing.
@@ -105,8 +106,8 @@ describe('the device half of the tool catalog', () => {
     });
     expect(block.anyAway).toBe(true);
     expect(block.text).toContain('### files (2 tools) — runs on “Ada’s MacBook”, which is NOT connected right now');
-    expect(block.text).toContain('  - tool_0:');
-    expect(block.text).toContain('  - tool_1:');
+    expect(block.text).toContain('Search to discover');
+    expect(block.text).not.toContain('  - tool_');
   });
 
   it('says when the machine is up but the server on it is not', () => {
@@ -191,7 +192,7 @@ describe('the block main injects each turn', () => {
     expect(asleep).toContain('which is NOT connected right now');
     // And the tools are still there, with the instruction that makes them usable
     // to the assistant: name the machine rather than deny the capability.
-    expect(asleep).toContain('  - tool_0:');
+    expect(asleep).toContain('find_tools');
     expect(asleep).toContain('as soon as that computer is awake');
   });
 
@@ -205,8 +206,8 @@ describe('the block main injects each turn', () => {
     expect(text).toContain('### files (2 tools) — runs on');
     // One heading, one closing instruction: the assistant sees a single list of
     // servers it can call, whichever machine each one happens to be on.
-    expect(text.match(/Available tools \(extra MCP servers/g)).toHaveLength(1);
-    expect(text.match(/call `invoke_tool`/g)).toHaveLength(1);
+    expect(text.match(/Available integrations/g)).toHaveLength(1);
+    expect(text.match(/through `invoke_tool`/g)).toHaveLength(1);
   });
 
   it('says nothing at all when there is nothing to say', async () => {
@@ -418,6 +419,24 @@ describe('one call, from the bridge extension to the machine that hosts it', () 
       });
       expect(parsed.inputSchema.required).toEqual(['a']);
       expect(sent.map((s) => s.data.op)).toContain('describe');
+    });
+
+    it('discovery supplies the live schema without executing a device tool', async () => {
+      const tools = await startBridge();
+      const result = JSON.parse(textOf(await tools.get('find_tools')!.execute('id', { query: 'wide', server: 'files' })));
+      expect(result.tools).toHaveLength(1);
+      expect(result.tools[0].inputSchema).toEqual(REAL_SCHEMA);
+      expect(sent.map(s => s.data.op)).toContain('describe');
+      expect(sent.map(s => s.data.op)).not.toContain('call');
+    });
+
+    it('discovery retains an offline tool but explicitly defers its schema', async () => {
+      connected.delete('mac');
+      const tools = await startBridge();
+      const result = JSON.parse(textOf(await tools.get('find_tools')!.execute('id', { query: '', server: 'files' })));
+      expect(result.tools[0].name).toBe('wide');
+      expect(result.tools[0].schemaDeferred).toBeTruthy();
+      expect(result.tools[0].inputSchema).toBeUndefined();
     });
 
     it('says it is partial, and why, when that computer cannot be asked', async () => {

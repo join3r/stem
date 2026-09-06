@@ -37,6 +37,15 @@ import scheduledTasksMd from '../../../docs/user/scheduled-tasks.md?raw';
 import settingsMd from '../../../docs/user/settings.md?raw';
 import movingAndBackupsMd from '../../../docs/user/moving-and-backups.md?raw';
 import releaseNotesMd from '../../../RELEASE_NOTES.md?raw';
+import assistantPreferencesMd from '../../../docs/assistant/assistant-preferences.md?raw';
+import assistantMcpMd from '../../../docs/assistant/assistant-mcp.md?raw';
+import assistantSkillsMd from '../../../docs/assistant/assistant-skills.md?raw';
+import assistantSchedulingMd from '../../../docs/assistant/assistant-scheduling.md?raw';
+import assistantFilesMd from '../../../docs/assistant/assistant-files.md?raw';
+import assistantWebMd from '../../../docs/assistant/assistant-web.md?raw';
+import assistantHostMd from '../../../docs/assistant/assistant-host.md?raw';
+import outputFormatMd from '../../../docs/assistant/output-format.md?raw';
+
 
 export interface StemGuidePage {
   /** Tool argument the model passes, and the key of the enum in the descriptor. */
@@ -91,7 +100,16 @@ export const STEM_GUIDE_PAGES: readonly StemGuidePage[] = [
   page('scheduled-tasks', 'docs/user/scheduled-tasks.md', 'running a prompt later or on a repeating schedule, and its controls', scheduledTasksMd),
   page('settings', 'docs/user/settings.md', 'providers and models, command approvals, Esc, notifications, Quick Chat defaults', settingsMd),
   page('moving-and-backups', 'docs/user/moving-and-backups.md', 'moving Stem to another computer, what travels, and backups', movingAndBackupsMd),
-  page('release-notes', 'RELEASE_NOTES.md', 'what changed in each Stem version, newest first', releaseNotesMd)
+  page('release-notes', 'RELEASE_NOTES.md', 'what changed in each Stem version, newest first', releaseNotesMd),
+  // Detailed assistant procedures are loaded only for the task that needs them.
+  page('assistant-preferences', 'docs/assistant/assistant-preferences.md', 'saving standing instructions: actions, approval and surfaces', assistantPreferencesMd),
+  page('assistant-mcp', 'docs/assistant/assistant-mcp.md', 'assistant procedure for connecting and troubleshooting MCP servers', assistantMcpMd),
+  page('assistant-skills', 'docs/assistant/assistant-skills.md', 'assistant procedure for authoring, updating and saving reusable skills', assistantSkillsMd),
+  page('assistant-scheduling', 'docs/assistant/assistant-scheduling.md', 'assistant procedure for schedules and autonomous-run notifications', assistantSchedulingMd),
+  page('assistant-files', 'docs/assistant/assistant-files.md', 'assistant procedure for shared files, deliverables and scratch storage', assistantFilesMd),
+  page('assistant-web', 'docs/assistant/assistant-web.md', 'assistant procedure for web search, fetching URLs and source safety', assistantWebMd),
+  page('assistant-host', 'docs/assistant/assistant-host.md', 'server execution, device routing and persistent package installation', assistantHostMd),
+  page('output-format', 'docs/assistant/output-format.md', 'supported rich-output components, exact syntax, limitations and examples', outputFormatMd)
 ];
 
 /** Valid `page` arguments, in guide order — the tool descriptor's enum. */
@@ -105,7 +123,7 @@ export function stemGuidePage(slug: unknown): StemGuidePage | null {
 }
 
 /**
- * The one-line-per-page index for the system prompt. Generated rather than
+ * The one-line-per-page index for guide discovery. Generated rather than
  * written out beside the other instructions so a page added here shows up in the
  * prompt in the same commit — a slug the model has been told about but the tool
  * rejects (or the reverse) is the only way this feature can quietly break.

@@ -34,7 +34,7 @@ import { pathToFileURL } from 'node:url';
 // in would make the hashes churn until they said nothing. Subsystem-specific
 // pieces that used to live there (the mail preamble) were moved out into their
 // subsystem's directory so they count.
-const SHARED = ['src/server/pi/stem-mcp-extension.mjs'];
+const SHARED = ['src/server/pi/stem-mcp-extension.mjs', 'src/server/pi/mcp-discovery.mjs', 'src/server/workspace/bootstrap.ts', 'docs/assistant'];
 
 export const SUBSYSTEMS = {
   persona: ['src/server/mail', 'src/server/workspace/personas.ts', ...SHARED],

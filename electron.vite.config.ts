@@ -12,6 +12,7 @@ const rootDir = fileURLToPath(new URL('.', import.meta.url));
 const systemVersion = JSON.stringify(computeSystemVersion(rootDir));
 const mainAssets = [
   ['src/server/pi/stem-mcp-extension.mjs', 'dist/main/pi/stem-mcp-extension.mjs'],
+  ['src/server/pi/mcp-discovery.mjs', 'dist/main/pi/mcp-discovery.mjs'],
   ['src/server/pi/pi-node-shim.mjs', 'dist/main/pi/pi-node-shim.mjs']
 ] as const;
 

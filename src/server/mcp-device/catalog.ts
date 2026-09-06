@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { log } from '../log';
+import { summarizeToolCapabilities } from '../pi/mcp-discovery.mjs';
 import { piMcpDeviceCatalogPath } from '../workspace/paths';
 import type {
   DeviceMcpAnnouncement,
@@ -134,12 +135,6 @@ export interface DeviceCatalogBlock {
   anyAway: boolean;
 }
 
-/** One tool, in the same line shape the bridge's own catalog uses. */
-function toolLine(tool: DeviceMcpTool): string {
-  const tail = [tool.description, tool.signature].filter(Boolean).join(' — ');
-  return tail ? `  - ${tool.name}: ${tail}` : `  - ${tool.name}`;
-}
-
 /**
  * What to say about a server beyond where it lives, or '' when there is nothing
  * to add. Being on another machine is not a caveat; being unable to reach that
@@ -162,7 +157,7 @@ function condition(report: DeviceMcpServerReport, available: boolean): string {
  * The device half of the per-turn tool catalog: every server the user's own
  * machines have announced, whether or not those machines are up.
  *
- * A server whose machine is asleep is listed WITH its tools and marked, rather
+ * A server whose machine is asleep is listed with capability hints and marked, rather
  * than dropped. That is decision ③ in one behaviour: the assistant that can see
  * the capability can say "I can do that once your Mac is awake", and the one
  * that cannot see it says "I can't do that at all" — which is false, and which
@@ -194,7 +189,7 @@ export function renderDeviceCatalogBlock(
       const count = `${tools.length} tool${tools.length === 1 ? '' : 's'}`;
       sections.push(
         `### ${report.name} (${count}) — runs on ${place}${condition(report, available)}\n` +
-          tools.map(toolLine).join('\n')
+          summarizeToolCapabilities(tools)
       );
     }
   }

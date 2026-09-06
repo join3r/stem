@@ -30,6 +30,7 @@ import {
 } from './protocol';
 import { decryptSecretValue, encryptSecretValue, secretKeyAvailable } from './secrets';
 import { degrade } from '../degrade';
+import { compactCatalogText } from './mcp-discovery.mjs';
 
 // Stem's MCP config for the pi backend (mcp.json). Consumed by the bridge
 // extension (stem-mcp-extension.mjs), which pi loads via `-e`. Stem owns this file
@@ -117,7 +118,7 @@ export function piMcpStatusPath(): string {
   return join(piHome(), 'mcp-status.json');
 }
 
-/** Where the bridge writes the routed-tools names+signatures catalog (next to mcp.json). */
+/** Where the bridge writes integration capability summaries (next to mcp.json). */
 export function piMcpCatalogPath(): string {
   return join(piHome(), 'mcp-catalog.json');
 }
@@ -133,7 +134,7 @@ function bridgeCatalogText(): string {
     const mtime = statSync(piMcpCatalogPath()).mtimeMs;
     if (mtime !== catalogCache.mtime) {
       const data = JSON.parse(readFileSync(piMcpCatalogPath(), 'utf8')) as { text?: string };
-      catalogCache = { mtime, text: typeof data.text === 'string' ? data.text : '' };
+      catalogCache = { mtime, text: typeof data.text === 'string' ? compactCatalogText(data.text) : '' };
     }
     return catalogCache.text;
   } catch (error) {
@@ -184,10 +185,8 @@ export function forgetMcpCatalogCaches(): void {
 }
 
 /**
- * The per-turn "Available tools" block, injected alongside the files listing. Lists
- * routed MCP servers' tools as name + 1-line description + compact signature — the
- * heavy input schemas are deferred and fetched on demand via the bridge's
- * describe_tool. Returns null when there is nothing to list.
+ * Per-turn integration summaries. Tool entries and schemas are discovered through
+ * find_tools rather than injected for every tool. Returns null when empty.
  *
  * Two sources, deliberately not one. The bridge writes mcp-catalog.json for the
  * servers it connects itself; the servers pinned to the user's own machines are
@@ -202,10 +201,11 @@ export async function buildMcpCatalogContext(): Promise<string | null> {
   const exec = await buildExecHostSection();
   const text = [bridge, device.text].filter(Boolean).join('\n\n');
   const mcpBlock = text
-    ? `Available tools (extra MCP servers, beyond your built-in file tools):\n${text}\n\n` +
-      `To use any of these, call \`invoke_tool\` with the server name, the exact tool name, and an \`args\` object. ` +
-      `The signatures above are compact — if a tool's arguments aren't obvious, call \`describe_tool\` first to get ` +
-      `its full input schema. Do not invent servers or tools that aren't listed here.` +
+    ? `Available integrations (tool definitions are loaded on demand):\n${text}\n\n` +
+      `Use \`find_tools\` with a task description and optional server name to discover matching tools and schemas. ` +
+      `Hints are not exhaustive. If search misses, browse that server with an empty query and paginate. ` +
+      `Call discovered tools through \`invoke_tool\`; use \`describe_tool\` when a schema was deferred. ` +
+      `Do not invent tool names or arguments.` +
       (device.anyAway
         ? ` A server marked NOT connected runs on one of the user's own machines, which is asleep or offline right now: ` +
           `its tools are real and will work again as soon as that computer is awake with Stem running on it. ` +
