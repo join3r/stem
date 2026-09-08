@@ -2295,7 +2295,7 @@ function registerTaskTools(pi) {
     name: 'schedule_task',
     label: 'Schedule task',
     description:
-      'Schedule the CURRENT conversation to re-run a prompt automatically on a schedule. Each run is a full autonomous turn appended to this same chat; no human watches it live, so the run should call notify_user only if it finds something the user should see. Provide EITHER `cron` (a standard 5-field cron expression, in local time, for a recurring task) OR `at` (an ISO 8601 datetime for a one-time task) — not both. The `at` time is interpreted in the user\'s LOCAL time and must be in the future; write it without a trailing "Z" (e.g. 2026-07-01T08:00:00) so it is not misread as UTC. Examples: cron "0 8 * * 1-5" = weekday mornings at 08:00; cron "*/30 * * * *" = every 30 minutes.',
+      'Schedule the CURRENT conversation to re-run a prompt automatically on a schedule. Each run is a full autonomous turn appended to this same chat (or, when scheduled from a mail conversation, to a new chat of its own — the result says which); no human watches it live, so the run should call notify_user only if it finds something the user should see. Provide EITHER `cron` (a standard 5-field cron expression, in local time, for a recurring task) OR `at` (an ISO 8601 datetime for a one-time task) — not both. The `at` time is interpreted in the user\'s LOCAL time and must be in the future; write it without a trailing "Z" (e.g. 2026-07-01T08:00:00) so it is not misread as UTC. Examples: cron "0 8 * * 1-5" = weekday mornings at 08:00; cron "*/30 * * * *" = every 30 minutes.',
     parameters: {
       type: 'object',
       properties: {
@@ -2309,6 +2309,16 @@ function registerTaskTools(pi) {
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const res = await taskBridge(ctx, { op: 'schedule', prompt: params?.prompt, cron: params?.cron, at: params?.at, personaId: params?.personaId });
       if (!res.ok) return taskErr(res.error || 'Could not schedule the task.');
+      // Scheduled from a mail conversation: the task lives in a chat of its own
+      // (this persona session is hidden from the Chats list), and the user has
+      // to be told where to look — "in this chat" would point at nothing.
+      if (res.task && res.task.originThreadId) {
+        return taskOk(
+          `Scheduled to run ${describeSchedule(res.task)} in a NEW chat named "${res.task.title}" — not in this mail conversation. ` +
+            'Each run is appended to that chat (it appears in the Chats list after the first run), and anything the run writes for the user — drafts, reports — is there, not here. ' +
+            'Tell the user that in your reply. Manage it in the Tasks tab.'
+        );
+      }
       return taskOk(`Scheduled this conversation to run ${describeSchedule(res.task)}. Manage it in the Tasks tab.`);
     }
   });

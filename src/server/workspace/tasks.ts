@@ -57,6 +57,7 @@ function coerce(raw: unknown): ScheduledTask | null {
     ...(typeof r.model === 'string' && r.model ? { model: r.model } : {}),
     ...(typeof r.effort === 'string' && r.effort ? { effort: r.effort } : {}),
     ...(typeof r.personaId === 'string' && r.personaId ? { personaId: r.personaId } : {}),
+    ...(typeof r.originThreadId === 'string' && r.originThreadId ? { originThreadId: r.originThreadId } : {}),
     ...(typeof r.lastRunAt === 'string' ? { lastRunAt: r.lastRunAt } : {}),
     ...(typeof r.nextRunAt === 'string' || r.nextRunAt === null ? { nextRunAt: r.nextRunAt } : {}),
     ...(r.lastStatus === 'ok' || r.lastStatus === 'failed' || r.lastStatus === 'running'

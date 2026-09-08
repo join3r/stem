@@ -892,6 +892,14 @@ export interface ScheduledTask {
    * Absent → a plain run, as every task started out.
    */
   personaId?: string;
+  /**
+   * The hidden mail-persona session this task was scheduled from, when it was.
+   * A task's runs need a chat the user can open, and a persona's mail session is
+   * not one (the Chats list hides it), so schedule_task called from a mail turn
+   * binds the task to a fresh chat and keeps where it came from here — so
+   * list_tasks asked in that mail conversation still finds it.
+   */
+  originThreadId?: string;
 }
 
 /** What the assistant's `schedule_task` tool passes (exactly one of cron/at). */

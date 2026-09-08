@@ -130,6 +130,77 @@ describe('TaskScheduler.create', () => {
   });
 });
 
+describe('tasks scheduled from a hidden mail session', () => {
+  it('create keeps the origin, and listForThread answers for both the chat and the origin', async () => {
+    const { scheduler } = makeScheduler(new FakeRuntime());
+    const res = await scheduler.create({ prompt: 'draft replies', cron: '0 8 * * *' }, 'fresh-chat', { threadId: 'mail-session' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.task.threadId).toBe('fresh-chat');
+    expect(res.task.originThreadId).toBe('mail-session');
+    expect(scheduler.listForThread('fresh-chat').map((t) => t.id)).toEqual([res.task.id]);
+    expect(scheduler.listForThread('mail-session').map((t) => t.id)).toEqual([res.task.id]);
+    expect(scheduler.listForThread('elsewhere')).toEqual([]);
+    expect((await readTasks())[0].originThreadId).toBe('mail-session');
+    scheduler.stop();
+  });
+
+  it('validate refuses what create refuses, without writing anything', async () => {
+    const { scheduler } = makeScheduler(new FakeRuntime());
+    expect((await scheduler.validate({ prompt: 'x', cron: 'nope' })).ok).toBe(false);
+    expect((await scheduler.validate({ prompt: '', cron: '0 8 * * *' })).ok).toBe(false);
+    expect((await scheduler.validate({ prompt: 'x', cron: '0 8 * * *', personaId: 'nobody' })).ok).toBe(false);
+    expect((await scheduler.validate({ prompt: 'x', cron: '0 8 * * *' })).ok).toBe(true);
+    expect(await readTasks()).toEqual([]);
+    scheduler.stop();
+  });
+
+  it('start moves a task still bound to a hidden session into the chat the host adopts, once', async () => {
+    const past = new Date(Date.now() + 60 * 60_000).toISOString();
+    await saveTasks([
+      { id: 'a', threadId: 'mail-session', prompt: 'draft replies', schedule: { kind: 'cron', expr: '0 8 * * *' }, enabled: true, createdAt: past, nextRunAt: past, title: 'draft replies' },
+      { id: 'b', threadId: 't1', prompt: 'leave me', schedule: { kind: 'cron', expr: '0 8 * * *' }, enabled: true, createdAt: past, nextRunAt: past, title: 'leave me' }
+    ]);
+    const runtime = new FakeRuntime();
+    const asked: string[] = [];
+    const scheduler = new TaskScheduler({
+      runtime: runtime as never,
+      onChange: () => {},
+      onRun: () => {},
+      rehomeHiddenThread: async (task) => {
+        asked.push(task.id);
+        return task.threadId === 'mail-session' ? 'fresh-chat' : null;
+      }
+    });
+    await scheduler.start();
+    const after = await readTasks();
+    expect(asked.sort()).toEqual(['a', 'b']);
+    expect(after.find((t) => t.id === 'a')).toMatchObject({ threadId: 'fresh-chat', originThreadId: 'mail-session' });
+    expect(after.find((t) => t.id === 'b')).toMatchObject({ threadId: 't1' });
+    expect(after.find((t) => t.id === 'b')!.originThreadId).toBeUndefined();
+    expect(scheduler.listForThread('mail-session').map((t) => t.id)).toEqual(['a']);
+    scheduler.stop();
+  });
+
+  it('start leaves a task alone when the host cannot adopt a chat for it this boot', async () => {
+    const past = new Date(Date.now() + 60 * 60_000).toISOString();
+    await saveTasks([
+      { id: 'a', threadId: 'mail-session', prompt: 'draft replies', schedule: { kind: 'cron', expr: '0 8 * * *' }, enabled: true, createdAt: past, nextRunAt: past, title: 'draft replies' }
+    ]);
+    const scheduler = new TaskScheduler({
+      runtime: new FakeRuntime() as never,
+      onChange: () => {},
+      onRun: () => {},
+      rehomeHiddenThread: async () => {
+        throw new Error('backend not up');
+      }
+    });
+    await scheduler.start();
+    expect((await readTasks())[0]).toMatchObject({ threadId: 'mail-session' });
+    scheduler.stop();
+  });
+});
+
 describe('TaskScheduler catch-up', () => {
   it('runs an overdue task exactly once on start', async () => {
     // Seed a task whose persisted nextRunAt is in the past (missed during downtime).

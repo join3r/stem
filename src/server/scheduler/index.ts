@@ -49,6 +49,12 @@ export interface SchedulerOptions {
    * memory (mail/reflect.ts). Called only for personas that own a memory.
    */
   reflect?: (args: { personaId: string; assignment: string; threadId: string }) => Promise<void>;
+  /**
+   * Boot-time repair for a task bound to a thread the user cannot open (a mail
+   * persona's hidden session — see ScheduledTask.originThreadId). Answers with a
+   * fresh chat to move the task onto, or null to leave it where it is.
+   */
+  rehomeHiddenThread?: (task: ScheduledTask) => Promise<string | null>;
 }
 
 // Timer cap: setTimeout is unreliable over very long delays and across system
@@ -150,6 +156,7 @@ export class TaskScheduler {
     if (this.started) return;
     this.started = true;
     this.tasks = await readTasks();
+    await this.rehomeHiddenThreads();
 
     const now = new Date();
     const overdue: ScheduledTask[] = [];
@@ -182,25 +189,53 @@ export class TaskScheduler {
     return this.tasks.map((t) => ({ ...t }));
   }
 
+  /**
+   * Tasks bound to `threadId` — plus the ones scheduled FROM it when it is a
+   * mail persona's hidden session, which run in a chat of their own (see
+   * ScheduledTask.originThreadId): the persona that made a task must still be
+   * able to list and cancel it from the conversation it made it in.
+   */
   listForThread(threadId: string): ScheduledTask[] {
-    return this.tasks.filter((t) => t.threadId === threadId).map((t) => ({ ...t }));
+    return this.tasks
+      .filter((t) => t.threadId === threadId || t.originThreadId === threadId)
+      .map((t) => ({ ...t }));
   }
 
-  /** Create a task bound to a chat (the assistant's schedule_task tool). */
-  async create(
-    req: ScheduleTaskRequest,
-    threadId: string
-  ): Promise<{ ok: true; task: ScheduledTask } | { ok: false; error: string }> {
+  /**
+   * The checks `create` runs before it writes anything, on their own so a caller
+   * that has to set something up first (the bridge adopting a fresh chat for a
+   * task scheduled from mail) can refuse a bad request without leaving that
+   * setup behind.
+   */
+  async validate(req: ScheduleTaskRequest): Promise<{ ok: true } | { ok: false; error: string }> {
     const schedule = this.buildSchedule(req);
     if (!schedule.ok) return { ok: false, error: schedule.error };
-    const prompt = (req.prompt ?? '').trim();
-    if (!prompt) return { ok: false, error: 'A task needs a prompt to run.' };
+    if (!(req.prompt ?? '').trim()) return { ok: false, error: 'A task needs a prompt to run.' };
     // Schedule-as-persona: validated at creation so a typo'd persona fails the
     // tool call loudly instead of every future run quietly.
     const personaId = (req.personaId ?? '').trim();
     if (personaId && !(await getPersona(personaId))) {
       return { ok: false, error: `No persona "${personaId}" exists.` };
     }
+    return { ok: true };
+  }
+
+  /**
+   * Create a task bound to a chat (the assistant's schedule_task tool). `origin`
+   * is the hidden mail session the tool was called from, when `threadId` is a
+   * fresh chat adopted in its place.
+   */
+  async create(
+    req: ScheduleTaskRequest,
+    threadId: string,
+    origin?: { threadId: string }
+  ): Promise<{ ok: true; task: ScheduledTask } | { ok: false; error: string }> {
+    const valid = await this.validate(req);
+    if (!valid.ok) return valid;
+    const schedule = this.buildSchedule(req);
+    if (!schedule.ok) return { ok: false, error: schedule.error };
+    const prompt = req.prompt.trim();
+    const personaId = (req.personaId ?? '').trim();
 
     const now = new Date();
     const task: ScheduledTask = {
@@ -212,12 +247,44 @@ export class TaskScheduler {
       createdAt: now.toISOString(),
       title: titleFromPrompt(prompt),
       nextRunAt: null,
-      ...(personaId ? { personaId } : {})
+      ...(personaId ? { personaId } : {}),
+      ...(origin ? { originThreadId: origin.threadId } : {})
     };
     task.nextRunAt = this.computeNextRunAt(task, now);
     this.tasks.push(task);
     await this.persistAndArm();
     return { ok: true, task: { ...task } };
+  }
+
+  /**
+   * Move every task still bound to a hidden mail session onto a chat of its own.
+   * Tasks scheduled from mail before origin tracking existed (and any the bridge
+   * failed to rehome at creation) ran in a thread no surface shows: the Chats
+   * list hides persona sessions and the Inbox shows only mail, so their runs —
+   * the drafts and reports the user was told to look for — landed nowhere. One
+   * pass at start; a task that cannot be moved this boot is tried again next.
+   */
+  private async rehomeHiddenThreads(): Promise<void> {
+    const rehome = this.opts.rehomeHiddenThread;
+    if (!rehome) return;
+    let moved = false;
+    for (const task of this.tasks) {
+      try {
+        const threadId = await rehome(task);
+        if (!threadId || threadId === task.threadId) continue;
+        log('tasks', 'moved a task out of a hidden mail session into its own chat', {
+          task: task.title,
+          from: task.threadId,
+          to: threadId
+        });
+        task.originThreadId = task.threadId;
+        task.threadId = threadId;
+        moved = true;
+      } catch (e) {
+        degrade('tasks', `left "${task.title}" running in a chat nobody can open`, e);
+      }
+    }
+    if (moved) await saveTasks(this.tasks);
   }
 
   async setEnabled(id: string, enabled: boolean): Promise<ScheduledTask[]> {

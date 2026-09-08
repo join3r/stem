@@ -3,8 +3,11 @@ import { reflectOnDelivery } from '../mail/reflect';
 import { degrade } from '../degrade';
 import { pushTaskAlert } from '../push';
 import { noteSilentRun } from '../workspace/inbox';
+import { mailSessionThreadIds } from '../workspace/mail';
 import { readSettings } from '../workspace/settings';
+import { titleFromPrompt } from '../workspace/tasks';
 import type { ChatBackend } from '../backend';
+import type { ScheduledTask } from '../../shared/types';
 
 /**
  * Scheduled tasks: re-run a chat's prompt as an autonomous turn on a cron/once
@@ -36,6 +39,21 @@ export function initTaskScheduler(deps: {
     personaId?: string;
   }) => Promise<void>;
 }): TaskScheduler {
+  // A task's runs need a chat the user can open. A mail persona's session is not
+  // one — the Chats list hides it and the Inbox shows only mail — so a task
+  // scheduled from a mail turn would append every run, drafts and all, to a
+  // thread no surface shows. Such a task gets a chat of its own instead, named
+  // after the task; pi writes the session file with the first run, which is
+  // when the chat appears in the list.
+  const hidden = async (threadId: string): Promise<boolean> => (await mailSessionThreadIds()).has(threadId);
+  const adoptChat = async (prompt: string): Promise<string> => {
+    const threadId = await deps.runtime.createThread();
+    await deps.runtime.renameThread(threadId, titleFromPrompt(prompt));
+    return threadId;
+  };
+  const rehomeHiddenThread = async (task: ScheduledTask): Promise<string | null> =>
+    (await hidden(task.threadId)) ? adoptChat(task.prompt) : null;
+
   const scheduler = new TaskScheduler({
     runtime: deps.runtime,
     onChange: (tasks) => deps.emit('tasks:changed', tasks),
@@ -47,6 +65,7 @@ export function initTaskScheduler(deps: {
     // A persona run that settled ok reflects into the persona's memory, the
     // same pass a mail delivery gets (mail/reflect.ts never rejects).
     reflect: (args) => reflectOnDelivery(deps.runtime, args),
+    rehomeHiddenThread,
     // A run that found nothing still wrote a turn, which bumps the thread's
     // mtime — the read-state signal the CHATS TREE bolds rows by. (The Inbox is
     // mail now and never sees the thread; this absorber only keeps a quiet
@@ -60,7 +79,13 @@ export function initTaskScheduler(deps: {
     }
   });
   deps.runtime.setTaskBridge({
-    schedule: (req, threadId) => scheduler.create(req, threadId),
+    schedule: async (req, threadId) => {
+      if (!(await hidden(threadId))) return scheduler.create(req, threadId);
+      // Validate before adopting, so a bad cron does not leave an empty chat behind.
+      const valid = await scheduler.validate(req);
+      if (!valid.ok) return valid;
+      return scheduler.create(req, await adoptChat(req.prompt), { threadId });
+    },
     listForThread: async (threadId) => scheduler.listForThread(threadId),
     cancel: async (taskId) => {
       const before = scheduler.snapshot().length;
