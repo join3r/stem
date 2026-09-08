@@ -14,7 +14,7 @@ import {
   setSnooze
 } from '../../src/server/workspace/inbox';
 import { inboxStorePath } from '../../src/server/workspace/paths';
-import { isUnread, placement } from '../../src/shared/inbox';
+import { isUnread, listedUpdatedAt, placement } from '../../src/shared/inbox';
 
 const path = inboxStorePath();
 const HOUR = 3600_000;
@@ -226,10 +226,64 @@ describe('silent scheduled run', () => {
     expect(isUnread({ threadId: 'a', updatedAt: at }, state)).toBe(true);
   });
 
-  it('writes nothing for a thread that was already unread and in the Inbox', async () => {
-    const base = await readInbox();
-    const state = await noteSilentRun('a', base.baseline + HOUR, runEnd());
-    expect(state.entries.a).toBeUndefined();
+  it('settles nothing new for a thread that was already unread and in the Inbox', async () => {
+    await readInbox();
+    const at = runEnd();
+    const before = at - 500; // real activity after the baseline, never opened
+    const state = await noteSilentRun('a', before, at);
+    expect(state.entries.a.readAt).toBeUndefined();
+    expect(state.entries.a.archivedAt).toBeUndefined();
+    expect(isUnread({ threadId: 'a', updatedAt: at }, state)).toBe(true);
+    // …but the run still may not move the row: it is listed as of the real activity.
+    expect(listedUpdatedAt({ threadId: 'a', updatedAt: at }, state)).toBe(before);
+  });
+
+  it('lists the thread as of the moment before the run, so it does not jump to the top', async () => {
+    const at = runEnd();
+    const before = at - HOUR;
+    const state = await noteSilentRun('a', before, at);
+    expect(state.entries.a).toMatchObject({ quietFrom: before, quietUntil: at });
+    // The row's mtime is the run's write, inside the window: listed as `before`.
+    expect(listedUpdatedAt({ threadId: 'a', updatedAt: at - 1 }, state)).toBe(before);
+    // In the backend's seconds too, answered in seconds.
+    expect(listedUpdatedAt({ threadId: 'a', updatedAt: Math.floor((at - 1) / 1000) }, state)).toBe(
+      Math.floor(before / 1000)
+    );
+    // A real message after the run speaks for itself again.
+    expect(listedUpdatedAt({ threadId: 'a', updatedAt: at + 1 }, state)).toBe(at + 1);
+  });
+
+  it('a second silent run extends the window instead of moving the thread to the first run', async () => {
+    const first = runEnd();
+    const origin = first - HOUR;
+    await noteSilentRun('a', origin, first);
+    // The scheduler reads the raw mtime, which the first run's write left inside the window.
+    const second = first + 24 * HOUR;
+    const state = await noteSilentRun('a', first - 500, second);
+    expect(state.entries.a).toMatchObject({ quietFrom: origin, quietUntil: second });
+    expect(listedUpdatedAt({ threadId: 'a', updatedAt: second - 1 }, state)).toBe(origin);
+  });
+
+  it('a real message between two silent runs opens a fresh window from that message', async () => {
+    const first = runEnd();
+    await noteSilentRun('a', first - HOUR, first);
+    const message = first + HOUR;
+    const second = message + HOUR;
+    const state = await noteSilentRun('a', message, second);
+    expect(state.entries.a).toMatchObject({ quietFrom: message, quietUntil: second });
+  });
+
+  it('round-trips the window through the file and drops a half-written one', async () => {
+    const at = runEnd();
+    await noteSilentRun('a', at - HOUR, at);
+    expect(onDisk().entries.a).toMatchObject({ quietFrom: at - HOUR, quietUntil: at });
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 1, baseline: 0, entries: { b: { quietFrom: 5 }, c: { quietFrom: 9, quietUntil: 5 } } })
+    );
+    const state = await readInbox();
+    expect(state.entries.b).toBeUndefined();
+    expect(state.entries.c).toBeUndefined();
   });
 });
 

@@ -6,6 +6,7 @@ import {
   emptyInboxState,
   formatWake,
   isUnread,
+  listedUpdatedAt,
   nextWakeAt,
   placement,
   snoozedUntil,
@@ -95,6 +96,31 @@ describe('placement', () => {
   it('ignores a half-written snooze (a wake time with no set-at stamp)', () => {
     const s = state({ a: { snoozedUntil: now + HOUR } });
     expect(placement(chat('a', now - HOUR), s, now)).toBe('inbox');
+  });
+});
+
+describe('listedUpdatedAt', () => {
+  // Real ms timestamps: anything under 1e12 reads as backend seconds (see toMs).
+  const T = 1_700_000_000_000;
+  const from = T + 8 * HOUR;
+  const until = T + 9 * HOUR;
+
+  it('is the real mtime for a thread with no quiet window', () => {
+    expect(listedUpdatedAt(chat('a', until), state({}))).toBe(until);
+    expect(listedUpdatedAt(chat('a', until), state({ a: { readAt: T } }))).toBe(until);
+  });
+
+  it('answers with the window’s opening while the mtime sits inside it, in the caller’s unit', () => {
+    const s = state({ a: { quietFrom: from, quietUntil: until } });
+    expect(listedUpdatedAt(chat('a', until), s)).toBe(from);
+    expect(listedUpdatedAt(chat('a', (until - 1000) / 1000), s)).toBe(from / 1000);
+  });
+
+  it('lets a write past the window, or one before it, speak for itself', () => {
+    const s = state({ a: { quietFrom: from, quietUntil: until } });
+    expect(listedUpdatedAt(chat('a', until + 1), s)).toBe(until + 1);
+    expect(listedUpdatedAt(chat('a', from), s)).toBe(from);
+    expect(listedUpdatedAt(chat('a', from - HOUR), s)).toBe(from - HOUR);
   });
 });
 

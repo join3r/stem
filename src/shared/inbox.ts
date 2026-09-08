@@ -21,6 +21,16 @@ export interface InboxEntry {
   snoozedAt?: number;
   /** ms — the wake time. */
   snoozedUntil?: number;
+  /**
+   * A quiet window: writes to the session file between `quietFrom` and
+   * `quietUntil` (ms, both or neither) were non-events — a scheduled run that
+   * found nothing, a rename to the name the chat already had. While the file's
+   * mtime is still inside the window the chat is listed as of `quietFrom`, so
+   * it neither jumps to the top nor changes its read/archive/snooze standing.
+   * The next real write lands past `quietUntil` and the mtime speaks again.
+   */
+  quietFrom?: number;
+  quietUntil?: number;
 }
 
 export interface InboxState {
@@ -52,6 +62,21 @@ export function toMs(ts: number): number {
 export interface InboxSubject {
   threadId: string;
   updatedAt: number;
+}
+
+/**
+ * The last-activity time a chat should be listed with: its real mtime, unless
+ * that mtime still sits inside the entry's quiet window, in which case the time
+ * the window opened on. Same unit as `chat.updatedAt` (backend seconds or ms).
+ * The server applies this to every ChatSummary it lists, so clients never see
+ * the quiet mtime at all — see server/ipc/chats.ts.
+ */
+export function listedUpdatedAt(chat: InboxSubject, state: InboxState): number {
+  const entry = state.entries[chat.threadId];
+  if (entry?.quietFrom == null || entry.quietUntil == null) return chat.updatedAt;
+  const updated = toMs(chat.updatedAt);
+  if (updated > entry.quietUntil || updated <= entry.quietFrom) return chat.updatedAt;
+  return chat.updatedAt < 1e12 ? Math.floor(entry.quietFrom / 1000) : entry.quietFrom;
 }
 
 export function placement(chat: InboxSubject, state: InboxState, now: number): InboxPlacement {

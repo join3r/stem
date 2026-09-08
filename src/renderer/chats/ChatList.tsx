@@ -167,7 +167,8 @@ const STATUS_LABEL: Record<ThreadStatus, string> = {
   error: 'Failed'
 };
 
-type Editing = { kind: 'chat' | 'folder'; id: string; value: string };
+/** `initial` is the name the row had when editing began: committing it unchanged is a no-op, not a rename. */
+type Editing = { kind: 'chat' | 'folder'; id: string; value: string; initial: string };
 type Creating = { parentId: string | null; value: string };
 type Menu =
   | { kind: 'chat'; id: string; x: number; y: number }
@@ -349,7 +350,10 @@ export function ChatList(props: ChatListProps) {
   const commitEdit = () => {
     if (!editing) return;
     const value = editing.value.trim();
-    if (value) {
+    // The field commits on blur, so opening Rename and clicking away lands here
+    // with the name untouched. That is not a rename: sending it would still write
+    // to the chat and bump it to the top of the list as if a message had arrived.
+    if (value && value !== editing.initial) {
       if (editing.kind === 'folder') props.onRenameFolder(editing.id, value);
       else props.onRenameChat(editing.id, value);
     }
@@ -815,7 +819,7 @@ export function ChatList(props: ChatListProps) {
                 menu.kind === 'folder'
                   ? data.folders.find((f) => f.id === menu.id)?.name ?? ''
                   : data.chats.find((c) => c.threadId === menu.id)?.title ?? '';
-              setEditing({ kind: menu.kind, id: menu.id, value: name });
+              setEditing({ kind: menu.kind, id: menu.id, value: name, initial: name });
               closeMenu();
             }}
           >

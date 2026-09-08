@@ -18,12 +18,14 @@ import {
 } from '../workspace/chats';
 import {
   markAllRead,
+  noteSilentRun,
   readInbox,
   removeInboxEntry,
   setArchived,
   setRead,
   setSnooze
 } from '../workspace/inbox';
+import { listedUpdatedAt, toMs } from '../../shared/inbox';
 import { mailSessionThreadIds } from '../workspace/mail';
 import { memoryRunOf } from '../workspace/settings';
 import type { LlmClient } from '../recall/llm';
@@ -43,6 +45,13 @@ import type { ChatListResult } from '../../shared/types';
  * the cross-language superset back indefinitely.
  */
 const CHAT_SEARCH_COMPLETION_TIMEOUT_MS = 4_000;
+
+/**
+ * How far past the rename's own write its quiet window reaches. pi appends the
+ * session_info entry before answering, so the mtime is already final when the
+ * thread list is re-read; the grace covers a filesystem that rounds mtimes up.
+ */
+const RENAME_GRACE_MS = 2_000;
 
 export function registerChatsIpc(deps: IpcDeps): void {
   const chatList = async (): Promise<ChatListResult> => {
@@ -66,6 +75,10 @@ export function registerChatsIpc(deps: IpcDeps): void {
       const subject = subjects[chat.threadId];
       if (subject) chat.subject = subject;
       if (privateChats.has(chat.threadId)) chat.private = true;
+      // A write nobody should notice (a silent scheduled run, a no-op rename)
+      // still moved the file's mtime. List the chat as of the last write that
+      // meant something, so it stays where the user left it — see shared/inbox.ts.
+      chat.updatedAt = listedUpdatedAt(chat, inbox);
     }
     return { chats, folders, inbox };
   };
@@ -109,9 +122,25 @@ export function registerChatsIpc(deps: IpcDeps): void {
     return forked;
   });
   registerServer('chats:rename', async (_e, threadId: string, name: string) => {
+    const before = (await deps.runtime().listThreads()).find((t) => t.threadId === threadId);
+    // The sidebar's rename field commits on blur, so opening Rename and clicking
+    // away asks for the name the chat already has. Writing it would append a
+    // session_info entry all the same, and the bumped mtime would drag the chat
+    // to the top of the list, bold — a "new message" nobody wrote.
+    if (before && before.title === name.trim()) return;
     await deps.runtime().renameThread(threadId, name);
     // The title is indexed for search too — reflect the new name right away.
     void reindexChatThread(deps.runtime(), threadId);
+    // A real rename is the user's own doing, not new activity: keep the chat
+    // where it was, with whatever read/archive/snooze standing it had. Same
+    // absorber a silent scheduled run gets, for the same reason.
+    if (before) {
+      const after = (await deps.runtime().listThreads()).find((t) => t.threadId === threadId);
+      const at = Math.max(Date.now(), toMs(after?.updatedAt ?? 0)) + RENAME_GRACE_MS;
+      await noteSilentRun(threadId, before.updatedAt, at).catch((err) =>
+        degrade('chats', 'left a renamed chat looking like it had a new message', err)
+      );
+    }
   });
   registerServer('chats:delete', async (_e, threadId: string) => {
     // Independent stores (pi session file vs. folder-assignment JSON) — run concurrently.

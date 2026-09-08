@@ -35,6 +35,13 @@ function coerceEntry(raw: unknown): InboxEntry | null {
   const snoozedUntil = num(r.snoozedUntil);
   if (snoozedUntil !== undefined) entry.snoozedUntil = snoozedUntil;
   if (r.forcedUnread === true) entry.forcedUnread = true;
+  // The quiet window only means something as a pair.
+  const quietFrom = num(r.quietFrom);
+  const quietUntil = num(r.quietUntil);
+  if (quietFrom !== undefined && quietUntil !== undefined && quietFrom <= quietUntil) {
+    entry.quietFrom = quietFrom;
+    entry.quietUntil = quietUntil;
+  }
   return Object.keys(entry).length ? entry : null;
 }
 
@@ -258,21 +265,30 @@ export function markAllRead(chats: { threadId: string; updatedAt: number }[]): P
 }
 
 /**
- * A scheduled run finished without calling `notify_user` — it looked, and there
- * was nothing to say. The turn still appended to the thread and bumped the
- * session file's mtime, which is the only "something happened here" signal the
- * Inbox has, so left alone every silent run would resurrect the thread from the
- * archive and paint the row bold. Roll the thread's own timestamps past the run
- * instead: whatever was settled before it stays settled.
+ * A write to the session file that the user should never notice: a scheduled
+ * run that finished without calling `notify_user` (it looked, and there was
+ * nothing to say), or a rename to the name the chat already had. The write
+ * bumped the file's mtime, which is the only "something happened here" signal
+ * the chat list has, so left alone it would drag the thread to the top of the
+ * list, resurrect it from the archive and paint the row bold.
  *
- * Only the dimensions the run found settled move. A thread you had deliberately
- * left unread stays bold, a thread already sitting in the Inbox stays there, and
- * an expired snooze is not re-armed — a silent run can hide a thread that was
+ * Two things absorb it. The quiet window (`quietFrom`..`quietUntil`) makes the
+ * list keep showing the thread as of `before` for as long as its mtime stays
+ * inside the window, so its position and its standing don't move. And the
+ * thread's own timestamps roll past the write for whichever dimensions the
+ * write found settled: whatever was settled before it stays settled, even for
+ * a reader that ignores the window (the scheduler's own raw mtime reads).
+ *
+ * Only the dimensions found settled move. A thread you had deliberately left
+ * unread stays bold, a thread already sitting in the Inbox stays there, and an
+ * expired snooze is not re-armed — a quiet write can hide a thread that was
  * already hidden, never hide one that wasn't.
  *
- * `before` is the thread's mtime as the run started; `at` must be at or past its
- * mtime now (the caller reads both from the thread list, so a write that lands
- * after the turn settles is still covered).
+ * `before` is the thread's mtime as the write started; `at` must be at or past
+ * its mtime now (the caller reads both from the thread list, so a write that
+ * lands a moment after is still covered). A quiet write landing inside an open
+ * window extends the window rather than opening a new one, so a thread polled
+ * silently every morning stays exactly where the last real message left it.
  */
 export function noteSilentRun(threadId: string, before: number, at: number): Promise<InboxState> {
   const prev = toMs(before);
@@ -287,11 +303,14 @@ export function noteSilentRun(threadId: string, before: number, at: number): Pro
       at < entry.snoozedUntil &&
       prev <= entry.snoozedAt;
     const wasRead = !entry?.forcedUnread && prev <= Math.max(entry?.readAt ?? 0, store.baseline);
-    if (!wasArchived && !wasSnoozed && !wasRead) return;
     const target = entryOf(store, threadId);
     if (wasArchived) target.archivedAt = at;
     if (wasSnoozed) target.snoozedAt = at;
     if (wasRead) target.readAt = at;
+    const inOpenWindow =
+      target.quietFrom != null && target.quietUntil != null && prev <= target.quietUntil && prev > target.quietFrom;
+    target.quietFrom = inOpenWindow ? target.quietFrom : prev;
+    target.quietUntil = Math.max(at, target.quietUntil ?? 0);
   });
 }
 
