@@ -14,6 +14,10 @@ Maintainer notes:
 
 ## 0.5.2 — Unreleased
 
+### Added
+
+- **Multiple custom model endpoints.** Add separately named OpenAI-compatible and Anthropic-compatible endpoints and keep all of their models available at once. Existing single Custom endpoint settings continue to work.
+
 ### Fixed
 
 - **Downloads carry only the app.** Every installer so far also packed Stem's own source tree,

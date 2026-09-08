@@ -11,7 +11,7 @@ import type {
   LocalProviderTestResult,
   ModelOverride
 } from '../../../../shared/types';
-import { API_KEY_PROVIDER_IDS, AUTH_PROVIDER_IDS, isLocalProviderId, providerName } from '../../../../shared/providers';
+import { API_KEY_PROVIDER_IDS, AUTH_PROVIDER_IDS, customProviderId, isCustomProviderId, isLocalProviderId, providerName } from '../../../../shared/providers';
 import { resolveBackgroundModel, resolveMemoryModel, resolveRoleEffort, resolveSkillsModel } from '../../../../shared/modelRoles';
 import { parsePiModelsJson, providerLabel } from '../../../../shared/piModelsImport';
 import { clampEffort, EffortSelect, effortsOf } from '../../../ui/EffortSelect';
@@ -815,8 +815,8 @@ function ProvidersSection({ deadProvider }: { deadProvider?: string | null }) {
   const cloudProviders = providers.filter((p) => !isLocalProviderId(p));
   const enabledLocals = local ? (Object.keys(local) as LocalProviderId[]).filter((id) => local[id].enabled) : [];
   const rows = [
-    ...cloudProviders.map((id) => ({ id, detail: providerKind(id) })),
-    ...enabledLocals.map((id) => ({ id, detail: local![id].baseUrl }))
+    ...cloudProviders.map((id) => ({ id, name: providerName(id), detail: providerKind(id) })),
+    ...enabledLocals.map((id) => ({ id, name: local![id].name ?? providerName(id), detail: local![id].baseUrl }))
   ];
 
   return (
@@ -856,7 +856,7 @@ function ProvidersSection({ deadProvider }: { deadProvider?: string | null }) {
               <span className={`prov-dot ${row.id === deadProvider ? 'bad' : 'ok'}`} />
             </span>
             <span>
-              <b>{providerName(row.id)}</b>
+              <b>{row.name}</b>
               <i>{row.id === deadProvider ? 'Session expired' : row.detail}</i>
             </span>
           </button>
@@ -977,9 +977,11 @@ function ProvidersSection({ deadProvider }: { deadProvider?: string | null }) {
           Only for a connected custom endpoint: Ollama reports its own
           capabilities, and LM Studio's users are better served by adding their
           server as a custom endpoint than by a second place to hand-configure. */}
-      {selected === 'custom' && local?.custom.enabled && !adding && (
+      {selected && isCustomProviderId(selected) && local?.[selected]?.enabled && !adding && (
         <CustomOverridesForm
-          value={local.custom.modelOverrides}
+          providerId={selected}
+          providerName={local[selected].name ?? providerName(selected)}
+          value={local[selected].modelOverrides}
           busy={busy}
           onSaved={changed}
           onError={setError}
@@ -1311,11 +1313,15 @@ function OverridesField({
  * feature exists to stop them hand-editing.
  */
 function CustomOverridesForm({
+  providerId,
+  providerName: displayName,
   value,
   busy,
   onSaved,
   onError
 }: {
+  providerId: LocalProviderId;
+  providerName: string;
   value: Record<string, ModelOverride> | undefined;
   busy: boolean;
   onSaved: () => Promise<void>;
@@ -1339,7 +1345,7 @@ function CustomOverridesForm({
     setSaving(true);
     onError(null);
     try {
-      const res = await window.stem.updateLocalProvider('custom', { modelOverrides: parsed.value });
+      const res = await window.stem.updateLocalProvider(providerId, { modelOverrides: parsed.value });
       if (!res.ok) onError(res.error ?? 'Could not save the overrides.');
       else await onSaved();
     } finally {
@@ -1349,7 +1355,7 @@ function CustomOverridesForm({
 
   return (
     <>
-      <div className="grp-head">Custom endpoint — per-model overrides</div>
+      <div className="grp-head">{displayName} — per-model overrides</div>
       <div className="formgroup">
         <div className="set-block">
           <OverridesField text={text} onChange={setText} />
@@ -1399,6 +1405,7 @@ function LocalServerAddForm({
   const [baseUrl, setBaseUrl] = useState(settings.ollama.baseUrl);
   const [apiKey, setApiKey] = useState('');
   const [models, setModels] = useState('');
+  const [customName, setCustomName] = useState('');
   // API flavor for the Custom endpoint. Ollama/LM Studio ignore it — always
   // openai-completions. `null` = auto-detect (default): the Test probe
   // classifies which chat route the endpoint exposes and snaps the dropdown to
@@ -1408,14 +1415,12 @@ function LocalServerAddForm({
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<LocalProviderTestResult | null>(null);
   const [saving, setSaving] = useState(false);
-  // Overrides survive a disconnect on purpose, so the form starts holding
-  // whatever the last endpoint had. Seeded once, not per render: this is an
-  // editable draft, and re-seeding would fight the typing.
-  const [overrides, setOverrides] = useState(() => overridesToText(settings.custom.modelOverrides));
-  // Open when something was retained: Enable is about to apply it to whatever
-  // endpoint this turns out to be, and a fragment that rides along behind a
-  // collapsed heading is the invisible-config problem all over again.
-  const [showAdvanced, setShowAdvanced] = useState(!!settings.custom.modelOverrides);
+  // Each named endpoint owns its overrides. Start a new endpoint empty rather
+  // than copying the legacy custom slot (which could silently apply settings
+  // intended for another server). Re-enabling a disconnected endpoint omits an
+  // empty patch below, preserving the overrides already stored under its id.
+  const [overrides, setOverrides] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const parsedOverrides = overridesFromText(overrides);
   // The probe runs for seconds against a URL the user is still typing into, so a
   // late answer must prove it still belongs to this form before it may speak for
@@ -1440,6 +1445,7 @@ function LocalServerAddForm({
     setBaseUrl(settings[id].baseUrl);
     setApiKey('');
     setModels('');
+    setCustomName('');
     // Custom starts on Auto-detect; Ollama/LM Studio are always openai-completions.
     setApi(id === 'custom' ? null : 'openai-completions');
     setTest(null);
@@ -1502,10 +1508,18 @@ function LocalServerAddForm({
     setSaving(true);
     onError(null);
     try {
-      const res = await window.stem.updateLocalProvider(server, {
+      let providerId = server;
+      if (custom) {
+        const baseId = customProviderId(customName);
+        providerId = baseId;
+        let suffix = 2;
+        while (settings[providerId]?.enabled) providerId = `${baseId}-${suffix++}` as LocalProviderId;
+      }
+      const res = await window.stem.updateLocalProvider(providerId, {
         enabled: true,
+        ...(custom ? { name: customName.trim() } : {}),
         baseUrl: baseUrl.trim(),
-        // API flavor only meaningful for `custom`; the coercion in settings
+        // API flavor only meaningful for custom endpoints; settings coercion
         // strips it for other providers. Enable is disabled below when a custom
         // endpoint is still on Auto-detect, so `api` is guaranteed non-null here.
         api: custom ? (api ?? 'openai-completions') : 'openai-completions',
@@ -1513,10 +1527,12 @@ function LocalServerAddForm({
         // one clears the stored key instead of silently inheriting it.
         apiKey: custom ? apiKey.trim() : '',
         models: custom ? modelList : [],
-        // Whatever the box holds, including an emptied one — Enable is the point
-        // where the retained fragment is either confirmed for this endpoint or
-        // cleared. Malformed JSON can't get here: the button is disabled.
-        ...(custom && parsedOverrides.ok ? { modelOverrides: parsedOverrides.value } : {})
+        // Do not send an empty override object here: when this id belongs to a
+        // disconnected endpoint, omission preserves its hard-won retained
+        // overrides. Once connected, its dedicated editor can explicitly clear.
+        ...(custom && parsedOverrides.ok && Object.keys(parsedOverrides.value).length
+          ? { modelOverrides: parsedOverrides.value }
+          : {})
       });
       if (!res.ok) onError(res.error ?? 'Could not enable the server.');
       else await onSaved();
@@ -1561,7 +1577,7 @@ function LocalServerAddForm({
         value={server}
         onChange={(e) => pick(e.target.value as LocalProviderId)}
       >
-        {(Object.keys(settings) as LocalProviderId[]).map((id) => (
+        {(['ollama', 'lmstudio', 'custom'] as LocalProviderId[]).map((id) => (
           <option key={id} value={id}>
             {providerName(id)}
           </option>
@@ -1576,6 +1592,13 @@ function LocalServerAddForm({
       />
       {custom && (
         <>
+          <input
+            className="ifield"
+            aria-label="Endpoint name"
+            placeholder="Name, e.g. HAI OpenAI"
+            value={customName}
+            onChange={(e) => setCustomName(e.target.value)}
+          />
           <select
             className="ifield"
             aria-label="API flavor"
@@ -1626,7 +1649,6 @@ function LocalServerAddForm({
               <OverridesField
                 text={overrides}
                 onChange={setOverrides}
-                kept={!!settings.custom.modelOverrides}
               />
               {!parsedOverrides.ok && <p className="error">That isn’t valid JSON yet.</p>}
             </>
@@ -1661,6 +1683,7 @@ function LocalServerAddForm({
           disabled={
             saving ||
             !baseUrl.trim() ||
+            (custom && !customName.trim()) ||
             (custom && modelList.length === 0) ||
             (custom && api === null) ||
             (custom && !parsedOverrides.ok)

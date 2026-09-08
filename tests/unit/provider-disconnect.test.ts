@@ -71,6 +71,43 @@ describe('providers:disconnect', () => {
     expect(settings.localProviders.custom.apiKey).toBeUndefined();
   });
 
+  it('disconnects one named custom endpoint without changing another', async () => {
+    await updateLocalProvider('custom-one', {
+      enabled: true,
+      name: 'One',
+      baseUrl: 'https://one.example',
+      apiKey: 'one-key',
+      models: ['one-model'],
+      modelOverrides: { 'one-model': { reasoning: true } }
+    });
+    await updateLocalProvider('custom-two', {
+      enabled: true,
+      name: 'Two',
+      baseUrl: 'https://two.example',
+      apiKey: 'two-key',
+      models: ['two-model']
+    });
+    await updateDefaultModel('custom-one/one-model');
+
+    await expect(dispatchLocal('providers:disconnect', ['custom-one'])).resolves.toMatchObject({ ok: true });
+
+    const settings = await readSettings();
+    expect(removed).toEqual(['custom-one']);
+    expect(settings.defaults.model).toBeNull();
+    expect(settings.localProviders['custom-one']).toMatchObject({
+      enabled: false,
+      name: 'One',
+      modelOverrides: { 'one-model': { reasoning: true } }
+    });
+    expect(settings.localProviders['custom-one'].apiKey).toBeUndefined();
+    expect(settings.localProviders['custom-two']).toMatchObject({
+      enabled: true,
+      name: 'Two',
+      apiKey: 'two-key',
+      models: ['two-model']
+    });
+  });
+
   it('leaves a default served by a provider that is still connected', async () => {
     await updateDefaultModel('anthropic/claude-sonnet-4.5');
     await expect(dispatchLocal('providers:disconnect', ['openai-codex'])).resolves.toMatchObject({ ok: true });

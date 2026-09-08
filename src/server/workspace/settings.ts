@@ -571,35 +571,37 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
         : null,
     backgroundEffort: coerceEffort(rawDef.backgroundEffort)
   };
-  const rawLp = (parsed?.localProviders ?? {}) as Partial<Record<LocalProviderId, Partial<LocalProviderSettings>>>;
+  const rawLp = (parsed?.localProviders ?? {}) as Record<string, Partial<LocalProviderSettings>>;
   const coerceLocal = (id: LocalProviderId): LocalProviderSettings => {
     const r = rawLp[id] ?? {};
-    const def = DEFAULTS.localProviders[id];
+    const custom = id === 'custom' || id.startsWith('custom-');
+    const def = custom ? DEFAULTS.localProviders.custom : DEFAULTS.localProviders[id];
     // apiKey/models stay absent rather than empty when unset, so a keyless server
     // with a server-provided catalog round-trips to exactly the old shape.
     const apiKey = typeof r.apiKey === 'string' ? r.apiKey.trim() : '';
     const models = Array.isArray(r.models)
       ? r.models.filter((m): m is string => typeof m === 'string' && !!m.trim()).map((m) => m.trim())
       : [];
-    // API flavor: only `custom` may opt into anthropic-messages. Ollama/LM Studio
+    // API flavor: only custom endpoints may opt into anthropic-messages. Ollama/LM Studio
     // are always openai-completions — a hand-edited settings.json cannot switch
     // them; the field would be ignored downstream anyway. Persist the flavor
     // verbatim (both `openai-completions` and `anthropic-messages`) so a saved
     // settings.json is self-describing and future debugging can tell an explicit
     // openai-completions pick from an absent field (= not yet configured).
     const api: LocalProviderApi | undefined =
-      id === 'custom' && (r.api === 'anthropic-messages' || r.api === 'openai-completions') ? r.api : undefined;
-    // Per-model overrides: `custom` only, and coerced only as far as its shape —
+      custom && (r.api === 'anthropic-messages' || r.api === 'openai-completions') ? r.api : undefined;
+    // Per-model overrides: custom endpoints only, coerced only as far as their shape —
     // an entry that fails the deeper guard (pi/model-overrides.ts) is KEPT here
     // and dropped at sync time instead. Losing the text on read is the exact
     // failure the feature exists to end; the box has to still show what was
     // typed so it can be corrected.
     const rawOverrides = r.modelOverrides;
     const overrides =
-      id === 'custom' && isRecord(rawOverrides)
+      custom && isRecord(rawOverrides)
         ? Object.fromEntries(Object.entries(rawOverrides).filter(([k, v]) => k.trim() && isRecord(v)))
         : {};
     return {
+      ...(custom && typeof r.name === 'string' && r.name.trim() ? { name: r.name.trim().slice(0, 80) } : {}),
       enabled: typeof r.enabled === 'boolean' ? r.enabled : def.enabled,
       baseUrl: typeof r.baseUrl === 'string' && r.baseUrl.trim() ? r.baseUrl.trim() : def.baseUrl,
       ...(api ? { api } : {}),
@@ -613,6 +615,11 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
     lmstudio: coerceLocal('lmstudio'),
     custom: coerceLocal('custom')
   };
+  // Dynamic entries are restricted to the reserved, pi-safe custom namespace.
+  for (const id of Object.keys(rawLp)) {
+    if (/^custom-[a-z0-9][a-z0-9-]*$/.test(id))
+      localProviders[id as `custom-${string}`] = coerceLocal(id as LocalProviderId);
+  }
   return {
     quickChat: {
       defaultModel: typeof qc.defaultModel === 'string' && qc.defaultModel.trim() ? qc.defaultModel : null,

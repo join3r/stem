@@ -357,6 +357,38 @@ describe('local provider settings', () => {
     });
   });
 
+  it('keeps multiple named custom endpoints independently', async () => {
+    await updateLocalProvider('custom-hai-openai', {
+      enabled: true,
+      name: 'HAI OpenAI',
+      baseUrl: 'http://localhost:6655/openai',
+      api: 'openai-completions',
+      apiKey: 'openai-key',
+      models: ['gpt-5']
+    });
+    await updateLocalProvider('custom-hai-anthropic', {
+      enabled: true,
+      name: 'HAI Anthropic',
+      baseUrl: 'http://localhost:6655/anthropic',
+      api: 'anthropic-messages',
+      apiKey: 'anthropic-key',
+      models: ['claude-opus']
+    });
+    const providers = (await readSettings()).localProviders;
+    expect(providers['custom-hai-openai']).toMatchObject({ name: 'HAI OpenAI', api: 'openai-completions' });
+    expect(providers['custom-hai-anthropic']).toMatchObject({ name: 'HAI Anthropic', api: 'anthropic-messages' });
+  });
+
+  it('drops arbitrary dynamic provider keys while preserving valid named custom endpoints', async () => {
+    writeFileSync(path, JSON.stringify({ localProviders: {
+      'custom-good': { enabled: true, name: 'Good', baseUrl: 'http://good', models: ['m'] },
+      evil: { enabled: true, baseUrl: 'http://evil', models: ['m'] }
+    } }));
+    const providers = (await readSettings()).localProviders;
+    expect(providers['custom-good']).toMatchObject({ enabled: true, name: 'Good' });
+    expect((providers as Record<string, unknown>).evil).toBeUndefined();
+  });
+
   it('round-trips the anthropic-messages flavor on the custom endpoint', async () => {
     await updateLocalProvider('custom', {
       enabled: true,
