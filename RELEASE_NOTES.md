@@ -16,43 +16,24 @@ Maintainer notes:
 
 ### Added
 
-- **Stem GTE Memory.** A new memory model, trained for Czech, Slovak, German and English, that
-  scored the best recall and the fastest ranking in Stem's benchmarks. It picks memories and skills on
-  top of the built-in Qwen3 models, and it also reads the last two things you said in the chat, so a
-  follow-up question finds the memories the earlier one was about. New installs start on it. If you
-  set up Stem before this release, the what's-new popup offers the switch once: accept and Stem
-  downloads and verifies the model (about 340 MB) in the background, using it from the next reply on;
-  decline and nothing changes. The switch is also under Manage → Memory → Reranker either way, and
-  picking the Qwen3 reranker there goes back. Your memories are never re-indexed or changed by
-  switching. Phones and desktops connected to one server share the choice.
-- **See the work behind mail.** Expand **Work** below a mail to follow its personas and coding
-  agents, with actions, progress, timings, and expandable inputs and results. The history updates
-  quietly while work runs and keeps partial results after failure or Stop. Desktop and iOS show
-  the same records. Scheduled notifications include their run history; older mails show what can
-  be recovered, with missing details marked.
-- **Multiple custom model endpoints.** Add separately named OpenAI-compatible and
-  Anthropic-compatible endpoints and keep all of their models available at once. Existing single
-  Custom endpoint settings continue to work.
+- **Stem GTE Memory.** A new memory model, trained for Czech, Slovak, German and English. It is
+  smaller and faster than the Qwen3 reranker and picks the right memories more often in Stem's
+  benchmarks. It also reads the last two things you said, so a follow-up question finds the memories
+  the earlier one was about. Manage → Memory → Reranker is where you switch, either way.
 - **Update dialog.** A newer Stem now announces itself in a dialog once per launch instead of a
   strip under the title bar that was easy to sit under for weeks. "Later" keeps the strip and the
   Settings → App row as the quieter reminders.
 
 ### Changed
 
-- **Integrations no longer weigh on every reply.** The assistant used to be handed the full
-  description of every tool from every connected integration, and every procedure, at the start
-  of each reply. It now gets a short summary per integration and looks up the tools and procedures
-  it needs. Replies start faster and cost less with many integrations connected, and adding one
-  more no longer slows everything else down.
-- **Recall quality row only when there is something to review.** The Memory tab no longer shows a
-  row confirming the recommended recall setup. It appears only when your models differ from it,
-  with the same "Review setup" link.
+- **Progressive disclosure v2.** The assistant used to be handed the full description of every tool
+  from every connected integration, and every procedure, at the start of each reply. It now gets a
+  short summary per integration and looks up the tools and procedures it needs. Replies start faster
+  and cost less with many integrations connected, and adding one more no longer slows everything
+  else down.
 
 ### Fixed
 
-- **Downloads carry only the app.** Every installer so far also packed Stem's own source tree,
-  tests and mobile project inside the app folder, none of which the app reads. They are gone, and
-  building the macOS app from a checkout with the phone project set up no longer fails partway.
 - **Unsent text survives switching chats.** Opening another chat threw away whatever you had
   typed but not yet sent, usually a follow-up written while the previous reply was still
   streaming. Each chat now keeps its draft and attachments until you send them or close Stem.
