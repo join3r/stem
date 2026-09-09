@@ -3,18 +3,18 @@ import { Check, TriangleAlert } from 'lucide-react';
 import type { PartialRetrievalSettings, RetrievalSettings } from '../shared/types';
 import { recallSetupStatus, recommendedRetrievalPatch } from '../shared/recall-recommended';
 
-// The one-time offer inside the "what's new" popup for the release that changed
-// the recall defaults. Fresh installs already get the Qwen3 models; an existing
-// install keeps whatever it had stored, which is exactly the person this is for.
-// Two buttons, because a recommendation with only an accept button reads as a
-// demand: Switch applies the same settings write the Memory tab makes (models
-// download in the background, facts re-index against the new embedder as recall
-// runs), Keep leaves everything as it is and says so. Either way the popup's
+// The one-time offer inside the "what's new" popup for a release that changed
+// the recall defaults. Fresh installs already get the recommended models; an
+// existing install keeps whatever it had stored, which is exactly the person
+// this is for. Two buttons, because a recommendation with only an accept button
+// reads as a demand: Switch applies the same settings write the Memory tab makes
+// (models download in the background; facts re-index only if the embedder
+// changed), Keep leaves everything as it is and says so. Either way the popup's
 // seen-marker means nobody is asked twice.
 
-/** Human name for the stage a setup is running, for the "you have X" line. */
+/** Human name for the stages a setup is running, for the "you have X" line. */
 function describe(retrieval: RetrievalSettings): string {
-  const { embedOk, rerankOk } = recallSetupStatus(retrieval);
+  const { embedOk, rerankOk, factOk } = recallSetupStatus(retrieval);
   const parts: string[] = [];
   if (!embedOk) {
     const e = retrieval.embeddings;
@@ -35,6 +35,8 @@ function describe(retrieval: RetrievalSettings): string {
           ? `the ${r.model || 'server'} reranker on your own endpoint`
           : `the ${r.localModel} reranker`
     );
+  } else if (!factOk) {
+    parts.push('the Qwen3 reranker alone');
   }
   return parts.join(' and ');
 }
@@ -51,8 +53,11 @@ export function RecallRecommendation({
   const [error, setError] = useState<string | null>(null);
   const patch = recommendedRetrievalPatch(retrieval);
   if (!patch) return null;
-  const both = Boolean(patch.embeddings && patch.reranker);
-  const { embedRemoteQwen3 } = recallSetupStatus(retrieval);
+  const { embedRemoteQwen3, rerankOk } = recallSetupStatus(retrieval);
+  // Only a reranker still to download counts as a second model: GTE alone on
+  // top of the Qwen3 pair is one ~340 MB download and no re-indexing.
+  const embedChanges = Boolean(patch.embeddings);
+  const downloads = 1 + (embedChanges ? 1 : 0) + (!rerankOk ? 1 : 0);
 
   async function apply() {
     if (!patch) return;
@@ -70,9 +75,9 @@ export function RecallRecommendation({
     return (
       <div className="callout callout-info release-notes-recommend" role="note" aria-label="Recommended memory setup">
         <p>
-          <Check size={13} /> <strong>Switched.</strong> The {both ? 'models download' : 'model downloads'} in
-          the background and your memory is re-indexed as it is used; Manage → Memory shows the progress,
-          and recall keeps working on the old setup until the new one is ready.
+          <Check size={13} /> <strong>Switched.</strong> The {downloads > 1 ? 'models download' : 'model downloads'} in
+          the background{embedChanges ? ' and your memory is re-indexed as it is used' : ''}; Manage → Memory
+          shows the progress, and recall keeps working on the old setup until the new one is ready.
         </p>
       </div>
     );
@@ -90,14 +95,16 @@ export function RecallRecommendation({
   return (
     <div className="callout callout-info release-notes-recommend" role="note" aria-label="Recommended memory setup">
       <p>
-        <strong>Memory search has a new recommended setup.</strong> This version ships the Qwen3 Embedding
-        0.6B and Qwen3 Reranker 0.6B models as the default recall setup.
-        Your Stem still uses {describe(retrieval)}, because an update never changes a setting you made.
+        <strong>Memory search has a new recommended setup.</strong> This version ships Stem GTE Memory, a
+        model trained for Czech, Slovak, German and English that picks memories and skills on top of the
+        built-in Qwen3 models. It scored the best recall and the fastest ranking in Stem's benchmarks and
+        is the default for new installs. Your Stem still uses {describe(retrieval)}, because an update
+        never changes a setting you made.
         {embedRemoteQwen3 && (
           <>
             {' '}
-            This switches embeddings from your endpoint to the built-in Qwen3 model. It
-            stops memory search depending on that server, and re-indexes your memory once.
+            Stem GTE Memory needs the built-in Qwen3 embeddings, so this also moves embeddings off your
+            endpoint. It stops memory search depending on that server, and re-indexes your memory once.
           </>
         )}
       </p>

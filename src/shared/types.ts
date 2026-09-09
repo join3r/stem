@@ -2967,7 +2967,7 @@ export type LocalRerankModelId = 'bge-reranker-v2-m3' | 'qwen3-reranker-0.6b';
  */
 export interface RerankerSettings {
   mode: RerankerMode;
-  /** Experimental model selection for facts and skills; configured/absent uses the normal reranker. */
+  /** Stem GTE Memory for facts and skills (the default since 0.5.2); configured/absent uses the normal reranker. */
   factModel?: 'configured' | 'gte-memory-20260905-epoch2';
   /** Catalog id or imported {@link CustomRerankModel} id; see EmbeddingsSettings.localModel. */
   localModel: string;

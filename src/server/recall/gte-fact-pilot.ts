@@ -36,7 +36,7 @@ export function createGteFactPilot(deps: {
   manager: EmbedWorkerManager;
   getSettings: () => Promise<RetrievalSettings>;
   onFailure: (error: unknown) => void;
-  /** Managed installations fetch the pinned release only after explicit selection. */
+  /** Managed installations fetch the pinned release only while the settings select it. */
   prepare?: (directory: string, options: { signal: AbortSignal; onProgress: (percent: number) => void }) => Promise<void>;
   onProgress?: () => void;
   /** Test seam; production always verifies the pinned files above. */

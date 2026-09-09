@@ -27,7 +27,7 @@ import type {
   CustomImportCandidate,
   CustomRerankModel
 } from '../../../shared/types';
-import { recallSetupStatus } from '../../../shared/recall-recommended';
+import { RECOMMENDED_FACT_MODEL, recallSetupStatus } from '../../../shared/recall-recommended';
 import { resolveMemoryModel } from '../../../shared/modelRoles';
 import { clampEffort, EffortSelect, effortsOf } from '../../ui/EffortSelect';
 import { MdxView } from '../../chat/MdxView';
@@ -82,7 +82,7 @@ const LOCAL_RERANK_MODELS: { id: LocalRerankModelId; label: string; detail: stri
   { id: 'bge-reranker-v2-m3', label: 'BGE Reranker v2 M3', detail: '~570 MB · multilingual' }
 ];
 
-const GTE_FACT_MODEL = 'gte-memory-20260905-epoch2';
+const GTE_FACT_MODEL = RECOMMENDED_FACT_MODEL;
 
 /**
  * An imported model as a picker entry. Its size came off the disk it was copied
@@ -539,14 +539,15 @@ function RerankerFields({
               </option>
             ))}
             <option value={GTE_FACT_MODEL} disabled={!gteAvailable}>
-              Stem GTE Memory (~342 MB · best measured recall · fastest measured · CS/SK/DE/EN){!gteAvailable ? ' — unavailable' : ''}
+              Stem GTE Memory (~342 MB · recommended · best measured recall · fastest · CS/SK/DE/EN){!gteAvailable ? ' — unavailable' : ''}
             </option>
           </select>
           {gteSelected ? (
             <>
               <p className="muted">
                 Trained for Czech, Slovak, German, and English. Best recall and fastest reranking
-                measured in Stem benchmarks. Experimental.
+                measured in Stem benchmarks; the default for new installs. Runs on top of the Qwen3
+                reranker, which stays the fallback while this model prepares.
               </p>
               {!factStatus ? <p className="muted">Checking GTE availability…</p>
                 : !factStatus.installed && !factStatus.downloadable ? <p className="retrieval-status-error">Stem GTE Memory is unavailable on the connected host. Update Stem to download this model.</p>
@@ -624,9 +625,9 @@ function RerankerFields({
 /**
  * Nudge toward the recommended recall setup, outside the collapsed advanced
  * section. Rendered only while the configured models differ from the
- * recommendation: a setup that already matches (including the opt-in GTE fact
- * model, which sits on top of the recommended pair) has nothing to review, so
- * the row is gone rather than confirming the default back to the user.
+ * recommendation (Stem GTE Memory on top of the Qwen3 pair): a setup that
+ * already matches has nothing to review, so the row is gone rather than
+ * confirming the default back to the user.
  */
 function RecallQualityRow({
   retrieval,
@@ -635,20 +636,22 @@ function RecallQualityRow({
   retrieval: RetrievalSettings;
   onReview: () => void;
 }) {
-  const { embedOk: embedBest, rerankOk: rerankBest, embedRemoteQwen3 } = recallSetupStatus(retrieval);
-  if (embedBest && rerankBest) return null;
+  const { embedOk: embedBest, rerankOk: rerankBest, factOk, embedRemoteQwen3 } = recallSetupStatus(retrieval);
+  if (embedBest && rerankBest && factOk) return null;
   const rerankOn = retrieval.reranker.mode !== 'off';
-  const hint = embedBest && !rerankOn
-    ? 'Reranker is off'
-    : embedBest
-      ? 'Compare reranker models for your conversations'
-      : embedRemoteQwen3
-        ? rerankBest
-          ? 'Qwen3 embeddings from your endpoint with the Qwen3 reranker'
-          : 'Qwen3 embeddings from your endpoint; compare reranker models below'
-        : rerankOn
-          ? 'Compare embedding models for your conversations'
-          : 'Compare embedding and reranker models for your conversations';
+  const hint = embedBest && rerankBest
+    ? 'Stem GTE Memory is recommended — best measured recall, fastest'
+    : embedBest && !rerankOn
+      ? 'Reranker is off'
+      : embedBest
+        ? 'Compare reranker models for your conversations'
+        : embedRemoteQwen3
+          ? rerankBest
+            ? 'Qwen3 embeddings from your endpoint with the Qwen3 reranker'
+            : 'Qwen3 embeddings from your endpoint; compare reranker models below'
+          : rerankOn
+            ? 'Compare embedding models for your conversations'
+            : 'Compare embedding and reranker models for your conversations';
   return (
     <div className="group-row">
       <span className="row-main">

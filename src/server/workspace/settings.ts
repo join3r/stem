@@ -40,6 +40,7 @@ import { degrade } from '../degrade';
 import { DEFAULT_SCRATCH_TTL_DAYS } from '../exec/scratch';
 import { customModelId, DEFAULT_LOCAL_EMBED_MODEL, EMBED_CATALOG } from '../recall/embed-catalog';
 import { DEFAULT_LOCAL_RERANK_MODEL, RERANK_CATALOG } from '../recall/rerank-catalog';
+import { GTE_FACT_PILOT_ID } from '../recall/gte-model-artifact';
 import { settingsStorePath } from './paths';
 
 // Stem-owned app settings. Like the chat store, kept deliberately tiny and
@@ -145,6 +146,12 @@ const DEFAULTS: ServerSettings = {
       // degrade gracefully rather than wait.
       mode: 'local',
       localModel: DEFAULT_LOCAL_RERANK_MODEL,
+      // Stem GTE Memory picks facts and skills on top of the Qwen3 pair: best
+      // recall and fastest reranking measured (docs/gte-memory-pilot.md). A
+      // fresh install gets it; a stored reranker section without the field is
+      // a user who set up recall before it existed and is offered the switch
+      // by the release popup instead (shared/recall-recommended.ts).
+      factModel: GTE_FACT_PILOT_ID,
       baseUrl: 'http://localhost:8080',
       model: '',
       apiKey: null
@@ -306,6 +313,12 @@ function coerceReranker(
   custom: CustomRerankModel[]
 ): RerankerSettings {
   const r = raw ?? {};
+  // No reranker section at all is a first launch (or a file from before the
+  // stage existed), which takes the default fact model. A section that merely
+  // lacks the field was written by an earlier Stem for a user who had recall set
+  // up already, and an update never changes a setting the user made.
+  const factModel = raw === undefined ? def.factModel
+    : r.factModel === GTE_FACT_PILOT_ID ? r.factModel : undefined;
   // Migration from the pre-mode shape ({ enabled: boolean } + endpoint fields):
   // enabled:true meant "user pointed us at their own /rerank server" → remote;
   // anything else takes the default. An explicit mode ('off' included) is
@@ -318,7 +331,7 @@ function coerceReranker(
       : def.mode;
   return {
     mode,
-    ...(r.factModel === 'gte-memory-20260905-epoch2' ? { factModel: r.factModel } : {}),
+    ...(factModel ? { factModel } : {}),
     // Catalog ∪ imported: the set is only closed until someone brings their own
     // weights, and an id that names neither would leave the stage pointing at a
     // model nothing can describe.

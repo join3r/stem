@@ -1,8 +1,8 @@
-# Stem GTE Memory: download and opt-in use
+# Stem GTE Memory: download and use
 
-Stem downloads the selected GTE epoch2 model on demand. Selecting GTE uses it for both memory facts and skill selection. Desktop and mobile clients connected to the server share the selection. An updated desktop client exposes the choice in Manage → Memory → Facts → Reranker; restart a development client after updating its server so the new controls and channel bindings are loaded.
+Stem downloads the selected GTE epoch2 model on demand. Since 0.5.2 it is the default for a fresh install and the recall recommendation (`src/shared/recall-recommended.ts`): the release popup offers the switch to installs whose stored reranker settings predate it. Selecting GTE uses it for both memory facts and skill selection. Desktop and mobile clients connected to the server share the selection. An updated desktop client exposes the choice in Manage → Memory → Facts → Reranker; restart a development client after updating its server so the new controls and channel bindings are loaded.
 
-Keep built-in Qwen3 Embedding 0.6B selected. In the Reranker dropdown, choose **Stem GTE Memory (experimental)** to enable it, or **Qwen3 Reranker 0.6B** to return to Qwen. Selecting Qwen switches both stages back to Qwen. Changes apply on the next turn, without a server restart. Wait for **Ready** before comparing; **Test model** times the selected model on the same small probe. Normal chat timing also includes skill selection, tools, and the LLM.
+Keep built-in Qwen3 Embedding 0.6B selected. In the Reranker dropdown, choose **Stem GTE Memory** to enable it, or **Qwen3 Reranker 0.6B** to return to Qwen. Selecting Qwen switches both stages back to Qwen. Changes apply on the next turn, without a server restart. Wait for **Ready** before comparing; **Test model** times the selected model on the same small probe. Normal chat timing also includes skill selection, tools, and the LLM.
 
 No environment variable is needed for normal use. The optional model-directory environment variable supplies a preinstalled offline copy; it does not override the dropdown. The persisted `reranker.factModel` field explicitly selects GTE for facts and skills; absent or `configured` means facts and skills use the normal reranker. Switching embeddings away from built-in Qwen pauses GTE.
 
@@ -14,7 +14,7 @@ The repository includes a model card, license notices and a tested Node.js infer
 
 ## Automatic installation
 
-Update the desktop client and, when connected remotely, its server. Select **Stem GTE Memory** in the reranker dropdown and wait for **Ready**. Progress appears below the picker and in background activity. Switching away cancels an unfinished download; selecting GTE again reuses already verified files. If downloading fails, **Test model** retries preparation. Existing model selections are preserved; upgrading does not select GTE automatically.
+Update the desktop client and, when connected remotely, its server. Select **Stem GTE Memory** in the reranker dropdown and wait for **Ready**. Progress appears below the picker and in background activity. Switching away cancels an unfinished download; selecting GTE again reuses already verified files. If downloading fails, **Test model** retries preparation. Existing model selections are preserved; upgrading does not select GTE automatically, the what's-new popup offers it once and the Memory tab's Recall quality row points at it until it is selected.
 
 The model lives under `embed-models/gte-memory-20260905-epoch2` in the host's app data, or under `STEM_EMBED_MODELS_DIR` when configured. Docker uses its persistent model volume. E2E tests disable automatic preparation.
 

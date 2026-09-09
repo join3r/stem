@@ -665,6 +665,21 @@ describe('reranker settings migration + coercion', () => {
   it('does not enable GTE for legacy settings or an unrecognized fact model', async () => {
     writeFileSync(path, JSON.stringify({ retrieval: { reranker: { factModel: 'unknown-model' } } }));
     expect((await readSettings()).retrieval.reranker.factModel).toBeUndefined();
+    // A reranker section from before the field existed is a user who set up
+    // recall already; the release popup offers GTE, the coercion must not force it.
+    writeFileSync(path, JSON.stringify({ retrieval: { reranker: { mode: 'local', localModel: 'qwen3-reranker-0.6b' } } }));
+    expect((await readSettings()).retrieval.reranker.factModel).toBeUndefined();
+  });
+
+  it('a fresh install starts on Stem GTE Memory over the Qwen3 pair', async () => {
+    const fresh = (await readSettings()).retrieval.reranker;
+    expect(fresh).toMatchObject({ mode: 'local', localModel: 'qwen3-reranker-0.6b', factModel: 'gte-memory-20260905-epoch2' });
+    // A file with no reranker section at all is the same first launch.
+    writeFileSync(path, JSON.stringify({ retrieval: { embeddings: { mode: 'local' } } }));
+    expect((await readSettings()).retrieval.reranker.factModel).toBe('gte-memory-20260905-epoch2');
+    // And the default survives the first unrelated write.
+    await updateRetrievalSettings({ embeddings: { mode: 'local' } });
+    expect((await readSettings()).retrieval.reranker.factModel).toBe('gte-memory-20260905-epoch2');
   });
 });
 

@@ -1,16 +1,19 @@
 // The one verdict on "is this the measured-best recall setup", shared by the
 // Memory tab's Recall quality row and the post-update popup's switch offer. The
-// patch it hands back must move only the stage that is off the recommendation.
+// patch it hands back must move only the stage that is off the recommendation;
+// Stem GTE Memory rides on the reranker stage, so that stage is one patch.
 import { describe, expect, it } from 'vitest';
 import {
   RECALL_DEFAULTS_RELEASE,
   RECOMMENDED_EMBED_MODEL,
+  RECOMMENDED_FACT_MODEL,
   RECOMMENDED_RERANK_MODEL,
   recallSetupStatus,
   recommendedRetrievalPatch
 } from '../../src/shared/recall-recommended';
 import { DEFAULT_LOCAL_EMBED_MODEL } from '../../src/server/recall/embed-catalog';
 import { DEFAULT_LOCAL_RERANK_MODEL } from '../../src/server/recall/rerank-catalog';
+import { GTE_FACT_PILOT_ID } from '../../src/server/recall/gte-model-artifact';
 import type { RetrievalSettings } from '../../src/shared/types';
 
 function retrieval(over: {
@@ -19,7 +22,7 @@ function retrieval(over: {
 }): RetrievalSettings {
   return {
     embeddings: { mode: 'local', localModel: RECOMMENDED_EMBED_MODEL, baseUrl: '', model: '', apiKey: null, ...over.embeddings },
-    reranker: { mode: 'local', localModel: RECOMMENDED_RERANK_MODEL, baseUrl: '', model: '', apiKey: null, ...over.reranker },
+    reranker: { mode: 'local', localModel: RECOMMENDED_RERANK_MODEL, factModel: RECOMMENDED_FACT_MODEL, baseUrl: '', model: '', apiKey: null, ...over.reranker },
     customEmbedModels: [],
     customRerankModels: []
   };
@@ -29,7 +32,18 @@ describe('recall recommendation', () => {
   it('names the catalog defaults — a fresh install is already the recommendation', () => {
     expect(RECOMMENDED_EMBED_MODEL).toBe(DEFAULT_LOCAL_EMBED_MODEL);
     expect(RECOMMENDED_RERANK_MODEL).toBe(DEFAULT_LOCAL_RERANK_MODEL);
+    expect(RECOMMENDED_FACT_MODEL).toBe(GTE_FACT_PILOT_ID);
     expect(recommendedRetrievalPatch(retrieval({}))).toBeNull();
+  });
+
+  it('the Qwen3 pair without Stem GTE Memory (a 0.5.0 install) is offered GTE on the reranker stage alone', () => {
+    const r = retrieval({ reranker: { factModel: undefined } });
+    expect(recallSetupStatus(r)).toMatchObject({ embedOk: true, rerankOk: true, factOk: false });
+    expect(recommendedRetrievalPatch(r)).toEqual({
+      reranker: { mode: 'local', localModel: RECOMMENDED_RERANK_MODEL, factModel: RECOMMENDED_FACT_MODEL }
+    });
+    // An explicit "configured" is the user switching GTE off, and is still offered.
+    expect(recommendedRetrievalPatch(retrieval({ reranker: { factModel: 'configured' } }))).not.toBeNull();
   });
 
   it('is pinned to the release whose popup carries the offer', () => {
@@ -38,16 +52,16 @@ describe('recall recommendation', () => {
 
   it('a Qwen3 embedder on the user\'s own endpoint is offered the built-in one, flagged as same-quality', () => {
     const r = retrieval({ embeddings: { mode: 'remote', model: 'qwen3-embedding:4b' } });
-    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: true, embedRemoteQwen3: true });
+    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: true, factOk: true, embedRemoteQwen3: true });
     expect(recommendedRetrievalPatch(r)).toEqual({
       embeddings: { mode: 'local', localModel: RECOMMENDED_EMBED_MODEL }
     });
   });
 
   it('patches only the stage that is off the recommendation', () => {
-    const bge = retrieval({ reranker: { localModel: 'bge-reranker-v2-m3' } });
+    const bge = retrieval({ reranker: { localModel: 'bge-reranker-v2-m3', factModel: undefined } });
     expect(recommendedRetrievalPatch(bge)).toEqual({
-      reranker: { mode: 'local', localModel: RECOMMENDED_RERANK_MODEL }
+      reranker: { mode: 'local', localModel: RECOMMENDED_RERANK_MODEL, factModel: RECOMMENDED_FACT_MODEL }
     });
 
     const e5 = retrieval({ embeddings: { localModel: 'multilingual-e5-base' } });
@@ -59,15 +73,15 @@ describe('recall recommendation', () => {
   it('moves the pre-0.5 default (e5-base + bge) and a switched-off setup onto both models', () => {
     const old = retrieval({
       embeddings: { localModel: 'multilingual-e5-base' },
-      reranker: { localModel: 'bge-reranker-v2-m3' }
+      reranker: { localModel: 'bge-reranker-v2-m3', factModel: undefined }
     });
     expect(recommendedRetrievalPatch(old)).toEqual({
       embeddings: { mode: 'local', localModel: RECOMMENDED_EMBED_MODEL },
-      reranker: { mode: 'local', localModel: RECOMMENDED_RERANK_MODEL }
+      reranker: { mode: 'local', localModel: RECOMMENDED_RERANK_MODEL, factModel: RECOMMENDED_FACT_MODEL }
     });
 
     const off = retrieval({ embeddings: { mode: 'off' }, reranker: { mode: 'off' } });
-    expect(recallSetupStatus(off)).toEqual({ embedOk: false, rerankOk: false, embedRemoteQwen3: false });
+    expect(recallSetupStatus(off)).toEqual({ embedOk: false, rerankOk: false, factOk: false, embedRemoteQwen3: false });
     expect(recommendedRetrievalPatch(off)?.embeddings?.mode).toBe('local');
   });
 
@@ -76,6 +90,6 @@ describe('recall recommendation', () => {
       embeddings: { mode: 'remote', model: 'nomic-embed-text' },
       reranker: { mode: 'remote', model: 'bge-reranker-v2-m3' }
     });
-    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: false, embedRemoteQwen3: false });
+    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: false, factOk: false, embedRemoteQwen3: false });
   });
 });
