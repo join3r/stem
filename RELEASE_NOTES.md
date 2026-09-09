@@ -16,18 +16,60 @@ Maintainer notes:
 
 ### Added
 
+- **Stem GTE Memory.** A new memory model, trained for Czech, Slovak, German and English, that
+  scored the best recall and the fastest reranking in Stem's benchmarks. It is opt-in and
+  experimental: in Manage → Memory, under Reranker, pick **Stem GTE Memory** and Stem downloads
+  and verifies the model (about 340 MB) in the background, then uses it for picking memories and
+  skills from the next reply on. Pick the Qwen3 reranker to switch back; your memories are never
+  re-indexed or changed by trying it. It needs the built-in Qwen3 embeddings, and it also reads
+  the last two things you said in the chat, so a follow-up question finds the memories the
+  earlier one was about. Phones and desktops connected to one server share the choice.
 - **See the work behind mail.** Expand **Work** below a mail to follow its personas and coding
   agents, with actions, progress, timings, and expandable inputs and results. The history updates
   quietly while work runs and keeps partial results after failure or Stop. Desktop and iOS show
   the same records. Scheduled notifications include their run history; older mails show what can
   be recovered, with missing details marked.
-- **Multiple custom model endpoints.** Add separately named OpenAI-compatible and Anthropic-compatible endpoints and keep all of their models available at once. Existing single Custom endpoint settings continue to work.
+- **Multiple custom model endpoints.** Add separately named OpenAI-compatible and
+  Anthropic-compatible endpoints and keep all of their models available at once. Existing single
+  Custom endpoint settings continue to work.
+- **Update dialog.** A newer Stem now announces itself in a dialog once per launch instead of a
+  strip under the title bar that was easy to sit under for weeks. "Later" keeps the strip and the
+  Settings → App row as the quieter reminders.
+
+### Changed
+
+- **Integrations no longer weigh on every reply.** The assistant used to be handed the full
+  description of every tool from every connected integration, and every procedure, at the start
+  of each reply. It now gets a short summary per integration and looks up the tools and procedures
+  it needs. Replies start faster and cost less with many integrations connected, and adding one
+  more no longer slows everything else down.
+- **Recall quality row only when there is something to review.** The Memory tab no longer shows a
+  row confirming the default recall setup. It appears only when your models differ from the
+  recommendation, with the same "Review setup" link.
 
 ### Fixed
 
 - **Downloads carry only the app.** Every installer so far also packed Stem's own source tree,
   tests and mobile project inside the app folder, none of which the app reads. They are gone, and
   building the macOS app from a checkout with the phone project set up no longer fails partway.
+- **Unsent text survives switching chats.** Opening another chat threw away whatever you had
+  typed but not yet sent, usually a follow-up written while the previous reply was still
+  streaming. Each chat now keeps its draft and attachments until you send them or close Stem.
+- **Scheduled mail says what happened this time.** All firings of a scheduled task share one mail
+  conversation, and its subject stayed the first firing's headline for good, so a daily watch kept
+  an old title on the morning it was about something else. Each firing now carries its own
+  headline, the Inbox row shows the newest one, and the run's actual report or drafts arrive in the
+  mail itself instead of a one-line pointer to a chat you were not looking at.
+- **Tasks scheduled from mail get a chat you can open.** Asking a persona by mail to check
+  something every morning produced a task whose runs, and whatever they drafted, landed in a hidden
+  thread that no screen showed. Such a task now gets its own chat, named after the task, and
+  existing ones move there on the next start.
+- **Chats stay where they were.** A scheduled run that found nothing, or opening Rename and
+  clicking away, moved the chat to the top of the list in bold as if someone had written to it. A
+  quiet write now leaves the chat where the last real message put it.
+- **"Restart now" after an update does something.** When the downloaded Linux update could not
+  replace the running AppImage, usually because it sits in a folder you cannot write to, the button
+  did nothing. The failure now shows in Settings and the button opens the release page instead.
 
 ## 0.5.1 — 2026-09-05
 
