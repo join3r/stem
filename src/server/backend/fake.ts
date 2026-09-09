@@ -14,6 +14,7 @@ import { readTasks } from '../workspace/tasks';
 import { previewText } from '../chats/preview';
 import { autoTitle, KEEP, nameThread, nameThreadIfDue as nameIfDue, type SubjectDeps } from '../chats/subject';
 import { setNaming } from '../workspace/chats';
+import { turnFailureMessage } from '../../shared/chatState';
 
 /**
  * The canned model behind the fake's naming pass: "About <the first three words
@@ -460,6 +461,10 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
       steps.push(() => {
         if (this.activeTurn?.turnId === turnId) this.activeTurn = null;
         this.recordAssistant(turn, streamed);
+        // pi persists the failed assistant entry with its error, and readThread
+        // rebuilds the failure notice from it — the settle-time history refresh
+        // relies on that, so the fake has to leave the same notice on "disk".
+        this.recordFailure(turn, 'E2E scripted failure');
         this.emitEvent('turn/failed', {
           threadId,
           turn: { id: turnId, status: 'failed' },
@@ -527,6 +532,15 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
       content: text,
       turnId: turn.turnId,
       createdAt: new Date().toISOString()
+    });
+  }
+
+  private recordFailure(turn: ActiveTurn, error: string): void {
+    this.ensureThread(turn.threadId).messages.push({
+      id: `system-${turn.turnId}`,
+      role: 'system',
+      content: turnFailureMessage(error),
+      turnId: turn.turnId
     });
   }
 
