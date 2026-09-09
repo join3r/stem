@@ -134,6 +134,8 @@ interface ChatViewProps {
   /** The thread the composer's `/learn` saves a skill from. Passed only by the main
    *  window; null while the chat is still an unsent draft. */
   threadId?: string | null;
+  /** Forwarded to the Composer so unsent text survives a chat switch. */
+  draftKey?: string;
   /** Permission asks raised by this chat's turn, oldest first. The head renders
    *  as a card pinned above the composer — the turn waits on it. */
   approvals?: PendingApproval[];
@@ -328,6 +330,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   onToggleDraftPrivate,
   showContextMeter = true,
   threadId,
+  draftKey,
   approvals,
   onChangeEffort,
   onSelectModel,
@@ -741,6 +744,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         format={format}
         showContextMeter={showContextMeter}
         threadId={threadId}
+        draftKey={draftKey}
         models={models}
         onChangeEffort={onChangeEffort}
         onSelectModel={onSelectModel}

@@ -19,6 +19,7 @@ import { useOffline } from '../hooks/useServerReachable';
 import { ShortcutHint, glyphsFor, useShortcut, useShortcutsBound, type ShortcutId } from '../shortcuts';
 import { EffortModelControl } from '../ui/EffortModelControl';
 import { NOTE_CONFIRM_MS, detectNoteTrigger, noteBodyValid, useNoteMode } from '../noteMode';
+import { clearDraft, readDraft, writeDraft } from './draft-store';
 
 const MAX_COMPOSER_HEIGHT = 180;
 
@@ -89,6 +90,11 @@ interface ComposerProps {
   /** The thread `/learn` saves from. Null in an unsent draft and absent in Quick
    *  Chat; either way the draft takes the normal send path. */
   threadId?: string | null;
+  /** Identity of the chat this composer writes for. Unsent text and attachments
+   *  are parked under it across the remount a chat switch causes, so what was
+   *  typed is still there when the user comes back (issue #13). Absent in Quick
+   *  Chat, which never remounts mid-draft. */
+  draftKey?: string;
   onDraftChange?: (text: string) => void;
   onNoteSaved?: () => void;
 }
@@ -122,11 +128,20 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   onToggleWebSearch,
   reportDraft,
   threadId,
+  draftKey,
   onDraftChange,
   onNoteSaved
 }: ComposerProps, ref) {
-  const [draft, setDraft] = useState('');
-  const [attachments, setAttachments] = useState<TurnAttachment[]>([]);
+  const [draft, setDraft] = useState(() => (draftKey ? readDraft(draftKey).text : ''));
+  const [attachments, setAttachments] = useState<TurnAttachment[]>(
+    () => (draftKey ? readDraft(draftKey).attachments : [])
+  );
+  // Mirror every change back to the store. Sending clears the store directly
+  // (see submit): a first send turns the draft into a real thread, which remounts
+  // this component before an effect could record the emptied field.
+  useEffect(() => {
+    if (draftKey) writeDraft(draftKey, { text: draft, attachments });
+  }, [draftKey, draft, attachments]);
   const [dragOver, setDragOver] = useState(false);
   // Two-stage Escape: after the first Escape stops the turn, `armed` lets a second
   // Escape retract the just-stopped message. Cleared the moment the user acts
@@ -248,6 +263,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     onSend(text, attachments);
     setDraft('');
     setAttachments([]);
+    if (draftKey) clearDraft(draftKey);
   }
 
   const removeAttachment = useCallback((idx: number) => {

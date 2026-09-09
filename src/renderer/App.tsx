@@ -1801,6 +1801,7 @@ export default function App() {
           draftPrivate={activeThreadId === null && draftPrivate}
           onToggleDraftPrivate={activeThreadId === null ? toggleDraftPrivate : undefined}
           threadId={activeThreadId}
+          draftKey={activeKey}
           approvals={activeApprovals}
           onChangeEffort={setEffort}
           onSelectModel={onSelectModel}

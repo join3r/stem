@@ -102,3 +102,39 @@ test('a new chat lands with the caret in the composer', async ({ mainWindow }) =
   // shouldn't throw away what you were writing.
   await expect(composer).toHaveValue('typed without clicking');
 });
+
+test('unsent text survives switching chats and coming back', async ({ mainWindow }) => {
+  const composer = mainWindow.getByPlaceholder('Ask Stem…');
+  await send(mainWindow, 'first');
+  await expect(
+    mainWindow.locator('.message-assistant:not(.activity-row) .message-body').last()
+  ).toContainText('Echo: first');
+
+  // Start a follow-up in the open thread but don't send it.
+  await composer.fill('a follow-up I have not sent');
+
+  // Peek at a fresh chat: its composer is its own (empty), and typing there is
+  // kept separately.
+  await mainWindow.keyboard.press('ControlOrMeta+n');
+  await expect(mainWindow.locator('.message-user')).toHaveCount(0);
+  await expect(composer).toHaveValue('');
+  await composer.fill('a new chat I have not started');
+
+  // Back to the thread: the follow-up is still there (issue #13).
+  await mainWindow.locator('.chats-modes').getByRole('button', { name: 'Chats', exact: true }).click();
+  await mainWindow.locator('.chat-row').first().click();
+  await expect(mainWindow.locator('.message-user')).toHaveCount(1);
+  await expect(composer).toHaveValue('a follow-up I have not sent');
+
+  // And the unstarted chat kept its text too.
+  await mainWindow.keyboard.press('ControlOrMeta+n');
+  await expect(composer).toHaveValue('a new chat I have not started');
+
+  // Sending consumes the parked text: the next new chat starts empty.
+  await composer.press('Enter');
+  await expect(
+    mainWindow.locator('.message-assistant:not(.activity-row) .message-body').last()
+  ).toContainText('Echo: a new chat I have not started');
+  await mainWindow.keyboard.press('ControlOrMeta+n');
+  await expect(composer).toHaveValue('');
+});
