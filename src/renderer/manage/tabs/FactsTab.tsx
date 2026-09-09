@@ -621,7 +621,13 @@ function RerankerFields({
   );
 }
 
-/** Show the selected recall setup outside the collapsed advanced section. */
+/**
+ * Nudge toward the recommended recall setup, outside the collapsed advanced
+ * section. Rendered only while the configured models differ from the
+ * recommendation: a setup that already matches (including the opt-in GTE fact
+ * model, which sits on top of the recommended pair) has nothing to review, so
+ * the row is gone rather than confirming the default back to the user.
+ */
 function RecallQualityRow({
   retrieval,
   onReview
@@ -630,32 +636,19 @@ function RecallQualityRow({
   onReview: () => void;
 }) {
   const { embedOk: embedBest, rerankOk: rerankBest, embedRemoteQwen3 } = recallSetupStatus(retrieval);
-  if (retrieval.reranker.mode === 'local' && retrieval.reranker.factModel === GTE_FACT_MODEL) {
-    return (
-      <div className="group-row">
-        <span className="row-main">
-          <strong>Recall quality</strong>
-          <em>Stem GTE Memory — best measured recall · fastest measured</em>
-        </span>
-        <button className="link-btn" onClick={onReview}>Compare models</button>
-      </div>
-    );
-  }
+  if (embedBest && rerankBest) return null;
   const rerankOn = retrieval.reranker.mode !== 'off';
-  const best = embedBest && rerankBest;
-  const hint = best
-    ? 'Default setup — Qwen3 Embedding 0.6B with the Qwen3 reranker'
-    : embedBest && !rerankOn
-      ? 'Reranker is off'
-      : embedBest
-        ? 'Compare reranker models for your conversations'
-        : embedRemoteQwen3
-          ? rerankBest
-            ? 'Qwen3 embeddings from your endpoint with the Qwen3 reranker'
-            : 'Qwen3 embeddings from your endpoint; compare reranker models below'
-          : rerankOn
-            ? 'Compare embedding models for your conversations'
-            : 'Compare embedding and reranker models for your conversations';
+  const hint = embedBest && !rerankOn
+    ? 'Reranker is off'
+    : embedBest
+      ? 'Compare reranker models for your conversations'
+      : embedRemoteQwen3
+        ? rerankBest
+          ? 'Qwen3 embeddings from your endpoint with the Qwen3 reranker'
+          : 'Qwen3 embeddings from your endpoint; compare reranker models below'
+        : rerankOn
+          ? 'Compare embedding models for your conversations'
+          : 'Compare embedding and reranker models for your conversations';
   return (
     <div className="group-row">
       <span className="row-main">
@@ -669,15 +662,9 @@ function RecallQualityRow({
         </strong>
         <em>{hint}</em>
       </span>
-      {best ? (
-        <span className="retrieval-test-status ok" title="The default configuration is selected">
-          <Check size={12} /> in use
-        </span>
-      ) : (
-        <button className="link-btn" onClick={onReview}>
-          Review setup
-        </button>
-      )}
+      <button className="link-btn" onClick={onReview}>
+        Review setup
+      </button>
     </div>
   );
 }
