@@ -232,13 +232,13 @@ describe('mail router', () => {
     expect(mail.conversations[0].sessions.verifier).toBe('thread-1');
   });
 
-  it('the reply is the WHOLE turn, not its last message: tool-using turns write several', async () => {
+  it('the reply contains the final message while intermediate commentary belongs to Work', async () => {
     const fake = fakeBackend();
     fake.script = { mode: 'ok', replies: ['I looked it up.', 'Here is the answer.', 'Want prices too?'] };
     const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined });
     await router.compose({ to: ['verifier'], subject: 's', body: 'question' });
     const mail = await settledMail();
-    expect(mail.items[1].body).toBe('I looked it up.\n\nHere is the answer.\n\nWant prices too?');
+    expect(mail.items[1].body).toBe('Want prices too?');
 
     // …and a follow-up reply gathers only the NEW turn's messages, not the
     // first turn's answer over again.

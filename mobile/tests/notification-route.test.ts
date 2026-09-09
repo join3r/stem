@@ -97,3 +97,14 @@ describe('routing', () => {
     expect(routeForWakeUp({ kind: 'turn' })).toBeNull();
   });
 });
+
+
+describe('mail notifications', () => {
+  it('opens mail rather than a hidden execution thread, including task mail', () => {
+    expect(routeForNotification(response({ kind: 'mail', conversationId: 'mail-1', threadId: 'hidden', taskId: 'task-1' }))).toEqual({ screen: 'mail', conversationId: 'mail-1' });
+  });
+  it('ignores malformed mail destinations', () => {
+    expect(routeForNotification(response({ kind: 'mail', conversationId: '' }))).toBeNull();
+    expect(routeForNotification(response({ kind: 'mail', conversationId: 17 }))).toBeNull();
+  });
+});

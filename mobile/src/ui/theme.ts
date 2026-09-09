@@ -15,6 +15,8 @@ export interface Theme {
   dim: string;
   line: string;
   accent: string;
+  accentText: string;
+  accentSoft: string;
   live: string;
   warn: string;
   bad: string;
@@ -32,6 +34,8 @@ const light: Theme = {
   dim: '#6d675d',
   line: '#e0dccf',
   accent: '#9a6230',
+  accentText: '#ffffff',
+  accentSoft: '#efe2cf',
   live: '#3a7d4f',
   warn: '#b7791f',
   bad: '#c53030'
@@ -44,6 +48,8 @@ const dark: Theme = {
   dim: '#9b948a',
   line: '#3d382f',
   accent: '#c79257',
+  accentText: '#231b13',
+  accentSoft: '#3b2d20',
   live: '#5fae74',
   warn: '#d5a445',
   bad: '#e0796d'

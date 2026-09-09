@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { log } from '../server/log';
@@ -18,6 +19,8 @@ import {
   type MailComposeInput,
   type QuickChatSettings,
   type StartTurnInput,
+  type StartTurnResult,
+  type LiveTurnInfo,
   type TurnAttachment
 } from '../shared/types';
 import { convertHeicAttachments } from '../server/pi/heic';
@@ -259,6 +262,12 @@ export interface DeviceHarnessHostBinding {
 }
 
 export interface ProxyDeps {
+  /** HUD lifecycle is separate from HTTP reachability and renderer replay. */
+  hudDisconnected?(): void;
+  hudSnapshot?(deviceId: string, turns: LiveTurnInfo[]): void;
+  turnSubmitted?(input: StartTurnInput): void;
+  turnAccepted?(turnId: string): void;
+  turnAbandoned?(turnId: string): void;
   /** Origin of the server, e.g. `http://127.0.0.1:52413`. */
   url: string;
   /** This device's bearer token (the `desktop` role). */
@@ -546,6 +555,21 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
   }
 
   async function invoke(channel: string, args: unknown[]): Promise<unknown> {
+    if (channel !== 'backend:startTurn' || !deps.turnSubmitted) return invokeChannel(channel, args);
+    const input = { ...(args[0] as StartTurnInput), turnId: (args[0] as StartTurnInput)?.turnId || randomUUID() };
+    deps.turnSubmitted?.(input);
+    try {
+      const result = await invokeChannel(channel, [input]) as StartTurnResult;
+      if (result.handled || !result.turnId) deps.turnAbandoned?.(input.turnId);
+      else deps.turnAccepted?.(input.turnId);
+      return result;
+    } catch (error) {
+      deps.turnAbandoned?.(input.turnId);
+      throw error;
+    }
+  }
+
+  async function invokeChannel(channel: string, args: unknown[]): Promise<unknown> {
     const hooks = wrapped[channel];
     // A throw from `before` never reaches the wire — that is what lets a refused
     // Quick Chat hand-off cancel the open it was called for, and what makes a
@@ -656,6 +680,13 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     if (name === HARNESS_CANCEL_FRAME) {
       const turnId = (data as { turnId?: unknown } | null)?.turnId;
       if (typeof turnId === 'string' && turnId) deps.harnessHost.onCancel({ turnId });
+      return;
+    }
+    if (name === 'hudSnapshot') {
+      const snapshot = data as { deviceId?: unknown; state?: { liveTurns?: unknown } };
+      if (typeof snapshot.deviceId === 'string' && Array.isArray(snapshot.state?.liveTurns)) {
+        deps.hudSnapshot?.(snapshot.deviceId, snapshot.state.liveTurns as LiveTurnInfo[]);
+      }
       return;
     }
     if (name === 'snapshot') {
@@ -909,6 +940,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         }
         attempt = 0;
         streamOpen = true;
+        deps.hudDisconnected?.();
         setReachable(true);
         res.setEncoding('utf8');
         let buffer = '';
@@ -943,6 +975,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
           if (stream !== req) return;
           stream = null;
           streamOpen = false;
+          deps.hudDisconnected?.();
           scheduleReconnect();
         };
         res.on('end', dropped);
@@ -955,6 +988,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       if (stream !== req) return;
       stream = null;
       streamOpen = false;
+      deps.hudDisconnected?.();
       // A connect that could not even be made. Note this fires on the RECONNECT,
       // not on the drop that caused it: a stream ending is routine (a proxy
       // recycling a connection, a laptop's wifi handing over) and the honest

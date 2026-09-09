@@ -20,6 +20,8 @@ export interface HarnessRunUsage {
 export interface HarnessRunRecord {
   runId: string;
   threadId: string;
+  /** Outer coding_agent call, for exact mail work correlation. */
+  itemId?: string;
   agent: string;
   cwd: string;
   /** Device label when the run was hosted by a paired client; absent for server runs. */
@@ -69,6 +71,7 @@ function coerce(raw: unknown): HarnessRunRecord | null {
   return {
     runId: typeof r.runId === 'string' && r.runId ? r.runId : randomUUID(),
     threadId: r.threadId,
+    ...(typeof r.itemId === 'string' && r.itemId ? { itemId: r.itemId } : {}),
     agent: r.agent,
     cwd: r.cwd,
     sessionId: r.sessionId,

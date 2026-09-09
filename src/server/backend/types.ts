@@ -1,3 +1,4 @@
+import type { HistoricalWorkRun } from '../mail/work-history';
 import type { EventEmitter } from 'node:events';
 import type {
   ChatMessage,
@@ -277,7 +278,9 @@ export interface ChatBackend extends EventEmitter {
 
   // thread CRUD
   listThreads(): Promise<ChatSummary[]>;
-  readThread(threadId: string): Promise<{ title: string; messages: ChatMessage[] }>;
+  readThread(threadId: string): Promise<{ title: string; messages: ChatMessage[]; complete?: boolean }>;
+  /** Raw persisted action history for Mail; excludes private reasoning. */
+  readWorkHistory?(threadId: string): Promise<HistoricalWorkRun[]>;
   resumeThread(threadId: string): Promise<void>;
   renameThread(threadId: string, name: string): Promise<void>;
   /**

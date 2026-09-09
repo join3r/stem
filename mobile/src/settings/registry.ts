@@ -104,7 +104,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
       {
         kind: 'choice',
         key: 'preview-lines',
-        label: 'Preview lines in the Inbox',
+        label: 'Preview lines in Chats',
         hint: 'How much of the newest message each row shows',
         options: [
           { value: '0', label: 'None' },
@@ -166,7 +166,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         kind: 'choice',
         key: 'tasks-notify',
         label: 'Scheduled tasks',
-        hint: 'The chat always waits in your Inbox — this sets how much it interrupts the desk',
+        hint: 'Task results stay in Chats or Mail — choose how you are notified',
         options: [
           { value: 'alert', label: 'Pop-up' },
           { value: 'nudge', label: 'Nudge' },

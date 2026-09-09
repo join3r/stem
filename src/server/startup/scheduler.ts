@@ -37,7 +37,8 @@ export function initTaskScheduler(deps: {
     taskId: string;
     /** The persona the run executed as (schedule-as-persona): the mail's sender. */
     personaId?: string;
-  }) => Promise<void>;
+    threadId?: string;
+  }) => Promise<string | void>;
 }): TaskScheduler {
   // A task's runs need a chat the user can open. A mail persona's session is not
   // one — the Chats list hides it and the Inbox shows only mail — so a task
@@ -110,12 +111,14 @@ export function initTaskScheduler(deps: {
       // actually in flight — an interactive turn calling notify_user has the
       // user right there, and a mail about it would be a copy of the reply.
       const running = scheduler.runningTask(threadId);
+      let conversationId: string | void = undefined;
       if (running) {
-        await deps
+        conversationId = await deps
           .deliverTaskMail({
             subject: title?.trim() || running.title,
             body: message,
             taskId: running.id,
+            threadId,
             ...(running.personaId ? { personaId: running.personaId } : {})
           })
           .catch((err) =>
@@ -149,7 +152,7 @@ export function initTaskScheduler(deps: {
       // nothing, on top of the push that turn's own ending already sends. The
       // desktop half below still runs, because a model that asked for the user's
       // attention at the desk should get it either way.
-      if (running) pushTaskAlert({ threadId, taskId: running.id, label: running.title });
+      if (running) pushTaskAlert({ threadId, taskId: running.id, label: running.title, ...(conversationId ? { conversationId } : {}) });
       if (mode === 'alert') deps.revealMainWindow();
       deps.requestAttention();
       if (mode === 'nudge') return;

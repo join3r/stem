@@ -22,10 +22,10 @@ export function createThreadEvents(options: {
     // User-message echoes are not broadcast. A turn started elsewhere needs a
     // history read, including when it ends without a single assistant token.
     const foreign = settled && !options.sending() && !options.read().messages.some(
-      (message) => message.role === 'user' && message.turnId === turnId
+      (message) => message.role === 'user' && (message.runtimeTurnId ?? message.turnId) === turnId
     );
     options.apply((state) => applyBackendEventToThread(state, event) ?? state);
-    if (foreign) options.refresh();
+    if (foreign || (settled && !options.sending() && options.read().messages.some((message) => message.pendingHistory))) options.refresh();
   }, options.schedule);
 
   return {

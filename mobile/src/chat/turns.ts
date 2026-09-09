@@ -78,7 +78,7 @@ export function applyStartTurnResult(
     return {
       state: {
         ...prev,
-        messages: prev.messages.map((m) => (m.id === userMessageId ? { ...m, turnId } : m))
+        messages: prev.messages.map((m) => (m.id === userMessageId ? { ...m, turnId: m.turnId ?? turnId, runtimeTurnId: turnId } : m))
       },
       turnId
     };
@@ -88,10 +88,10 @@ export function applyStartTurnResult(
       ...prev,
       messages: result.assistantMessage
         ? [
-            ...prev.messages,
+            ...prev.messages.map((message) => message.id === userMessageId ? { ...message, pendingHistory: false } : message),
             { id: `assistant-${Date.now()}`, role: 'assistant', content: result.assistantMessage }
           ]
-        : prev.messages,
+        : prev.messages.map((message) => message.id === userMessageId ? { ...message, pendingHistory: false } : message),
       running: false,
       activeTurnId: null,
       status: 'idle'
@@ -118,7 +118,7 @@ export function interruptTarget(state: ThreadState): string | null {
   if (!state.running) return null;
   for (let i = state.messages.length - 1; i >= 0; i -= 1) {
     const message = state.messages[i];
-    if (message.role === 'user' && message.turnId) return message.turnId;
+    if (message.role === 'user' && (message.runtimeTurnId || message.turnId)) return message.runtimeTurnId ?? message.turnId ?? null;
   }
   return null;
 }

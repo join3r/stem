@@ -1,5 +1,6 @@
+import { workDetail } from '../../shared/work-detail';
 import type { PiEvent } from './rpc';
-import type { ActivityItem, PersonaHarnessPin, SourceRef, TurnUsage } from '../../shared/types';
+import type { ActivityItem, PersonaHarnessPin, SourceRef, TurnUsage, TurnOrigin } from '../../shared/types';
 import { stripCiteMarkers } from '../../shared/citations';
 import { WEB_ACCESS_TOOL_NAMES } from '../../shared/activity';
 import { SECRET_ENVELOPE_KEY, toolArgsOf } from './protocol';
@@ -25,6 +26,7 @@ export interface NormalizedEvent {
 
 /** Per-turn state the normalizer accumulates. PiRuntime owns one per active turn. */
 export interface TurnContext {
+  origin?: TurnOrigin;
   threadId: string;
   turnId: string;
   assistantText: string;
@@ -536,7 +538,7 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
         ctx.assistantText += delta;
         out.push({
           method: 'item/agentMessage/delta',
-          params: { threadId, turnId, itemId: turnId, delta }
+          params: { threadId, turnId, itemId: turnId, delta, offset: ctx.assistantText.length - delta.length }
         });
       } else if (ame.type === 'thinking_start') {
         out.push({ method: 'item/started', params: { item: { type: 'reasoning', id: turnId }, threadId, turnId } });
@@ -565,6 +567,9 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
         ctx.traceChars += args?.length ?? 0;
         ctx.trace.push({ id: item.id, name: item.name, args });
       }
+      if (ctx.isMail || ctx.isScheduled) out.push({ method: 'mail/work/activity', params: { threadId, turnId, activity: {
+        id: item.id, kind: 'tool', label: item.detail ?? item.name ?? item.type, at: Date.now(), status: 'running', input: workDetail(nested)
+      } } });
       out.push({
         method: 'item/started',
         params: {
@@ -573,6 +578,16 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
           turnId
         }
       });
+      break;
+    }
+    case 'tool_execution_update': {
+      if (!ctx.isMail && !ctx.isScheduled) break;
+      const id = String(ev.toolCallId ?? '');
+      const entry = ctx.activity.find((a) => a.id === id);
+      if (entry) out.push({ method: 'mail/work/activity', params: { threadId, turnId, activity: {
+        id, kind: 'tool', label: entry.detail ?? entry.name ?? entry.type,
+        at: ctx.activityStartedAt.get(id) ?? Date.now(), status: 'running', output: workDetail(resultText(ev.partialResult as { content?: unknown } | undefined))
+      } } });
       break;
     }
     case 'tool_execution_end': {
@@ -607,6 +622,9 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
           if (!ctx.sources.some((s) => s.url === source.url)) ctx.sources.push(source);
         }
       }
+      if (ctx.isMail || ctx.isScheduled) out.push({ method: 'mail/work/activity', params: { threadId, turnId, activity: {
+        id, kind: 'tool', label: entry.detail ?? entry.name ?? entry.type, at: startedAt ?? Date.now(), endedAt: Date.now(), status: entry.status, output: workDetail(resultText(result))
+      } } });
       out.push({
         method: 'item/completed',
         params: {

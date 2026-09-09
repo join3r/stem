@@ -10,9 +10,13 @@ export interface HarnessEvent {
   stream?: string;
   tag?: string;
   toolCallId?: string;
+  messageId?: string;
   status?: string;
   title?: string;
   kind?: string;
+  rawInput?: unknown;
+  rawOutput?: unknown;
+  content?: unknown;
   locations?: Array<{ path?: string }>;
   cost?: { amount?: number; currency?: string };
 }

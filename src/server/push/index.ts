@@ -42,7 +42,8 @@ export type ApprovalPushKind = 'exec' | 'mcp' | 'instructions' | 'skill' | 'harn
  * anyone who does not already hold a token for this server.
  */
 export interface WakeUp {
-  kind: 'approval' | 'turn' | 'task';
+  kind: 'approval' | 'turn' | 'task' | 'mail';
+  conversationId?: string;
   /** Approvals and turns: the chat to open. */
   threadId?: string;
   /** Approvals: the card to open, in the id the resolve channels take back. */
@@ -100,6 +101,7 @@ function phrasing(wake: WakeUp): { title: string; fallback: string } {
       ? { title: 'A turn stopped', fallback: 'A turn you started did not finish.' }
       : { title: 'Stem finished', fallback: 'A turn you started has finished.' };
   }
+  if (wake.kind === 'mail') return { title: 'New Stem mail', fallback: 'A persona has mail for you.' };
   return { title: 'Task alert', fallback: 'A scheduled task has something for you.' };
 }
 
@@ -125,11 +127,12 @@ export function wakeUpPayload(wake: WakeUp, label?: string | null): unknown {
       sound: 'default',
       // Group by thread where there is one, so a chat that produces an approval
       // and then finishes does not stack two unrelated-looking rows.
-      ...(wake.threadId ? { 'thread-id': wake.threadId } : {})
+      ...(wake.conversationId ? { 'thread-id': `mail:${wake.conversationId}` } : wake.threadId ? { 'thread-id': wake.threadId } : {})
     },
     // Everything the app routes on. Ids only — see the header comment.
     stem: {
       kind: wake.kind,
+      ...(wake.conversationId ? { conversationId: wake.conversationId } : {}),
       ...(wake.approvalKind ? { approvalKind: wake.approvalKind } : {}),
       ...(wake.threadId ? { threadId: wake.threadId } : {}),
       ...(wake.approvalId ? { approvalId: wake.approvalId } : {}),
@@ -253,9 +256,16 @@ export function pushTurnFinished(turn: {
  * modes push: `alert` and `nudge` differ in how they disturb the machine at the
  * desk, and the phone is not at the desk.
  */
-export function pushTaskAlert(task: { threadId: string; taskId?: string; label?: LabelSource }): void {
+export function pushTaskAlert(task: { threadId: string; conversationId?: string; taskId?: string; label?: LabelSource }): void {
   fireAndForget(
-    { kind: 'task', threadId: task.threadId, ...(task.taskId ? { taskId: task.taskId } : {}) },
+    { ...(task.conversationId ? { kind: 'mail' as const, conversationId: task.conversationId } : { kind: 'task' as const, threadId: task.threadId }), ...(task.taskId ? { taskId: task.taskId } : {}) },
     task.label
   );
+}
+
+/** Called only for newly persisted user-addressed mail. Task notify_user keeps
+ * its existing notification policy and channel, avoiding duplicate alerts. */
+export function pushMailReceived(item: { conversationId: string; from: string; to: string[]; taskId?: string }): void {
+  if (item.from === 'user' || !item.to.includes('user') || item.taskId) return;
+  fireAndForget({ kind: 'mail', conversationId: item.conversationId });
 }

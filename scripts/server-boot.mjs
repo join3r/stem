@@ -391,7 +391,7 @@ try {
   const channelsRes = await fetch(`${url}/channels`, { headers: auth });
   const channels = (await channelsRes.json()).result ?? [];
   check('GET /channels answers with the registry', Array.isArray(channels) && channels.length > 50, `${channels.length} channels`);
-  for (const expected of ['settings:get', 'chats:list', 'backend:startTurn', 'memory:activeFacts']) {
+  for (const expected of ['settings:get', 'chats:list', 'backend:startTurn', 'memory:activeFacts', 'mail:work']) {
     check(`  registry exposes ${expected}`, channels.includes(expected));
   }
   check(
@@ -408,6 +408,12 @@ try {
 
   const status = await rpc('runtime:status');
   check('runtime:status answers', status.status === 200 && status.body?.ok === true);
+
+  const mailWork = await rpc('mail:work', ['unknown-mail']);
+  check('mail:work reads history over the authenticated transport',
+    mailWork.status === 200 && Array.isArray(mailWork.body?.result?.groups) && mailWork.body.result.groups.length === 0);
+  const invalidWork = await rpc('mail:work', [42]);
+  check('mail:work rejects an invalid conversation id', invalidWork.status === 400);
 
   const chats = await rpc('chats:list');
   check('chats:list answers with an empty workspace', status.status === 200 && Array.isArray(chats.body?.result?.chats), `${chats.body?.result?.chats?.length ?? '?'} chats`);

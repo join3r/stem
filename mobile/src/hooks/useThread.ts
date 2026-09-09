@@ -36,7 +36,7 @@ import {
   mergeHydratedThread,
   type ThreadState
 } from '@shared/chatState';
-import type { ChatMessage } from '@shared/types';
+import type { ChatMessage, TurnAttachment } from '@shared/types';
 import {
   IDLE_READ,
   isCurrent,
@@ -49,6 +49,7 @@ import {
   type ReadState
 } from '../chat/reads';
 import { applyStartTurnResult, interruptTarget, settleAgainstSnapshot } from '../chat/turns';
+import { takeSubmittedThread, acknowledgeSubmittedThread, newSubmittedTurnId, retainSubmittedThread, rejectSubmittedThread, onSubmittedThreadRejected } from '../chat/submitted';
 import { createThreadEvents } from '../chat/events';
 import { isUnreachable } from '../transport/connection';
 import { useTransport } from '../transport/provider';
@@ -72,7 +73,7 @@ export interface ThreadView {
   /** Why the connection makes sending impossible, or null when it doesn't. */
   blocked: string | null;
   /** `personaId` = send this turn AS that persona (one the user opened to clients). */
-  send(text: string, personaId?: string | null): void;
+  send(text: string, personaId?: string | null, attachments?: TurnAttachment[]): Promise<void>;
   interrupt(): void;
   reload(): void;
 }
@@ -86,6 +87,8 @@ interface PendingSend {
 export function useThread(threadId: string): ThreadView {
   const { connection, status } = useTransport();
   const live = useLiveTurns();
+  const currentThread = useRef(threadId);
+  currentThread.current = threadId;
 
   const [state, setState] = useState<ThreadState>(EMPTY_STATE);
   const [title, setTitle] = useState('');
@@ -129,6 +132,7 @@ export function useThread(threadId: string): ThreadView {
 
   const load = useCallback(
     async (cause: ReadCause) => {
+      if (currentThread.current !== threadId) return;
       if (!status.paired) {
         // There is nothing to ask yet, and that is not a failure — but it is not a
         // read in progress either. Leaving `loading` set here is what made a cold
@@ -145,7 +149,7 @@ export function useThread(threadId: string): ThreadView {
       const stateAtRequest = stateRef.current;
       try {
         const history = await connection.rpc(cause === 'background' ? 'chats:history' : 'chats:open', threadId);
-        if (!isCurrent(readRef.current, mine)) return;
+        if (currentThread.current !== threadId || !isCurrent(readRef.current, mine)) return;
         setTitle(history.title);
         if (history.offline && stateRef.current.hydrated) {
           // The cache spoke for the server, and there is already a transcript
@@ -157,11 +161,17 @@ export function useThread(threadId: string): ThreadView {
           applyRead((prev) => readSettled(prev, mine, null));
           return;
         }
-        apply((liveState) => mergeHydratedThread(history.messages, liveState, stateAtRequest));
-        applyRead((prev) => readSettled(prev, mine, null));
+        apply((liveState) => mergeHydratedThread(history.messages, liveState, stateAtRequest, history.complete !== false && !history.offline));
+        const submitted = takeSubmittedThread(threadId);
+        if (submitted && history.complete !== false && !history.offline && history.messages.some((message) => message.role === 'user' && (message.id === submitted.id || !!submitted.runtimeTurnId && message.runtimeTurnId === submitted.runtimeTurnId))) {
+          acknowledgeSubmittedThread(threadId, submitted.id);
+        }
+        const missingSubmitted = history.complete === true && !history.offline && !stateRef.current.running && !liveTurnRef.current && !pending.current && stateRef.current.messages.some((message) => message.pendingHistory);
+        applyRead((prev) => readSettled(prev, mine, missingSubmitted ? new Error('Your submitted message is still waiting to appear in saved history. Reload to check again.') : null));
         // The cache spoke for an empty screen. Fine to show, not fine to stop at.
         needsFreshRead.current = history.offline === true;
       } catch (e) {
+        if (currentThread.current !== threadId) return;
         if (shouldAbandon(cause, isUnreachable(e), connection.status().reachable)) {
           needsFreshRead.current = true;
           applyRead((prev) => readAbandoned(prev, mine));
@@ -178,12 +188,16 @@ export function useThread(threadId: string): ThreadView {
   // previous thread is ever on screen under this one's title.
   useEffect(() => {
     applyRead(readIdle);
-    stateRef.current = EMPTY_STATE;
-    setState(EMPTY_STATE);
+    const submitted = takeSubmittedThread(threadId);
+    const initial = submitted ? { ...EMPTY_STATE, messages: [submitted] } : EMPTY_STATE;
+    stateRef.current = initial;
+    setState(initial);
     setTitle('');
     needsFreshRead.current = false;
+    pending.current = null;
+    setSending(false);
     void load('user');
-  }, [applyRead, load]);
+  }, [applyRead, load, threadId]);
 
   useEffect(() => {
     if (!status.streaming || !needsFreshRead.current) return;
@@ -223,23 +237,33 @@ export function useThread(threadId: string): ThreadView {
     };
   }, [apply, connection, load, threadId]);
 
+  useEffect(() => onSubmittedThreadRejected((rejectedThread, messageId) => {
+    if (rejectedThread !== threadId) return;
+    apply((previous) => ({ ...previous, messages: previous.messages.map((message) => message.id === messageId ? { ...message, pendingHistory: false, sendFailed: true } : message) }));
+  }), [apply, threadId]);
+
   const send = useCallback(
-    (text: string, personaId?: string | null) => {
+    (text: string, personaId?: string | null, attachments?: TurnAttachment[]): Promise<void> => {
       const input = text.trim();
-      if (!input || pending.current) return;
+      if ((!input && !attachments?.length) || pending.current) return Promise.reject(new Error('A send is already pending or the message is empty.'));
+      if (!connection.status().reachable) return Promise.reject(new Error('Offline — your draft has been kept.'));
       // A turn already running on this thread — ours or one started at the desk.
       // The backend refuses a second one, so accepting the text here would only
       // produce a bubble that fails a round trip later.
-      if (stateRef.current.running || liveTurnRef.current !== null) return;
+      if (stateRef.current.running || liveTurnRef.current !== null) return Promise.reject(new Error('Wait for the current reply before sending.'));
 
       // The optimistic bubble carries no turnId yet; the answer stamps one on so
       // a later failure can be traced to the message that caused it.
       const id = `user-${Date.now()}-${++nonce.current}`;
+      const runtimeTurnId = newSubmittedTurnId();
       const optimistic: ChatMessage = {
+        runtimeTurnId,
         id,
         role: 'user',
         content: input,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        pendingHistory: true,
+        ...(attachments?.length ? { attachments: attachments.map((file) => ({ kind: file.mime?.startsWith('image/') ? 'image' as const : 'file' as const, name: file.name, mime: file.mime })) } : {})
       };
       apply((prev) => ({
         ...prev,
@@ -248,26 +272,36 @@ export function useThread(threadId: string): ThreadView {
         status: 'running'
       }));
 
+      retainSubmittedThread(threadId, optimistic);
       setSending(true);
       // Declared before the chain that closes over it: the `finally` must only
       // clear `pending` if it is still the send that set it.
       let entry: PendingSend | null = null;
+      let sendError: unknown;
       const started = connection
         // No `format`: StartTurnInput defaults to 'mdx', which is what the desk
         // asks for and what src/mdx/ now renders. Step 5 pinned this to 'md'
         // while the component map did not exist yet.
-        .rpc('backend:startTurn', { input, threadId, ...(personaId ? { personaId } : {}) })
+        .rpc('backend:startTurn', { input, threadId, turnId: runtimeTurnId, ...(attachments?.length ? { attachments } : {}), ...(personaId ? { personaId } : {}) })
         .then(
           (result) => {
+            if (result.canceled) {
+              sendError = new Error('The send was canceled. Your draft is saved.');
+              rejectSubmittedThread(threadId, id);
+            } else if (!result.turnId) acknowledgeSubmittedThread(threadId, id);
+            if (currentThread.current !== threadId) return result.turnId ?? null;
             // One fold for both answers a send can get: a turn to wait for, or a
             // reply the server has already handled and no turn at all — the
             // second of which has to end the optimistic `running` set above,
             // because no event ever will. See ../chat/turns.ts.
             const outcome = applyStartTurnResult(stateRef.current, result, id);
-            apply(() => outcome.state);
+            apply(() => result.canceled ? { ...outcome.state, messages: outcome.state.messages.map((message) => message.id === id ? { ...message, sendFailed: true, pendingHistory: false } : message) } : outcome.state);
             return outcome.turnId;
           },
           (e: unknown) => {
+            sendError = e;
+            rejectSubmittedThread(threadId, id);
+            if (currentThread.current !== threadId) return null;
             // The send never became a turn (offline, or the agent is already
             // busy). Mark the bubble so it does not look sent, and say why —
             // the same split the desktop makes with `sendFailed`.
@@ -275,7 +309,7 @@ export function useThread(threadId: string): ThreadView {
               appendSystemMessage(
                 {
                   ...prev,
-                  messages: prev.messages.map((m) => (m.id === id ? { ...m, sendFailed: true } : m))
+                  messages: prev.messages.map((m) => (m.id === id ? { ...m, sendFailed: true, pendingHistory: false } : m))
                 },
                 e
               )
@@ -284,13 +318,14 @@ export function useThread(threadId: string): ThreadView {
           }
         )
         .finally(() => {
-          if (pending.current === entry) pending.current = null;
-          setSending(false);
+          if (pending.current === entry) { pending.current = null; setSending(false); }
+          if (!sendError) void load('background');
         });
       entry = { turnId: started };
       pending.current = entry;
+      return started.then(() => { if (sendError) throw sendError; });
     },
-    [apply, connection, threadId]
+    [apply, connection, threadId, load]
   );
 
   const interrupt = useCallback(async () => {

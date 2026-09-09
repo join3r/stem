@@ -26,6 +26,7 @@ import {
 import { reflectOnDelivery } from './reflect';
 import { personaTurnFields } from '../workspace/persona-turn';
 import { repoLocks } from './repo-lock';
+import { attachScheduledWork, beginMailWork, type WorkHandle } from './work';
 import { readSettings } from '../workspace/settings';
 import {
   addParticipant,
@@ -464,7 +465,8 @@ export class MailRouter {
     body: string;
     taskId: string;
     personaId?: string;
-  }): Promise<void> {
+    threadId?: string;
+  }): Promise<string> {
     // One conversation per task, found by the task id on its items; created on
     // the first notify. Keeps every firing of a watch task in one thread of mail.
     const { conversations, items } = await readMail();
@@ -475,14 +477,17 @@ export class MailRouter {
     const from = input.personaId ?? `task:${input.taskId}`;
     const target =
       conversation ?? (await createConversation(input.subject, [input.personaId ?? 'normal'], input.body));
-    await appendMailItem({
+    const delivered = await appendMailItem({
       conversationId: target.id,
       from,
       to: ['user'],
       body: input.body,
       taskId: input.taskId
     });
+    const notification = delivered.items.at(-1);
+    if (input.threadId && notification) await attachScheduledWork(input.threadId, target.id, notification.id, from);
     this.opts.onChange();
+    return target.id;
   }
 
   // ---- the mail bridge (send_mail / add_persona from inside a delivery turn) ----
@@ -1012,6 +1017,7 @@ export class MailRouter {
     const turnId = randomUUID();
     this.activeTurns.set(turnId, { conversationId });
     let releaseRepoLock: (() => void) | undefined;
+    let work: WorkHandle | undefined;
     try {
       const persona = await getPersona(personaId);
       if (!persona) {
@@ -1082,12 +1088,15 @@ export class MailRouter {
       this.lanes.get(conversationId)?.active.set(personaId, persona.name);
       this.updateActivityDetail(conversationId);
       const threadId = conversation.sessions[personaId];
+      work = await beginMailWork(this.opts.runtime, { conversationId, sourceItemId, personaId, turnId, threadId });
 
       // Two harnessed deliveries must never work the same repo tree at once
       // (same device, either cwd inside the other) — this waits until the tree
       // is free. Before waitForSettle on purpose: the wait belongs to queueing,
       // not to the turn.
+      if (persona.harness) work.activity({ id: `repo:${turnId}`, kind: 'progress', label: 'Waiting for repository access', at: Date.now(), status: 'running' });
       releaseRepoLock = await repoLocks.acquire(persona.harness);
+      if (persona.harness) work.activity({ id: `repo:${turnId}`, kind: 'progress', label: 'Repository access acquired', at: work.run.startedAt, endedAt: Date.now(), status: 'ok' });
       // The wait can outlive a user Stop — nothing should start a turn for a
       // conversation the user already stopped while it queued for the tree.
       if (this.stopping.has(conversationId)) return;
@@ -1164,11 +1173,13 @@ export class MailRouter {
         return;
       }
       threadIdRef.current = runThreadId;
+      work.bindThread(runThreadId);
       this.liveThreads.add(runThreadId);
       if (runThreadId !== threadId) await setConversationSession(conversationId, personaId, runThreadId);
       noteTurnStart(runThreadId, started.turnId);
 
       const settle = await settling.done.finally(() => this.liveThreads.delete(runThreadId));
+      await work.finish(this.stopping.has(conversationId) ? 'aborted' : settle.status === 'ok' ? 'ok' : 'failed', settle.error);
       const sent = this.turnMailSent.get(turnId);
       this.turnMailSent.delete(turnId);
       if (settle.status !== 'ok') {
@@ -1213,6 +1224,7 @@ export class MailRouter {
       // The reply IS the error channel: a mail that silently disappears is the
       // one outcome the Inbox must not produce.
       const message = error instanceof Error ? error.message : String(error);
+      await work?.finish('failed', message);
       degrade('mail', 'delivered a failure notice instead of a reply', error);
       this.settleBranchFailure(conversationId, from, personaId, `its delivery failed (${message}).`);
       await this.appendReply(conversationId, personaId, `The delivery failed: ${message}`, 'failed', epoch).catch(() => {
@@ -1220,6 +1232,7 @@ export class MailRouter {
         // cannot be written has nothing left to say it in.
       });
     } finally {
+      await work?.finish(this.stopping.has(conversationId) ? 'aborted' : 'failed', 'The delivery ended before recording a result.');
       releaseRepoLock?.();
       this.activeTurns.delete(turnId);
       this.turnInitiators.delete(turnId);
@@ -1341,13 +1354,17 @@ export class MailRouter {
   }
 
   /**
-   * Everything the settled turn said — the implicit reply. A turn that uses
-   * tools writes SEVERAL assistant messages (text between tool calls), so the
-   * reply is all of them since the last user message, not just the final one:
-   * taking the last alone once mailed back only a turn's closing sentence.
+   * The final assistant message becomes the reply. Intermediate commentary
+   * belongs to the Work timeline; raw history preserves message boundaries
+   * that readThread's chat aggregation intentionally combines.
    */
   private async lastAssistantText(threadId: string): Promise<string> {
     try {
+      if (this.opts.runtime.readWorkHistory) {
+        const turns = await this.opts.runtime.readWorkHistory(threadId);
+        const final = turns.at(-1)?.finalText;
+        if (final !== undefined) return final;
+      }
       const { messages } = await this.opts.runtime.readThread(threadId);
       let start = 0;
       for (let i = messages.length - 1; i >= 0; i--) {
@@ -1356,11 +1373,7 @@ export class MailRouter {
           break;
         }
       }
-      return messages
-        .slice(start)
-        .filter((m) => m.role === 'assistant' && m.content.trim())
-        .map((m) => m.content.trim())
-        .join('\n\n');
+      return messages.slice(start).filter((m) => m.role === 'assistant' && m.content.trim()).at(-1)?.content.trim() ?? '';
     } catch (error) {
       degrade('mail', 'replied without the turn transcript', error);
       return '';

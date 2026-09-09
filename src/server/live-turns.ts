@@ -7,15 +7,15 @@
 // The server sees every backend event, so it can answer for every device at once
 // — and that is the only answer that stays right when there is more than one.
 //
-// Driven purely from the event stream, never from a start-turn response. That is
-// what retires the settled-turn race the bridge needed a guard for: a terminal
-// event can no longer arrive before the mark it is supposed to clear, because the
-// mark is made by an earlier event of the same turn.
+// Events and prompt acceptance both mark activity. Retain settled turn IDs so
+// a late start response or a trailing delta cannot resurrect completed work.
 
-import { isSettledMethod } from '../shared/settledTurns';
+import { isSettledMethod, SETTLED_TURN_CAP } from '../shared/settledTurns';
+import type { LiveTurnInfo, TurnOrigin } from '../shared/types';
 
 /** What is known about one running turn: its id (empty when unknown) and its clock. */
 interface LiveTurn {
+  origin?: TurnOrigin;
   turnId: string;
   /** When this turn was first heard of, in epoch ms — see noteTurnStart. */
   startedAt: number;
@@ -23,28 +23,37 @@ interface LiveTurn {
 
 /** Thread id → the turn currently running in it. */
 const live = new Map<string, LiveTurn>();
+const settled = new Set<string>();
+function retire(turnId?: string): void {
+  if (!turnId) return;
+  settled.add(turnId);
+  if (settled.size > SETTLED_TURN_CAP) settled.delete(settled.values().next().value!);
+}
 
 /**
  * Fold one backend event into the set. A process/exit is attributed to the one
- * thread the dying worker was carrying; a thread-less one (an older backend, or
- * any other process-level event) means the backend is gone and no turn survived
- * it, so everything clears.
+ * thread the dying worker was carrying; a thread-less exit (an older backend)
+ * means the backend is gone. Other process events do not settle turns.
  */
-export function noteTurnEvent(method: string, threadId: string | undefined, turnId?: string): void {
+export function noteTurnEvent(method: string, threadId: string | undefined, turnId?: string, origin?: TurnOrigin): void {
   if (method === 'process/exit') {
     // Attributed (pool): the threadId names the one turn the dying worker was
     // carrying — turns streaming on other workers keep their marks. Unattributed
     // (an older backend): the whole backend died and no turn survived it.
-    if (threadId) live.delete(threadId);
-    else live.clear();
+    if (threadId) {
+      const current = live.get(threadId);
+      retire(turnId ?? current?.turnId);
+      if (!turnId || !current?.turnId || current.turnId === turnId) live.delete(threadId);
+    } else {
+      for (const turn of live.values()) retire(turn.turnId);
+      live.clear();
+    }
     return;
   }
-  if (!threadId) {
-    live.clear();
-    return;
-  }
+  if (!threadId) return; // Logs and unrelated process events do not end turns.
   // The same two methods the desktop's follow-me pill has always treated as "this
   // thread is working": the first item of a turn, or its first token.
+  if (turnId && settled.has(turnId)) return;
   if (method === 'item/started' || method === 'item/agentMessage/delta') {
     // Later events of the same turn re-assert the same id; a NEW turn in the same
     // thread overwrites it, which is what a client resuming needs — the turn id is
@@ -58,8 +67,13 @@ export function noteTurnEvent(method: string, threadId: string | undefined, turn
     // genuinely different turn restarts it. Anything else would measure "time
     // since the last delta", which is nearly zero for every turn there is.
     const startedAt = current && (!current.turnId || !id || current.turnId === id) ? current.startedAt : Date.now();
-    live.set(threadId, { turnId: id, startedAt });
-  } else if (isSettledMethod(method)) live.delete(threadId);
+    const turnOrigin = origin ?? (current?.turnId === id ? current.origin : undefined);
+    live.set(threadId, { turnId: id, startedAt, ...(turnOrigin ? { origin: turnOrigin } : {}) });
+  } else if (isSettledMethod(method)) {
+    retire(turnId);
+    const current = live.get(threadId);
+    if (!turnId || !current?.turnId || current.turnId === turnId) live.delete(threadId);
+  }
 }
 
 /**
@@ -76,21 +90,18 @@ export function noteTurnEvent(method: string, threadId: string | undefined, turn
  * First-of-the-two wins. A turn whose events arrive before this call keeps the
  * earlier clock (and this only fills in an id it may have been missing), because
  * an event of a turn cannot precede the turn; a different turn id means a genuinely
- * new turn and restarts it. Only the CLOCK is taken on trust here — everything
- * else about which thread is live still comes out of the event stream, and this
- * cannot strand a mark the stream would not have cleared anyway: one THREAD's
- * turns serialize on its pool worker's gate (different threads run in parallel
- * on different workers, but each entry here is per thread), so the previous
- * turn's terminal event has been folded in by the time the next one is
- * dispatched.
+ * new turn and restarts it. A terminal event may beat prompt acceptance back to
+ * its caller; the settled-ID guard below keeps that late response from reviving
+ * the turn. Origin metadata survives whichever of those signals arrives first.
  */
-export function noteTurnStart(threadId: string, turnId: string): void {
+export function noteTurnStart(threadId: string, turnId: string, origin?: TurnOrigin): void {
+  if (settled.has(turnId)) return;
   const current = live.get(threadId);
   if (current && (!current.turnId || current.turnId === turnId)) {
-    live.set(threadId, { turnId: current.turnId || turnId, startedAt: current.startedAt });
+    live.set(threadId, { ...current, turnId: current.turnId || turnId, ...(origin ? { origin } : {}) });
     return;
   }
-  live.set(threadId, { turnId, startedAt: Date.now() });
+  live.set(threadId, { turnId, startedAt: Date.now(), ...(origin ? { origin } : {}) });
 }
 
 /** Threads still streaming — the scheduler's defer/preempt signal. */
@@ -108,8 +119,10 @@ export function liveTurnCount(): number {
  * could disagree — and it is the whole of the answer, so a thread absent from it
  * is settled, not merely unmentioned.
  */
-export function liveTurnSnapshot(): { threadId: string; turnId: string | null }[] {
-  return [...live].map(([threadId, turn]) => ({ threadId, turnId: turn.turnId || null }));
+export function liveTurnSnapshot(): LiveTurnInfo[] {
+  return [...live].map(([threadId, turn]) => ({
+    threadId, turnId: turn.turnId || null, ...(turn.origin ? { origin: turn.origin } : {})
+  }));
 }
 
 /**
@@ -144,15 +157,17 @@ export function liveTurnAgeMs(threadId: string): number | null {
 export function foldTurnEvent(
   method: string,
   threadId: string | undefined,
-  turnId?: string
+  turnId?: string,
+  origin?: TurnOrigin
 ): { ranForMs: number | null } {
   const ranForMs =
     threadId && (method === 'turn/completed' || method === 'turn/failed') ? liveTurnAgeMs(threadId) : null;
-  noteTurnEvent(method, threadId, turnId);
+  noteTurnEvent(method, threadId, turnId, origin);
   return { ranForMs };
 }
 
 /** Drop every mark (tests; a fresh server). */
 export function clearLiveTurns(): void {
   live.clear();
+  settled.clear();
 }

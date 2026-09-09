@@ -206,6 +206,24 @@ function coerce(parsed: unknown): MailFile {
   };
 }
 
+// Observers run only after durable writes. Triage changes need the same push
+// as router deliveries so every paired client sees the same Inbox.
+const changeListeners = new Set<() => void>();
+const receivedListeners = new Set<(item: MailItem) => void>();
+export function onMailChanged(listener: () => void): () => void {
+  changeListeners.add(listener);
+  return () => { changeListeners.delete(listener); };
+}
+export function onMailReceived(listener: (item: MailItem) => void): () => void {
+  receivedListeners.add(listener);
+  return () => { receivedListeners.delete(listener); };
+}
+function announce<T>(listeners: Set<(value: T) => void>, value: T): void {
+  for (const listener of listeners) {
+    try { listener(value); } catch (error) { degrade('mail', 'a mail observer failed after the write', error); }
+  }
+}
+
 // Serialize writes through a promise chain so concurrent IPC calls and the
 // router's delivery bookkeeping can't interleave a read-modify-write.
 let chain: Promise<unknown> = Promise.resolve();
@@ -271,6 +289,7 @@ function update(mutate: (store: MailFile) => void): Promise<MailListResult> {
     }
     mutate(store);
     await writeFileAtomic(store);
+    announce(changeListeners, undefined);
     return asResult(store);
   });
 }
@@ -351,6 +370,7 @@ export function appendMailItem(
   }
 ): Promise<MailListResult> {
   const { guard, staleIfUserSentAfter, ...fields } = input;
+  let appended: MailItem | undefined;
   return update((store) => {
     const conversation = conversationOf(store, fields.conversationId);
     // Every item carries the system version in force when it landed. For a
@@ -378,6 +398,7 @@ export function appendMailItem(
       }
     }
     store.items.push(item);
+    appended = item;
     conversation.updatedAt = item.at;
     if (item.from === 'user') {
       conversation.exchangeCount = 0;
@@ -391,6 +412,9 @@ export function appendMailItem(
         conversation.sendCounts[item.from] = (conversation.sendCounts[item.from] ?? 0) + hops;
       }
     }
+  }).then((result) => {
+    if (appended && appended.from !== 'user' && appended.to.includes('user')) announce(receivedListeners, appended);
+    return result;
   });
 }
 

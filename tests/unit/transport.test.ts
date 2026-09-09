@@ -28,6 +28,8 @@ import {
 } from '../../src/server/startup/transport';
 import { createServerProxy, type ServerProxy } from '../../src/desktop/proxy';
 import { clientCredentials } from '../../src/desktop/server-endpoint';
+import { PillTurns } from '../../src/desktop/quickchat/pill-turns';
+import { noteTurnEvent } from '../../src/server/live-turns';
 import { emptyInboxState } from '../../src/shared/inbox';
 import type { AppSettings, BackendEventEnvelope, ChatListResult, QuickChatSettings } from '../../src/shared/types';
 
@@ -483,6 +485,8 @@ describe('the event stream', () => {
 // server that died takes its buffer with it and the client resyncs instead.
 describe('resuming a dropped stream', () => {
   let resumer: ServerProxy;
+  const pill = new PillTurns();
+  const hudOrder: string[] = [];
   /** The `seq` of every backend event this client was handed, in order. */
   const seen: number[] = [];
   const snapshots: { threadId: string; turnId: string | null }[][] = [];
@@ -508,6 +512,8 @@ describe('resuming a dropped stream', () => {
       routeBackendEvent: (event) => {
         const s = (event.params as { seq?: number } | undefined)?.seq;
         if (typeof s === 'number') seen.push(s);
+        hudOrder.push('event');
+        pill.event(event.method, event.params as Parameters<PillTurns['event']>[1]);
       },
       revealMainWindow: () => undefined,
       requestAttention: () => undefined,
@@ -521,6 +527,8 @@ describe('resuming a dropped stream', () => {
         resyncs += 1;
       },
       liveTurns: (turns) => snapshots.push(turns),
+      hudDisconnected: () => { hudOrder.push('disconnect'); pill.disconnect(); },
+      hudSnapshot: (id, turns) => { hudOrder.push('snapshot'); pill.reconcile(id, turns); },
       connection: () => undefined
     });
     await resumer.start();
@@ -585,6 +593,26 @@ describe('resuming a dropped stream', () => {
     await until(() => seen.length === 1, 'a frame after the resync');
     expect(resyncs).toBe(before + 1);
   });
+  it('hides on a dropped stream and reconciles the pill only after replay', async () => {
+    await until(() => pill.connected, 'HUD snapshot');
+    const origin = { kind: 'interactive' as const, deviceId };
+    const params = { threadId: 'pill-chat', turnId: 'pill-turn', origin };
+    noteTurnEvent('item/started', params.threadId, params.turnId, origin);
+    pushToClients('backend:event', { method: 'item/started', params });
+    await until(() => pill.turns.length === 1, 'local pill turn');
+    hudOrder.length = 0;
+    dropDeviceStreams(deviceId);
+    await until(() => !pill.connected, 'pill disconnected');
+    expect(pill.turns).toEqual([]);
+    noteTurnEvent('turn/completed', params.threadId, params.turnId, origin);
+    pushToClients('backend:event', { method: 'turn/completed', params });
+    await until(() => pill.connected, 'reconciled pill');
+    expect(pill.turns).toEqual([]);
+    expect(hudOrder.indexOf('disconnect')).toBeLessThan(hudOrder.indexOf('event'));
+    expect(hudOrder.indexOf('event')).toBeLessThan(hudOrder.lastIndexOf('snapshot'));
+    expect(pill.event('item/agentMessage/delta', params)).toBe(false);
+  });
+
 });
 
 // The other axis of the same resume machine: what the server does with the

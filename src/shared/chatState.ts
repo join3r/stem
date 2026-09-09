@@ -71,9 +71,13 @@ export function mergeDraftIntoReal(draft: ThreadState, live: ThreadState | undef
   // The draft IS the whole conversation (the send created the chat), so the
   // merged slice is complete even when `live` was seeded from events alone.
   if (!live) return { ...draft, hydrated: true };
-  const ids = new Set(draft.messages.map((m) => m.id));
-  const extra = live.messages.filter((m) => !ids.has(m.id));
-  return { ...live, messages: [...draft.messages, ...extra], hydrated: true };
+  const same = (a: ChatMessage, b: ChatMessage) => a.id === b.id || (a.role === b.role && !!a.runtimeTurnId && a.runtimeTurnId === b.runtimeTurnId);
+  const messages = draft.messages.map((message) => {
+    const raced = live.messages.find((candidate) => same(candidate, message));
+    return raced ? { ...message, ...raced } : message;
+  });
+  const extra = live.messages.filter((message) => !draft.messages.some((candidate) => same(candidate, message)));
+  return { ...live, messages: [...messages, ...extra], hydrated: true };
 }
 
 /**
@@ -85,19 +89,24 @@ export function mergeDraftIntoReal(draft: ThreadState, live: ThreadState | undef
 export function mergeHydratedThread(
   historyMessages: ChatMessage[],
   live: ThreadState | undefined,
-  stateAtRequest: ThreadState | undefined
+  stateAtRequest: ThreadState | undefined,
+  complete = true
 ): ThreadState {
-  const hydrated: ThreadState = { ...EMPTY_STATE, messages: historyMessages, hydrated: true };
-  if (!live || (live === stateAtRequest && !live.running)) return hydrated;
+  const savedMessages = historyMessages.map((message) => message.role === 'assistant' && message.runtimeTurnId ? { ...message, hydratedContent: true } : message);
+  const hydrated: ThreadState = { ...EMPTY_STATE, messages: savedMessages, hydrated: true };
+  if (!live) return hydrated;
+  const preserveLive = live !== stateAtRequest || live.running || !complete;
+  const candidates = preserveLive ? live.messages : live.messages.filter((message) => message.pendingHistory);
+  if (!candidates.length) return hydrated;
 
   // Disk supplies older transcript entries; newer in-memory versions win for
   // matching ids, and event-only messages are appended rather than discarded.
-  const messages = [...historyMessages];
+  const messages = [...savedMessages];
   const claimed = new Set<number>();
   let appendedNewTurn = false;
-  for (const liveMessage of live.messages) {
+  for (const liveMessage of candidates) {
     if (liveMessage.role === 'user') appendedNewTurn = false;
-    let index = messages.findIndex((message, i) => !claimed.has(i) && message.id === liveMessage.id);
+    let index = messages.findIndex((message, i) => !claimed.has(i) && (message.id === liveMessage.id || (message.role === liveMessage.role && !!message.runtimeTurnId && message.runtimeTurnId === liveMessage.runtimeTurnId)));
     const trailingUnansweredUser =
       liveMessage.role === 'assistant' &&
       messages.length > 0 &&
@@ -117,6 +126,7 @@ export function mergeHydratedThread(
         if (
           !claimed.has(i) &&
           candidate.role === liveMessage.role &&
+          !candidate.runtimeTurnId && !liveMessage.runtimeTurnId &&
           candidate.content === liveMessage.content &&
           candidate.scheduled?.at === liveMessage.scheduled?.at
         ) {
@@ -130,7 +140,20 @@ export function mergeHydratedThread(
       claimed.add(messages.length - 1);
       if (liveMessage.role === 'user') appendedNewTurn = true;
     } else {
-      messages[index] = liveMessage;
+      const saved = messages[index];
+      // A stream first observed halfway through a reply has no reliable prefix:
+      // its raw offsets can include citation markers stripped from history.
+      // Keep the saved answer until item/completed supplies the whole live text.
+      const liveContent = liveMessage.content;
+      const preferSaved = !!saved.runtimeTurnId && ((liveMessage.streamOffset ?? 0) > 0 || saved.content.startsWith(liveContent));
+      messages[index] = {
+        ...saved, ...liveMessage,
+        streamOffset: 0,
+        hydratedContent: preferSaved ? saved.hydratedContent : liveMessage.hydratedContent,
+        turnId: saved.turnId ?? liveMessage.turnId,
+        pendingHistory: complete ? undefined : liveMessage.pendingHistory,
+        content: preferSaved ? saved.content : liveContent
+      };
       claimed.add(index);
       if (liveMessage.role === 'user') appendedNewTurn = false;
     }
@@ -244,10 +267,21 @@ export function applyBackendEventToThread(
       const id = `assistant-${p.turnId}`;
       const meta = options.turnMeta?.get(p.turnId);
       const idx = state.messages.findIndex((m) => m.id === id);
+      const foldDelta = (message: ChatMessage): string => {
+        const content = message.content;
+        // Disk strips citation markers, so its character positions cannot safely
+        // accept raw deltas. Keep the saved answer until a completed item gives
+        // us a new authoritative stream baseline. Fresh streaming is unaffected.
+        if (message.hydratedContent) return content;
+        const offset = p.offset === undefined ? undefined : p.offset - (message.streamOffset ?? 0);
+        if (offset === undefined || offset < 0 || offset > content.length) return content + p.delta;
+        if (content.slice(offset, offset + p.delta.length) === p.delta) return content;
+        return content.slice(0, offset) + p.delta;
+      };
       const messages =
         idx === -1
-          ? [...state.messages, { id, role: 'assistant', content: p.delta, meta, turnId: p.turnId } as ChatMessage]
-          : state.messages.map((m, i) => (i === idx ? { ...m, content: m.content + p.delta } : m));
+          ? [...state.messages, { id, role: 'assistant', content: p.delta, streamOffset: p.offset ?? 0, meta, turnId: p.turnId, runtimeTurnId: p.turnId } as ChatMessage]
+          : state.messages.map((m, i) => (i === idx ? { ...m, content: foldDelta(m) } : m));
       return {
         ...state,
         messages: stampActivity(messages, p.turnId, state.activities),
@@ -337,9 +371,14 @@ export function applyBackendEventToThread(
       const idx = state.messages.findIndex((m) => m.id === id);
       const messages =
         idx === -1
-          ? [...state.messages, { id, role: 'assistant', content: text, meta, turnId: p.turnId } as ChatMessage]
+          ? [...state.messages, { id, role: 'assistant', content: text, meta, turnId: p.turnId, runtimeTurnId: p.turnId } as ChatMessage]
           : state.messages.map((m, i) =>
-              i === idx ? { ...m, content: text || m.content, meta: m.meta ?? meta } : m
+              i === idx ? {
+                ...m,
+                content: m.hydratedContent && text && m.content.startsWith(text) ? m.content : text || m.content,
+                hydratedContent: !!(m.hydratedContent && text && m.content !== text && m.content.startsWith(text)),
+                streamOffset: 0, meta: m.meta ?? meta
+              } : m
             );
       return { ...state, messages: stampActivity(messages, p.turnId, state.activities), streamingId: null };
     }
@@ -409,7 +448,7 @@ export function applyBackendEventToThread(
       // Retry only when a user message
       // actually carries this turn (synthetic failures like the Quick Chat
       // hand-off mint an id no message has; Retry could never map those back).
-      const canRetry = state.messages.some((m) => m.role === 'user' && m.turnId === p.turn.id);
+      const canRetry = state.messages.some((m) => m.role === 'user' && (m.runtimeTurnId ?? m.turnId) === p.turn.id);
       const settled =
         method === 'turn/failed' || method === 'turn/aborted'
           ? [

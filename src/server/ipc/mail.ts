@@ -1,3 +1,5 @@
+import { getMailWork } from '../mail/work-query';
+import { deleteRecordedWork } from '../mail/work';
 import { registerServer, type CallerContext } from './guard';
 import type { MailRouter } from '../mail/router';
 import type { MailComposeInput, TurnAttachment } from '../../shared/types';
@@ -33,6 +35,7 @@ export function registerMailIpc(deps: { router(): MailRouter | null; runtime(): 
     }
   };
   registerServer('mail:list', () => readMail());
+  registerServer('mail:work', (_e, conversationId: string) => getMailWork(deps.runtime(), conversationId));
   registerServer('mail:compose', async (e, input: MailComposeInput) => {
     await refuseRawPaths(e, input.attachments);
     return router().compose(input);
@@ -56,6 +59,8 @@ export function registerMailIpc(deps: { router(): MailRouter | null; runtime(): 
     setMailSnooze(ids, until ?? null)
   );
   registerServer('mail:delete', async (_e, conversationId: string) => {
+    await router().stopConversation(conversationId);
+    await deleteRecordedWork(conversationId);
     const { result, threadIds } = await deleteConversation(conversationId);
     // The hidden persona threads go with the conversation — they are its work
     // product, unreachable from anywhere else. Best-effort: a session file that

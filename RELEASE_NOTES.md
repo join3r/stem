@@ -14,6 +14,14 @@ Maintainer notes:
 
 ## 0.5.2 — Unreleased
 
+### Added
+
+- **See the work behind mail.** Expand **Work** below a mail to follow its personas and coding
+  agents, with actions, progress, timings, and expandable inputs and results. The history updates
+  quietly while work runs and keeps partial results after failure or Stop. Desktop and iOS show
+  the same records. Scheduled notifications include their run history; older mails show what can
+  be recovered, with missing details marked.
+
 ### Fixed
 
 - **Downloads carry only the app.** Every installer so far also packed Stem's own source tree,

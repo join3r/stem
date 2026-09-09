@@ -159,3 +159,15 @@ describe('background transcript refresh', () => {
     expect(store.getThread('t')?.messages).toEqual([old, phone]);
   });
 });
+
+it('keeps an authoritative transcript when an incomplete desktop refresh omits its tail', () => {
+  const before = { ...EMPTY_STATE, hydrated: true, messages: [old, phone] };
+  expect(mergeRefreshedThread({ ...history([old]), complete: false }, before, before).messages).toMatchObject([old, phone]);
+  expect(mergeRefreshedThread({ ...history([old]), complete: true }, before, before).messages).toEqual([old]);
+});
+
+it('does not acknowledge a desktop pending prompt from an offline initial snapshot', () => {
+  const pending = { ...phone, pendingHistory: true };
+  const before = { ...EMPTY_STATE, messages: [pending] };
+  expect(mergeRefreshedThread({ ...history([phone]), offline: true }, before, before).messages[0].pendingHistory).toBe(true);
+});

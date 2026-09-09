@@ -1,0 +1,23 @@
+{
+  "recordedOn": "2026-09-07",
+  "result": {
+    "status": "unverified",
+    "reason": "Temporary profile did not initialize; no native handshake. Isolated probe process stopped while existing Arc remained running."
+  },
+  "launch": {
+    "kind": "arc",
+    "executable": "/Applications/Arc.app/Contents/MacOS/Arc",
+    "args": [
+      "--user-data-dir=/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-browser-arc-NpfkDz/profile",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--load-extension=/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-browser-arc-NpfkDz/extension",
+      "http://127.0.0.1:49785/existing"
+    ],
+    "runDir": "/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-browser-arc-NpfkDz",
+    "extensionPath": "/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-browser-arc-NpfkDz/extension",
+    "nativeHostManifest": "/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-browser-arc-NpfkDz/profile/NativeMessagingHosts/com.stem.browser_probe.json"
+  }
+}

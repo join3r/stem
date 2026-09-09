@@ -153,3 +153,8 @@ describe('settleAgainstSnapshot', () => {
     expect(settleAgainstSnapshot(optimistic, [], 'thread-1', true)).toBe(optimistic);
   });
 });
+
+it('does not replace an acknowledged rollback entry with a late runtime id', () => {
+  const state = { ...EMPTY_STATE, messages: [{ id: 'u', role: 'user' as const, content: 'hello', turnId: 'persisted-entry', runtimeTurnId: 'run' }] };
+  expect(applyStartTurnResult(state, { turnId: 'run' }, 'u').state.messages[0].turnId).toBe('persisted-entry');
+});

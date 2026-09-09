@@ -19,6 +19,7 @@ import type {
 } from '../../src/server/harness/host';
 import { HarnessService, type HarnessServiceDeps } from '../../src/server/harness/service';
 import { readHarnessRuns } from '../../src/server/harness/records';
+import { readHarnessActivities, type HarnessActivity } from '../../src/server/harness/activities';
 import { lookupSession, rememberSession } from '../../src/server/harness/sessions';
 import { harnessRunsPath, harnessSessionsStorePath, protectedRootsPath } from '../../src/server/workspace/paths';
 
@@ -131,6 +132,52 @@ function makeService(
 }
 
 const REQ = { agent: 'claude', prompt: 'add a --version flag', threadId: 'thread-1' };
+
+describe('inner work history', () => {
+  it('makes inner work readable while its long-running coding-agent call is still active', async () => {
+    let release!: (result: HarnessTurnResult) => void;
+    const held = new Promise<HarnessTurnResult>((resolve) => { release = resolve; });
+    const delivered: HarnessActivity[] = [];
+    const host = scriptedHost({ turn: (_input, sink) => {
+      sink.onEvent([{ type: 'tool_call', toolCallId: 'build', title: 'Build', rawInput: 'npm run build' }]);
+      return held;
+    } });
+    const { service } = makeService(host, { onActivity: (row) => delivered.push(row) });
+    const running = service.handleHarnessRequest({ ...REQ, itemId: 'live-outer' });
+    try {
+      await vi.waitFor(() => expect(delivered).toHaveLength(1));
+      expect(delivered[0]).toMatchObject({ title: 'Build', status: 'running' });
+      expect((await readHarnessActivities({ itemId: 'live-outer' }))[0]).toEqual(delivered[0]);
+      expect((await readHarnessRuns())[0].status).toBe('running');
+    } finally {
+      release({ ok: true, stopReason: 'cancelled', text: '' });
+      await running;
+    }
+    expect((await readHarnessActivities({ itemId: 'live-outer' }))[0].status).toBe('cancelled');
+  });
+
+  it('retains streamed work when the host fails, linked to the outer coding-agent call', async () => {
+    const delivered: HarnessActivity[] = [];
+    const host = scriptedHost({ turn: async (_input, sink) => {
+      sink.onEvent([
+        { type: 'tool_call', toolCallId: 'build', title: 'Build', rawInput: { command: 'npm run build' } },
+        { type: 'tool_call', toolCallId: 'build', status: 'completed', rawOutput: 'Build succeeded' },
+        { type: 'text_delta', stream: 'output', text: 'Uploading the build now.' },
+        { type: 'tool_call', toolCallId: 'upload', title: 'Upload' }
+      ]);
+      return { ok: false, error: 'Device disconnected' };
+    } });
+    const { service } = makeService(host, { onActivity: (row) => delivered.push(row) });
+    const result = await service.handleHarnessRequest({ ...REQ, itemId: 'outer-item' });
+    expect(result.ok).toBe(false);
+    const records = await readHarnessActivities({ threadId: REQ.threadId, itemId: 'outer-item' });
+    expect(records).toHaveLength(4);
+    expect(records[0]).toMatchObject({ title: 'Build', status: 'completed', output: 'Build succeeded' });
+    expect(records[2]).toMatchObject({ title: 'Upload', status: 'failed' });
+    expect(delivered).toEqual(records);
+    expect((await readHarnessRuns())[0]).toMatchObject({ itemId: 'outer-item', status: 'failed' });
+  });
+});
 
 describe('gates', () => {
   it('refuses scheduled runs with the explanatory sentence', async () => {

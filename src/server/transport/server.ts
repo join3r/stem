@@ -719,7 +719,8 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
     // Flush the headers and set the client's reconnect backoff in one dispatch;
     // a block with no `data:` field fires no event.
     res.write(`retry: ${SSE_RETRY_MS}\n\n`);
-    if (opts.connectSnapshot) res.write(controlFrame('snapshot', opts.connectSnapshot()));
+    const snapshot = opts.connectSnapshot?.();
+    if (opts.connectSnapshot) res.write(controlFrame('snapshot', snapshot));
     if (resume.kind === 'replay') {
       for (const frame of ring) {
         if (frame.id > resume.after) res.write(frame.text);
@@ -732,6 +733,11 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
       log('transport', 'replay gap too old, asking for a resync', { deviceId: gated.device.id });
       res.write(controlFrame('resync', { head: `${epoch}.${lastPushedId}` }));
     }
+    // The HUD reconciles AFTER replay. Replaying old starts must never revive a
+    // finished turn or chime for an answer that completed while disconnected.
+    if (opts.connectSnapshot) res.write(controlFrame('hudSnapshot', {
+      state: snapshot, deviceId: gated.device.id
+    }));
     const client = { res, deviceId: gated.device.id };
     clients.add(client);
 

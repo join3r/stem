@@ -7,7 +7,7 @@ export function messageToResend(messages: ChatMessage[]): ChatMessage | null {
   for (let i = messages.length - 2; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== 'user') continue;
-    return message.turnId === notice.turnId && message.content.trim() && !message.attachments?.length
+    return (message.turnId === notice.turnId || message.runtimeTurnId === notice.turnId) && message.content.trim() && !message.attachments?.length
       ? message
       : null;
   }

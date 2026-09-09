@@ -1,145 +1,115 @@
-// Starting a conversation from the phone.
-//
-// A composer and nothing else, because the server already knows how to do the
-// rest: `backend:startTurn` without a threadId opens a fresh thread implicitly —
-// the same path the desktop's main window takes — so there is no draft state to
-// migrate and no thread to pre-create. The moment the send lands, this screen is
-// *replaced* (not pushed over) by the real thread, which hydrates and follows
-// the stream like any other; Back from there is the chat list, not a spent
-// compose form.
-//
-// The one answer that does not become a thread to open is `handled` without a
-// threadId — the backend absorbed the input itself (a remembered fact) and there
-// is nothing to navigate to, so its reply is shown right here instead.
-
 import { Stack, useRouter } from 'expo-router';
-import { useCallback, useState, type ReactElement } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { StartTurnResult } from '@shared/types';
+import { SymbolView } from 'expo-symbols';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import type { TurnAttachment, MessageAttachment } from '@shared/types';
+import { draftGeneration } from '../src/drafts/store';
+import { seedSubmittedThread } from '../src/chat/submitted';
+import { useDraft } from '../src/drafts/useDraft';
 import { useChatPersonas } from '../src/hooks/useChatPersonas';
 import { useTransport } from '../src/transport/provider';
-import { useKeyboardInset, useKeyboardVisible } from '../src/ui/keyboard';
+import { DraftComposer } from '../src/ui/DraftComposer';
 import { PersonaChips } from '../src/ui/PersonaChips';
+import { useKeyboardInset } from '../src/ui/keyboard';
 import { useTheme } from '../src/ui/theme';
 
-export default function NewChatScreen(): ReactElement {
+export default function NewChatScreen() {
   const { connection, status } = useTransport();
   const theme = useTheme();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
-  const keyboardUp = useKeyboardVisible();
-
-  const [draft, setDraft] = useState('');
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [handled, setHandled] = useState<string | null>(null);
-  // Who this chat is with. Rides the send as StartTurnInput.personaId, then
-  // travels to the thread screen as a route param so the conversation stays
-  // with the persona it was started with.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const keyboardInset = useKeyboardInset();
   const personas = useChatPersonas();
-  const [personaId, setPersonaId] = useState<string | null>(null);
-
-  // The same three reasons the thread composer refuses, for the same reason
-  // there is no offline queue: a message accepted here would exist nowhere else.
+  const draftStore = useDraft('chat:new');
+  const personaId =
+    typeof draftStore.draft.metadata.personaId === 'string'
+      ? draftStore.draft.metadata.personaId
+      : null;
+  const [handled, setHandled] = useState<{ input: string; reply: string } | null>(null);
   const blocked = !status.paired
-    ? 'This phone is not paired with a server.'
+    ? 'Pair this phone to send messages.'
     : status.unauthorized
       ? 'This phone’s pairing was rejected. Pair it again.'
-      : !status.reachable
-        ? 'Offline — messages can’t be sent from here.'
-        : null;
-
-  const submit = useCallback(async () => {
-    const input = draft.trim();
-    if (!input || sending) return;
-    setSending(true);
-    setError(null);
-    setHandled(null);
-    try {
-      const result: StartTurnResult = await connection.rpc('backend:startTurn', {
+      : null;
+  const submit = useCallback(
+    async (input: string, attachments?: TurnAttachment[]) => {
+      const generation = draftGeneration();
+      const result = await connection.rpc('backend:startTurn', {
         input,
-        ...(personaId ? { personaId } : {})
+        ...(personaId ? { personaId } : {}),
+        ...(attachments?.length ? { attachments } : {})
       });
+      if (generation !== draftGeneration()) return;
+      if (result.canceled) throw new Error('The send was canceled. Your draft is saved.');
       if (result.threadId) {
-        router.replace({
-          pathname: '/thread/[id]',
-          params: { id: result.threadId, ...(personaId ? { persona: personaId } : {}) }
-        });
-        return;
+        const display: MessageAttachment[] | undefined = attachments?.map((attachment) => ({
+          kind: attachment.mime?.startsWith('image/') ? 'image' : 'file',
+          name: attachment.name,
+          mime: attachment.mime
+        }));
+        seedSubmittedThread(result.threadId, input, result.turnId ?? undefined, display);
+        if (mounted.current)
+          router.replace({
+            pathname: '/thread/[id]',
+            params: { id: result.threadId, ...(personaId ? { persona: personaId } : {}) }
+          });
+      } else {
+        if (mounted.current) setHandled({ input, reply: result.assistantMessage ?? 'Done.' });
       }
-      setDraft('');
-      setHandled(result.assistantMessage ?? 'Done — nothing more to show.');
-    } catch (e) {
-      setError(String((e as Error)?.message ?? e));
-    } finally {
-      setSending(false);
-    }
-  }, [connection, draft, personaId, router, sending]);
-
-  const canSend = draft.trim().length > 0 && !sending && !blocked;
-
-  // Measured, not offset-guessed — a sheet's distance from the top of the
-  // screen is exactly what KeyboardAvoidingView's constant can't know. See
-  // src/ui/keyboard.ts.
-  const keyboardInset = useKeyboardInset();
-
+    },
+    [connection, personaId, router]
+  );
   return (
     <View style={[styles.screen, { backgroundColor: theme.bg, paddingBottom: keyboardInset }]}>
       <Stack.Screen options={{ title: 'New chat' }} />
       <View style={styles.body}>
-        <TextInput
-          style={[styles.input, { color: theme.text }]}
-          value={draft}
-          onChangeText={setDraft}
-          placeholder={blocked ?? 'What do you want done?'}
-          placeholderTextColor={theme.dim}
-          editable={!blocked && !sending}
-          autoFocus
-          multiline
-        />
-        {handled ? <Text style={[styles.note, { color: theme.dim }]}>{handled}</Text> : null}
-        {error ? <Text style={[styles.note, { color: theme.bad }]}>{error}</Text> : null}
+        {handled ? (
+          <>
+            <Text style={[styles.prompt, { backgroundColor: theme.accentSoft, color: theme.text }]}>
+              {handled.input}
+            </Text>
+            <Text style={[styles.reply, { color: theme.text }]}>{handled.reply}</Text>
+          </>
+        ) : (
+          <>
+            <View style={[styles.mark, { backgroundColor: theme.accentSoft }]}>
+              <SymbolView name="leaf" size={38} tintColor={theme.accent} />
+            </View>
+            <Text style={[styles.title, { color: theme.text }]}>What’s on your mind?</Text>
+            <Text style={[styles.subtitle, { color: theme.dim }]}>
+              A question, an idea, a task. Start here.
+            </Text>
+          </>
+        )}
       </View>
-      <View
-        style={[
-          styles.footer,
-          { borderColor: theme.line },
-          { paddingBottom: keyboardUp ? 10 : Math.max(insets.bottom, 12) }
-        ]}
-      >
-        {blocked ? <Text style={[styles.blocked, { color: theme.warn }]}>{blocked}</Text> : null}
-        <PersonaChips personas={personas} selected={personaId} onSelect={setPersonaId} theme={theme} />
-        <Pressable
-          onPress={() => void submit()}
-          disabled={!canSend}
-          style={[styles.send, { backgroundColor: canSend ? theme.accent : theme.line }]}
-        >
-          {sending ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={[styles.sendText, !canSend && { color: theme.dim }]}>Send</Text>
-          )}
-        </Pressable>
-      </View>
+      <DraftComposer
+        draftKey="chat:new"
+        onSend={submit}
+        disabledReason={blocked}
+        header={
+          <PersonaChips
+            personas={personas}
+            selected={personaId}
+            onSelect={(value) => draftStore.setMetadata({ personaId: value ?? '' })}
+            theme={theme}
+          />
+        }
+      />
     </View>
   );
 }
-
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  body: { flex: 1, paddingHorizontal: 16, paddingTop: 12, gap: 10 },
-  input: { flex: 1, fontSize: 17, lineHeight: 24, textAlignVertical: 'top' },
-  note: { fontSize: 14, lineHeight: 20, paddingBottom: 8 },
-  footer: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingTop: 8, gap: 6 },
-  blocked: { fontSize: 12, paddingHorizontal: 2 },
-  send: { borderRadius: 18, paddingVertical: 11, alignItems: 'center' },
-  sendText: { fontSize: 15, fontWeight: '600', color: '#ffffff' }
+  body: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, gap: 16 },
+  mark: { width: 78, height: 78, borderRadius: 25, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 27, fontWeight: '600', textAlign: 'center' },
+  subtitle: { fontSize: 16, lineHeight: 24, textAlign: 'center' },
+  prompt: { alignSelf: 'flex-end', padding: 14, borderRadius: 18, fontSize: 16 },
+  reply: { alignSelf: 'stretch', fontSize: 16, lineHeight: 24 }
 });

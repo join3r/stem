@@ -922,6 +922,29 @@ describe('scheduled-run model restore', () => {
     return { runtime, internal, worker, requests, workspace };
   }
 
+  it('stamps interactive device origin and excludes mail and scheduled turns on starts and endings', async () => {
+    for (const kind of ['interactive', 'mail', 'background'] as const) {
+      const { runtime, worker } = await scheduledRuntime();
+      await runtime.startTurn({
+        input: 'hello', threadId: 'sched-1', originDeviceId: 'mac',
+        ...(kind === 'mail' ? { mail: { conversationId: 'conv', subject: 'test', from: 'user', participants: ['normal'] } } : {}),
+        ...(kind === 'background' ? { scheduled: { at: new Date().toISOString(), taskId: 'task' } } : {})
+      });
+      const expected = kind === 'interactive' ? { kind, deviceId: 'mac' } : { kind };
+      expect(worker.currentTurn?.origin).toEqual(expected);
+      const events: Array<{ method: string; params: unknown }> = [];
+      runtime.on('event', event => events.push(event));
+      const internal = runtime as unknown as {
+        announceSkills(turn: ReturnType<typeof newTurnContext>, skills: { slug: string; name: string }[]): void;
+        onPiEvent(worker: FakeWorker, event: Record<string, unknown>): void;
+      };
+      internal.announceSkills(worker.currentTurn!, [{ slug: 'test', name: 'Test' }]);
+      internal.onPiEvent(worker, { type: 'agent_end' });
+      expect(events.find(e => e.method === 'item/started')?.params).toMatchObject({ origin: expected });
+      expect(events.find(e => e.method === 'turn/completed')?.params).toMatchObject({ origin: expected, turn: { id: expect.any(String) } });
+    }
+  });
+
   it('resolves the last explicitly chosen model/effort, ignoring assistant-message models', async () => {
     const { internal } = await scheduledRuntime();
     await expect(internal.threadTurnSettings('sched-1')).resolves.toMatchObject({
@@ -1436,3 +1459,28 @@ describe('fact pilot history at prompt preparation', () => {
 // with the retrieval takeover: skill bodies are inlined into the turn now, so no
 // tool ever reads a SKILL.md and there is no path to attribute. Usage is the
 // injected-then-graded loop instead — see tests/unit/skills-grade.test.ts.
+
+describe('durable mobile turn identity', () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  it('reads identity without exposing the marker and aggregates retry/tool replies', async () => {
+    const { runtime, sessions } = await tempRuntime();
+    const lines = [
+      { type: 'session', id: 'identity-session', timestamp: '2026-09-06T10:00:00.000Z', cwd: '/tmp' },
+      { type: 'message', id: 'u', message: { role: 'user', content: `<!--stem:context-->\n<!--stem:turn id="${id}"-->\n<!--/stem:context-->\n\nQuestion` } },
+      { type: 'message', id: 'a1', message: { role: 'assistant', content: [{ type: 'text', text: 'Checking' }], stopReason: 'toolUse' } },
+      { type: 'message', id: 'a2', message: { role: 'assistant', content: [{ type: 'text', text: 'Broken partial' }], stopReason: 'error' } },
+      { type: 'message', id: 'a3', message: { role: 'assistant', content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' } }
+    ];
+    await writeFile(join(sessions, 'identity.jsonl'), lines.map((line) => JSON.stringify(line)).join('\n'));
+    const result = await runtime.readThread('identity-session');
+    expect(result.complete).toBe(true);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]).toMatchObject({ content: 'Question', runtimeTurnId: id, turnId: 'u' });
+    expect(result.messages[1]).toMatchObject({ id: `assistant-${id}`, content: 'Checking\n\nDone', runtimeTurnId: id, turnId: 'u' });
+  });
+  it('labels a torn transcript incomplete', async () => {
+    const { runtime, sessions } = await tempRuntime();
+    await writeFile(join(sessions, 'torn.jsonl'), JSON.stringify({ type: 'session', id: 'torn-session', timestamp: '2026-09-06T10:00:00.000Z', cwd: '/tmp' }) + '\n{"type":');
+    expect((await runtime.readThread('torn-session')).complete).toBe(false);
+  });
+});

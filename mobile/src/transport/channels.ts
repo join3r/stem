@@ -21,8 +21,19 @@
 import type { StemApi } from '@shared/types';
 
 export interface ChannelSignatures {
+  'mail:list': StemApi['listMail'];
+  'mail:work': StemApi['getMailWork'];
+  'mail:compose': StemApi['composeMail'];
+  'mail:reply': StemApi['replyMail'];
+  'mail:addParticipant': StemApi['addMailParticipant'];
+  'mail:stop': StemApi['stopMail'];
+  'mail:setRead': StemApi['setMailRead'];
+  'mail:setArchived': StemApi['setMailArchived'];
+  'mail:snooze': StemApi['snoozeMail'];
+  'mail:delete': StemApi['deleteMailConversation'];
   /** All chats, their folders, and the Inbox state that goes with them. */
   'chats:list': StemApi['listChats'];
+  'chats:delete': StemApi['deleteChat'];
   /** One thread's transcript. */
   'chats:open': StemApi['openChat'];
   /**

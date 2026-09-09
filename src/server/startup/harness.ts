@@ -6,6 +6,7 @@ import { DeviceHarnessHost, harnessDeviceRouter } from '../harness/device-host';
 import { LocalHarnessHost } from '../harness/local-host';
 import type { HarnessHost } from '../harness/host';
 import type { HarnessProgressUpdate } from '../harness/service';
+import type { HarnessActivity } from '../harness/activities';
 import { readSettings } from '../workspace/settings';
 import type { ChatBackend } from '../backend';
 import type { HarnessApprovalArmed, HarnessApprovalRequest } from '../../shared/types';
@@ -24,6 +25,7 @@ export function initHarness(deps: {
   emitApprovalResolved: (id: string) => void;
   emitApprovalArmed: (armed: HarnessApprovalArmed) => void;
   onProgress?: (update: HarnessProgressUpdate) => void;
+  onActivity?: (activity: HarnessActivity) => void;
 }): { service: HarnessService; close: () => Promise<void> } {
   let localHost: LocalHarnessHost | null = null;
   let overrides: Record<string, string> = {};
@@ -82,7 +84,8 @@ export function initHarness(deps: {
     emitApprovalRequest: deps.emitApprovalRequest,
     emitApprovalResolved: deps.emitApprovalResolved,
     emitApprovalArmed: deps.emitApprovalArmed,
-    onProgress
+    onProgress,
+    onActivity: deps.onActivity
   });
   deps.runtime.setHarnessBridge(service);
   return {

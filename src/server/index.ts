@@ -1,3 +1,5 @@
+import { eventTurnId } from '../shared/settledTurns';
+import { onMailWorkChanged, recordInnerWork } from './mail/work';
 import { join } from 'node:path';
 import dns from 'node:dns';
 import net from 'node:net';
@@ -44,7 +46,8 @@ import {
 } from './startup/transport';
 import { setActivityEmitter } from './activity';
 import { foldTurnEvent, liveTurnCount, noteTurnStart } from './live-turns';
-import { pushApprovalRequest, pushTurnFinished, type ApprovalPushKind } from './push';
+import { pushApprovalRequest, pushMailReceived, pushTurnFinished, type ApprovalPushKind } from './push';
+import { onMailChanged, onMailReceived } from './workspace/mail';
 import { closeApns } from './push/apns';
 import { closeDeviceMcpRouter } from './mcp-device/router';
 import { closeExecDeviceRouter, resolveHarnessTarget } from './exec-device/router';
@@ -372,6 +375,9 @@ function registerIpc(): void {
   // persona list (the composer's To: field included) stays current.
   onPersonasChanged(() => emit('personas:changed', undefined));
   registerMailIpc({ router: () => mailRouter, runtime: () => runtime! });
+  onMailChanged(() => emit('mail:changed', undefined));
+  onMailWorkChanged((event) => emit('mail:workChanged', event));
+  onMailReceived(pushMailReceived);
   registerDevicesIpc();
   registerHarnessIpc({
     // A device announcing it runs coding agents is the wake-up the mail
@@ -436,7 +442,8 @@ function registerIpc(): void {
       // turn. Only the mail router (which calls the runtime directly) sets
       // these — a client asks by id, resolved and gated above.
       persona: personaFields?.persona,
-      mail: undefined
+      mail: undefined,
+      originDeviceId: e?.deviceId
     });
     // Start the turn's clock the moment there is a turn. Waiting for its first
     // event (which is where the fold otherwise learns of it) means a turn that
@@ -449,7 +456,7 @@ function registerIpc(): void {
     // ignores them: their events never reach the fold, so a mark made here would
     // have nothing to clear it.
     if (started.threadId && started.turnId && !runtime!.isInternalThread(started.threadId)) {
-      noteTurnStart(started.threadId, started.turnId);
+      noteTurnStart(started.threadId, started.turnId, input.scheduled ? { kind: 'background' } : { kind: 'interactive', deviceId: e?.deviceId });
     }
     return started;
   });
@@ -495,8 +502,8 @@ function registerIpc(): void {
     // the first send its latency and nothing else — the read below is a local
     // file read and does not go near the backend.
     void runtime!.resumeThread(threadId).catch(() => {});
-    const { title, messages } = await runtime!.readThread(threadId);
-    return { threadId, title, messages };
+    const history = await runtime!.readThread(threadId);
+    return { threadId, ...history };
   });
 
   // The same transcript, without the pre-warm — a pure read, which is what a
@@ -506,8 +513,8 @@ function registerIpc(): void {
   // is actually doing. Nothing about the reader is the server's business; this
   // is just "read a thread and change nothing".
   registerServer('chats:history', async (_e, threadId: string) => {
-    const { title, messages } = await runtime!.readThread(threadId);
-    return { threadId, title, messages };
+    const history = await runtime!.readThread(threadId);
+    return { threadId, ...history };
   });
 
   // ---- settings ----
@@ -875,7 +882,13 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     // call. Missing a frame is harmless — the final state rides the tool result.
     onProgress: (update) => {
       emit('harness:progress', update);
-    }
+    },
+    onActivity: (a) => recordInnerWork(a.threadId, {
+      id: `harness:${a.runId}:${a.id}`, kind: a.kind === 'tool' ? 'tool' : 'progress',
+      label: a.title, at: Date.parse(a.startedAt), ...(a.status !== 'running' ? { endedAt: Date.parse(a.updatedAt) } : {}),
+      status: a.status === 'running' ? 'running' : a.status === 'completed' ? 'ok' : 'error',
+      input: a.input, output: a.output, parentId: a.itemId
+    })
   });
 
   // Scratch housekeeping: each chat's run_command folder is removed when the chat
@@ -1018,7 +1031,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     const { ranForMs } = foldTurnEvent(
       event.method,
       threadId,
-      (event.params as { turnId?: string } | undefined)?.turnId
+      eventTurnId(event.params),
+      (event.params as { origin?: import('../shared/types').TurnOrigin } | undefined)?.origin
     );
     // Out to every client, which filters by threadId itself exactly as the main
     // window always did — the server does not track which thread anyone has open.

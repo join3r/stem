@@ -283,7 +283,7 @@ export function QuickChat() {
             updateChatState((s) => ({
               ...s,
               activeTurnId: alreadySettled ? null : result.turnId ?? null,
-              messages: s.messages.map((m) => (m.id === userMsgId ? { ...m, turnId: result.turnId } : m))
+              messages: s.messages.map((m) => (m.id === userMsgId ? { ...m, turnId: m.turnId ?? result.turnId, runtimeTurnId: result.turnId } : m))
             }));
           }
           if (alreadySettled) core.pendingSends.delete(QC_KEY);

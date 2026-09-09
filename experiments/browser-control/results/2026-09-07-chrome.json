@@ -1,0 +1,49 @@
+{
+  "recordedOn": "2026-09-07",
+  "result": {
+    "transport": "browser-created native messaging pipes",
+    "checks": [
+      "Native Messaging handshake and tab enumeration",
+      "Native peer cannot grant itself access",
+      "Internal and script URLs are rejected",
+      "Open a background tab and inspect its existing session",
+      "Fill a form and click a fixture control",
+      "Capture a PNG through extension CDP",
+      "Select and submit a fictional file, verifying the server received its content",
+      "CDP text input produces trusted events, so isTrusted alone cannot identify human takeover",
+      "Download a fixture into the isolated download folder",
+      "Reject a direct cross-origin navigation",
+      "Same-origin child frames allow whole-tab screenshots",
+      "Cross-origin child content is excluded from top-page text and screenshots",
+      "Cross-origin redirects revoke a tab grant",
+      "Stop revokes opened-tab access"
+    ],
+    "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+    "extensionId": "hblnhmminghfnhnmkjfbklkhbjbloecm",
+    "screenshotBytes": 31010,
+    "status": "passed"
+  },
+  "launch": {
+    "kind": "chrome",
+    "executable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "args": [
+      "--user-data-dir=/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-browser-chrome-AYrbmK/profile",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "http://127.0.0.1:50422/existing",
+      "chrome://extensions/"
+    ],
+    "runDir": "/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-browser-chrome-AYrbmK",
+    "extensionPath": "/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-browser-chrome-AYrbmK/extension",
+    "nativeHostManifest": "/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-browser-chrome-AYrbmK/profile/NativeMessagingHosts/com.stem.browser_probe.json"
+  },
+  "sourceSha256": {
+    "extension/background.mjs": "0862cd0a8ca06e3144ec0a717bf5b36c7c84421e5011e5a9fe60683f029a8272",
+    "extension/policy.mjs": "817dae09f6c1dbbd5d12e6050c98bc4bdf3a8a426bf790bfcd4c7e86b9c8f76e",
+    "native-host.mjs": "fa914a36e6d5072d04f19a4f2fc3465d8bdab8fcd03be128da5b7946e8708049",
+    "policy.test.mjs": "53a893c97ad574545ac9a1bbf6e39619301c559c5804693556656025baddbced",
+    "run.mjs": "900f210110a2a55470116d9e7c6ee457921c1d7c59c44cbb9883b7e11de75d8a"
+  }
+}

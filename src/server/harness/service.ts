@@ -21,6 +21,7 @@ import { resolveHarnessTarget } from '../exec-device/router';
 import { clientFoldersForDevice } from '../workspace/connected-folders';
 import { previewFacts } from '../recall/inject';
 import { activityDetail, formatRunResult, newTurnSummary, noteEvent } from './format';
+import { HarnessActivityRecorder, pruneHarnessActivities, type HarnessActivity } from './activities';
 import type {
   HarnessHost,
   HarnessPermissionAsk,
@@ -69,6 +70,8 @@ export interface HarnessServiceDeps {
   emitApprovalArmed?: (armed: HarnessApprovalArmed) => void;
   /** Live-row sink (broadcast + activity); absent in tests that don't care. */
   onProgress?: (update: HarnessProgressUpdate) => void;
+  /** Persisted inner actions and output text, as stable row upserts (never thoughts). */
+  onActivity?: (activity: HarnessActivity) => void;
   /** Test seams. */
   resolveDevice?: typeof resolveHarnessTarget;
   facts?: (text: string) => Promise<{ facts: Array<{ text: string }> }>;
@@ -237,10 +240,14 @@ export class HarnessService implements HarnessBridge {
       agent,
       cwd,
       sessionId,
+      ...(req.itemId ? { itemId: req.itemId } : {}),
       startedAt: new Date().toISOString(),
       status: 'running',
       ...(hostKey !== 'server' ? { device: host.label() } : {})
     });
+    await pruneHarnessActivities();
+    const activities = new HarnessActivityRecorder({ threadId: req.threadId, runId, agent,
+      ...(req.itemId ? { itemId: req.itemId } : {}) }, this.deps.onActivity);
 
     const summary = newTurnSummary();
     let lastProgressAt = 0;
@@ -270,43 +277,47 @@ export class HarnessService implements HarnessBridge {
       }
     };
 
-    const handle = host.runTurn(
-      {
-        turnId: runId,
-        agent,
-        cwd,
-        sessionId,
-        ...(model ? { model } : {}),
-        prompt: await this.promptWithFacts(prompt)
-      },
-      {
-        onEvent: (events) => {
-          for (const event of events) noteEvent(summary, event);
-          noteProgress();
-        },
-        onPermission: (ask) =>
-          this.askPermission(
-            {
-              threadId: req.threadId,
-              agent,
-              hostLabel: host.label(),
-              cwd,
-              // The pre-facts brief: what the agent was asked to do, which is
-              // what its commands should serve.
-              intent: prompt,
-              ...(hostKey !== 'server' ? { deviceId: hostKey } : {}),
-              ...(host.platform?.() ? { platform: host.platform() } : {})
-            },
-            ask
-          )
-      }
-    );
-    const running: RunningTurn = { threadId: req.threadId, handle };
-    this.running.set(runId, running);
-
     try {
+      const handle = host.runTurn(
+        {
+          turnId: runId,
+          agent,
+          cwd,
+          sessionId,
+          ...(model ? { model } : {}),
+          prompt: await this.promptWithFacts(prompt)
+        },
+        {
+          onEvent: (events) => {
+            for (const event of events) {
+              noteEvent(summary, event);
+              activities.note(event);
+            }
+            noteProgress();
+          },
+          onPermission: (ask) =>
+            this.askPermission(
+              {
+                threadId: req.threadId,
+                agent,
+                hostLabel: host.label(),
+                cwd,
+                // The pre-facts brief: what the agent was asked to do, which is
+                // what its commands should serve.
+                intent: prompt,
+                ...(hostKey !== 'server' ? { deviceId: hostKey } : {}),
+                ...(host.platform?.() ? { platform: host.platform() } : {})
+              },
+              ask
+            )
+        }
+      );
+      const running: RunningTurn = { threadId: req.threadId, handle };
+      this.running.set(runId, running);
+
       const result = await handle.result;
       const status: HarnessRunStatus = !result.ok ? 'failed' : result.stopReason === 'cancelled' ? 'cancelled' : 'ok';
+      await activities.finish(status, !result.ok ? result.error : running.cancelReason);
       await settleRun(runId, {
         status,
         ...(summary.costUsd !== undefined ? { costUsd: summary.costUsd } : {}),
@@ -322,6 +333,12 @@ export class HarnessService implements HarnessBridge {
         ...(status === 'cancelled' && running.cancelReason ? { cancelReason: running.cancelReason } : {})
       });
       return status === 'failed' ? { ok: false, error: text } : { ok: true, text };
+    } catch (error) {
+      // quiet: the failed tool result below reports the error; Work retains its partial activity.
+      const message = error instanceof Error ? error.message : String(error);
+      await activities.finish('failed', message);
+      await settleRun(runId, { status: 'failed', error: message });
+      return { ok: false, error: formatRunResult({ agent, summary, status: 'failed', hostLabel: host.label(), error: message }) };
     } finally {
       this.running.delete(runId);
       if (progressTimer) clearTimeout(progressTimer);

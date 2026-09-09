@@ -1,3 +1,4 @@
+import { parseWorkHistory, type HistoricalWorkRun } from '../mail/work-history';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { access, copyFile, mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
@@ -200,13 +201,12 @@ const MAIL_STRIP_RE = /^<!--stem:mail from=([^>]*)-->[\s\S]*?<!--\/stem:mail-->\
 const TOOL_PATH_KEYS = ['path', 'file_path', 'filename'] as const;
 
 /**
- * Stamp `mail: true` onto a mail turn's normalized events. Clients need it to
- * tell a hidden persona delivery from the user's own turn — the desktop's
- * follow-me HUD pill must not announce "Answer ready" for background mail work.
+ * Stamp the turn origin on normalized events, including terminal events.
+ * Keep the existing mail marker for consumers of the older event shape.
  */
-function tagMailEvent(params: unknown, turn: { isMail?: boolean }): unknown {
-  if (!turn.isMail || typeof params !== 'object' || params === null) return params;
-  return { ...params, mail: true };
+function tagTurnEvent(params: unknown, turn: Pick<TurnContext, 'isMail' | 'origin'>): unknown {
+  if (typeof params !== 'object' || params === null) return params;
+  return { ...params, ...(turn.isMail ? { mail: true } : {}), ...(turn.origin ? { origin: turn.origin } : {}) };
 }
 
 
@@ -1177,6 +1177,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // can mail the user about it).
       turn.isScheduled = !!input.scheduled || !!input.mail;
       turn.isMail = !!input.mail;
+      turn.origin = input.mail ? { kind: 'mail' } : input.scheduled
+        ? { kind: 'background' }
+        : { kind: 'interactive', ...(input.originDeviceId ? { deviceId: input.originDeviceId } : {}) };
       // Private chat / mail conversation: the taint keeps every Recall capture
       // path shut from the first byte (the held-back user message included);
       // isPrivate is what buildMessage and the tool gate read.
@@ -1785,7 +1788,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }));
   }
 
-  async readThread(threadId: string): Promise<{ title: string; messages: ChatMessage[] }> {
+  async readWorkHistory(threadId: string): Promise<HistoricalWorkRun[]> {
+    const file = await this.resolveSessionFile(threadId);
+    if (!file) return [];
+    return parseWorkHistory(await readFile(file, 'utf8'), threadId, (content) => this.contentToParts(content).text);
+  }
+
+  async readThread(threadId: string): Promise<{ title: string; messages: ChatMessage[]; complete?: boolean }> {
     const file = await this.resolveSessionFile(threadId);
     if (!file) {
       // No persisted file yet (a freshly forked/created session writes lazily on
@@ -1793,7 +1802,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // worker's in-memory state.
       const live = this.workers.find((w) => w.proc?.running && w.activeThreadId === threadId);
       if (live) return this.readActiveMessages(live);
-      return { title: 'New chat', messages: [] };
+      return { title: 'New chat', messages: [], complete: true };
     }
     let text: string;
     try {
@@ -1801,12 +1810,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     } catch (e) {
       // An unreadable session file renders exactly like a chat nobody has said
       // anything in yet, so the user reads their missing history as an empty one.
-      degrade('pi.thread', 'showed the chat as empty', e);
-      return { title: 'New chat', messages: [] };
+      throw new Error('Could not read this chat. Please try again.', { cause: e });
     }
     let title = 'New chat';
     const messages: ChatMessage[] = [];
     let lastUserId = '';
+    let runtimeTurnId: string | undefined;
+    let committedText = '';
+    let aggregateIndex = -1;
     let pendingFailure: ChatMessage | undefined;
     // Persisted answer-time breakdowns + tool activity, keyed by the final
     // assistant entry id.
@@ -1899,6 +1910,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         if (pendingFailure) messages.push(pendingFailure);
         pendingFailure = undefined;
         lastUserId = entry.id ?? lastUserId;
+        runtimeTurnId = this.runtimeIdentity(entry.message.content);
+        committedText = '';
+        aggregateIndex = -1;
         pendingActivity = [];
         if (content.trim() || images.length)
           messages.push({
@@ -1906,6 +1920,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             role: 'user',
             content,
             turnId: entry.id,
+            ...(runtimeTurnId ? { runtimeTurnId } : {}),
             ...(entry.timestamp ? { createdAt: entry.timestamp } : {}),
             ...(images.length ? { attachments: images } : {}),
             ...(scheduled ? { scheduled } : {})
@@ -1948,17 +1963,29 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                   ...(sys ? { sys } : {})
                 }
               : undefined;
-          messages.push({
-            id: `assistant-${entry.id}`,
+          const answer: ChatMessage = {
+            id: `assistant-${runtimeTurnId ?? entry.id}`,
             role: 'assistant',
             content,
             turnId: lastUserId || entry.id,
+            ...(runtimeTurnId ? { runtimeTurnId } : {}),
             ...(meta ? { meta } : {}),
             ...(timing ? { timing } : {}),
             ...(usage ? { usage } : {}),
             ...(activity ? { activity } : {}),
             ...(sources ? { sources } : {})
-          });
+          };
+          if (runtimeTurnId) {
+            answer.content = committedText ? `${committedText}\n\n${content}` : content;
+            if (entry.message.stopReason !== 'error' && entry.message.stopReason !== 'aborted') committedText = answer.content;
+            if (aggregateIndex < 0) {
+              aggregateIndex = messages.length;
+              messages.push(answer);
+            } else {
+              const previous = messages[aggregateIndex];
+              messages[aggregateIndex] = { ...previous, ...answer, activity: answer.activity ?? previous.activity, sources: answer.sources ?? previous.sources };
+            }
+          } else messages.push(answer);
         }
         // A provider error can be retried within the same user turn. Only
         // expose its last outcome; a later clean assistant message recovers it.
@@ -1985,7 +2012,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (unparsed > 0) {
       degrade('pi.thread', `dropped ${unparsed} unreadable lines from the transcript`, unparsedError);
     }
-    return { title, messages };
+    return { title, messages, complete: unparsed === 0 };
   }
 
   async resumeThread(threadId: string): Promise<void> {
@@ -2837,7 +2864,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const id = `skill-${turn.turnId}-${skill.slug}`;
       if (turn.activity.some((a) => a.id === id)) continue;
       turn.activity.push({ id, kind: 'skill', type: 'skill', name: skill.name, status: 'ok' });
-      const params = { threadId: turn.threadId, turnId: turn.turnId };
+      const params = { threadId: turn.threadId, turnId: turn.turnId, origin: turn.origin, ...(turn.isMail ? { mail: true } : {}) };
       this.emitEvent('item/started', { item: { type: 'skill', id, name: skill.name }, ...params });
       this.emitEvent('item/completed', { item: { type: 'skill', id, status: 'ok' }, ...params });
     }
@@ -2988,6 +3015,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // an exit of the worker's CURRENT process is unexpected and feeds the breaker.
       const unexpected = worker.proc === proc;
       const deadThread = worker.currentTurn?.threadId ?? null;
+      const deadTurnId = worker.currentTurn?.turnId;
       worker.proc = null;
       worker.activeThreadId = null;
       worker.currentTurn = null;
@@ -3003,7 +3031,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // it; before the pool, a bare process/exit meant "everything died", and an
       // idle worker's retirement was failing every in-flight mail delivery and
       // scheduled run on the other workers.
-      this.emitEvent('process/exit', { ...info, threadId: deadThread });
+      this.emitEvent('process/exit', { ...info, threadId: deadThread, turnId: deadTurnId });
       const uptimeMs = Date.now() - spawnedAt;
       log('pi', unexpected ? 'backend exited unexpectedly' : 'backend stopped', {
         ...info,
@@ -3115,7 +3143,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const leftover = worker.currentTurn;
       if (leftover) {
         const { events } = normalizePiEvent({ type: 'agent_end' }, leftover);
-        for (const e of events) this.emitEvent(e.method, tagMailEvent(e.params, leftover));
+        for (const e of events) this.emitEvent(e.method, tagTurnEvent(e.params, leftover));
         this.settleTurn(worker, leftover, Date.now());
       }
       this.releaseForeground(worker);
@@ -3161,7 +3189,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
       this.advancePhase(turn, events, now);
     }
-    for (const e of events) this.emitEvent(e.method, tagMailEvent(e.params, turn));
+    for (const e of events) this.emitEvent(e.method, tagTurnEvent(e.params, turn));
     if (done) this.settleTurn(worker, turn, now);
   }
 
@@ -3940,6 +3968,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
     // Fence the injected context so replay can strip it (see CONTEXT_* above): the
     // model still sees it inline, but the stored user bubble renders only userText.
+    if (turnId) blocks.unshift(`<!--stem:turn id="${turnId}"-->`);
     const body = blocks.length
       ? `${CONTEXT_OPEN}\n${blocks.join('\n\n')}\n\n---\n${CONTEXT_CLOSE}\n\n${userText}`
       : userText;
@@ -4099,23 +4128,30 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   }
 
   /** Read a worker's live session messages (for active sessions without a file yet). */
-  private async readActiveMessages(worker: PiWorker): Promise<{ title: string; messages: ChatMessage[] }> {
+  private async readActiveMessages(worker: PiWorker): Promise<{ title: string; messages: ChatMessage[]; complete?: boolean }> {
     const res = await worker.proc!.request({ type: 'get_messages' });
     const raw =
       (res.data as { messages?: { role?: string; content?: unknown; provider?: string; model?: string; stopReason?: string; errorMessage?: string }[] } | undefined)
         ?.messages ?? [];
     const messages: ChatMessage[] = [];
     let pendingFailure: ChatMessage | undefined;
+    let runtimeTurnId: string | undefined;
+    let committedText = '';
+    let aggregateIndex = -1;
     for (const m of raw) {
       const { text: content, images, scheduled } = this.contentToParts(m.content);
       if (m.role === 'user' && !content.trim() && !images.length) continue;
       if (m.role === 'user') {
         if (pendingFailure) messages.push(pendingFailure);
         pendingFailure = undefined;
+        runtimeTurnId = this.runtimeIdentity(m.content);
+        committedText = '';
+        aggregateIndex = -1;
         messages.push({
           id: `user-${messages.length}`,
           role: 'user',
           content,
+          ...(runtimeTurnId ? { runtimeTurnId } : {}),
           ...(images.length ? { attachments: images } : {}),
           ...(scheduled ? { scheduled } : {})
         });
@@ -4129,12 +4165,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             ? { ...(model ? { model } : {}), ...(worker.currentThinking ? { effort: worker.currentThinking } : {}) }
             : undefined;
         if (content.trim()) {
-          messages.push({
-            id: `assistant-${messages.length}`,
+          const answer: ChatMessage = {
+            id: `assistant-${runtimeTurnId ?? messages.length}`,
             role: 'assistant',
             content,
-            ...(meta ? { meta } : {})
-          });
+            ...(meta ? { meta } : {}),
+            ...(runtimeTurnId ? { runtimeTurnId } : {})
+          };
+          if (runtimeTurnId) {
+            answer.content = committedText ? `${committedText}\n\n${content}` : content;
+            if (m.stopReason !== 'error' && m.stopReason !== 'aborted') committedText = answer.content;
+            if (aggregateIndex < 0) { aggregateIndex = messages.length; messages.push(answer); }
+            else messages[aggregateIndex] = answer;
+          } else messages.push(answer);
         }
         pendingFailure = m.stopReason === 'error'
           ? { id: `system-${messages.length}`, role: 'system', content: turnFailureMessage(m.errorMessage) }
@@ -4147,7 +4190,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (pendingFailure) messages.push(pendingFailure);
     const state = await worker.proc!.request({ type: 'get_state' });
     const title = ((state.data as { sessionName?: string } | undefined)?.sessionName || 'New chat').trim() || 'New chat';
-    return { title, messages };
+    return { title, messages, complete: false };
   }
 
   /** Parse a JSONL session line's entry id (null if not a tree entry). */
@@ -4167,6 +4210,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * stores images as `{type:'image', data, mimeType}` blocks alongside text blocks, so
    * replay rebuilds thumbnails straight from the session JSONL.
    */
+  private runtimeIdentity(content: unknown): string | undefined {
+    const raw = typeof content === 'string' ? content : Array.isArray(content)
+      ? content.filter((part) => part?.type === 'text').map((part) => part.text ?? '').join('') : '';
+    const body = raw.replace(SCHED_STRIP_RE, '').replace(MAIL_STRIP_RE, '');
+    const match = body.match(/^<!--stem:context-->\n<!--stem:turn id="([0-9a-f-]+)"-->/i);
+    return match && CLIENT_TURN_ID.test(match[1]) ? match[1] : undefined;
+  }
+
   private contentToParts(content: unknown): {
     text: string;
     images: MessageAttachment[];

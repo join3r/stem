@@ -630,3 +630,11 @@ describe('background-thread hydration regression', () => {
     expect(mergeQuickChatHandoff({ ...EMPTY_STATE }, payload).hydrated).toBe(true);
   });
 });
+
+it('merges a desktop draft with its already hydrated runtime identity', () => {
+  const draft: ThreadState = { ...EMPTY_STATE, messages: [{ id: 'optimistic', role: 'user', content: 'Hello', runtimeTurnId: 'run' }] };
+  const saved: ThreadState = { ...EMPTY_STATE, messages: [{ id: 'user-entry', role: 'user', content: 'Hello', runtimeTurnId: 'run', turnId: 'entry' }, { id: 'assistant-run', role: 'assistant', content: 'Hi', runtimeTurnId: 'run', turnId: 'entry' }] };
+  const result = mergeDraftIntoReal(draft, saved);
+  expect(result.messages).toHaveLength(2);
+  expect(result.messages[0].turnId).toBe('entry');
+});

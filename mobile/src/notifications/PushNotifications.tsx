@@ -61,7 +61,9 @@ export function PushNotifications(): null {
 
   const go = useCallback(
     (route: NotificationRoute) => {
-      if (route.screen === 'thread') {
+      if (route.screen === 'mail') {
+        router.push({ pathname: '/mail/[id]', params: { id: route.conversationId } });
+      } else if (route.screen === 'thread') {
         router.push({ pathname: '/thread/[id]', params: { id: route.threadId } });
       } else {
         router.navigate('/');

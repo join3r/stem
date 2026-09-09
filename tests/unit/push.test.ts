@@ -33,6 +33,7 @@ import {
   MIN_TURN_PUSH_MS,
   pushApprovalRequest,
   pushTaskAlert,
+  pushMailReceived,
   pushTurnFinished,
   wakeUpPayload
 } from '../../src/server/push';
@@ -322,11 +323,12 @@ describe('what a push is allowed to say', () => {
   it('puts nothing but ids, a kind and a flag in the routing block', () => {
     // The keys are the deep-link contract with the app, and the list is closed:
     // anything else added here is content until proven otherwise.
-    const allowed = new Set(['kind', 'approvalKind', 'threadId', 'approvalId', 'taskId', 'failed']);
+    const allowed = new Set(['kind', 'approvalKind', 'threadId', 'approvalId', 'taskId', 'conversationId', 'failed']);
     const payloads = [
       wakeUpPayload({ kind: 'approval', approvalKind: 'skill', approvalId: '3', threadId: 't' }, 'A title'),
       wakeUpPayload({ kind: 'turn', threadId: 't', failed: true }, 'A title'),
-      wakeUpPayload({ kind: 'task', threadId: 't', taskId: 'k' }, 'A title')
+      wakeUpPayload({ kind: 'task', threadId: 't', taskId: 'k' }, 'A title'),
+      wakeUpPayload({ kind: 'mail', conversationId: 'mail-1' })
     ] as { stem: Record<string, unknown> }[];
     for (const payload of payloads) {
       for (const key of Object.keys(payload.stem)) expect(allowed).toContain(key);
@@ -697,5 +699,30 @@ describe('task notifications', () => {
 
     expect(await quiet()).toBe(0);
     scheduler.stop();
+  });
+});
+
+
+describe('mail delivery notifications', () => {
+  it('wakes only for new user-addressed mail, without forwarding the body', async () => {
+    apnsEnv(); await pairedPhone();
+    pushMailReceived({ conversationId: 'm', from: 'user', to: ['normal'] });
+    pushMailReceived({ conversationId: 'm', from: 'normal', to: ['code'] });
+    pushMailReceived({ conversationId: 'm', from: 'normal', to: ['user'], taskId: 'task' });
+    expect(await quiet()).toBe(0);
+    pushMailReceived({ conversationId: 'm', from: 'normal', to: ['user'] });
+    await waitForSends(1);
+    expect(JSON.parse(sent[0].body).stem).toEqual({ kind: 'mail', conversationId: 'm' });
+  });
+  it('uses the same desktop presence suppression as other notifications', async () => {
+    apnsEnv(); const id = await pairedPhone(); reportPresence(id);
+    pushMailReceived({ conversationId: 'm', from: 'normal', to: ['user'] });
+    expect(await quiet()).toBe(0);
+  });
+  it('routes a task mail alert to its conversation', async () => {
+    apnsEnv(); await pairedPhone();
+    pushTaskAlert({ threadId: 'hidden', conversationId: 'm', taskId: 'task' });
+    await waitForSends(1);
+    expect(JSON.parse(sent[0].body).stem).toEqual({ kind: 'mail', conversationId: 'm', taskId: 'task' });
   });
 });

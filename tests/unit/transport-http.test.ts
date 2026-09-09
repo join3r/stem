@@ -838,10 +838,10 @@ describe('resuming a dropped stream', () => {
   it('opens every stream with a live-turn snapshot before anything that happened', async () => {
     liveTurns = [{ threadId: 't-live', turnId: 'turn-9' }];
     const stream = await fetch(`${origin}/events`, { headers: bearer });
-    const blocks = collectBlocks(stream, 2);
+    const blocks = collectBlocks(stream, 3);
     pushRange(1, 1);
 
-    const [first, second] = await blocks;
+    const [first, hud, second] = await blocks;
     // First, so that the frames behind it can carry the client forward through
     // the same history it missed. The other order would let a snapshot re-mark as
     // running a turn whose terminal frame the client has just been handed.
@@ -850,6 +850,9 @@ describe('resuming a dropped stream', () => {
     // A control frame is not a position in the stream and must not be bookmarked
     // as one, or a client would resume past whatever came next.
     expect(first.id).toBeNull();
+    expect(hud.event).toBe('hudSnapshot');
+    expect(hud.id).toBeNull();
+    expect(hud.data).toEqual({ deviceId: 'dev-1', state: { liveTurns } });
     expect(second.event).toBeNull();
     expect(second.data.channel).toBe('backend:event');
     liveTurns = [];
@@ -865,15 +868,17 @@ describe('resuming a dropped stream', () => {
     const stream = await fetch(`${origin}/events`, {
       headers: { ...bearer, 'last-event-id': `${resumed.epoch}.3` }
     });
-    // Five blocks: the snapshot, the three replayed, and the live one. A frame
+    // Six blocks: renderer snapshot, three replayed, HUD snapshot, and live. A frame
     // delivered twice would take the live one's place and fail the sequence
     // below; one delivered not at all would leave a hole in it.
-    const blocks = collectBlocks(stream, 5);
+    const blocks = collectBlocks(stream, 6);
     // Pushed while the reconnect is being served, which is precisely where a
     // dropped or doubled frame would come from.
     pushRange(7, 1);
 
-    const seen = (await blocks).filter((b) => !b.event).map((b) => b.data.payload as { seq: number });
+    const frames = await blocks;
+    expect(frames.map(b => b.event)).toEqual(['snapshot', null, null, null, 'hudSnapshot', null]);
+    const seen = frames.filter((b) => !b.event).map((b) => b.data.payload as { seq: number });
     expect(seen.map((p) => p.seq)).toEqual([4, 5, 6, 7]);
   });
 
@@ -881,13 +886,14 @@ describe('resuming a dropped stream', () => {
     const stream = await fetch(`${origin}/events`, {
       headers: { ...bearer, 'last-event-id': `${resumed.epoch}.7` }
     });
-    const blocks = collectBlocks(stream, 2);
+    const blocks = collectBlocks(stream, 3);
     pushRange(8, 1);
     const seen = await blocks;
     expect(seen[0].event).toBe('snapshot');
     // Straight to the new frame: no replay of what it already has, no resync.
-    expect(seen[1].event).toBeNull();
-    expect(seen[1].data.payload).toEqual({ seq: 8 });
+    expect(seen[1].event).toBe('hudSnapshot');
+    expect(seen[2].event).toBeNull();
+    expect(seen[2].data.payload).toEqual({ seq: 8 });
   });
 
   // Serial from here: these share one sequence, and overflowing the buffer is

@@ -9,6 +9,7 @@ interface DeltaBuffer {
   turnId: string;
   itemId: string;
   delta: string;
+  offset?: number;
   receivedAt: string;
 }
 
@@ -33,7 +34,8 @@ export function createEventBatcher(apply: (event: BackendEventEnvelope) => void)
       threadId,
       turnId: buf.turnId,
       itemId: buf.itemId,
-      delta: buf.delta
+      delta: buf.delta,
+      ...(buf.offset === undefined ? {} : { offset: buf.offset })
     };
     apply({ method: 'item/agentMessage/delta', params, receivedAt: buf.receivedAt });
   }
@@ -71,7 +73,7 @@ export function createEventBatcher(apply: (event: BackendEventEnvelope) => void)
       if (event.method === 'item/agentMessage/delta') {
         const p = event.params as AgentMessageDeltaParams;
         const buf = buffers.get(p.threadId);
-        if (buf && buf.turnId === p.turnId) {
+        if (buf && buf.turnId === p.turnId && (buf.offset === undefined && p.offset === undefined || buf.offset !== undefined && p.offset === buf.offset + buf.delta.length)) {
           buf.delta += p.delta;
           buf.receivedAt = event.receivedAt;
         } else {
@@ -82,6 +84,7 @@ export function createEventBatcher(apply: (event: BackendEventEnvelope) => void)
             turnId: p.turnId,
             itemId: p.itemId,
             delta: p.delta,
+            offset: p.offset,
             receivedAt: event.receivedAt
           });
         }

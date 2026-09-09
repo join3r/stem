@@ -9,7 +9,7 @@ export function mergeRefreshedThread(
   stateAtRequest: ThreadState | undefined
 ): ThreadState {
   if (history.offline && live?.hydrated) return live;
-  const merged = mergeHydratedThread(history.messages, live, stateAtRequest);
+  const merged = mergeHydratedThread(history.messages, live, stateAtRequest, history.complete !== false && !history.offline);
   let failedSend = false;
   const localOnly = (live?.messages ?? []).filter((message) => {
     if (message.role === 'user') failedSend = !!message.sendFailed;

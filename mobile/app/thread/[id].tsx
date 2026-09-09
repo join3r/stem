@@ -1,42 +1,19 @@
-// One conversation, on a phone.
-//
-// The state is entirely useThread's; this file is the rendering and the two
-// interactions the desktop's chat view also has and for the same reasons:
-//
-//   FOLLOW-THE-STREAM. Pinned to the bottom while a reply arrives, released the
-//   moment the user scrolls up to read something, re-pinned when they come back
-//   down. The rule is ../../src/ui/scroll.ts; the wiring is that content growing
-//   (a token) and the viewport moving (a finger) are two different events and
-//   only the second one may change the decision.
-//
-//   ACTIVITY. What the model is doing between "sent" and the first token is the
-//   difference between a live app and a frozen one, so the running tool's label
-//   is shown while it runs and the turn's tool list stays with its bubble
-//   afterwards. One line each, deliberately: the desk is where you go to read a
-//   diff, and a phone that tried would be showing you six characters of one.
-//
-// Attachments are step 6. The seam is `send(text)` taking only text and
-// StartTurnInput already having an `attachments` field — nothing here needs to
-// change shape to gain a picker, so none was faked.
-
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type Ref } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
   AppState,
+  Image,
   FlatList,
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
   type NativeScrollEvent,
   type NativeSyntheticEvent
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { activityLabel } from '@shared/activity';
-import type { ActivityItem, ChatMessage } from '@shared/types';
-import type { Persona } from '@shared/types';
+import type { ActivityItem, ChatMessage, TurnAttachment } from '@shared/types';
 import { messageToResend } from '../../src/chat/resend';
 import { useChatPersonas } from '../../src/hooks/useChatPersonas';
 import { useThread } from '../../src/hooks/useThread';
@@ -44,8 +21,10 @@ import { useTransport } from '../../src/transport/provider';
 import { MdxActionContext } from '../../src/mdx/actions';
 import { AgentMarkdown } from '../../src/ui/AgentMarkdown';
 import { ConnectionBadge } from '../../src/ui/ConnectionBadge';
+import { DraftComposer, type DraftComposerHandle } from '../../src/ui/DraftComposer';
+import { useDraft } from '../../src/drafts/useDraft';
 import { PersonaChips } from '../../src/ui/PersonaChips';
-import { useKeyboardInset, useKeyboardVisible } from '../../src/ui/keyboard';
+import { useKeyboardInset } from '../../src/ui/keyboard';
 import { isPinnedToBottom, type ScrollMetrics } from '../../src/ui/scroll';
 import { useTheme, type Theme } from '../../src/ui/theme';
 
@@ -56,15 +35,21 @@ export default function ThreadScreen(): ReactElement {
   const threadId = String(id ?? '');
   const theme = useTheme();
   const thread = useThread(threadId);
-  const [draft, setDraft] = useState('');
-  const composerInput = useRef<TextInput>(null);
+  const [draftEmpty, setDraftEmpty] = useState(false);
+  const composerInput = useRef<DraftComposerHandle>(null);
+  const draftStore = useDraft(`chat:${threadId}`);
   // Who the next send runs as. Screen-local and per-send on the wire — the
   // server pins nothing to the thread, so the desk (or a later visit) sending
   // plain into the same thread is normal, exactly like scheduled persona runs.
   const personas = useChatPersonas();
-  const [personaId, setPersonaId] = useState<string | null>(
-    typeof personaParam === 'string' && personaParam ? personaParam : null
-  );
+  const storedPersona = draftStore.draft.metadata.personaId;
+  const personaId =
+    typeof storedPersona === 'string'
+      ? storedPersona || null
+      : typeof personaParam === 'string'
+        ? personaParam
+        : null;
+  const setPersonaId = (value: string | null) => draftStore.setMetadata({ personaId: value ?? '' });
 
   // Opening is what marks a thread read — the desktop's rule (see openChat in
   // src/renderer/App.tsx), applied here on mount and again each time a turn
@@ -128,23 +113,23 @@ export default function ThreadScreen(): ReactElement {
     if (pinned.current) list.current?.scrollToEnd({ animated: false });
   }, []);
 
-  const submit = useCallback(() => {
-    const text = draft;
-    setDraft('');
-    thread.send(text, personaId);
-    // Sending is always a return to the bottom: the thing you just wrote is
-    // there, and so is what answers it.
-    pinned.current = true;
-  }, [draft, personaId, thread]);
-
-  const canSend = draft.trim().length > 0 && !thread.blocked && !thread.running && !thread.sending;
+  const sendTurn = thread.send;
+  const submit = useCallback(
+    async (text: string, attachments?: TurnAttachment[]) => {
+      pinned.current = true;
+      await sendTurn(text, personaId, attachments);
+    },
+    [personaId, sendTurn]
+  );
   const resend = messageToResend(thread.state.messages);
-  const canRestore = !!resend && !draft && !thread.running && !thread.sending;
+  const canRestore = !!resend && draftEmpty && !thread.running && !thread.sending;
   const restoreMessage = useCallback(() => {
-    if (!resend || !canRestore) return;
-    setDraft(resend.content);
-    requestAnimationFrame(() => composerInput.current?.focus());
+    if (resend && canRestore) composerInput.current?.restore(resend.content);
   }, [canRestore, resend]);
+  const draftChanged = useCallback(
+    (body: string, hasAttachments: boolean) => setDraftEmpty(!body && !hasAttachments),
+    []
+  );
 
   // What a <Quiz> or <Form> in a reply may do: exactly what the composer does,
   // and only when the composer itself could. `running` is the flag those
@@ -156,7 +141,9 @@ export default function ThreadScreen(): ReactElement {
     () => ({
       // A <Quiz>/<Form> reply is a send like any other, so it goes to whoever
       // the composer is currently talking to.
-      submit: (text: string) => sendMessage(text, personaId),
+      submit: (text: string) => {
+        void sendMessage(text, personaId).catch(() => undefined);
+      },
       running: thread.running || thread.sending || thread.blocked !== null
     }),
     [personaId, sendMessage, thread.blocked, thread.running, thread.sending]
@@ -173,7 +160,9 @@ export default function ThreadScreen(): ReactElement {
       />
       {thread.error ? (
         <Pressable onPress={thread.reload} style={[styles.banner, { borderColor: theme.line }]}>
-          <Text style={[styles.bannerText, { color: theme.bad }]}>{thread.error} — tap to retry</Text>
+          <Text style={[styles.bannerText, { color: theme.bad }]}>
+            {thread.error} — tap to retry
+          </Text>
         </Pressable>
       ) : null}
       {/* A context provider is transparent to the native layout tree, so the
@@ -214,25 +203,30 @@ export default function ThreadScreen(): ReactElement {
               message={item}
               theme={theme}
               streaming={item.id === thread.state.streamingId}
-              onRestore={resend && item.id === thread.state.messages.at(-1)?.id ? restoreMessage : undefined}
+              onRestore={
+                resend && item.id === thread.state.messages.at(-1)?.id ? restoreMessage : undefined
+              }
               canRestore={canRestore}
             />
           )}
         />
       </MdxActionContext.Provider>
-      <Composer
-        theme={theme}
-        value={draft}
-        onChange={setDraft}
-        onSubmit={submit}
-        onStop={thread.interrupt}
-        canSend={canSend}
+      <DraftComposer
+        ref={composerInput}
+        draftKey={`chat:${threadId}`}
+        onSend={submit}
         running={thread.running}
-        blocked={thread.blocked}
-        personas={personas}
-        personaId={personaId}
-        onSelectPersona={setPersonaId}
-        inputRef={composerInput}
+        onStop={thread.interrupt}
+        disabledReason={thread.blocked}
+        onDraftChange={draftChanged}
+        header={
+          <PersonaChips
+            personas={personas}
+            selected={personaId}
+            onSelect={setPersonaId}
+            theme={theme}
+          />
+        }
       />
     </View>
   );
@@ -253,8 +247,25 @@ function Bubble({
 }): ReactElement {
   if (message.role === 'user') {
     return (
-      <View style={[styles.userBubble, { backgroundColor: theme.card, borderColor: theme.line }]}>
+      <View
+        style={[styles.userBubble, { backgroundColor: theme.accentSoft, borderColor: theme.line }]}
+      >
         <Text style={[styles.userText, { color: theme.text }]}>{message.content}</Text>
+        {message.attachments?.map((attachment, index) =>
+          attachment.kind === 'image' && attachment.dataUrl ? (
+            <Image
+              key={index}
+              source={{ uri: attachment.dataUrl }}
+              accessibilityLabel={attachment.name ?? 'Attached image'}
+              style={{ width: 200, height: 150, borderRadius: 10, marginTop: 8 }}
+              resizeMode="contain"
+            />
+          ) : (
+            <Text key={index} style={{ color: theme.dim, marginTop: 8 }}>
+              {attachment.name ?? 'Attachment'}
+            </Text>
+          )
+        )}
         {message.sendFailed ? (
           <Text style={[styles.failed, { color: theme.bad }]}>Not sent</Text>
         ) : null}
@@ -298,7 +309,14 @@ function ActivityRows({ rows, theme }: { rows: ActivityItem[]; theme: Theme }): 
           <View
             style={[
               styles.activityDot,
-              { backgroundColor: row.status === 'error' ? theme.bad : row.status === 'running' ? theme.warn : theme.line }
+              {
+                backgroundColor:
+                  row.status === 'error'
+                    ? theme.bad
+                    : row.status === 'running'
+                      ? theme.warn
+                      : theme.line
+              }
             ]}
           />
           <Text numberOfLines={1} style={[styles.activityText, { color: theme.dim }]}>
@@ -339,84 +357,13 @@ function LiveActivity({
   );
 }
 
-function Composer({
-  theme,
-  value,
-  onChange,
-  onSubmit,
-  onStop,
-  canSend,
-  running,
-  blocked,
-  personas,
-  personaId,
-  onSelectPersona,
-  inputRef
-}: {
-  theme: Theme;
-  value: string;
-  onChange: (next: string) => void;
-  onSubmit: () => void;
-  onStop: () => void;
-  canSend: boolean;
-  running: boolean;
-  blocked: string | null;
-  personas: Persona[];
-  personaId: string | null;
-  onSelectPersona: (personaId: string | null) => void;
-  inputRef: Ref<TextInput>;
-}): ReactElement {
-  // The home indicator's corner radii eat into the last dozen points of the
-  // screen, so the composer stands on the safe-area inset while the keyboard is
-  // down — and steps off it while the keyboard is up, when the inset would be a
-  // gap floating above the keys (see ../../src/ui/keyboard.ts).
-  const insets = useSafeAreaInsets();
-  const keyboardUp = useKeyboardVisible();
-  return (
-    <View
-      style={[
-        styles.composer,
-        { borderColor: theme.line, backgroundColor: theme.bg },
-        { paddingBottom: keyboardUp ? 10 : Math.max(insets.bottom, 12) }
-      ]}
-    >
-      {blocked ? <Text style={[styles.blocked, { color: theme.warn }]}>{blocked}</Text> : null}
-      <PersonaChips personas={personas} selected={personaId} onSelect={onSelectPersona} theme={theme} />
-      <View style={styles.composerRow}>
-        <TextInput
-          ref={inputRef}
-          style={[styles.input, { backgroundColor: theme.card, borderColor: theme.line, color: theme.text }]}
-          value={value}
-          onChangeText={onChange}
-          placeholder={blocked ? 'Can’t send right now' : 'Message Stem'}
-          placeholderTextColor={theme.dim}
-          editable={!blocked}
-          multiline
-        />
-        {/* Stop replaces Send while a turn runs, rather than sitting beside it:
-            the backend refuses a second turn on a busy thread anyway, so a Send
-            button there could only ever produce an error. */}
-        {running ? (
-          <Pressable onPress={onStop} style={[styles.button, { backgroundColor: theme.bad }]}>
-            <Text style={styles.buttonText}>Stop</Text>
-          </Pressable>
-        ) : (
-          <Pressable
-            onPress={onSubmit}
-            disabled={!canSend}
-            style={[styles.button, { backgroundColor: canSend ? theme.accent : theme.line }]}
-          >
-            <Text style={[styles.buttonText, !canSend && { color: theme.dim }]}>Send</Text>
-          </Pressable>
-        )}
-      </View>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  banner: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  banner: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth
+  },
   bannerText: { fontSize: 13 },
   transcript: { paddingHorizontal: 16, paddingVertical: 12, gap: 14 },
   loading: { paddingVertical: 40 },
@@ -446,20 +393,5 @@ const styles = StyleSheet.create({
   activityDot: { width: 6, height: 6, borderRadius: 3 },
   activityText: { fontSize: 12, flex: 1 },
   live: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-  liveText: { fontSize: 13, flex: 1 },
-  composer: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingTop: 8, gap: 6 },
-  blocked: { fontSize: 12, paddingHorizontal: 2 },
-  composerRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
-  input: {
-    flex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingTop: 9,
-    paddingBottom: 9,
-    fontSize: 16,
-    maxHeight: 140
-  },
-  button: { borderRadius: 18, paddingHorizontal: 16, paddingVertical: 10 },
-  buttonText: { fontSize: 15, fontWeight: '600', color: '#ffffff' }
+  liveText: { fontSize: 13, flex: 1 }
 });

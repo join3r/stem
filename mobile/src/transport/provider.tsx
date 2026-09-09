@@ -18,8 +18,10 @@
 // again and reconnecting through would only churn the socket.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AppState } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import { createOfflineCache, type OfflineCache } from '../offline/cache';
+import { clearSubmittedThreads } from '../chat/submitted';
+import { clearDrafts } from '../drafts/store';
 import { openCacheDatabase } from '../offline/sqlite';
 import { createConnection, type Connection, type ConnectionStatus } from './connection';
 import { clearPairing, readPairing, writePairing, type StoredPairing } from './credentials';
@@ -120,12 +122,19 @@ export function TransportProvider({ children }: { children: ReactNode }): ReactN
         forget: async () => {
           generation.current += 1;
           connection.setEndpoint(null);
+          clearSubmittedThreads();
           setPairing(null);
           // The cached chats belong to a server this phone no longer holds a
           // credential for. Leaving them would mean an unpaired phone still
           // shows somebody's conversations the moment it loses its network.
-          cache.clear();
-          await clearPairing();
+          try {
+            try { cache.clear(); } finally { clearDrafts(); }
+          } catch {
+            Alert.alert('Local cleanup incomplete', 'Disconnected, but some local drafts could not be removed from this device.');
+          } finally {
+            // Disk cleanup must never leave a usable credential in Keychain.
+            await clearPairing();
+          }
         }
       }),
     [cache, connection, pairing?.deviceId]

@@ -33,6 +33,8 @@ export function PersonaChips({
     return (
       <Pressable
         key={id ?? ''}
+        accessibilityRole="button"
+        accessibilityState={{ selected: active }}
         onPress={() => onSelect(id)}
         style={[
           styles.chip,
@@ -41,7 +43,7 @@ export function PersonaChips({
             : { backgroundColor: theme.card, borderColor: theme.line }
         ]}
       >
-        <Text style={[styles.chipText, { color: active ? '#ffffff' : theme.dim }]}>{label}</Text>
+        <Text style={[styles.chipText, { color: active ? theme.accentText : theme.dim }]}>{label}</Text>
       </Pressable>
     );
   };
@@ -65,7 +67,9 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: 5
+    paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: 'center'
   },
   chipText: { fontSize: 13, fontWeight: '500' }
 });

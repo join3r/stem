@@ -35,7 +35,8 @@
 
 /** The `stem` object from the payload, as far as this app is concerned. */
 export interface WakeUp {
-  kind: 'approval' | 'turn' | 'task';
+  kind: 'approval' | 'turn' | 'task' | 'mail';
+  conversationId?: string;
   threadId?: string;
   approvalId?: string;
   taskId?: string;
@@ -46,10 +47,11 @@ export interface WakeUp {
 /** Where to go. `null` from routeForWakeUp means: stay exactly where you are. */
 export type NotificationRoute =
   | { screen: 'thread'; threadId: string }
+  | { screen: 'mail'; conversationId: string }
   /** The chat list — the app's root route. */
   | { screen: 'chats' };
 
-const KINDS = new Set(['approval', 'turn', 'task']);
+const KINDS = new Set(['approval', 'turn', 'task', 'mail']);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
@@ -70,6 +72,7 @@ export function readWakeUp(source: unknown): WakeUp | null {
     if (!kind || !KINDS.has(kind)) continue;
     return {
       kind: kind as WakeUp['kind'],
+      ...(asString(stem.conversationId) ? { conversationId: asString(stem.conversationId) } : {}),
       ...(asString(stem.threadId) ? { threadId: asString(stem.threadId) } : {}),
       ...(asString(stem.approvalId) ? { approvalId: asString(stem.approvalId) } : {}),
       ...(asString(stem.taskId) ? { taskId: asString(stem.taskId) } : {}),
@@ -105,6 +108,7 @@ function* candidates(source: unknown): Generator<Record<string, unknown>> {
  */
 export function routeForWakeUp(wake: WakeUp | null): NotificationRoute | null {
   if (!wake) return null;
+  if (wake.kind === 'mail') return wake.conversationId ? { screen: 'mail', conversationId: wake.conversationId } : null;
   if (wake.threadId) return { screen: 'thread', threadId: wake.threadId };
   // A turn without a thread cannot happen (the server always sends one) and would
   // mean nothing if it did; an approval or a task without one is a wake-up whose

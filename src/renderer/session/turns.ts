@@ -366,7 +366,9 @@ export async function sendTurn(core: SessionCore, spec: SendSpec): Promise<void>
 
   const sentAttachments = spec.attachments.map((att) => ({ ...att }));
   const userMsgId = `user-${Date.now()}-${core.nextSendNonce()}`;
+  const turnId = mintTurnId();
   const optimisticMessage: ChatMessage = {
+    runtimeTurnId: turnId,
     id: userMsgId,
     role: 'user',
     content: spec.text,
@@ -388,7 +390,6 @@ export async function sendTurn(core: SessionCore, spec: SendSpec): Promise<void>
   // Minted client-side so Stop can name this turn from the very first moment —
   // the backend adopts the id, and can cancel the start it identifies even
   // while the RPC is still queued behind another turn.
-  const turnId = mintTurnId();
   const startPromise = Promise.resolve().then(() =>
     spec.start({ text: spec.text, attachments: sentAttachments, turnId })
   );

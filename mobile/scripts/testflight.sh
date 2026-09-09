@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Archive the iOS app and upload it to TestFlight.
 #
-# Needs an App Store Connect API key (App Store Connect → Users and Access →
+# Uses the signed-in Xcode account, or an App Store Connect API key
+# (App Store Connect → Users and Access →
 # Integrations → App Store Connect API → Team Keys, role "App Manager"):
 #   ASC_KEY_ID      the key id (e.g. 2X9R4HXF34)
 #   ASC_ISSUER_ID   the issuer id shown above the key list
@@ -13,18 +14,19 @@
 # build number past what TestFlight already has, so re-runs just work.
 set -euo pipefail
 
-: "${ASC_KEY_ID:?set ASC_KEY_ID to the App Store Connect API key id}"
-: "${ASC_ISSUER_ID:?set ASC_ISSUER_ID to the App Store Connect issuer id}"
-: "${ASC_KEY_PATH:?set ASC_KEY_PATH to the AuthKey .p8 file}"
-
 cd "$(dirname "$0")/.."
-KEY_PATH="$(cd "$(dirname "$ASC_KEY_PATH")" && pwd)/$(basename "$ASC_KEY_PATH")"
 ARCHIVE="ios/build/Stem.xcarchive"
 
-AUTH=(-allowProvisioningUpdates
-      -authenticationKeyPath "$KEY_PATH"
-      -authenticationKeyID "$ASC_KEY_ID"
-      -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+AUTH=(-allowProvisioningUpdates)
+if [[ -n "${ASC_KEY_ID:-}${ASC_ISSUER_ID:-}${ASC_KEY_PATH:-}" ]]; then
+  : "${ASC_KEY_ID:?set all three ASC variables, or unset them to use the Xcode account}"
+  : "${ASC_ISSUER_ID:?set all three ASC variables, or unset them to use the Xcode account}"
+  : "${ASC_KEY_PATH:?set all three ASC variables, or unset them to use the Xcode account}"
+  KEY_PATH="$(cd "$(dirname "$ASC_KEY_PATH")" && pwd)/$(basename "$ASC_KEY_PATH")"
+  AUTH+=(-authenticationKeyPath "$KEY_PATH"
+         -authenticationKeyID "$ASC_KEY_ID"
+         -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+fi
 
 xcodebuild archive \
   -workspace ios/Stem.xcworkspace \

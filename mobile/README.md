@@ -1,7 +1,8 @@
 # Stem for iOS
 
-The phone half of Stem: read and start chats, answer approval cards while the agent
-waits, triage the Inbox, watch a turn stream in live. It is a **companion**, not a second Stem
+The phone half of Stem: chat with Stem, compose and reply to persona mail, answer
+approval cards, and watch responses arrive live. Chats, Inbox, and Settings have
+separate bottom tabs. It is a **companion**, not a second Stem
 — no Manage panel, no provider onboarding, no API key ever on the device. It talks to
 the same server the desktop app talks to, over the same six HTTP routes.
 
@@ -10,7 +11,7 @@ The shared types come from `../src/shared`, imported as `@shared/*` (Metro
 
 ```
 npm install
-npm start          # Metro; press i for the simulator, or scan with Expo Go
+npm start          # Metro for the native development build
 npm test           # vitest, headless, no simulator
 npm run typecheck
 ```
@@ -27,19 +28,22 @@ The address is whatever the desktop uses to reach the Stem server:
 is the front door. The phone needs a route to that name (the tailnet, or the LAN).
 `http://` works if you type the scheme; `https://` is what you want once Serve is up.
 
-## Running in Expo Go
+## Chats and Mail
 
-Everything works except the two things Expo Go structurally cannot do:
+Chats show interactive conversations. Swipe left for a confirmed Delete action or
+right to change read status. Mail has its own Inbox, Sent, Snoozed, and Archived
+views, with sender/recipient cards, composing, replies, and private conversations.
+Swipe mail left for Archive/Snooze or right for read status. Long-press menus and
+accessibility actions provide the same operations without a swipe.
 
-- **No remote push.** Expo Go carries no APNs entitlement for your project, so asking
-  for a device token fails. The app notices, logs one line, and carries on — there is
-  nothing to fix and no dialog to dismiss.
-- **No `stem://` links from outside the app.** Expo Go owns its own URL scheme. QR
-  pairing still works, because the scanner reads and parses the code in-process rather
-  than routing a link through iOS.
+Both composers accept photos and files up to 100 MiB each. Files upload over the
+authenticated `/upload` endpoint before sending. Saved conversation attachments
+currently expose image previews and file names, not downloads of original files.
 
-Everything else — pairing, chat, streaming turns, approvals, the Inbox, the offline
-cache — behaves as it will in a real build.
+Use a native build for verification: the app includes photo/document pickers, native
+swipe gestures, Keychain, and push notification entitlements. Do not build the
+simulator app with `CODE_SIGNING_ALLOWED=NO`; SecureStore needs its normal simulator
+entitlements to pair successfully.
 
 ## Making a dev build
 
@@ -105,9 +109,27 @@ the first thing to check, and it is in the server log.
 `src/offline/cache.ts` keeps a read-only SQLite copy of the chat list and the fifty most
 recently updated transcripts, written through as the server answers and read back **only
 when a request could not reach the server at all**. A server that answers with an error
-is a server that is up, and its error is what you see. There is no outbox and no sync:
-composing is disabled while offline, which is what keeps this a cache rather than a
-second source of truth. Unpairing empties it.
+is a server that is up, and its error is what you see.
+
+Drafts use a separate account-scoped SQLite database and app-owned copies of picked
+files. Text, recipients, subject, and attachments survive navigation and app restart.
+Offline drafting is available; sending always requires an explicit action while
+connected. There is no automatic outbox or resend. An uncertain send retains the
+draft, so check the conversation before sending it again. Unpairing clears both the
+read cache and local drafts. Mail reads currently require a server connection.
+
+## Message compatibility
+
+Ship the corresponding server changes before this mobile release. New turns carry
+`runtimeTurnId` in history as well as live events, independently of the persisted
+`turnId` used by rollback/fork. Historical transcripts remain readable without a
+migration. Incomplete history cannot acknowledge pending submissions. Reopened saved
+replies may wait for the next authoritative completion before displaying overlapping
+deltas, because saved text and streaming citation offsets can differ.
+
+Mail notifications carry `kind: "mail"` and `conversationId`, and open the Mail
+conversation. Triage and persona-internal traffic do not create received-mail alerts;
+scheduled mail retains the scheduler's notification preferences.
 
 ## TestFlight
 
@@ -115,14 +137,22 @@ One-time setup, in the Awantech (AX23G9CAL9) account:
 
 1. Create the app record at appstoreconnect.apple.com → Apps → **+** → New App
    (platform iOS, bundle id `sk.awantech.stem`). This cannot be scripted.
-2. Create an API key under Users and Access → Integrations → App Store Connect API
-   (role App Manager) and download the `.p8` once.
+2. Sign in under Xcode → Settings → Apple Accounts with an account authorized to
+   distribute Stem. Alternatively, use an App Store Connect API key with the
+   required distribution signing access.
 
 Then every build is:
 
 ```sh
+./scripts/testflight.sh
+# Or use an API key:
 ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_KEY_PATH=…/AuthKey_….p8 ./scripts/testflight.sh
 ```
+
+Leave all three `ASC_*` variables unset to use the signed-in Xcode account. An
+API key that can read TestFlight builds may still lack cloud distribution signing
+access; if Apple reports that denial, use an authorized Xcode account or have the
+team administrator review the key's access.
 
 which archives with automatic signing (creating the distribution certificate and
 profile on first run) and uploads. The build appears under **TestFlight** after

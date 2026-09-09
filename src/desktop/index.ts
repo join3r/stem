@@ -469,14 +469,17 @@ app.whenReady().then(async () => {
     sendToOverlay: (channel, payload) => quickChat.sendToOverlay(channel, payload),
     revealIfOwns: (threadId) => quickChat.revealIfOwns(threadId),
     routeBackendEvent: (event) => void quickChat.routeBackendEvent(event),
+    hudDisconnected: () => quickChat.disconnectHud(),
+    hudSnapshot: (deviceId, turns) => quickChat.reconcileHud(deviceId, turns),
+    turnSubmitted: (input) => quickChat.submitHudTurn(input),
+    turnAccepted: (turnId) => quickChat.acceptHudTurn(turnId),
+    turnAbandoned: (turnId) => quickChat.abandonHudTurn(turnId),
     revealMainWindow,
     requestAttention: () => requestAttention(mainWindow),
     threadOpened: (threadId) => quickChat.threadOpened(threadId),
     applyQuickChatSettings: (patch, next) => quickChat.applySettings(patch, next),
-    // Both of these are decided in the window, not here: the main process does
-    // not know which thread is open, and has no state of its own to correct.
-    // They go through the push queue like any other server event, so one arriving
-    // during bootstrap waits for React rather than falling on the floor.
+    // Renderer recovery keeps its existing replay order. The HUD uses the
+    // separate post-replay snapshot above, with authenticated device identity.
     resync: () => sendToMain('client:resync', undefined),
     liveTurns: (turns) => sendToMain('client:liveTurns', turns),
     // Both windows compose, so both have to stop composing. The overlay is not

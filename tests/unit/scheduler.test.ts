@@ -4,6 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// These tests own the scheduler's virtual clock. The recorder now awaits native
+// file I/O before startTurn, which advancing a fake clock cannot flush. Keep that
+// persistence boundary out of the timing unit tests; mail-work-scheduler.test.ts
+// exercises the real scheduler + recorder together with real timers and files.
+vi.mock('../../src/server/mail/work', () => ({
+  beginMailWork: async (_runtime: unknown, input: { turnId: string }) => ({
+    run: { turnId: input.turnId },
+    finish: async () => {}
+  })
+}));
+
 // Point the tasks store at a throwaway file before importing modules that read the
 // path. setup-unit.ts already isolates the other stores; tasks gets its own here.
 const STORE = join(tmpdir(), `stem-tasks-${process.pid}.json`);

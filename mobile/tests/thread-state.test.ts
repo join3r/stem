@@ -232,3 +232,110 @@ describe('hydrating from chats:open', () => {
     expect(merged.running).toBe(true);
   });
 });
+
+describe('persisted runtime identity', () => {
+  const user: ChatMessage = { id: 'user-entry', role: 'user', content: 'Test', turnId: 'entry', runtimeTurnId: 'run' };
+  const answer: ChatMessage = { id: 'assistant-run', role: 'assistant', content: 'Accepted', turnId: 'entry', runtimeTurnId: 'run' };
+  it('keeps one answer when completion follows hydration', () => {
+    const clock = manualScheduler();
+    const t = thread('t1', clock.schedule, mergeHydratedThread([user, answer], EMPTY_STATE, EMPTY_STATE));
+    t.deliver(event('item/completed', { threadId: 't1', turnId: 'run', item: { type: 'agentMessage', id: 'run', text: 'Accepted' } }));
+    expect(t.state.messages).toHaveLength(2);
+    expect(t.state.messages[1].turnId).toBe('entry');
+  });
+  it('reconciles partial streaming text against a full persisted reply', () => {
+    const live: ThreadState = { ...EMPTY_STATE, running: true, messages: [{ ...answer, turnId: 'run', content: 'Ac' }] };
+    expect(mergeHydratedThread([user, answer], live, EMPTY_STATE).messages).toEqual([user, expect.objectContaining({ content: 'Accepted', turnId: 'entry' })]);
+  });
+  it('keeps an unacknowledged prompt but allows a later rollback to remove it', () => {
+    const pending: ThreadState = { ...EMPTY_STATE, messages: [{ ...user, id: 'optimistic', pendingHistory: true }] };
+    const absent = mergeHydratedThread([], pending, pending);
+    expect(absent.messages).toHaveLength(1);
+    const acknowledged = mergeHydratedThread([user], absent, absent);
+    expect(acknowledged.messages[0].pendingHistory).toBeUndefined();
+    expect(mergeHydratedThread([], acknowledged, acknowledged).messages).toEqual([]);
+  });
+  it('does not acknowledge a prompt from an incomplete response', () => {
+    const pending: ThreadState = { ...EMPTY_STATE, messages: [{ ...user, pendingHistory: true }] };
+    expect(mergeHydratedThread([user], pending, pending, false).messages[0].pendingHistory).toBe(true);
+  });
+  it('does not collapse equal text belonging to different known turns', () => {
+    const live: ThreadState = { ...EMPTY_STATE, running: true, messages: [{ ...user, id: 'second', runtimeTurnId: 'run2', pendingHistory: true }] };
+    expect(mergeHydratedThread([user, answer], live, EMPTY_STATE).messages).toHaveLength(3);
+  });
+});
+
+describe('history overlaps buffered absolute deltas', () => {
+  it.each([
+    ['Accepted', 'cep', 2, 'ted', 5],
+    ['Checking\n\nDone', '\n\nDo', 8, 'ne', 12]
+  ] as const)('does not append replayed suffixes to %s', (content, first, offset, second, nextOffset) => {
+    const clock = manualScheduler();
+    const initial: ThreadState = { ...EMPTY_STATE, hydrated: true, messages: [{ id: 'assistant-run', role: 'assistant', content, runtimeTurnId: 'run', turnId: 'entry' }] };
+    const t = thread('t1', clock.schedule, initial);
+    t.deliver(event('item/agentMessage/delta', { threadId: 't1', turnId: 'run', itemId: 'run', delta: first, offset }));
+    t.deliver(event('item/agentMessage/delta', { threadId: 't1', turnId: 'run', itemId: 'run', delta: second, offset: nextOffset }));
+    t.flush();
+    expect(t.state.messages[0].content).toBe(content);
+  });
+  it('restores a missed stream prefix before applying later deltas', () => {
+    const clock = manualScheduler();
+    const t = thread('t1', clock.schedule);
+    t.deliver(event('item/agentMessage/delta', { threadId: 't1', turnId: 'run', itemId: 'run', delta: 'cept', offset: 2 }));
+    t.flush();
+    const state = mergeHydratedThread([{ id: 'assistant-run', role: 'assistant', content: 'Accepted', runtimeTurnId: 'run' }], t.state, EMPTY_STATE);
+    expect(state.messages[0].content).toBe('Accepted');
+    const resumed = thread('t1', clock.schedule, state);
+    resumed.deliver(event('item/agentMessage/delta', { threadId: 't1', turnId: 'run', itemId: 'run', delta: 'ed', offset: 6 }));
+    resumed.flush();
+    expect(resumed.state.messages[0].content).toBe('Accepted');
+  });
+});
+
+it('does not acknowledge a new repeated prompt against legacy history', () => {
+  const legacy: ChatMessage[] = [{ id: 'old-user', role: 'user', content: 'Again' }, { id: 'old-answer', role: 'assistant', content: 'Done' }];
+  const live: ThreadState = { ...EMPTY_STATE, messages: [
+    { id: 'new-user', role: 'user', content: 'Again', runtimeTurnId: 'new-run', pendingHistory: true },
+    { id: 'assistant-new-run', role: 'assistant', content: 'Done', runtimeTurnId: 'new-run' }
+  ] };
+  const result = mergeHydratedThread(legacy, live, EMPTY_STATE);
+  expect(result.messages).toHaveLength(4);
+  expect(result.messages[2].pendingHistory).toBe(true);
+});
+
+it('holds ambiguous citation offsets until a completed reply establishes the baseline', () => {
+  const clock = manualScheduler();
+  const hydrated = mergeHydratedThread([{ id: 'assistant-run', role: 'assistant', content: 'Found it', runtimeTurnId: 'run' }], EMPTY_STATE, EMPTY_STATE);
+  const t = thread('t1', clock.schedule, hydrated);
+  t.deliver(event('item/agentMessage/delta', { threadId: 't1', turnId: 'run', itemId: 'run', delta: 'it', offset: 50 }));
+  t.flush();
+  expect(t.state.messages[0].content).toBe('Found it');
+  t.deliver(event('item/completed', { threadId: 't1', turnId: 'run', item: { type: 'agentMessage', id: 'run', text: 'Found it' } }));
+  t.deliver(event('item/agentMessage/delta', { threadId: 't1', turnId: 'run', itemId: 'run', delta: '\n\nDetails', offset: 8 }));
+  t.flush();
+  expect(t.state.messages[0].content).toBe('Found it\n\nDetails');
+});
+
+it('does not regress a hydrated multipart reply on an older completed part', () => {
+  const clock = manualScheduler();
+  const t = thread('t1', clock.schedule, mergeHydratedThread([{ id: 'assistant-run', role: 'assistant', content: 'Checking\n\nDone', runtimeTurnId: 'run' }], EMPTY_STATE, EMPTY_STATE));
+  t.deliver(event('item/completed', { threadId: 't1', turnId: 'run', item: { type: 'agentMessage', id: 'run', text: 'Checking' } }));
+  t.deliver(event('item/agentMessage/delta', { threadId: 't1', turnId: 'run', itemId: 'run', delta: '\n\nDone', offset: 8 }));
+  t.flush();
+  expect(t.state.messages[0].content).toBe('Checking\n\nDone');
+});
+
+it('does not splice a raw mid-answer suffix into citation-sanitized history', () => {
+  const clock = manualScheduler();
+  const t = thread('t1', clock.schedule);
+  t.deliver(event('item/agentMessage/delta', { threadId: 't1', turnId: 'run', itemId: 'run', delta: 'it', offset: 50 }));
+  t.flush();
+  const hydrated = mergeHydratedThread([{ id: 'assistant-run', role: 'assistant', content: 'Found it', runtimeTurnId: 'run' }], t.state, EMPTY_STATE);
+  expect(hydrated.messages[0].content).toBe('Found it');
+  const resumed = thread('t1', clock.schedule, hydrated);
+  resumed.deliver(event('item/agentMessage/delta', { threadId: 't1', turnId: 'run', itemId: 'run', delta: '.', offset: 52 }));
+  resumed.flush();
+  expect(resumed.state.messages[0].content).toBe('Found it');
+  resumed.deliver(event('item/completed', { threadId: 't1', turnId: 'run', item: { type: 'agentMessage', id: 'run', text: 'Found it.' } }));
+  expect(resumed.state.messages[0].content).toBe('Found it.');
+});

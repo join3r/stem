@@ -229,3 +229,34 @@ describe('folding the event that ends a turn', () => {
     expect(foldTurnEvent('turn/completed', 'thread-1', 'turn-a').ranForMs).toBeNull();
   });
 });
+
+describe('pill snapshot origin and late events', () => {
+  it('preserves authenticated origin across events and the start response', () => {
+    const origin = { kind: 'interactive' as const, deviceId: 'mac' };
+    noteTurnEvent('item/started', 'chat', 'turn', origin);
+    noteTurnStart('chat', 'turn');
+    noteTurnEvent('item/agentMessage/delta', 'chat', 'turn');
+    expect(liveTurnSnapshot()).toEqual([{ threadId: 'chat', turnId: 'turn', origin }]);
+  });
+
+  it('does not resurrect a settled turn from a late start response or delta', () => {
+    noteTurnEvent('item/started', 'chat', 'old');
+    noteTurnEvent('turn/completed', 'chat', 'old');
+    noteTurnStart('chat', 'old', { kind: 'interactive', deviceId: 'mac' });
+    noteTurnEvent('item/agentMessage/delta', 'chat', 'old');
+    expect(liveTurnSnapshot()).toEqual([]);
+  });
+
+  it('an old terminal does not clear a new turn or carry its origin forward', () => {
+    noteTurnStart('chat', 'old', { kind: 'interactive', deviceId: 'mac' });
+    noteTurnEvent('item/started', 'chat', 'task', { kind: 'background' });
+    noteTurnEvent('turn/completed', 'chat', 'old');
+    expect(liveTurnSnapshot()).toEqual([{ threadId: 'chat', turnId: 'task', origin: { kind: 'background' } }]);
+  });
+});
+
+  it('unrelated process logs do not erase active turns', () => {
+    noteTurnStart('chat', 'turn');
+    noteTurnEvent('process/stderr', undefined);
+    expect(liveTurnSnapshot()).toEqual([{ threadId: 'chat', turnId: 'turn' }]);
+  });

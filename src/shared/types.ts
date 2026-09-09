@@ -142,6 +142,14 @@ export interface ChatMessage {
    * turn for rollback/fork. Absent on optimistic bubbles until their turn resolves.
    */
   turnId?: string;
+  /** Stable runtime identity for reconciling streams with persisted history. */
+  runtimeTurnId?: string;
+  /** Locally submitted user text not yet acknowledged by history. */
+  pendingHistory?: boolean;
+  /** Offset of a partial stream observed before history supplied its prefix. */
+  streamOffset?: number;
+  /** A saved reply is ahead of the stream; await its authoritative completion. */
+  hydratedContent?: boolean;
   /** Assistant messages only: how long the answer took (total + thinking/tools). */
   timing?: TurnTiming;
   /** Assistant messages only: token usage (context fill + cost) for this turn. */
@@ -337,7 +345,21 @@ export interface TurnAttachment {
   mime?: string;
 }
 
+/** Server-stamped origin of a turn. Never inferred from its conversation. */
+export interface TurnOrigin {
+  kind: 'interactive' | 'mail' | 'background';
+  deviceId?: string;
+}
+
+export interface LiveTurnInfo {
+  threadId: string;
+  turnId: string | null;
+  origin?: TurnOrigin;
+}
+
 export interface StartTurnInput {
+  /** Server-internal: authenticated submitting device; overwritten at the RPC boundary. */
+  originDeviceId?: string;
   input: string;
   /**
    * Client-minted turn id (UUID). Lets Stop interrupt a turn from the moment it
@@ -515,6 +537,8 @@ export interface BackendEventEnvelope {
 
 /** `item/agentMessage/delta` — a streamed token chunk of the assistant reply. */
 export interface AgentMessageDeltaParams {
+  /** UTF-16 offset in the accumulated reply; permits safe overlap with history. */
+  offset?: number;
   threadId: string;
   turnId: string;
   itemId: string;
@@ -2159,6 +2183,45 @@ export interface PersonaNote {
 /** 'user', or a persona id. */
 export type MailAddress = string;
 
+/** Recorded work, separate from mail delivery/read state. Never contains reasoning. */
+export interface MailWorkActivity {
+  id: string;
+  kind: 'tool' | 'progress';
+  label: string;
+  at: number;
+  endedAt?: number;
+  status: 'running' | 'ok' | 'error';
+  input?: string;
+  output?: string;
+  parentId?: string;
+}
+
+export interface MailWorkRun {
+  id: string;
+  personaId: string;
+  threadId?: string;
+  turnId?: string;
+  startedAt: number;
+  endedAt?: number;
+  status: 'running' | 'ok' | 'failed' | 'aborted';
+  error?: string;
+  activities: MailWorkActivity[];
+}
+
+export interface MailWorkGroup {
+  id: string;
+  conversationId: string;
+  sourceItemId?: string;
+  notificationItemId?: string;
+  /** Multiple notify_user calls in the same scheduled run share its recorded work. */
+  notificationItemIds?: string[];
+  runs: MailWorkRun[];
+  historical?: boolean;
+  gaps?: string[];
+}
+
+export interface MailWorkResult { groups: MailWorkGroup[] }
+
 /** One immutable mail in a conversation. */
 export interface MailItem {
   id: string;
@@ -2335,6 +2398,8 @@ export interface ChatSearchHit {
 
 /** Full chat contents for replay when a chat is opened. */
 export interface ChatHistory {
+  /** False when the transcript could only be read partially. */
+  complete?: boolean;
   threadId: string;
   title: string;
   messages: ChatMessage[];
@@ -3690,6 +3755,8 @@ export interface StemApi {
 
   // Mail. Mutations return the fresh MailListResult, like the inbox mutators.
   listMail(): Promise<MailListResult>;
+  getMailWork(conversationId: string): Promise<MailWorkResult>;
+  onMailWorkChanged(listener: (event: { conversationId: string }) => void): () => void;
   /** Compose a new mail conversation and deliver it to its driver persona. */
   composeMail(input: MailComposeInput): Promise<MailListResult>;
   /** Reply into a conversation (resumes the driver persona with full context). */

@@ -13,6 +13,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Virtual-clock lifecycle tests isolate native recorder I/O; the real persistence
+// integration is exercised in mail-work-scheduler.test.ts.
+vi.mock('../../src/server/mail/work', () => ({
+  beginMailWork: async (_runtime: unknown, input: { turnId: string }) => ({
+    run: { turnId: input.turnId }, finish: async () => {}
+  })
+}));
+
 // Point the tasks store at a throwaway file before importing modules that read
 // the path — same isolation as scheduler.test.ts, different file.
 const STORE = join(tmpdir(), `stem-tasks-matrix-${process.pid}.json`);

@@ -19,6 +19,13 @@ export function isSettledMethod(method: string): method is TurnSettledMethod {
   return method === 'turn/completed' || method === 'turn/failed' || method === 'turn/aborted';
 }
 
+/** Item events use turnId; canonical terminal events use turn.id. */
+export function eventTurnId(params: unknown): string | undefined {
+  if (!params || typeof params !== 'object') return undefined;
+  const p = params as { turnId?: unknown; turn?: { id?: unknown } };
+  return typeof p.turnId === 'string' ? p.turnId : typeof p.turn?.id === 'string' ? p.turn.id : undefined;
+}
+
 /** Terminal events can beat the start-turn IPC response on very fast turns.
  * Remember them briefly so the late response cannot resurrect activeTurnId. */
 export class SettledTurns {

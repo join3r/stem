@@ -8,6 +8,8 @@ import { dirname } from 'node:path';
 import {
   addParticipant,
   appendMailItem,
+  onMailChanged,
+  onMailReceived,
   createConversation,
   deleteConversation,
   mailSessionThreadIds,
@@ -348,5 +350,30 @@ describe('degradation', () => {
     raw.conversations = [];
     writeFileSync(path, JSON.stringify(raw), 'utf8');
     expect((await readMail()).items).toHaveLength(0);
+  });
+});
+
+
+describe('mail observers', () => {
+  it('announces durable triage writes and only newly appended user-addressed mail', async () => {
+    let changes = 0;
+    const received: string[] = [];
+    const off = onMailChanged(() => { changes += 1; });
+    const offReceived = onMailReceived((item) => received.push(item.body));
+    try {
+      const c = await createConversation('A test', ['normal']);
+      await appendMailItem({ conversationId: c.id, from: 'user', to: ['normal'], body: 'question' });
+      await appendMailItem({ conversationId: c.id, from: 'normal', to: ['helper'], body: 'internal' });
+      await appendMailItem({ conversationId: c.id, from: 'normal', to: ['user'], body: 'answer' });
+      await setMailRead([c.id], true);
+      await setMailArchived([c.id], true);
+      expect(changes).toBe(6);
+      expect(received).toEqual(['answer']);
+      await readMail();
+      expect(received).toEqual(['answer']);
+      await expect(appendMailItem({ conversationId: 'missing', from: 'normal', to: ['user'], body: 'failed' })).rejects.toThrow();
+      expect(received).toEqual(['answer']);
+      expect(changes).toBe(6);
+    } finally { off(); offReceived(); }
   });
 });

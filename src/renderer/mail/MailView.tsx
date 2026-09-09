@@ -1,4 +1,5 @@
 import {
+  Fragment,
   forwardRef,
   useCallback,
   useEffect,
@@ -13,6 +14,7 @@ import type {
   MailComposeInput,
   MailConversation,
   MailItem,
+  MailWorkGroup,
   Persona,
   TurnAttachment,
   SystemVersion
@@ -21,14 +23,13 @@ import { MdxView } from '../chat/MdxView';
 import { formatSystemVersion, sameSystem } from '../../shared/sys-version';
 import { groupMailTimeline } from './grouping';
 import { personaName } from './useMail';
+import { useMailWork } from './useMailWork';
+import { MailWork } from './MailWork';
 
 // The centre pane's mail surface: a conversation read like email (discrete
 // mails, newest last, a reply box underneath), or the compose form for a new
-// one. Deliberately NOT a chat view — items are immutable mails, there is no
-// streaming, and the persona's work happens out of sight on its hidden thread;
-// the row spinner in the list is the only "in progress" signal. Persona↔persona
-// exchanges collapse behind per-gap "N mails exchanged" dividers: the user's
-// conversation reads clean, the work is inspectable in place.
+// one. Replies stay discrete while the Work disclosure below their originating
+// mail preserves the live activity of every participating persona.
 
 /** Path-less bytes (a pasted screenshot) become base64, same as the chat composer. */
 function fileToAttachment(file: globalThis.File): Promise<TurnAttachment> {
@@ -167,6 +168,21 @@ export const MailConversationView = forwardRef<MailViewHandle, {
     [items, conversation.id]
   );
   const groups = useMemo(() => groupMailTimeline(mails), [mails]);
+  const work = useMailWork(conversation.id);
+  const workGroups = work.groups;
+  const workByMail = useMemo(() => {
+    const mapped = new Map<string, MailWorkGroup[]>();
+    for (const group of workGroups) {
+      const anchor = group.notificationItemId ?? group.sourceItemId;
+      if (!anchor) continue;
+      mapped.set(anchor, [...(mapped.get(anchor) ?? []), group]);
+    }
+    return mapped;
+  }, [workGroups]);
+  const unlinkedWork = workGroups.filter((group) => {
+    const anchor = group.notificationItemId ?? group.sourceItemId;
+    return !anchor || !mails.some((mail) => mail.id === anchor);
+  });
   const addable = useMemo(
     () => personas.filter((p) => !conversation.participants.includes(p.id)),
     [personas, conversation.participants]
@@ -194,7 +210,8 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   };
 
   const mailCard = (m: MailItem, exchange: boolean) => (
-    <article key={m.id} className={`mail-item${m.from === 'user' ? ' from-user' : ''}${exchange ? ' exchange' : ''}`}>
+    <Fragment key={m.id}>
+    <article className={`mail-item${m.from === 'user' ? ' from-user' : ''}${exchange ? ' exchange' : ''}`}>
       <div className="mail-item-head">
         <strong title={m.sys ? `Made by system: ${formatSystemVersion(m.sys)}` : undefined}>
           {m.from === 'user' ? 'You' : personaName(personas, m.from)}
@@ -234,6 +251,8 @@ export const MailConversationView = forwardRef<MailViewHandle, {
         </div>
       )}
     </article>
+    {workByMail.get(m.id)?.map((group) => <MailWork key={group.id} group={group} personas={personas} />)}
+    </Fragment>
   );
 
   return (
@@ -309,6 +328,8 @@ export const MailConversationView = forwardRef<MailViewHandle, {
         {mails.length === 0 && (
           <p className="muted">This conversation has no mail yet.</p>
         )}
+        {unlinkedWork.map((group) => <MailWork key={group.id} group={group} personas={personas} unlinked />)}
+        {work.error && <p className="mail-work-note">{work.error} <button type="button" onClick={work.refresh}>Retry</button></p>}
       </div>
       <div className="mail-reply" onDragOver={(e) => e.preventDefault()} onDrop={files.onDrop}>
         <AttachmentChips attachments={files.attachments} onRemove={files.remove} />

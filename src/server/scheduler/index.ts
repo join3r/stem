@@ -1,3 +1,4 @@
+import { beginMailWork, type WorkHandle } from '../mail/work';
 import { randomUUID } from 'node:crypto';
 import type { ChatBackend } from '../backend/types';
 import type {
@@ -593,8 +594,13 @@ export class TaskScheduler {
     // Instrumented here rather than at the onRun callback: onRun only fires when
     // the turn starts, and this is the only scope that also sees it settle.
     const handle = activity.begin('tasks.run', 'Running scheduled task', { detail: titleFromPrompt(task.prompt) });
-    try {
-      const { turnId } = await this.opts.runtime.startTurn({
+    let work: WorkHandle | undefined;
+    const startWorkTurn = async () => {
+      await work?.finish('failed', 'Retrying after a context overflow.');
+      const requestedTurnId = randomUUID();
+      work = await beginMailWork(this.opts.runtime, { personaId: task.personaId ?? `task:${task.id}`, turnId: requestedTurnId, threadId: task.threadId });
+      const started = await this.opts.runtime.startTurn({
+        turnId: requestedTurnId,
         input: task.prompt,
         threadId: task.threadId,
         // The persona's pin, then the task's own; the runtime falls back to the
@@ -603,6 +609,11 @@ export class TaskScheduler {
         webSearch: true,
         scheduled: { at: atIso, taskId: task.id }
       });
+      if (started.turnId) work.run.turnId = started.turnId;
+      return started;
+    };
+    try {
+      const { turnId } = await startWorkTurn();
       if (turnId) {
         run.turnId = turnId;
         // Start this turn's clock now rather than at its first streamed event, so
@@ -636,13 +647,7 @@ export class TaskScheduler {
               return false;
             });
           if (compacted) {
-            const retry = await this.opts.runtime.startTurn({
-              input: task.prompt,
-              threadId: task.threadId,
-              ...turnExtras,
-              webSearch: true,
-              scheduled: { at: atIso, taskId: task.id }
-            });
+            const retry = await startWorkTurn();
             if (retry.turnId) {
               run.turnId = retry.turnId;
               noteTurnStart(task.threadId, retry.turnId);
@@ -683,6 +688,7 @@ export class TaskScheduler {
       task.lastStatus = 'failed';
       this.recordOutcome(task, error instanceof Error ? error.message : String(error));
     } finally {
+      await work?.finish(run.preempted ? 'aborted' : task.lastStatus === 'ok' ? 'ok' : 'failed', task.lastError ?? undefined);
       this.activeRun = null;
       // A preempted run is requeued below rather than finished, so it earns
       // neither a completed row nor a failure — `worked: false` drops it.

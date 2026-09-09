@@ -2,7 +2,7 @@
   "expo": {
     "name": "Stem",
     "slug": "stem",
-    "version": "0.4.1",
+    "version": "0.5.1",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -14,7 +14,8 @@
       "appleTeamId": "AX23G9CAL9",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "buildNumber": "1"
     },
     "android": {
       "package": "sk.awantech.stem",
@@ -39,7 +40,16 @@
         {
           "mode": "development"
         }
-      ]
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Stem accesses selected photos so you can attach them to chats and mail.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      "expo-document-picker"
     ],
     "experiments": {
       "typedRoutes": false,

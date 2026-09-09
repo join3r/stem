@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { globalShortcut, ipcMain, type BrowserWindow } from 'electron';
 import { log } from '../../server/log';
 import { handleLocal } from '../ipc-bridge';
@@ -21,10 +22,13 @@ import {
   placeOverlay,
   setOverlayWorkspaceVisibility
 } from './windows';
+import { eventTurnId } from '../../shared/settledTurns';
+import { PillTurns, type PillEventParams } from './pill-turns';
 import { activityLabel } from '../../shared/activity';
 import type {
   BackendEventEnvelope,
   ItemEventParams,
+  LiveTurnInfo,
   QuickChatHandoff,
   QuickChatPrompt,
   QuickChatSettings,
@@ -74,6 +78,11 @@ export interface QuickChatDeps {
 }
 
 export interface QuickChatSurface {
+  submitHudTurn(input: StartTurnInput): void;
+  acceptHudTurn(turnId: string): void;
+  abandonHudTurn(turnId: string): void;
+  disconnectHud(): void;
+  reconcileHud(deviceId: string, turns: LiveTurnInfo[]): void;
   /** Create both windows (hidden) and bind the saved global accelerator. */
   start(settings: QuickChatSettings): void;
   /** Register the client-owned channels: quickchat:* and main:reveal. */
@@ -149,8 +158,9 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
   let followAcrossSpaces = true;
   /** Play a chime when a turn finishes while the pill is visible. */
   let finishSound = false;
-  /** Main-window threads currently running (working/answering), keyed by threadId. */
-  const runningMainThreads = new Set<string>();
+  /** Locally initiated interactive turns shared by both HUD paths. */
+  const pillTurns = new PillTurns();
+  let overlayTurnId: string | null = null;
   /** Ownership + last phase of the shared pill (chime edge detection) — see HudPill. */
   const hud = new HudPill();
 
@@ -198,6 +208,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
    * fires once, on the transition into 'finished' while the pill is visible.
    */
   function showHud(status: QuickChatStatus, owner: 'quickchat' | 'main'): void {
+    if (!pillTurns.connected) return;
     const win = ensureHudWindow();
     if (!win.isVisible()) {
       placeHud(win);
@@ -228,6 +239,8 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
    *   finished  -> once the turn completes
    */
   function driveHud(event: { method: string; params: unknown }): void {
+    const p = (event.params ?? {}) as PillEventParams;
+    if (eventTurnId(p) !== overlayTurnId || !pillTurns.event(event.method, p)) return;
     const overlayVisible = overlayWindow?.isVisible() ?? false;
     switch (event.method) {
       case 'item/started': {
@@ -290,10 +303,10 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     if (hud.owner === 'quickchat') return;
     const main = deps.mainWindow();
     const blurred = !!main && !main.isDestroyed() && !main.isFocused();
-    const running = runningMainThreads.size > 0;
+    const running = pillTurns.turns.some(t => !overlay.owns(t.threadId));
     if (running && blurred) {
       showHud({ phase: 'working', label: 'Working…', reveal: 'main' }, 'main');
-    }
+    } else if (hud.owner === 'main') hideHud();
   }
 
   /**
@@ -302,25 +315,13 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
    * shown for the main app (hud.owner === 'main') — i.e. the user is away.
    */
   function noteMainThreadEvent(method: string, threadId: string, params?: unknown): void {
-    // Hidden persona mail turns (params.mail) are background work, not "your
-    // answer" — the Inbox surfaces them; the pill would be noise ("Answer
-    // ready" for a mail the user never asked this window about).
-    if ((params as { mail?: boolean } | undefined)?.mail === true) return;
+    const p = (params ?? {}) as PillEventParams;
+    if (!pillTurns.event(method, { ...p, threadId })) return;
     if (method === 'item/started' || method === 'item/agentMessage/delta') {
-      runningMainThreads.add(threadId);
-      syncMainHud(); // handles a thread that starts while you're already away
-    } else if (
-      method === 'turn/completed' ||
-      method === 'turn/failed' ||
-      method === 'turn/aborted' ||
-      // An attributed process/exit routes with the dead turn's threadId: that
-      // thread's run is over exactly as if it had failed.
-      method === 'process/exit'
-    ) {
-      runningMainThreads.delete(threadId);
-      if (hud.owner === 'main' && runningMainThreads.size === 0) {
-        const label =
-          method === 'turn/completed' ? 'Answer ready' : method === 'turn/aborted' ? 'Stopped' : 'Request failed';
+      syncMainHud();
+    } else if (method === 'turn/completed' || method === 'turn/failed' || method === 'turn/aborted' || method === 'process/exit') {
+      if (hud.owner === 'main' && !pillTurns.turns.some(t => !overlay.owns(t.threadId))) {
+        const label = method === 'turn/completed' ? 'Answer ready' : method === 'turn/aborted' ? 'Stopped' : 'Request failed';
         showHud({ phase: 'finished', label, reveal: 'main' }, 'main');
       }
     }
@@ -469,7 +470,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     deps.sendToMain('quickchat:adopt', transition.snapshot);
     for (const bufferedEvent of transition.events) {
       deps.sendToMain('backend:event', bufferedEvent);
-      noteMainThreadEvent(bufferedEvent.method, threadId);
+      noteMainThreadEvent(bufferedEvent.method, threadId, bufferedEvent.params);
     }
   }
 
@@ -488,7 +489,8 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       // The overlay's own worker died mid-turn (attributed process/exit routes
       // with the dead turn's threadId): restore the input exactly as an
       // unattributed backend death always has.
-      if (event.method === 'process/exit' && (overlay.turnRunning || overlayResetBarrier.pending)) {
+      if (event.method === 'process/exit' && (overlay.turnRunning || overlayResetBarrier.pending) &&
+          pillTurns.event(event.method, (event.params ?? {}) as PillEventParams)) {
         overlay.restore(failQuickChatProcess(Date.now(), overlay.threadId));
         if (hud.owner === 'quickchat') showHud({ phase: 'finished', label: 'Request failed' }, 'quickchat');
         if (overlayResetBarrier.pending) finishOverlayReset();
@@ -518,13 +520,13 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       }
       deps.sendToMain('backend:event', event);
       sendToOverlay('backend:event', event);
-      runningMainThreads.clear();
+      if (event.method === 'process/exit') pillTurns.event(event.method, (event.params ?? {}) as PillEventParams);
       if (event.method === 'process/exit' && (overlay.turnRunning || overlayResetBarrier.pending)) {
         overlay.restore(failQuickChatProcess(Date.now(), overlay.threadId));
         if (hud.owner === 'quickchat') showHud({ phase: 'finished', label: 'Request failed' }, 'quickchat');
         if (overlayResetBarrier.pending) finishOverlayReset();
       }
-      if (hud.owner === 'main') hideHud();
+      if (event.method === 'process/exit' && hud.owner === 'main') hideHud();
       return false;
     }
     deps.sendToMain('backend:event', event);
@@ -540,6 +542,8 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
   async function runQuickChat(prompt: QuickChatPrompt): Promise<StartTurnResult> {
     // Start the disappear→HUD half of the cycle immediately — before the (async)
     // thread creation — so the overlay never flashes the half-laid-out panel.
+    const turnId = prompt.turnId || randomUUID();
+    overlayTurnId = turnId;
     overlay.beginTurn(Date.now());
     // Hide just the overlay (NOT app.hide — that would also hide the HUD we're
     // about to show, and re-showing the HUD would reactivate the app and surface
@@ -569,7 +573,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       const result = (await deps.invoke('backend:startTurn', [
         {
           input: prompt.input,
-          turnId: prompt.turnId,
+          turnId,
           threadId,
           model: prompt.model ?? undefined,
           effort: prompt.effort ?? undefined,
@@ -625,6 +629,23 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
   }
 
   return {
+    submitHudTurn(input) { pillTurns.submit(input); },
+    acceptHudTurn(turnId) { pillTurns.accepted(turnId); },
+    abandonHudTurn(turnId) { pillTurns.abandon(turnId); syncMainHud(); },
+    disconnectHud() { pillTurns.disconnect(); hideHud(); },
+    reconcileHud(deviceId, turns) {
+      pillTurns.reconcile(deviceId, turns);
+      const runningOverlay = pillTurns.turns.some(t => t.turnId === overlayTurnId && overlay.owns(t.threadId));
+      if (overlay.turnRunning && !runningOverlay) {
+        overlay.settleTurn(Date.now());
+        if (overlayResetBarrier.pending) finishOverlayReset();
+      }
+      hideHud(); // Snapshot corrections are silent; only live endings chime.
+      if (runningOverlay && !overlayWindow?.isVisible()) {
+        overlay.beginTurn(Date.now());
+        showHud({ phase: 'working', label: 'Working…' }, 'quickchat');
+      } else syncMainHud();
+    },
     start(settings) {
       // Seed the all-Spaces flag before creating the overlay so it's applied once,
       // at creation.
@@ -673,7 +694,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
         deps.sendToMain('quickchat:adopt', payload);
         for (const bufferedEvent of bufferedEvents) {
           deps.sendToMain('backend:event', bufferedEvent);
-          noteMainThreadEvent(bufferedEvent.method, payload.threadId);
+          noteMainThreadEvent(bufferedEvent.method, payload.threadId, bufferedEvent.params);
         }
       });
 

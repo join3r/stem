@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Stem Browser Control — feasibility probe",
+  "version": "0.0.1",
+  "description": "Development probe for isolated, fictional browser fixtures. Not a production integration.",
+  "permissions": ["tabs", "debugger", "nativeMessaging", "webNavigation", "downloads"],
+  "background": { "service_worker": "background.mjs", "type": "module" },
+  "action": { "default_title": "Connect the Stem feasibility probe" },
+  "incognito": "not_allowed"
+}
