@@ -11,7 +11,15 @@ import type {
   LocalProviderTestResult,
   ModelOverride
 } from '../../../../shared/types';
-import { API_KEY_PROVIDER_IDS, AUTH_PROVIDER_IDS, customProviderId, isCustomProviderId, isLocalProviderId, providerName } from '../../../../shared/providers';
+import {
+  API_KEY_PROVIDER_IDS,
+  AUTH_PROVIDER_IDS,
+  LOCAL_PROVIDER_IDS,
+  isCustomProviderId,
+  isLocalProviderId,
+  providerName,
+  resolveCustomProviderId
+} from '../../../../shared/providers';
 import { resolveBackgroundModel, resolveMemoryModel, resolveRoleEffort, resolveSkillsModel } from '../../../../shared/modelRoles';
 import { parsePiModelsJson, providerLabel } from '../../../../shared/piModelsImport';
 import { clampEffort, EffortSelect, effortsOf } from '../../../ui/EffortSelect';
@@ -1294,7 +1302,7 @@ function OverridesField({
       </p>
       {kept && (
         <p className="muted">
-          Kept from the endpoint you last used — clear it if this is a different server.
+          Kept from when this endpoint was last connected — clear it if this is a different server.
         </p>
       )}
     </>
@@ -1415,12 +1423,34 @@ function LocalServerAddForm({
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<LocalProviderTestResult | null>(null);
   const [saving, setSaving] = useState(false);
-  // Each named endpoint owns its overrides. Start a new endpoint empty rather
-  // than copying the legacy custom slot (which could silently apply settings
-  // intended for another server). Re-enabling a disconnected endpoint omits an
-  // empty patch below, preserving the overrides already stored under its id.
-  const [overrides, setOverrides] = useState('');
+  const custom = server === 'custom';
+  // Where Enable will save a custom endpoint: the slug of its name, unless a
+  // live endpoint already owns that id. A disconnected one with the same slug
+  // is reused, which is what brings its retained overrides back into play.
+  const targetId = resolveCustomProviderId(customName, (id) => !!settings[id]?.enabled);
+  const retained = custom ? settings[targetId]?.modelOverrides : undefined;
+  const retainedText = overridesToText(retained);
+  // Each named endpoint owns its overrides, so a new endpoint starts empty
+  // instead of inheriting another server's. But overrides survive a disconnect,
+  // and Enable applies whatever is stored under the id it writes to — so when
+  // the typed name resolves to an endpoint that still holds some, they are put
+  // in the box first. The box is the whole truth: what it shows is what Enable
+  // sends, including nothing. Seeding stops once the user has edited the draft;
+  // re-seeding would fight the typing.
+  const [overrides, setOverridesRaw] = useState('');
+  const [overridesTouched, setOverridesTouched] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const setOverrides = (text: string) => {
+    setOverridesTouched(true);
+    setOverridesRaw(text);
+  };
+  useEffect(() => {
+    if (overridesTouched) return;
+    setOverridesRaw(retainedText);
+    // Open when something was retained: Enable is about to apply it, and a
+    // fragment behind a collapsed heading is the invisible-config problem again.
+    if (retainedText) setShowAdvanced(true);
+  }, [retainedText, overridesTouched]);
   const parsedOverrides = overridesFromText(overrides);
   // The probe runs for seconds against a URL the user is still typing into, so a
   // late answer must prove it still belongs to this form before it may speak for
@@ -1433,7 +1463,6 @@ function LocalServerAddForm({
   const testGateRef = useRef(new RequestGate());
   const formRef = useRef({ server, baseUrl, apiKey, models, api });
   formRef.current = { server, baseUrl, apiKey, models, api };
-  const custom = server === 'custom';
   const modelList = models
     .split(',')
     .map((m) => m.trim())
@@ -1450,9 +1479,11 @@ function LocalServerAddForm({
     setApi(id === 'custom' ? null : 'openai-completions');
     setTest(null);
     setTesting(false);
-    // The overrides draft is NOT cleared: it belongs to `custom`, only reaches
-    // the patch when `custom` is the selection, and surviving a stray click on
-    // Ollama and back is the same reason it survives a disconnect.
+    // A fresh pick is a fresh draft: the name is gone, so the id the overrides
+    // were seeded for is gone too, and the seeding effect may take over again.
+    setOverridesRaw('');
+    setOverridesTouched(false);
+    setShowAdvanced(false);
   }
 
   async function runTest() {
@@ -1508,14 +1539,7 @@ function LocalServerAddForm({
     setSaving(true);
     onError(null);
     try {
-      let providerId = server;
-      if (custom) {
-        const baseId = customProviderId(customName);
-        providerId = baseId;
-        let suffix = 2;
-        while (settings[providerId]?.enabled) providerId = `${baseId}-${suffix++}` as LocalProviderId;
-      }
-      const res = await window.stem.updateLocalProvider(providerId, {
+      const res = await window.stem.updateLocalProvider(custom ? targetId : server, {
         enabled: true,
         ...(custom ? { name: customName.trim() } : {}),
         baseUrl: baseUrl.trim(),
@@ -1527,12 +1551,10 @@ function LocalServerAddForm({
         // one clears the stored key instead of silently inheriting it.
         apiKey: custom ? apiKey.trim() : '',
         models: custom ? modelList : [],
-        // Do not send an empty override object here: when this id belongs to a
-        // disconnected endpoint, omission preserves its hard-won retained
-        // overrides. Once connected, its dedicated editor can explicitly clear.
-        ...(custom && parsedOverrides.ok && Object.keys(parsedOverrides.value).length
-          ? { modelOverrides: parsedOverrides.value }
-          : {})
+        // Whatever the box holds, including an emptied one — Enable is the point
+        // where retained overrides are either confirmed for this endpoint or
+        // cleared. Malformed JSON can't get here: the button is disabled.
+        ...(custom && parsedOverrides.ok ? { modelOverrides: parsedOverrides.value } : {})
       });
       if (!res.ok) onError(res.error ?? 'Could not enable the server.');
       else await onSaved();
@@ -1577,7 +1599,7 @@ function LocalServerAddForm({
         value={server}
         onChange={(e) => pick(e.target.value as LocalProviderId)}
       >
-        {(['ollama', 'lmstudio', 'custom'] as LocalProviderId[]).map((id) => (
+        {LOCAL_PROVIDER_IDS.map((id) => (
           <option key={id} value={id}>
             {providerName(id)}
           </option>
@@ -1646,10 +1668,7 @@ function LocalServerAddForm({
           </button>
           {showAdvanced && (
             <>
-              <OverridesField
-                text={overrides}
-                onChange={setOverrides}
-              />
+              <OverridesField text={overrides} onChange={setOverrides} kept={!!retainedText && overrides === retainedText} />
               {!parsedOverrides.ok && <p className="error">That isn’t valid JSON yet.</p>}
             </>
           )}

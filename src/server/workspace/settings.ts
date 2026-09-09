@@ -35,6 +35,7 @@ import type {
   MailSettings
 } from '../../shared/types';
 import { type BackgroundRole, resolveRoleEffort } from '../../shared/modelRoles';
+import { CUSTOM_PROVIDER_ID_RE, isCustomProviderId } from '../../shared/providers';
 import { degrade } from '../degrade';
 import { DEFAULT_SCRATCH_TTL_DAYS } from '../exec/scratch';
 import { customModelId, DEFAULT_LOCAL_EMBED_MODEL, EMBED_CATALOG } from '../recall/embed-catalog';
@@ -574,7 +575,7 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
   const rawLp = (parsed?.localProviders ?? {}) as Record<string, Partial<LocalProviderSettings>>;
   const coerceLocal = (id: LocalProviderId): LocalProviderSettings => {
     const r = rawLp[id] ?? {};
-    const custom = id === 'custom' || id.startsWith('custom-');
+    const custom = isCustomProviderId(id);
     const def = custom ? DEFAULTS.localProviders.custom : DEFAULTS.localProviders[id];
     // apiKey/models stay absent rather than empty when unset, so a keyless server
     // with a server-provided catalog round-trips to exactly the old shape.
@@ -617,8 +618,7 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
   };
   // Dynamic entries are restricted to the reserved, pi-safe custom namespace.
   for (const id of Object.keys(rawLp)) {
-    if (/^custom-[a-z0-9][a-z0-9-]*$/.test(id))
-      localProviders[id as `custom-${string}`] = coerceLocal(id as LocalProviderId);
+    if (CUSTOM_PROVIDER_ID_RE.test(id)) localProviders[id as `custom-${string}`] = coerceLocal(id as LocalProviderId);
   }
   return {
     quickChat: {

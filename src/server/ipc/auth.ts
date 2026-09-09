@@ -94,10 +94,11 @@ export function registerAuthIpc(deps: IpcDeps): void {
   });
   registerServer('providers:updateLocal', async (_e, id: LocalProviderId, patch: Partial<LocalProviderSettings>) => {
     if (!isLocalProviderId(id)) return { ok: false, error: 'Invalid local provider id.' };
+    // A named endpoint is only ever shown by its name, so one without a name
+    // would be a row nobody can tell apart. The id shape itself was checked above.
     if (isCustomProviderId(id) && id !== 'custom') {
       const existing = (await readSettings()).localProviders[id];
-      if (!/^custom-[a-z0-9][a-z0-9-]*$/.test(id) || !(patch.name ?? existing?.name)?.trim())
-        return { ok: false, error: 'Named custom endpoints need a valid name and provider id.' };
+      if (!(patch.name ?? existing?.name)?.trim()) return { ok: false, error: 'Named custom endpoints need a name.' };
     }
     if (deps.e2e) return { ok: true, status: await deps.runtime().login() };
     // Gate the overrides BEFORE anything is persisted. pi fails models.json as a
@@ -137,7 +138,8 @@ export function registerAuthIpc(deps: IpcDeps): void {
         // Drop the endpoint's secret with it — re-adding asks for the key again.
         // modelOverrides deliberately stays: the strings take real debugging to
         // find, and an override only applies to a model id that matches, so one
-        // left from another endpoint is inert. The add form pre-fills it back so
+        // left from another endpoint is inert. The add form pre-fills it back —
+        // for a named endpoint, whenever the typed name resolves to this id — so
         // it is never applied invisibly.
         await updateLocalProvider(providerId, { enabled: false, apiKey: '', models: [] });
         await syncModelsConfig();
