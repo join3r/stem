@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { LocalProviderApi, LocalProviderTestResult, ModelOverride } from '../../shared/types';
-import { LOCAL_PROVIDER_IDS, isLocalProviderId } from '../../shared/providers';
+import type { LocalProviderApi, LocalProviderId, LocalProviderTestResult, ModelOverride } from '../../shared/types';
+import { isCustomProviderId, isLocalProviderId } from '../../shared/providers';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { parseModelOverrides } from './model-overrides';
@@ -403,7 +403,7 @@ export function syncModelsConfig(): Promise<boolean> {
     }
     const before = JSON.stringify(config);
 
-    for (const id of LOCAL_PROVIDER_IDS) {
+    for (const id of Object.keys(settings) as LocalProviderId[]) {
       const { enabled, baseUrl, apiKey, models: manual, api: rawApi } = settings[id];
       if (!enabled) {
         delete config.providers[id];
@@ -416,9 +416,9 @@ export function syncModelsConfig(): Promise<boolean> {
       const parsed = parseModelOverrides(settings[id].modelOverrides);
       if (!parsed.ok) log('pi', `ignoring invalid model overrides for ${id}`, { errors: parsed.errors });
       const overrides = parsed.ok ? parsed.value : {};
-      // Only `custom` may speak anthropic-messages; the coercion enforces this too,
+      // Only custom endpoints may speak anthropic-messages; the coercion enforces this too,
       // this is defense in depth against a hand-edited settings.json.
-      const api: LocalProviderApi = id === 'custom' && rawApi === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions';
+      const api: LocalProviderApi = isCustomProviderId(id) && rawApi === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions';
       // Hand-entered ids are authoritative: an endpoint that names its models has
       // opted out of discovery, so don't probe it (and don't let a listing endpoint
       // it happens to serve override the user's choice).

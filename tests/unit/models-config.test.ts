@@ -51,7 +51,7 @@ afterEach(() => {
 });
 
 function settings(patch?: Partial<LocalProvidersSettings>): LocalProvidersSettings {
-  return { ...emptySettings(), ...patch };
+  return { ...emptySettings(), ...patch } as LocalProvidersSettings;
 }
 
 /** Point the mocked settings store at `patch` for the next sync. */
@@ -395,6 +395,35 @@ describe('syncModelsConfig', () => {
     const cfg = readConfig();
     expect(cfg.providers['my-vllm'].models).toEqual([{ id: 'custom' }]);
     expect(cfg.providers.ollama).toBeDefined();
+  });
+
+  it('writes multiple named custom providers with independent protocols and credentials', async () => {
+    use({
+      'custom-hai-openai': {
+        enabled: true,
+        name: 'HAI OpenAI',
+        baseUrl: 'http://localhost:6655/openai',
+        api: 'openai-completions',
+        apiKey: 'openai-key',
+        models: ['gpt-5']
+      },
+      'custom-hai-anthropic': {
+        enabled: true,
+        name: 'HAI Anthropic',
+        baseUrl: 'http://localhost:6655/anthropic',
+        api: 'anthropic-messages',
+        apiKey: 'anthropic-key',
+        models: ['claude-opus']
+      }
+    });
+    await syncModelsConfig();
+    const providers = readConfig().providers;
+    expect(providers['custom-hai-openai']).toMatchObject({
+      baseUrl: 'http://localhost:6655/openai/v1', apiKey: 'openai-key', models: [{ id: 'gpt-5' }]
+    });
+    expect(providers['custom-hai-anthropic']).toMatchObject({
+      baseUrl: 'http://localhost:6655/anthropic', apiKey: 'anthropic-key', models: [{ id: 'claude-opus' }]
+    });
   });
 
   it('uses hand-entered model ids verbatim and never probes the endpoint', async () => {

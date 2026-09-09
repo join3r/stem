@@ -21,6 +21,7 @@ Maintainer notes:
   quietly while work runs and keeps partial results after failure or Stop. Desktop and iOS show
   the same records. Scheduled notifications include their run history; older mails show what can
   be recovered, with missing details marked.
+- **Multiple custom model endpoints.** Add separately named OpenAI-compatible and Anthropic-compatible endpoints and keep all of their models available at once. Existing single Custom endpoint settings continue to work.
 
 ### Fixed
 

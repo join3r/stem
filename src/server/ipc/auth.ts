@@ -4,7 +4,7 @@ import { markOnboardingCompleted, readSettings, updateDefaultModel, updateLocalP
 import { probeLocalProvider, syncModelsConfig } from '../pi/models-config';
 import { parseModelOverrides } from '../pi/model-overrides';
 import { relayCallback } from '../pi/oauth-courier';
-import { isLocalProviderId } from '../../shared/providers';
+import { isCustomProviderId, isLocalProviderId } from '../../shared/providers';
 import type {
   ApiKeyProviderId,
   AuthProviderId,
@@ -93,6 +93,12 @@ export function registerAuthIpc(deps: IpcDeps): void {
     return probeLocalProvider(baseUrl, apiKey, api);
   });
   registerServer('providers:updateLocal', async (_e, id: LocalProviderId, patch: Partial<LocalProviderSettings>) => {
+    if (!isLocalProviderId(id)) return { ok: false, error: 'Invalid local provider id.' };
+    if (isCustomProviderId(id) && id !== 'custom') {
+      const existing = (await readSettings()).localProviders[id];
+      if (!/^custom-[a-z0-9][a-z0-9-]*$/.test(id) || !(patch.name ?? existing?.name)?.trim())
+        return { ok: false, error: 'Named custom endpoints need a valid name and provider id.' };
+    }
     if (deps.e2e) return { ok: true, status: await deps.runtime().login() };
     // Gate the overrides BEFORE anything is persisted. pi fails models.json as a
     // unit, so a single bad type here would empty the whole provider map and take

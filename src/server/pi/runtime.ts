@@ -1450,6 +1450,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const providers = await this.authProviders();
     const visible = providers.size ? models.filter((m) => providers.has(m.provider)) : models;
     const def = await this.resolveDefaultModel();
+    const localProviders = (await readSettings()).localProviders;
     return visible.map((m) => {
       const id = `${m.provider}/${m.id}`;
       const efforts = effortsFor(m);
@@ -1458,7 +1459,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         displayName: m.name ?? m.id,
         description: m.provider,
         provider: m.provider,
-        providerName: providerName(m.provider),
+        providerName: localProviders[m.provider as keyof typeof localProviders]?.name ?? providerName(m.provider),
         supportedEfforts: efforts,
         defaultEffort: efforts.includes('medium') ? 'medium' : efforts[0] ?? 'medium',
         serviceTiers: serviceTiersFor(m),
@@ -4293,7 +4294,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const parsed = JSON.parse(raw) as unknown;
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return new Set();
       const providers = new Set<string>();
-      const apiKeyProviders = new Set<string>([...API_KEY_PROVIDER_IDS, ...LOCAL_PROVIDER_IDS]);
+      const { localProviders } = await readSettings();
+      const apiKeyProviders = new Set<string>([...API_KEY_PROVIDER_IDS, ...LOCAL_PROVIDER_IDS, ...Object.keys(localProviders)]);
       const oauthProviders = new Set<string>(AUTH_PROVIDER_IDS);
       for (const [provider, value] of Object.entries(parsed as Record<string, unknown>)) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) continue;

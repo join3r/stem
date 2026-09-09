@@ -28,5 +28,15 @@ export const API_KEY_PROVIDER_IDS: ApiKeyProviderId[] = ['anthropic', 'openai', 
 export const LOCAL_PROVIDER_IDS: LocalProviderId[] = ['ollama', 'lmstudio', 'custom'];
 
 export function isLocalProviderId(id: string): id is LocalProviderId {
-  return (LOCAL_PROVIDER_IDS as string[]).includes(id);
+  return (LOCAL_PROVIDER_IDS as string[]).includes(id) || /^custom-[a-z0-9][a-z0-9-]*$/.test(id);
+}
+
+export function isCustomProviderId(id: string): id is LocalProviderId {
+  return id === 'custom' || /^custom-[a-z0-9][a-z0-9-]*$/.test(id);
+}
+
+/** Build a deterministic provider id; callers resolve collisions before saving. */
+export function customProviderId(name: string): LocalProviderId {
+  const slug = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
+  return `custom-${slug || 'endpoint'}`;
 }

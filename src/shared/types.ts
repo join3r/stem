@@ -211,11 +211,14 @@ export type ApiKeyProviderId = 'anthropic' | 'openai' | 'openrouter' | 'xai';
  * them as signed in. `custom` is a user-supplied endpoint: any URL, optionally
  * behind an API key, with the model ids typed by hand (see below).
  */
-export type LocalProviderId = 'ollama' | 'lmstudio' | 'custom';
+export type BuiltInLocalProviderId = 'ollama' | 'lmstudio';
+/** Legacy `custom` is retained for existing installs; new endpoints use `custom-<slug>`. */
+export type CustomProviderId = 'custom' | `custom-${string}`;
+export type LocalProviderId = BuiltInLocalProviderId | CustomProviderId;
 
 /**
  * Which API flavor the custom endpoint speaks. Ollama and LM Studio are always
- * OpenAI-compatible; only `custom` may set this to `anthropic-messages` (for
+ * OpenAI-compatible; only custom endpoints may set this to `anthropic-messages` (for
  * Anthropic's Messages API or a proxy that speaks it). Default (absent) is
  * `openai-completions` — matches the pre-existing single-flavor behavior.
  */
@@ -248,10 +251,12 @@ export interface ModelOverride {
 
 export interface LocalProviderSettings {
   enabled: boolean;
+  /** User-facing name for a named custom endpoint. */
+  name?: string;
   /** Server root, e.g. http://localhost:11434 (no path; Stem appends /v1/…). */
   baseUrl: string;
   /**
-   * API flavor the server speaks. `custom` only — Ollama/LM Studio always use
+   * API flavor the server speaks. Custom endpoints only — Ollama/LM Studio always use
    * `openai-completions`. Absent = `openai-completions`.
    */
   api?: LocalProviderApi;
@@ -273,7 +278,7 @@ export interface LocalProviderSettings {
   /**
    * Per-model facts the endpoint doesn't report, keyed by model id — written to
    * this provider's `modelOverrides` in models.json on every sync, which is what
-   * keeps them from being rebuilt away. `custom` only: Ollama reports its own
+   * keeps them from being rebuilt away. Custom endpoints only: Ollama reports its own
    * capabilities and LM Studio's users are better served by a Custom entry than
    * by a second place to hand-configure.
    *
@@ -284,7 +289,12 @@ export interface LocalProviderSettings {
   modelOverrides?: Record<string, ModelOverride>;
 }
 
-export type LocalProvidersSettings = Record<LocalProviderId, LocalProviderSettings>;
+export type LocalProvidersSettings = {
+  ollama: LocalProviderSettings;
+  lmstudio: LocalProviderSettings;
+  /** Migration-compatible slot for configurations written before named endpoints. */
+  custom: LocalProviderSettings;
+} & Record<`custom-${string}`, LocalProviderSettings>;
 
 /** Result of probing a local server's /v1/models (the "Test" button / onboarding). */
 export interface LocalProviderTestResult {
