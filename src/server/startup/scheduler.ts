@@ -38,7 +38,14 @@ export function initTaskScheduler(deps: {
     /** The persona the run executed as (schedule-as-persona): the mail's sender. */
     personaId?: string;
     threadId?: string;
+    /** The notify_user title, when given — this firing's own headline. */
+    headline?: string;
   }) => Promise<string | void>;
+  /**
+   * The run behind a notification settled with a reply: put it on that mail.
+   * Optional so a host without mail (tests) can leave results in the chat.
+   */
+  attachTaskResult?: (input: { itemId: string; result: string }) => Promise<void>;
 }): TaskScheduler {
   // A task's runs need a chat the user can open. A mail persona's session is not
   // one — the Chats list hides it and the Inbox shows only mail — so a task
@@ -67,6 +74,11 @@ export function initTaskScheduler(deps: {
     // same pass a mail delivery gets (mail/reflect.ts never rejects).
     reflect: (args) => reflectOnDelivery(deps.runtime, args),
     rehomeHiddenThread,
+    // The run's reply joins the mail its notify_user opened — the Inbox then
+    // holds the report or drafts, not a one-line pointer at a chat.
+    ...(deps.attachTaskResult
+      ? { onResult: (args: { itemId: string; result: string }) => deps.attachTaskResult!({ itemId: args.itemId, result: args.result }) }
+      : {}),
     // A run that found nothing still wrote a turn, which bumps the thread's
     // mtime — the read-state signal the CHATS TREE bolds rows by. (The Inbox is
     // mail now and never sees the thread; this absorber only keeps a quiet
@@ -119,6 +131,7 @@ export function initTaskScheduler(deps: {
             body: message,
             taskId: running.id,
             threadId,
+            ...(title?.trim() ? { headline: title.trim() } : {}),
             ...(running.personaId ? { personaId: running.personaId } : {})
           })
           .catch((err) =>

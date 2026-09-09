@@ -165,12 +165,22 @@ export default function MailConversation() {
                   {item.stale && (
                     <Text style={{ color: theme.warn }}>Reply to an earlier message</Text>
                   )}
+                  {item.subject && (
+                    <Text selectable style={{ color: theme.text, fontSize: 17, fontWeight: '600' }}>
+                      {item.subject}
+                    </Text>
+                  )}
                   {item.from === 'user' ? (
                     <Text selectable style={{ color: theme.text, fontSize: 16, lineHeight: 24 }}>
                       {item.body}
                     </Text>
                   ) : (
                     <AgentMarkdown text={item.body} theme={theme} />
+                  )}
+                  {item.result && (
+                    <View style={{ borderTopWidth: 1, borderTopColor: theme.line, paddingTop: 12 }}>
+                      <AgentMarkdown text={item.result} theme={theme} />
+                    </View>
                   )}
                   {item.attachments?.map((a, index) =>
                     a.kind === 'image' && a.dataUrl ? (

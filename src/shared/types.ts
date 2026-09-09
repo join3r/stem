@@ -2244,6 +2244,18 @@ export interface MailItem {
   /** Present when a scheduled task's run produced this mail. */
   taskId?: string;
   /**
+   * Scheduled-task mail only: this firing's own headline (the run's notify_user
+   * title). The conversation's subject follows the latest one; each item keeps
+   * its own, so an older firing still reads under the headline it had.
+   */
+  subject?: string;
+  /**
+   * Scheduled-task mail only: the run's final reply — the report or the drafts
+   * the short notify line announced — attached once the run settled ok. Absent
+   * while the run is still going, or when it ended without a reply.
+   */
+  result?: string;
+  /**
    * The user had already sent a newer mail into this conversation when this
    * reply landed — it answers an EARLIER message. The renderer badges it so a
    * late reply is never mistaken for the answer to the latest one.

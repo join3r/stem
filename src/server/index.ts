@@ -826,6 +826,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     isUserActive: () => busyWithin(USER_ACTIVE_WINDOW_MS),
     // notify_user in a scheduled run lands as mail, grouped per task.
     deliverTaskMail: (input) => mailRouter!.deliverTaskMail(input),
+    // …and the run's final reply lands on that mail once the run settles.
+    attachTaskResult: (input) => mailRouter!.attachTaskResult(input),
     // Raising a window and bouncing a dock are things only a machine with a
     // screen can do, so they leave as pushes rather than calls. There is no
     // allowlist deciding who hears them — every SSE client gets every channel

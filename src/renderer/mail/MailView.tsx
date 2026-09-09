@@ -235,7 +235,13 @@ export const MailConversationView = forwardRef<MailViewHandle, {
         )}
         <span className="mail-item-at">{formatAt(m.at, now)}</span>
       </div>
+      {m.subject && <h2 className="mail-item-subject">{m.subject}</h2>}
       {m.from === 'user' ? <p className="mail-item-body-plain">{m.body}</p> : <MdxView text={m.body} />}
+      {m.result && (
+        <section className="mail-item-result" aria-label="The run’s reply">
+          <MdxView text={m.result} />
+        </section>
+      )}
       {m.attachments && m.attachments.length > 0 && (
         <div className="message-attachments">
           {m.attachments.map((att, i) =>

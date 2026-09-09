@@ -4,6 +4,14 @@ Send mail to a persona when you want it to work on a request and return a reply.
 The first recipient coordinates the conversation and can consult the other
 personas. Replies arrive in your Inbox.
 
+## Scheduled tasks
+
+A scheduled task that finds something worth telling you sends mail. All firings
+of one task share one conversation. Each firing keeps its own headline, and the
+conversation takes the latest headline as its subject. Beneath the short notice
+the mail carries the run's full reply, such as a report or the drafts it wrote,
+once the run finishes. The reply also stays in the task's chat.
+
 ## Work history
 
 Expand **Work** beneath your message to see what happened while you waited.

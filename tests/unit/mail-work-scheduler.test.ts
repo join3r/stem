@@ -74,9 +74,10 @@ describe('scheduled mail work integration', () => {
   it.each(['ok', 'failed'] as const)('retains activity before and after notification when a scheduled run ends %s', async (status) => {
     runtime = new ScheduledRuntime();
     const silent = vi.fn();
+    const result = vi.fn(async () => {});
     scheduler = new TaskScheduler({
       runtime: runtime as unknown as ChatBackend,
-      onChange: () => {}, onRun: () => {}, onSilentRun: silent
+      onChange: () => {}, onRun: () => {}, onSilentRun: silent, onResult: result
     });
     const created = await scheduler.create({ prompt: 'Check fictional product news', cron: '0 8 * * *' }, 'scheduled-thread');
     if (!created.ok) throw new Error(created.error);
@@ -115,5 +116,13 @@ describe('scheduled mail work integration', () => {
     if (status === 'failed') expect(run.error).toBe('Connection lost after verification');
     expect(runtime.listenerCount('event')).toBe(0);
     expect(silent).not.toHaveBeenCalled();
+    // The final text block is the run's reply: it joins the mail the notify
+    // opened — but only for a clean settle. A failed run's partial text stays
+    // in Work as progress, never dressed up as the result.
+    if (status === 'ok') {
+      expect(result).toHaveBeenCalledWith({
+        taskId: created.task.id, threadId: 'scheduled-thread', itemId: 'notification-one', result: 'Sources checked; follow-up ready.'
+      });
+    } else expect(result).not.toHaveBeenCalled();
   });
 });

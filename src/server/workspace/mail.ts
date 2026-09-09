@@ -47,6 +47,8 @@ function coerceItem(raw: unknown): MailItem | null {
     at: num(r.at) ?? 0
   };
   if (typeof r.taskId === 'string' && r.taskId) item.taskId = r.taskId;
+  if (typeof r.subject === 'string' && r.subject) item.subject = r.subject;
+  if (typeof r.result === 'string' && r.result) item.result = r.result;
   if (r.stale === true) item.stale = true;
   const sys = coerceSystemVersion(r.sys);
   if (sys) item.sys = sys;
@@ -438,6 +440,32 @@ export function setConversationStatus(
     conversationOf(store, id).status = status;
     if (status === 'working') liveWorking.add(id);
     else liveWorking.delete(id);
+  });
+}
+
+/** Retitle a conversation — a scheduled task's latest firing names its thread. */
+export function setConversationSubject(id: string, subject: string): Promise<MailListResult> {
+  return update((store) => {
+    conversationOf(store, id).subject = subject;
+  });
+}
+
+/**
+ * Attach a scheduled run's final reply to the notification it sent mid-run.
+ * The reply lands after the mail did, so the conversation's activity clocks
+ * move with it: a user who read the one-line notice before the report arrived
+ * sees the conversation unread again, which is what happened. No `received`
+ * announcement — the notify already pushed, and this is the same mail.
+ */
+export function setMailItemResult(itemId: string, result: string): Promise<MailListResult> {
+  return update((store) => {
+    const item = store.items.find((i) => i.id === itemId);
+    if (!item) throw new Error('That mail no longer exists.');
+    item.result = result;
+    const conversation = conversationOf(store, item.conversationId);
+    const at = Date.now();
+    conversation.updatedAt = Math.max(conversation.updatedAt, at);
+    if (item.to.includes('user')) conversation.userUpdatedAt = Math.max(conversation.userUpdatedAt, at);
   });
 }
 

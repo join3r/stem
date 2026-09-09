@@ -16,7 +16,9 @@ import {
   readMail,
   setConversationSession,
   setConversationStatus,
+  setConversationSubject,
   setMailArchived,
+  setMailItemResult,
   setMailRead,
   setMailSnooze
 } from '../../src/server/workspace/mail';
@@ -355,6 +357,32 @@ describe('degradation', () => {
 
 
 describe('mail observers', () => {
+  it('a scheduled result joins its notification and re-bolds the conversation, without a second arrival', async () => {
+    const received: string[] = [];
+    const offReceived = onMailReceived((item) => received.push(item.body));
+    try {
+      const c = await createConversation('First headline', ['normal']);
+      await appendMailItem({ conversationId: c.id, from: 'task:t1', to: ['user'], body: 'One draft is ready in this chat.', taskId: 't1', subject: 'First headline', at: 1_000 });
+      let { conversations, items } = await readMail();
+      expect(items[0].subject).toBe('First headline');
+      // The user read the one-line notice before the drafts landed.
+      await setMailRead([c.id], true);
+      expect(isUnread({ threadId: c.id, updatedAt: conversations[0].userUpdatedAt }, (await readMail()).inbox)).toBe(false);
+      // Strictly after the read stamp: on a warm runner the read and the
+      // result otherwise share a millisecond and the re-bold never shows.
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      await setMailItemResult(items[0].id, '## Draft\n\nHi Josefine…');
+      await setConversationSubject(c.id, 'Second headline');
+      ({ conversations, items } = await readMail());
+      expect(items[0].result).toBe('## Draft\n\nHi Josefine…');
+      expect(conversations[0].subject).toBe('Second headline');
+      expect(conversations[0].userUpdatedAt).toBeGreaterThan(1_000);
+      expect(isUnread({ threadId: c.id, updatedAt: conversations[0].userUpdatedAt }, (await readMail()).inbox)).toBe(true);
+      expect(received).toEqual(['One draft is ready in this chat.']);
+      await expect(setMailItemResult('missing', 'x')).rejects.toThrow(/no longer exists/);
+    } finally { offReceived(); }
+  });
+
   it('announces durable triage writes and only newly appended user-addressed mail', async () => {
     let changes = 0;
     const received: string[] = [];

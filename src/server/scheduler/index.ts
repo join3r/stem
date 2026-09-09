@@ -51,6 +51,12 @@ export interface SchedulerOptions {
    */
   reflect?: (args: { personaId: string; assignment: string; threadId: string }) => Promise<void>;
   /**
+   * A run that called `notify_user` settled ok with a final reply: hand the
+   * reply to the mail its notification became (the last one, when it notified
+   * more than once), so the Inbox carries the result and not only the headline.
+   */
+  onResult?: (args: { taskId: string; threadId: string; itemId: string; result: string }) => Promise<void>;
+  /**
    * Boot-time repair for a task bound to a thread the user cannot open (a mail
    * persona's hidden session — see ScheduledTask.originThreadId). Answers with a
    * fresh chat to move the task onto, or null to leave it where it is.
@@ -688,7 +694,16 @@ export class TaskScheduler {
       task.lastStatus = 'failed';
       this.recordOutcome(task, error instanceof Error ? error.message : String(error));
     } finally {
-      await work?.finish(run.preempted ? 'aborted' : task.lastStatus === 'ok' ? 'ok' : 'failed', task.lastError ?? undefined);
+      const reply = await work?.finish(run.preempted ? 'aborted' : task.lastStatus === 'ok' ? 'ok' : 'failed', task.lastError ?? undefined);
+      // The notify said "the report is in this chat"; the report is this reply.
+      // Only a run that notified has a mail to carry it, and only a clean
+      // settle has a reply worth the name (a failed run's partial text is not).
+      const resultItemId = work?.group?.notificationItemIds?.at(-1);
+      if (reply && resultItemId && run.notified && !run.preempted && task.lastStatus === 'ok' && this.opts.onResult) {
+        await this.opts
+          .onResult({ taskId: task.id, threadId: task.threadId, itemId: resultItemId, result: reply })
+          .catch((err) => degrade('tasks', 'left a scheduled result out of its mail', err));
+      }
       this.activeRun = null;
       // A preempted run is requeued below rather than finished, so it earns
       // neither a completed row nor a failure — `worked: false` drops it.

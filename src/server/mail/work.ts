@@ -48,7 +48,8 @@ export interface WorkHandle {
   run: MailWorkRun;
   bindThread(id: string): void;
   activity(value: MailWorkActivity): void;
-  finish(status: MailWorkRun['status'], error?: string): Promise<void>;
+  /** Close the run. Resolves with the run's final reply text when it settled ok with one. */
+  finish(status: MailWorkRun['status'], error?: string): Promise<string | undefined>;
 }
 
 /** Attach before startTurn: even a synchronous failure must leave a work record. */
@@ -145,10 +146,12 @@ export async function beginMailWork(runtime: ChatBackend, input: {
       schedule();
     },
     finish: async (status, error) => {
-      if (finished) return;
+      if (finished) return undefined;
+      let reply: string | undefined;
       if (status === 'ok' && progress.trim()) {
         // The last text block is the reply; earlier blocks were committed before tools.
         run.activities = run.activities.filter((a) => a.id !== `progress:${run.id}:${progressIndex}`);
+        reply = progress;
       } else commitProgress();
       finished = true;
       runtime.off('event', onEvent);
@@ -166,6 +169,7 @@ export async function beginMailWork(runtime: ChatBackend, input: {
         for (const [k, value] of groups) if (value === g) groups.delete(k);
         if (!g.conversationId) await rm(pathFor(g), { force: true });
       }
+      return reply;
     }
   };
   active.set(run.id, handle);

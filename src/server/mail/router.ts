@@ -28,6 +28,7 @@ import { personaTurnFields } from '../workspace/persona-turn';
 import { repoLocks } from './repo-lock';
 import { attachScheduledWork, beginMailWork, type WorkHandle } from './work';
 import { readSettings } from '../workspace/settings';
+import { cleanMailSubject } from '../../shared/mail-subject';
 import {
   addParticipant,
   appendMailItem,
@@ -35,7 +36,9 @@ import {
   createConversation,
   readMail,
   setConversationSession,
-  setConversationStatus
+  setConversationStatus,
+  setConversationSubject,
+  setMailItemResult
 } from '../workspace/mail';
 import {
   dropQueuedMail,
@@ -461,11 +464,18 @@ export class MailRouter {
    * addressed to the user — no agent turn runs, the run already did the work.
    */
   async deliverTaskMail(input: {
+    /** The thread's subject when this firing opens it: the notify title, else the task's title. */
     subject: string;
     body: string;
     taskId: string;
     personaId?: string;
     threadId?: string;
+    /**
+     * The notify_user title, when the run gave one: kept on the item as this
+     * firing's own headline, and the thread is retitled after it so the Inbox
+     * row reads the newest headline rather than the one the task opened with.
+     */
+    headline?: string;
   }): Promise<string> {
     // One conversation per task, found by the task id on its items; created on
     // the first notify. Keeps every firing of a watch task in one thread of mail.
@@ -475,19 +485,34 @@ export class MailRouter {
       ? conversations.find((c) => c.id === existing.conversationId)
       : undefined;
     const from = input.personaId ?? `task:${input.taskId}`;
+    const headline = input.headline ? cleanMailSubject(input.headline) : '';
     const target =
       conversation ?? (await createConversation(input.subject, [input.personaId ?? 'normal'], input.body));
+    if (conversation && headline && headline !== conversation.subject) {
+      await setConversationSubject(conversation.id, headline);
+    }
     const delivered = await appendMailItem({
       conversationId: target.id,
       from,
       to: ['user'],
       body: input.body,
-      taskId: input.taskId
+      taskId: input.taskId,
+      ...(headline ? { subject: headline } : {})
     });
     const notification = delivered.items.at(-1);
     if (input.threadId && notification) await attachScheduledWork(input.threadId, target.id, notification.id, from);
     this.opts.onChange();
     return target.id;
+  }
+
+  /**
+   * The run behind a scheduled notification settled with a reply: attach it to
+   * the mail, so the report or drafts its short notify line pointed at are in
+   * the Inbox, not only in the run's chat.
+   */
+  async attachTaskResult(input: { itemId: string; result: string }): Promise<void> {
+    await setMailItemResult(input.itemId, input.result);
+    this.opts.onChange();
   }
 
   // ---- the mail bridge (send_mail / add_persona from inside a delivery turn) ----

@@ -727,6 +727,34 @@ describe('mail router', () => {
     // No delivery turn ran — the scheduled run already did the work.
     expect(fake.starts).toHaveLength(0);
   });
+
+  it('deliverTaskMail keeps each firing’s headline and retitles the thread after the latest', async () => {
+    const fake = fakeBackend();
+    const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined });
+    await router.deliverTaskMail({ subject: 'Lab A ships model 1', headline: 'Lab A ships model 1', body: 'model 1 is out', taskId: 'task-1' });
+    await router.deliverTaskMail({ subject: 'Watch the labs', body: 'nothing named', taskId: 'task-1' });
+    await router.deliverTaskMail({ subject: '**Lab B** narrows model 2 to Friday', headline: '**Lab B** narrows model 2 to Friday', body: 'Friday it is', taskId: 'task-1' });
+    const { conversations, items } = await readMail();
+    expect(conversations).toHaveLength(1);
+    // The row follows the newest headline, cleaned like any subject; a firing
+    // without a title neither renames the thread nor invents a headline.
+    expect(conversations[0].subject).toBe('Lab B narrows model 2 to Friday');
+    expect(items.map((i) => i.subject)).toEqual(['Lab A ships model 1', undefined, 'Lab B narrows model 2 to Friday']);
+  });
+
+  it('attachTaskResult puts the run’s reply on the notification it sent', async () => {
+    const fake = fakeBackend();
+    let changes = 0;
+    const router = new MailRouter({ runtime: fake.backend, onChange: () => { changes += 1; } });
+    await router.deliverTaskMail({ subject: 'Drafts ready', headline: 'Drafts ready', body: 'Two drafts are ready in this chat.', taskId: 'task-1' });
+    const before = await readMail();
+    await router.attachTaskResult({ itemId: before.items[0].id, result: '## Draft 1\n\nHi…' });
+    const { items, conversations } = await readMail();
+    expect(items[0]).toMatchObject({ body: 'Two drafts are ready in this chat.', result: '## Draft 1\n\nHi…' });
+    expect(conversations[0].userUpdatedAt).toBeGreaterThanOrEqual(before.conversations[0].userUpdatedAt);
+    expect(changes).toBe(2);
+    await expect(router.attachTaskResult({ itemId: 'gone', result: 'x' })).rejects.toThrow(/no longer exists/);
+  });
 });
 
 // ---- P3: parallel waves, fan-out joins, send budgets, persona bridge ops ----
