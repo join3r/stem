@@ -25,7 +25,7 @@ import type {
 import { isUnread } from '../../shared/inbox';
 import { useOffline } from '../hooks/useServerReachable';
 import { stripCiteMarkers } from '../../shared/citations';
-import { glyphsFor, useShortcut, type ShortcutId } from '../shortcuts';
+import { Kbd, glyphsFor, runKeyGlyphs, useShortcut, useShortcutHintMode, type ShortcutId } from '../shortcuts';
 import { MailList } from '../mail/MailList';
 import type { ReturnChatRow } from './return-chat';
 
@@ -309,6 +309,35 @@ export function ChatList(props: ChatListProps) {
   const folderChats = (folderId: string | null): ChatSummary[] =>
     data.chats.filter((c) => c.folderId === folderId);
 
+  // ⌘1…⌘9 open the first nine chat rows exactly as the Chats tab shows them, top
+  // to bottom — a collapsed folder's chats are not on screen, so they are not
+  // counted. The same walk the tree renders with, so the number on a row's hint
+  // and the key that opens it can never disagree.
+  const numberedChatIds = useMemo(() => {
+    const out: string[] = [];
+    const walk = (parentId: string | null) => {
+      for (const f of childFolders(parentId)) if (expanded.has(f.id)) walk(f.id);
+      for (const c of folderChats(parentId)) out.push(c.threadId);
+    };
+    walk(null);
+    return out.slice(0, 9);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- childFolders/folderChats are plain views over these
+  }, [data.chats, data.folders, expanded]);
+  const hintMode = useShortcutHintMode();
+  // Only while the Chats tab is the one on screen: on the Inbox the rows are mail,
+  // and in a search the numbers would point at rows the user cannot see.
+  const numbersLive = tab === 'chats' && !searching && results === null;
+  useShortcut('switch-chat', (e) => {
+    if (!numbersLive) return;
+    const id = numberedChatIds[Number(e.key) - 1];
+    if (id) onOpen(id);
+  });
+  const rowNumber = (threadId: string): number | null => {
+    if (!hintMode || !numbersLive) return null;
+    const i = numberedChatIds.indexOf(threadId);
+    return i === -1 ? null : i + 1;
+  };
+
   // Unread rolled up per folder (ancestors included), so a bold row can't hide
   // inside a collapsed folder. Same predicate as the tree rows.
   const folderUnread = useMemo(() => {
@@ -457,6 +486,7 @@ export function ChatList(props: ChatListProps) {
     // do something about, so it outranks the running pulse on the dot.
     const waiting = props.approvalThreadIds?.has(chat.threadId) ?? false;
     const subject = chat.subject ?? chat.title;
+    const number = rowNumber(chat.threadId);
     return (
       <div
         key={chat.threadId}
@@ -497,6 +527,11 @@ export function ChatList(props: ChatListProps) {
             <strong title={subject}>{subject}</strong>
           )}
         </span>
+        {number !== null && (
+          <span className="chat-row-kbd" aria-hidden="true">
+            <Kbd glyphs={runKeyGlyphs('switch-chat', String(number))} />
+          </span>
+        )}
         {!isEditing && props.scheduledThreadIds?.has(chat.threadId) && (
           <span className="chat-sched-badge" title="Has a scheduled task" aria-label="Has a scheduled task">
             <Clock size={11} />

@@ -10,7 +10,7 @@ import {
 } from 'react';
 
 import { IS_MAC } from './accel';
-import { SHORTCUTS, chordFor, keycapFor, type Chord, type ShortcutId } from '../shared/shortcut-defs';
+import { SHORTCUTS, chordFor, keycap, keycapFor, type Chord, type ShortcutId } from '../shared/shortcut-defs';
 
 // Mod-key shortcuts + the "hold the mod key to reveal" helper. The mod key is
 // ⌘ (metaKey) on macOS and Ctrl elsewhere.
@@ -46,6 +46,9 @@ const mod = (e: KeyboardEvent) =>
 // `mod`; off macOS the two are the same key and the two predicates coincide.
 const control = (e: KeyboardEvent) => e.ctrlKey && !e.metaKey && !e.altKey;
 const isKey = (e: KeyboardEvent, k: string) => e.key.toLowerCase() === k;
+/** Whether a keydown's key falls in a chord's run (`key`…`through`), e.g. '1'…'9'. */
+const inRun = (e: KeyboardEvent, first: string, last: string) =>
+  e.key.length === 1 && e.key >= first && e.key <= last;
 
 /**
  * The keydown predicate for a chord. A chord that leaves `shift` unset ignores the
@@ -57,8 +60,20 @@ const matcher =
   (e: KeyboardEvent): boolean => {
     if (!(chord.mod ? mod(e) : control(e))) return false;
     if (chord.shift !== undefined && e.shiftKey !== chord.shift) return false;
-    return isKey(e, chord.key.toLowerCase());
+    return chord.through ? inRun(e, chord.key, chord.through) : isKey(e, chord.key.toLowerCase());
   };
+
+/**
+ * Keycap for one key of a run binding, e.g. '⌘3' for `switch-chat` — the per-row
+ * hint, where the range keycap ('⌘1–9') the binding itself carries would not say
+ * which row is which.
+ */
+export function runKeyGlyphs(id: ShortcutId, key: string): string {
+  const def = SHORTCUTS.find((d) => d.id === id);
+  if (!def) return key;
+  const chord = chordFor(def, IS_MAC);
+  return keycap({ ...chord, key, through: undefined, macKey: undefined }, IS_MAC);
+}
 
 // Every mod-key shortcut, resolved for the platform this renderer is running on:
 // the shared table supplies the keys and the keycap text, this file supplies the
@@ -74,7 +89,8 @@ export function glyphsFor(id: ShortcutId): string | null {
   return BINDINGS.find((b) => b.id === id)?.glyphs ?? null;
 }
 
-type Handler = () => void;
+/** Receives the keydown so a run binding (⌘1…⌘9) can tell which key fired it. */
+type Handler = (e: KeyboardEvent) => void;
 
 interface ShortcutsCtx {
   /** False under the default context — i.e. no provider, so no shortcut works here. */
@@ -122,7 +138,7 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
           const h = handlers.current.get(b.id);
           if (h) {
             e.preventDefault();
-            h();
+            h(e);
           }
           dismiss();
           return;
@@ -173,9 +189,14 @@ export function useShortcut(id: ShortcutId, handler: Handler) {
   const ref = useRef(handler);
   ref.current = handler;
   useEffect(() => {
-    register(id, () => ref.current());
+    register(id, (e) => ref.current(e));
     return () => unregister(id);
   }, [id, register, unregister]);
+}
+
+/** True while the mod key has been held long enough to reveal the shortcut hints. */
+export function useShortcutHintMode(): boolean {
+  return useContext(Ctx).hintMode;
 }
 
 /**

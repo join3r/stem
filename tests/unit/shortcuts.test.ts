@@ -29,6 +29,7 @@ describe('keycaps off macOS', () => {
       if (b.match === null) continue; // display-only (Enter)
       expect(b.glyphs.startsWith('Ctrl+')).toBe(true);
     }
+    expect(glyphsFor('switch-chat')).toBe('Ctrl+1–9');
     expect(glyphsFor('archive-thread')).toBe('Ctrl+Shift+A');
     expect(glyphsFor('snooze-thread')).toBe('Ctrl+Shift+S');
     expect(glyphsFor('toggle-read')).toBe('Ctrl+Shift+D');
@@ -58,6 +59,7 @@ describe('keycaps on macOS', () => {
     expect(cap('snooze-thread')).toBe('⌘⇧S');
     expect(cap('toggle-read')).toBe('⌘⇧D');
     expect(cap('attach')).toBe('⌘U');
+    expect(cap('switch-chat')).toBe('⌘1–9');
     expect(cap('delete-thread')).toBe('⌃X');
     for (const b of bindings) expect(b.glyphs).not.toMatch(/Ctrl|Shift\+|Alt/);
   });
@@ -110,6 +112,16 @@ describe('what the keyboard actually fires', () => {
     expect(fired(key('A', { ctrl: true, shift: true }))).toEqual(['archive-thread']);
     expect(fired(key('s', { ctrl: true, shift: true }))).toEqual(['snooze-thread']);
     expect(fired(key('D', { ctrl: true, shift: true }))).toEqual(['toggle-read']);
+  });
+
+  it('routes Ctrl+1 through Ctrl+9 to switch-chat, and nothing else', () => {
+    for (const d of '123456789') expect(fired(key(d, { ctrl: true }))).toEqual(['switch-chat']);
+    // Shift is unconstrained: AZERTY reaches its digits on the shifted layer.
+    expect(fired(key('4', { ctrl: true, shift: true }))).toEqual(['switch-chat']);
+    // Ctrl+0 is Electron's reset-zoom; a bare digit is typing.
+    expect(fired(key('0', { ctrl: true }))).toEqual([]);
+    expect(fired(key('3'))).toEqual([]);
+    expect(fired(key('3', { ctrl: true, alt: true }))).toEqual([]);
   });
 
   it('leaves Ctrl+Shift+U unbound, so IBus can have it', () => {

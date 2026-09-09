@@ -945,12 +945,14 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 }
 .sc-hint.sc-tr { top: -7px; right: -7px; }
 .sc-hint.sc-br { bottom: -7px; right: -7px; }
+/* The ⌘1…⌘9 keycap on a chat row: inline at the row's end, same reveal as the floating hints. */
+.chat-row-kbd { flex: none; display: inline-flex; margin-left: var(--sp-3); animation: sc-hint-in var(--motion-med) ease both; }
 @keyframes sc-hint-in {
   from { opacity: 0; transform: scale(0.8); }
   to { opacity: 1; transform: scale(1); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sc-hint { animation: none; }
+  .sc-hint, .chat-row-kbd { animation: none; }
 }
 
 /* ---- MDX content ---- */

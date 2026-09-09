@@ -138,3 +138,45 @@ test('unsent text survives switching chats and coming back', async ({ mainWindow
   await mainWindow.keyboard.press('ControlOrMeta+n');
   await expect(composer).toHaveValue('');
 });
+
+test('⌘1…⌘9 open the chats by their position in the Chats list', async ({ mainWindow }) => {
+  const reply = mainWindow.locator('.message-assistant:not(.activity-row) .message-body').last();
+  for (const text of ['first', 'second', 'third']) {
+    await send(mainWindow, text);
+    await expect(reply).toContainText(`Echo: ${text}`);
+    await mainWindow.keyboard.press('ControlOrMeta+n');
+    await expect(mainWindow.locator('.message-user')).toHaveCount(0);
+  }
+  await mainWindow.locator('.chats-modes').getByRole('button', { name: 'Chats', exact: true }).click();
+  const rows = mainWindow.locator('.chat-row');
+  await expect(rows).toHaveCount(3);
+  // The fake stamps whole seconds, so three chats made in one second tie and the
+  // list order is whatever it is — the digit has to follow the rows as shown.
+  // The fake titles a thread "About <message>"; the bubble holds the message.
+  const titles = (await rows.locator('.row-main strong').allTextContents()).map((t) => t.replace(/^About /, ''));
+  const opened = mainWindow.locator('.message-user').last();
+
+  await mainWindow.keyboard.press('ControlOrMeta+3');
+  await expect(opened).toContainText(titles[2]);
+  await expect(mainWindow.locator('.chat-row.selected')).toContainText(titles[2]);
+
+  await mainWindow.keyboard.press('ControlOrMeta+1');
+  await expect(opened).toContainText(titles[0]);
+
+  // A number with no row behind it does nothing.
+  await mainWindow.keyboard.press('ControlOrMeta+7');
+  await expect(opened).toContainText(titles[0]);
+
+  // Holding the mod key labels each row with its number.
+  await expect(mainWindow.locator('.chat-row-kbd')).toHaveCount(0);
+  await mainWindow.keyboard.down('ControlOrMeta');
+  await expect(mainWindow.locator('.chat-row-kbd')).toHaveCount(3);
+  await expect(rows.nth(2).locator('.chat-row-kbd')).toHaveText(/3$/);
+  await mainWindow.keyboard.up('ControlOrMeta');
+  await expect(mainWindow.locator('.chat-row-kbd')).toHaveCount(0);
+
+  // On the Inbox the rows are mail, so the digits stay quiet.
+  await mainWindow.locator('.chats-modes').getByRole('button', { name: 'Inbox', exact: true }).click();
+  await mainWindow.keyboard.press('ControlOrMeta+3');
+  await expect(opened).toContainText(titles[0]);
+});

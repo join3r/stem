@@ -23,6 +23,7 @@ export type ShortcutId =
   | 'stop'
   | 'delete-thread'
   | 'focus-chat-search'
+  | 'switch-chat'
   | 'archive-thread'
   | 'snooze-thread'
   | 'toggle-read'
@@ -50,6 +51,13 @@ export interface Chord {
   shift?: boolean;
   /** The key as printed on its cap: 'N', '\\', '.', 'Enter'. Matching lowercases it. */
   key: string;
+  /**
+   * The last key of a run that shares this one binding, `key` being the first —
+   * `{ key: '1', through: '9' }` fires on any of ⌘1…⌘9 and prints as one keycap
+   * ('⌘1–9'). The handler reads which key it was off the event. Only single
+   * characters can form a run; the comparison is on the character itself.
+   */
+  through?: string;
   /** Keycap override on macOS, for keys the Mac prints as a glyph (Enter → ⏎). */
   macKey?: string;
 }
@@ -126,6 +134,14 @@ export const SHORTCUTS: ShortcutDef[] = [
     description: 'opens the chat search box, or refocuses it when it is already open',
     chord: { mod: true, shift: false, key: 'F' }
   },
+  // One binding for nine keys: the digit picks the row. Shift is left unconstrained
+  // on purpose — on AZERTY the digits themselves sit on the shifted layer.
+  {
+    id: 'switch-chat',
+    label: 'Switch chat',
+    description: 'opens the first to ninth chat in the Chats list, counted from the top; hold ⌘ or Ctrl to see the numbers',
+    chord: { mod: true, key: '1', through: '9' }
+  },
   // Inbox triage on the A/S/D home-row triad — three neighbouring keys for the
   // three triage verbs. All mod+Shift, which keeps them clear of the plain-mod
   // set and of Electron's default Windows/Linux menu (Ctrl+Shift+I and +R).
@@ -191,7 +207,8 @@ export function chordFor(def: ShortcutDef, mac: boolean): Chord {
  * drawn on these particular keycaps, and the docs page has to match the app.
  */
 export function keycap(chord: Chord, mac: boolean): string {
-  const key = (mac && chord.macKey) || chord.key;
+  const first = (mac && chord.macKey) || chord.key;
+  const key = chord.through ? `${first}–${chord.through}` : first;
   if (mac) {
     return `${chord.mod ? '⌘' : ''}${chord.control ? '⌃' : ''}${chord.shift ? '⇧' : ''}${key}`;
   }

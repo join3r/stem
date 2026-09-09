@@ -20,6 +20,8 @@ Maintainer notes:
   smaller and faster than the Qwen3 reranker and picks the right memories more often in Stem's
   benchmarks. It also reads the last two things you said, so a follow-up question finds the memories
   the earlier one was about. Manage → Memory → Reranker is where you switch, either way.
+- **Switch chats from the keyboard.** ⌘1 to ⌘9 (Ctrl on Windows and Linux) open the first nine
+  chats in the Chats list, counted from the top. Hold ⌘ for a moment and each chat shows its number.
 - **Update dialog.** A newer Stem now announces itself in a dialog once per launch instead of a
   strip under the title bar that was easy to sit under for weeks. "Later" keeps the strip and the
   Settings → App row as the quieter reminders.

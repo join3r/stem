@@ -18,6 +18,7 @@ Everything Stem binds to a key, and a few composer tricks that no keycap adverti
 | **Toggle MDX / Markdown** — switches the answer format between interactive MDX and plain Markdown | ⌘⇧M | Ctrl+Shift+M |
 | **Attach files** — opens the file picker for this message | ⌘U | Ctrl+U |
 | **Search chats** — opens the chat search box, or refocuses it when it is already open | ⌘F | Ctrl+F |
+| **Switch chat** — opens the first to ninth chat in the Chats list, counted from the top; hold ⌘ or Ctrl to see the numbers | ⌘1–9 | Ctrl+1–9 |
 | **Archive thread** — archives the selection, or restores it when it is already archived | ⌘⇧A | Ctrl+Shift+A |
 | **Snooze thread** — hides the selection until a time you pick, or wakes it again | ⌘⇧S | Ctrl+Shift+S |
 | **Mark read or unread** — flips the unread mark on the selection | ⌘⇧D | Ctrl+Shift+D |
