@@ -22,7 +22,11 @@ Open the right sidebar → **Memory** → **Facts**.
 - **Learned** — extracted from regular conversations. The normal path.
 - **From Personal Obsidian** — learned from a connected folder when its
   [settings allow it](../connected-folders.md).
-- **On request** — optional direct save with “remember this,” `/note`, or `//`.
+- **On request** — optional direct save with “remember this,” `/note`, or `//`. A note
+  can carry a picture: attach or paste an image while in note mode and the picture is
+  kept with the fact. Stem describes what the image shows into the fact's text in the
+  background, so a photo of a router label or a menu can be recalled later. The picture
+  itself is only ever shown to you, in the fact's details; the assistant sees the text.
 
 The source appears on each fact. One-off completed task details are normally skipped.
 

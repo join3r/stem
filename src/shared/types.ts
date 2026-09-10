@@ -1835,6 +1835,8 @@ export interface MemoryFile {
   timesInjected?: number;
   timesUsed?: number;
   lastUsedAt?: number | null;
+  /** Notes only: how many images were saved with this fact. */
+  imageCount?: number;
 }
 
 /** One thread's rolling episodic summary (Level 1.5), shown in Memory → Recall. */
@@ -1920,6 +1922,19 @@ export interface FactDetails {
   /** Last time an injection of this fact was graded (used or not). */
   lastGradedAt: number | null;
   evidence: FactEvidence[];
+  /** Images saved with the note (composer `/note` + attached picture). */
+  images: FactImage[];
+}
+
+/** An image stored alongside a durable fact, as shown in the fact's details. */
+export interface FactImage {
+  id: number;
+  name: string;
+  mime: string;
+  /** Stored bytes. */
+  size: number;
+  /** `data:<mime>;base64,…` — the full image, for the details view. */
+  dataUrl: string;
 }
 
 export interface MemoryConflict {
@@ -2038,8 +2053,9 @@ export interface ActiveFacts {
 export interface MemoryNoteResult {
   saved: boolean;
   factId?: number;
-  /** Why the note was not saved. */
-  reason?: 'empty' | 'disabled' | 'secret';
+  /** Why the note was not saved. 'image' = an attachment was not a usable image
+   *  (unsupported type, unreadable, or over the size cap); nothing was stored. */
+  reason?: 'empty' | 'disabled' | 'secret' | 'image';
 }
 
 /** Outcome of a manual consolidation pass, plus the refreshed memory list. */
@@ -3866,8 +3882,10 @@ export interface StemApi {
   /** Facts that WOULD be injected for `text` right now (draft preview; no side effects). */
   previewFacts(text: string): Promise<ActiveFacts>;
   /** Save a composer quick note as a durable explicit fact — instant, no chat turn.
-   *  A background pass canonicalizes + reconciles it when the model is reachable. */
-  addMemoryNote(text: string): Promise<MemoryNoteResult>;
+   *  A background pass canonicalizes + reconciles it when the model is reachable.
+   *  Image attachments are stored with the fact and described into its text by
+   *  that same pass; `text` may be empty when an image is attached. */
+  addMemoryNote(text: string, attachments?: TurnAttachment[]): Promise<MemoryNoteResult>;
   /** Delete one durable fact; returns the refreshed memory list. */
   forgetMemory(id: number): Promise<MemoryContents>;
   setFactPinned(id: number, pinned: boolean): Promise<MemoryContents>;

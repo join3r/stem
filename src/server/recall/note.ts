@@ -2,9 +2,10 @@
 import { reconcileExplicitFact } from './reconcile';
 import { parseClaims } from './distill';
 import { degrade } from '../degrade';
-import type { LlmClient } from './llm';
+import { isSensitiveMemoryText } from '../workspace/memory';
+import type { LlmClient, LlmImage } from './llm';
 import { recallStore } from './store';
-const { getFactDetails, getFactsGeneration, getInjectableFacts, supersedeFact, updateFactText, upsertFact } = recallStore;
+const { getFactDetails, getFactsGeneration, getInjectableFacts, moveFactImages, supersedeFact, updateFactText, upsertFact } = recallStore;
 
 // Post-processing for user-typed quick notes (composer `/note` / `//`). The note
 // is already durable before anything here runs — this pass only improves it:
@@ -12,7 +13,10 @@ const { getFactDetails, getFactsGeneration, getInjectableFacts, supersedeFact, u
 // works best on that shape, so a raw "radsej taby" note gets rewritten in place.
 // A long note (a pasted wall of text) is instead SPLIT into individual facts,
 // each one durable on its own, and the raw blob retired once the split lands.
-// Every step is best-effort; an unreachable model leaves the raw note as-is.
+// A note with an attached IMAGE first has the picture described into the text
+// (the only way its content reaches recall, which ranks text), then follows the
+// same path. Every step is best-effort; an unreachable model leaves the raw note
+// as-is.
 
 /** Longest rewrite we accept — a canonical fact is a short statement, so a reply
  *  this long means the model padded or hallucinated rather than rewrote. */
@@ -74,7 +78,79 @@ export async function normalizeExplicitNote(factId: number, llm: LlmClient): Pro
   if (!current || current.status !== 'active' || current.source !== 'explicit' || current.text !== originalText) {
     return factId;
   }
-  return updateFactText(factId, rewritten) ?? factId;
+  const survivor = updateFactText(factId, rewritten) ?? factId;
+  // A note that merged into an existing claim takes its picture along.
+  if (survivor !== factId) moveFactImages(factId, survivor);
+  return survivor;
+}
+
+/** Longest image description we accept — past this the model is narrating the
+ *  picture rather than pulling out what is worth remembering. */
+const MAX_DESCRIPTION_LENGTH = 1500;
+
+function describePrompt(text: string, imageCount: number): string {
+  const noun = imageCount === 1 ? 'an image' : `${imageCount} images`;
+  return `A user saved a note for a personal assistant's long-term memory and attached ${noun}. Describe what the image shows that is worth remembering, in one to three short English sentences.
+
+Note text: ${text || '(none — the image is the whole note)'}
+
+Rules:
+- Read out any text, numbers, names, labels, dates, prices, or identifiers visible in the image EXACTLY as written; those are usually the point.
+- Say what the thing is (a receipt, a router label, a whiteboard, a menu, a screenshot of…) in a few words; skip layout, colours, and decoration.
+- Do not repeat the note text; add only what the image contributes.
+Return ONLY JSON {"description":"..."}.`;
+}
+
+/**
+ * Describe a note's attached images into its text so the picture's content can
+ * be recalled. The description is joined to the typed text (an image-only note
+ * is replaced outright — its placeholder carried no content), and the merged
+ * text then goes through the ordinary rewrite/extract path. Returns the id of
+ * the fact now carrying the text — `factId` when the description was skipped,
+ * refused, or failed.
+ */
+export async function describeNoteImages(factId: number, llm: LlmClient, typedText: string): Promise<number> {
+  const factsGeneration = getFactsGeneration();
+  const fact = getFactDetails(factId);
+  if (!fact || fact.status !== 'active' || fact.source !== 'explicit' || fact.images.length === 0) return factId;
+  const originalText = fact.text;
+  const images: LlmImage[] = fact.images.map((img) => ({
+    data: img.dataUrl.slice(img.dataUrl.indexOf(',') + 1),
+    mimeType: img.mime
+  }));
+
+  let description: string;
+  try {
+    const raw = await llm.complete(describePrompt(typedText, images.length), images);
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start === -1 || end <= start) throw new Error('reply held no JSON object');
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as { description?: unknown };
+    if (typeof parsed.description !== 'string') throw new Error('reply had no description');
+    description = parsed.description.trim();
+  } catch (error) {
+    // The image is stored either way, but nothing retries this: a note that was
+    // only a picture stays under its placeholder, findable by filename alone.
+    degrade('recall.note', "kept the note's image undescribed", error);
+    return factId;
+  }
+  if (!description || description.length > MAX_DESCRIPTION_LENGTH) return factId;
+  if (isSensitiveMemoryText(description)) {
+    // The same rule the save path applies to typed text: a photo of a password
+    // sticker does not get transcribed into a fact. The picture itself stays.
+    degrade('recall.note', 'left a credential-looking image undescribed', new Error('description matched the secret filter'));
+    return factId;
+  }
+
+  if (getFactsGeneration() !== factsGeneration) return factId;
+  const current = getFactDetails(factId);
+  if (!current || current.status !== 'active' || current.source !== 'explicit' || current.text !== originalText) {
+    return factId;
+  }
+  const merged = typedText ? `${typedText}\n\nAttached image: ${description}` : description;
+  const survivor = updateFactText(factId, merged) ?? factId;
+  if (survivor !== factId) moveFactImages(factId, survivor);
+  return survivor;
 }
 
 function extractPrompt(text: string, known: Array<{ id: number; text: string }>): string {
@@ -161,7 +237,10 @@ export async function extractNoteFacts(factId: number, llm: LlmClient): Promise<
     });
     if (id != null && id !== factId && !ids.includes(id)) ids.push(id);
   }
-  if (ids.length > 0) supersedeFact(factId, ids[0]);
+  if (ids.length > 0) {
+    supersedeFact(factId, ids[0]);
+    moveFactImages(factId, ids[0]);
+  }
   return ids;
 }
 
@@ -171,10 +250,23 @@ export async function extractNoteFacts(factId: number, llm: LlmClient): Promise<
  * note (pasted wall of text): split it into individual facts and reconcile each.
  * Fired off the save acknowledgement path, so it must never surface a rejection.
  */
-export async function processExplicitNote(factId: number, llm: LlmClient): Promise<void> {
+export async function processExplicitNote(factId: number, llm: LlmClient, typedText?: string): Promise<void> {
   try {
-    const fact = getFactDetails(factId);
+    let fact = getFactDetails(factId);
     if (!fact) return;
+    if (fact.images.length > 0) {
+      // Image content has to be in the text before rewrite/extract can see it.
+      // An image-only note carries only its placeholder, so `typedText` (what
+      // the user actually typed, possibly nothing) is what the describer reads.
+      const withImage = await describeNoteImages(factId, llm, typedText ?? fact.text);
+      if (withImage !== factId) {
+        // Merged into an existing claim: that fact is already canonical.
+        await reconcileExplicitFact(withImage, llm);
+        return;
+      }
+      fact = getFactDetails(factId);
+      if (!fact) return;
+    }
     if (fact.text.length > LONG_NOTE_THRESHOLD) {
       const ids = await extractNoteFacts(factId, llm);
       for (const id of ids) await reconcileExplicitFact(id, llm);

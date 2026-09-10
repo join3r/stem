@@ -1026,7 +1026,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // Reconciliation is deliberately off the acknowledgement path: the fact is
         // durable the moment it's written, so a slow model never delays the reply
         // and a failed one costs only the supersede/conflict links, not the memory.
-        setTimeout(() => void reconcileExplicitFact(memory.factId!, this), 0);
+        setTimeout(() => void reconcileExplicitFact(memory.factId!, { complete: (prompt) => this.complete(prompt) }), 0);
       }
       return { handled: true, assistantMessage: "I'll remember that.", rememberedPath: memory.path };
     }
@@ -1570,7 +1570,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    */
   async complete(
     prompt: string,
-    opts?: { model?: string | null; effort?: string | null; timeoutMs?: number; priority?: boolean }
+    opts?: {
+      model?: string | null;
+      effort?: string | null;
+      timeoutMs?: number;
+      priority?: boolean;
+      images?: Array<{ data: string; mimeType: string }>;
+    }
   ): Promise<string> {
     // Cap concurrent completes; priority (exec judge) skips ahead of distill.
     await this.acquireCompleteSlot(opts?.priority === true);
@@ -1599,9 +1605,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   private async completeNow(
     prompt: string,
-    opts?: { model?: string | null; effort?: string | null; timeoutMs?: number }
+    opts?: {
+      model?: string | null;
+      effort?: string | null;
+      timeoutMs?: number;
+      images?: Array<{ data: string; mimeType: string }>;
+    }
   ): Promise<string> {
     const timeoutMs = opts?.timeoutMs ?? 120_000;
+    const images = opts?.images;
     const pi = await resolvePi();
     if (!pi) throw new Error('The pi backend could not be located.');
     await this.ensurePiHome();
@@ -1628,7 +1640,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             log('pi.complete', 'complete worker will not reset — falling back to cold spawns', {
               error: e instanceof Error ? e.message : String(e)
             });
-            return await this.completeCold(pi, prompt, provider, modelId, timeoutMs, effort);
+            return await this.completeCold(pi, prompt, provider, modelId, timeoutMs, effort, images);
           }
           this.completeWorkerDirty = false;
           // new_session drops the model selection along with the conversation,
@@ -1646,7 +1658,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         this.completeWorkerDirty = true;
         return await promptComplete(worker, prompt, timeoutMs, ({ timeoutMs: ms }) => {
           log('pi.complete', 'one-shot completion timed out', { timeoutMs: ms, provider, model: modelId });
-        });
+        }, images);
       } catch (e) {
         // Retire the worker whatever went wrong. A timeout or a rejected prompt
         // leaves pi mid-turn on a process we cannot clear, and prompting it
@@ -1661,14 +1673,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         });
         // Only pay a second cold start when the worker never came up; a call
         // that already burned its whole timeout should surface now, not twice.
-        if (died) return await this.completeCold(pi, prompt, provider, modelId, timeoutMs, effort);
+        if (died) return await this.completeCold(pi, prompt, provider, modelId, timeoutMs, effort, images);
         throw e;
       } finally {
         this.completeWorkerBusy = false;
       }
     }
 
-    return await this.completeCold(pi, prompt, provider, modelId, timeoutMs, effort);
+    return await this.completeCold(pi, prompt, provider, modelId, timeoutMs, effort, images);
   }
 
   private async completeCold(
@@ -1677,7 +1689,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     provider: string,
     modelId: string,
     timeoutMs: number,
-    effort: string | null
+    effort: string | null,
+    images?: Array<{ data: string; mimeType: string }>
   ): Promise<string> {
     const child = await spawnReadyCompleteChild({
       pi,
@@ -1690,7 +1703,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       await ensureCompleteThinking(child, effort, null);
       return await promptComplete(child, prompt, timeoutMs, ({ timeoutMs: ms }) => {
         log('pi.complete', 'one-shot completion timed out', { timeoutMs: ms, provider, model: modelId });
-      });
+      }, images);
     } finally {
       // quiet: dispose() resolves on the child's exit with a SIGKILL backstop,
       // so a rejection here is not a surviving process — and the completion's

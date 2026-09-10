@@ -249,7 +249,14 @@ export interface ChatBackend extends EventEmitter {
   // queue is busy (used by the exec safety judge so distill does not starve it).
   complete(
     prompt: string,
-    opts?: { model?: string | null; effort?: string | null; timeoutMs?: number; priority?: boolean }
+    opts?: {
+      model?: string | null;
+      effort?: string | null;
+      timeoutMs?: number;
+      priority?: boolean;
+      /** Images sent with the prompt (pi's `prompt.images`). */
+      images?: Array<{ data: string; mimeType: string }>;
+    }
   ): Promise<string>;
   isInternalThread(threadId: string): boolean;
   /** True when the active turn read a memorize:false connected folder → skip Recall capture. */

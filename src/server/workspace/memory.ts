@@ -1,9 +1,10 @@
-import type { EpisodicStats, MemoryContents, MemoryNoteResult, MemorySettings, ThreadSummary } from '../../shared/types';
+import type { EpisodicStats, MemoryContents, MemoryNoteResult, MemorySettings, ThreadSummary, TurnAttachment } from '../../shared/types';
 
+import { resolveAttachments } from '../pi/attachments';
 import { vacuumRecallDb } from '../recall/scan';
-import { recallStore } from '../recall/store';
+import { recallStore, type FactImageInput } from '../recall/store';
 import { listConnectedFolders } from './connected-folders';
-const { deleteFact, deleteThreadSummary, getAllFacts, getEpisodicLimitBytes, getEpisodicStats, getFactEvidenceCounts, getMaxRelevantFacts, getMeta, getTidyThreshold, listThreadSummaries: storeListThreadSummaries, resetEpisodic, resetFacts, setEpisodicLimitBytes, setMaxRelevantFacts, setMeta, setTidyThreshold, upsertFact } = recallStore;
+const { addFactImages, deleteFact, deleteThreadSummary, getAllFacts, getEpisodicLimitBytes, getEpisodicStats, getFactEvidenceCounts, getFactImageCounts, getMaxRelevantFacts, getMeta, getTidyThreshold, listThreadSummaries: storeListThreadSummaries, resetEpisodic, resetFacts, setEpisodicLimitBytes, setMaxRelevantFacts, setMeta, setTidyThreshold, upsertFact } = recallStore;
 
 // Stem's memory control surface, backed entirely by Stem Recall (recall.sqlite).
 //
@@ -64,7 +65,7 @@ interface MemoryCaptureResult {
   path?: string;
 }
 
-function isSensitiveMemoryText(text: string): boolean {
+export function isSensitiveMemoryText(text: string): boolean {
   return /\b(?:password|passcode|pin|api[_ -]?key|token|secret|private key|seed phrase|recovery phrase|credit card|card number|cvv|ssn|social security|national id|government id|birth number)\b/i.test(
     text
   );
@@ -155,16 +156,61 @@ export async function captureMemoryFromUserInput(text: string): Promise<MemoryCa
  *  deliberate. */
 const MAX_NOTE_LENGTH = 20_000;
 
+/** Most images one note may carry, and the largest one we keep. A note is one
+ *  thing to remember; a photo dump belongs in a chat. The byte cap matches what
+ *  the transport already accepts on one RPC and keeps recall.sqlite from growing
+ *  by a camera roll's worth per note. */
+export const MAX_NOTE_IMAGES = 4;
+export const MAX_NOTE_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Turn a note's attachments into storable images. Null when any attachment is
+ * not a usable image: an unsupported file, unreadable bytes, too many, or one
+ * over the cap. All-or-nothing, so a note never lands with a picture quietly
+ * missing — the renderer keeps the draft and says why.
+ */
+async function noteImagesOf(attachments: TurnAttachment[]): Promise<FactImageInput[] | null> {
+  if (attachments.length === 0) return [];
+  if (attachments.length > MAX_NOTE_IMAGES) return null;
+  const { images, textBlocks, rejected } = await resolveAttachments(attachments);
+  if (textBlocks.length > 0 || rejected.length > 0 || images.length !== attachments.length) return null;
+  const out: FactImageInput[] = [];
+  for (let i = 0; i < images.length; i++) {
+    const bytes = Buffer.from(images[i].data, 'base64');
+    if (bytes.length === 0 || bytes.length > MAX_NOTE_IMAGE_BYTES) return null;
+    out.push({ name: attachments[i].name || `image-${i + 1}`, mime: images[i].mimeType, bytes });
+  }
+  return out;
+}
+
+/**
+ * The text an image-only note is stored under until the background pass has
+ * described the picture. Stamped so two photo notes never collapse onto one
+ * fact through the norm-unique upsert (the description replaces this anyway).
+ */
+export function imageNotePlaceholder(names: string[], now = new Date()): string {
+  return `Image note (${names.join(', ')}) saved ${now.toISOString()}`;
+}
+
 /**
  * Store a user-typed quick note (composer `/note` / `//`) as a durable explicit
  * fact — no chat turn, no LLM on the save path. Never throws; the renderer gets
  * a result object it can turn into inline feedback.
+ *
+ * Attached images are stored with the fact (see fact_images). Their content
+ * reaches the fact's TEXT only through the background pass (recall/note.ts),
+ * which needs the model — so an image-only note is durable at once under a
+ * placeholder statement and gets its real wording when the description lands.
  */
-export async function addMemoryNote(text: string): Promise<MemoryNoteResult> {
-  const statement = text.trim().slice(0, MAX_NOTE_LENGTH).trim();
-  if (!statement) return { saved: false, reason: 'empty' };
+export async function addMemoryNote(text: string, attachments: TurnAttachment[] = []): Promise<MemoryNoteResult> {
+  const typed = text.trim().slice(0, MAX_NOTE_LENGTH).trim();
+  if (!typed && attachments.length === 0) return { saved: false, reason: 'empty' };
   if (!isRecallEnabled()) return { saved: false, reason: 'disabled' };
-  if (isSensitiveMemoryText(statement)) return { saved: false, reason: 'secret' };
+  if (isSensitiveMemoryText(typed)) return { saved: false, reason: 'secret' };
+
+  const images = await noteImagesOf(attachments);
+  if (images === null) return { saved: false, reason: 'image' };
+  const statement = typed || imageNotePlaceholder(images.map((i) => i.name));
 
   const factId = upsertFact(statement, {
     source: 'explicit',
@@ -175,11 +221,12 @@ export async function addMemoryNote(text: string): Promise<MemoryNoteResult> {
       threadId: null,
       role: 'user',
       timestamp: Math.floor(Date.now() / 1000),
-      excerpt: text,
+      excerpt: typed || `[image: ${images.map((i) => i.name).join(', ')}]`,
       origin: 'explicit_user'
     }]
   });
   if (factId == null) return { saved: false, reason: 'empty' };
+  addFactImages(factId, images);
   return { saved: true, factId };
 }
 
@@ -205,6 +252,7 @@ export async function readMemoryFiles(): Promise<MemoryContents> {
   // the old cap silently hid older facts from the Manage panel.
   const facts = getAllFacts().sort((a, b) => b.updatedAt - a.updatedAt);
   const evidenceCounts = getFactEvidenceCounts();
+  const imageCounts = getFactImageCounts();
   // Folder-learned facts (source `folder:<id>`) chip as "From <folder label>".
   const folderLabels = new Map(
     (await listConnectedFolders()).map((f) => [f.id, f.label] as const)
@@ -225,6 +273,7 @@ export async function readMemoryFiles(): Promise<MemoryContents> {
     pinned: f.pinned,
     validUntil: f.validUntil,
     evidenceCount: evidenceCounts.get(f.id) ?? 0,
+    imageCount: imageCounts.get(f.id) ?? 0,
     timesInjected: f.timesInjected,
     timesUsed: f.timesUsed,
     lastUsedAt: f.lastUsedAt

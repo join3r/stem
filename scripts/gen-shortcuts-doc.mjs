@@ -32,7 +32,8 @@ const TRICKS = `## Tricks
 - Hold **⌘** (**Ctrl** on Windows and Linux) for a moment. Stem labels every shortcut
   on screen with its keycap, so you can learn them from the buttons you already use.
 - Start a message with \`//\` to file a note straight into Memory. No chat turn, no
-  answer, no quota — just the note. Memory must be on.
+  answer, no quota — just the note. Memory must be on. Paste or attach a picture and it
+  is saved with the note; the picture alone is a valid note.
 - Send \`/learn\` after a reply that worked to save the approach as a skill. Add a
   focus—\`/learn the invoice reconciliation steps\`—to steer what it keeps.
 - Drop a file on **This chat** to use it for one message. Drop it on **Files** to copy

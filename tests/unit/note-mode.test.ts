@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectNoteTrigger, noteBodyValid } from '../../src/renderer/noteMode';
+import { detectNoteTrigger, isImageAttachment, noteBodyValid } from '../../src/renderer/noteMode';
 
 describe('detectNoteTrigger', () => {
   it('triggers on "/note " at the start and strips the prefix', () => {
@@ -40,5 +40,19 @@ describe('noteBodyValid', () => {
     expect(noteBodyValid('')).toBe(false);
     expect(noteBodyValid('   ')).toBe(false);
     expect(noteBodyValid('prefers tabs')).toBe(true);
+  });
+
+  it('accepts an empty body when an image is attached', () => {
+    expect(noteBodyValid('', 1)).toBe(true);
+    expect(noteBodyValid('   ', 0)).toBe(false);
+  });
+});
+
+describe('isImageAttachment', () => {
+  it('judges by mime when present, else by extension', () => {
+    expect(isImageAttachment({ name: 'x', mime: 'image/png', dataBase64: '' })).toBe(true);
+    expect(isImageAttachment({ name: 'x.png', mime: 'application/octet-stream' })).toBe(false);
+    expect(isImageAttachment({ name: 'IMG_1.HEIC', path: '/p/IMG_1.HEIC' })).toBe(true);
+    expect(isImageAttachment({ name: 'doc.pdf', path: '/p/doc.pdf' })).toBe(false);
   });
 });

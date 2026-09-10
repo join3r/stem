@@ -18,7 +18,7 @@ import { ContextMeter } from './ContextMeter';
 import { useOffline } from '../hooks/useServerReachable';
 import { ShortcutHint, glyphsFor, useShortcut, useShortcutsBound, type ShortcutId } from '../shortcuts';
 import { EffortModelControl } from '../ui/EffortModelControl';
-import { NOTE_CONFIRM_MS, detectNoteTrigger, noteBodyValid, useNoteMode } from '../noteMode';
+import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, noteBodyValid, useNoteMode } from '../noteMode';
 import { clearDraft, readDraft, writeDraft } from './draft-store';
 
 const MAX_COMPOSER_HEIGHT = 180;
@@ -240,11 +240,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (offline) return;
     const text = draft.trim();
     if (noteMode) {
-      // A note save never touches the backend, so it's allowed mid-turn.
-      if (!noteBodyValid(text)) return;
-      void saveNote(text).then((saved) => {
+      // A note save never starts a turn, so it's allowed mid-turn. Attached
+      // images go with the note (the picture can be the whole note).
+      if (!noteBodyValid(text, attachments.length)) return;
+      void saveNote(text, attachments).then((saved) => {
         if (!saved) return;
         setDraft('');
+        setAttachments([]);
+        if (draftKey) clearDraft(draftKey);
         if (onNoteSaved) window.setTimeout(onNoteSaved, NOTE_CONFIRM_MS);
       });
       return;
@@ -472,10 +475,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         {noteFlash && (
           <div className="composer-attachments">
             <span className={`note-flash${noteFlash === 'saved' ? ' ok' : ''}`} role="status" aria-live="polite">
-              {noteFlash === 'saved' && <><Check size={13} /> Saved to memory</>}
-              {noteFlash === 'off' && 'Memory is off — note not saved'}
-              {noteFlash === 'secret' && 'Looks like a credential — not saved'}
-              {noteFlash === 'error' && 'Couldn’t save the note — try restarting Stem'}
+              {noteFlash === 'saved' && <Check size={13} />} {NOTE_FLASH_TEXT[noteFlash]}
             </span>
           </div>
         )}

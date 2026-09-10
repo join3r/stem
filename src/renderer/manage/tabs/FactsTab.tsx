@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plug, ChevronRight, X, Check, Trash2, Wand2, Eye, RefreshCw, Pin, RotateCcw, ShieldCheck, Lock, Send, TriangleAlert, FolderInput } from 'lucide-react';
+import { Plug, ChevronRight, X, Check, Trash2, Wand2, Eye, RefreshCw, Pin, RotateCcw, ShieldCheck, Lock, Send, TriangleAlert, FolderInput, Image } from 'lucide-react';
 import type {
   DefaultsSettings,
   MemoryContents,
@@ -1028,6 +1028,15 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
                   )}
                   {f.status && f.status !== 'active' && <span className="chip">{FACT_STATUS_LABEL[f.status]}</span>}
                   {f.pinned && <span className="chip"><Pin size={10} /> pinned</span>}
+                  {(f.imageCount ?? 0) > 0 && (
+                    <HoverTip
+                      className="chip"
+                      ariaLabel={`${f.imageCount} image${f.imageCount === 1 ? '' : 's'} saved with this note`}
+                      tip="Saved with an image — click the fact to see it."
+                    >
+                      <Image size={10} /> {f.imageCount === 1 ? 'image' : `${f.imageCount} images`}
+                    </HoverTip>
+                  )}
                   {(f.timesInjected ?? 0) > 0 && (
                     <HoverTip
                       className="chip"
@@ -1047,6 +1056,16 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
                           {e.origin === 'folder_doc' ? `file ${e.relPath ?? '(unknown)'}` : EVIDENCE_ORIGIN_LABEL[e.origin] ?? e.origin}: {e.excerpt}
                         </blockquote>
                       ))}
+                      {details[f.id]!.images.length > 0 && (
+                        <div className="memory-images">
+                          {details[f.id]!.images.map((img) => (
+                            <figure key={img.id} className="memory-image">
+                              <img src={img.dataUrl} alt={img.name} loading="lazy" />
+                              <figcaption>{img.name}</figcaption>
+                            </figure>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

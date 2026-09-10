@@ -12,6 +12,17 @@ Maintainer notes:
   date, tag.
 -->
 
+## 0.5.3 — Unreleased
+
+### Added
+
+- **Notes with pictures.** A memory note (`//`, `/note`, or the Note button) can now carry an
+  image: paste a screenshot or attach a photo, with or without text, and it is saved with the
+  fact. Stem describes what the picture shows into the fact in the background, so a photo of a
+  router label, a receipt, or a menu can be recalled later like any other memory. The picture
+  itself stays yours: it shows in the fact's details under Manage → Memory and is never sent
+  to the assistant again. Desktop only for now.
+
 ## 0.5.2 — 2026-09-09
 
 ### Added

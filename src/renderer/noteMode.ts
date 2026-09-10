@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MemoryNoteResult } from '../shared/types';
+import type { MemoryNoteResult, TurnAttachment } from '../shared/types';
 
 // Composer note mode: `/note ` or `//` at the start of the draft flips the
 // composer into saving a quick memory note instead of running an AI turn. The
@@ -24,15 +24,34 @@ export function detectNoteTrigger(text: string): { body: string } | null {
   return null;
 }
 
-/** A note needs some content — the bare prefix isn't a saveable note. */
-export function noteBodyValid(body: string): boolean {
-  return body.trim().length > 0;
+/** A note needs some content — the bare prefix isn't a saveable note. An
+ *  attached image counts as content: the picture can be the whole note. */
+export function noteBodyValid(body: string, attachmentCount = 0): boolean {
+  return body.trim().length > 0 || attachmentCount > 0;
+}
+
+/** Notes take pictures only — a PDF or a text file has nowhere to go in a fact.
+ *  Judged by name/mime here so the composer can say so before the save call. */
+export function isImageAttachment(att: TurnAttachment): boolean {
+  if (att.mime) return att.mime.startsWith('image/');
+  return /\.(png|jpe?g|gif|webp|heic|heif)$/i.test(att.name || att.path || '');
 }
 
 /** Transient post-save feedback: saved OK, memory disabled in settings, the
- *  note looked like a credential (never stored), or the save call itself failed
- *  (IPC error — e.g. a stale main process). A failure must never be silent. */
-export type NoteFlash = 'saved' | 'off' | 'secret' | 'error' | null;
+ *  note looked like a credential (never stored), an attachment was not a usable
+ *  image, or the save call itself failed (IPC error — e.g. a stale main
+ *  process). A failure must never be silent. */
+export type NoteFlash = 'saved' | 'off' | 'secret' | 'image' | 'files' | 'error' | null;
+
+/** What each flash says. 'saved' is rendered with its own ✓ by the composers. */
+export const NOTE_FLASH_TEXT: Record<Exclude<NoteFlash, null>, string> = {
+  saved: 'Saved to memory',
+  off: 'Memory is off — note not saved',
+  secret: 'Looks like a credential — not saved',
+  image: 'Couldn’t read that image — not saved',
+  files: 'Notes take images only — remove the other files',
+  error: 'Couldn’t save the note — try restarting Stem'
+};
 
 export interface NoteMode {
   noteMode: boolean;
@@ -40,9 +59,10 @@ export interface NoteMode {
   enterNoteMode: () => void;
   exitNoteMode: () => void;
   toggleNoteMode: () => void;
-  /** Save `body` as a memory note. Resolves true when saved (flash shows the
-   *  outcome either way); the caller clears its own draft on true. */
-  saveNote: (body: string) => Promise<boolean>;
+  /** Save `body` (plus any attached images) as a memory note. Resolves true
+   *  when saved (flash shows the outcome either way); the caller clears its own
+   *  draft and attachments on true. */
+  saveNote: (body: string, attachments?: TurnAttachment[]) => Promise<boolean>;
 }
 
 export function useNoteMode(): NoteMode {
@@ -66,12 +86,17 @@ export function useNoteMode(): NoteMode {
   const toggleNoteMode = useCallback(() => setNoteMode((v) => !v), []);
 
   const saveNote = useCallback(
-    async (body: string): Promise<boolean> => {
-      if (!noteBodyValid(body) || savingRef.current) return false;
+    async (body: string, attachments: TurnAttachment[] = []): Promise<boolean> => {
+      if (!noteBodyValid(body, attachments.length) || savingRef.current) return false;
+      if (attachments.some((a) => !isImageAttachment(a))) {
+        // Keep the draft: the fix is removing a chip, not retyping the note.
+        showFlash('files');
+        return false;
+      }
       savingRef.current = true;
       let result: MemoryNoteResult | null;
       try {
-        result = await window.stem.addMemoryNote(body.trim());
+        result = await window.stem.addMemoryNote(body.trim(), attachments);
       } catch {
         result = null;
       } finally {
@@ -88,6 +113,8 @@ export function useNoteMode(): NoteMode {
       } else if (result?.reason === 'secret') {
         // Keep note mode + draft so the user can reword; just explain why.
         showFlash('secret');
+      } else if (result?.reason === 'image') {
+        showFlash('image');
       } else {
         // IPC rejection or an unexpected refusal: keep the draft, say SOMETHING —
         // a swallowed failure reads as a dead Enter key.

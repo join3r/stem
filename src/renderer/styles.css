@@ -1449,6 +1449,13 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .memory-note-actions { display: flex; align-items: flex-start; gap: var(--sp-1); }
 .memory-evidence { display: grid; gap: var(--sp-2); margin-top: var(--sp-3); color: var(--muted); font-size: var(--fs-10); }
 .memory-evidence blockquote { margin: 0; padding-left: var(--sp-4); border-left: 2px solid var(--line); white-space: normal; }
+/* Pictures saved with a note: thumbnails in the expanded details, full size on
+   click is not needed — the fact's text is what the model sees, the image is
+   the user's own reference. */
+.memory-images { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.memory-image { margin: 0; display: grid; gap: var(--sp-1); max-width: 240px; }
+.memory-image img { display: block; max-width: 100%; max-height: 180px; object-fit: contain; border-radius: var(--radius); border: 1px solid var(--line); background: var(--panel); }
+.memory-image figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip.sensitive { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 
 /* Non-blocking "session expired — reconnect" strip above the conversation. Stays

@@ -9,7 +9,7 @@ import { SkillApprovalCard } from '../manage/SkillApprovalCard';
 import { ApprovalCard, MissedApprovalDialog } from '../manage/ApprovalCard';
 import { approvalKey, approvalsElsewhere, approvalsForThread } from '../manage/approvalQueue';
 import { useApprovals } from '../manage/approvalStore';
-import { NOTE_CONFIRM_MS, detectNoteTrigger, useNoteMode } from '../noteMode';
+import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, useNoteMode } from '../noteMode';
 import { EMPTY_STATE, appendSystemMessage, type ThreadState } from '../chatState';
 import {
   attachBackendEvents,
@@ -622,10 +622,7 @@ export function QuickChat() {
           <span className="qc-spacer" />
           {noteFlash ? (
             <span className={`note-flash${noteFlash === 'saved' ? ' ok' : ''}`} role="status" aria-live="polite">
-              {noteFlash === 'saved' && <><Check size={13} /> Saved to memory</>}
-              {noteFlash === 'off' && 'Memory is off — note not saved'}
-              {noteFlash === 'secret' && 'Looks like a credential — not saved'}
-              {noteFlash === 'error' && 'Couldn’t save the note — try restarting Stem'}
+              {noteFlash === 'saved' && <Check size={13} />} {NOTE_FLASH_TEXT[noteFlash]}
             </span>
           ) : (
             <span className="qc-hint">

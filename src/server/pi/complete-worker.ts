@@ -149,7 +149,8 @@ export async function promptComplete(
   child: PiProcess,
   prompt: string,
   llmTimeoutMs: number,
-  logTimeout?: (info: { timeoutMs: number }) => void
+  logTimeout?: (info: { timeoutMs: number }) => void,
+  images?: Array<{ data: string; mimeType: string }>
 ): Promise<string> {
   let text = '';
   let settle!: (result: { ok: true; text: string } | { ok: false; error: Error }) => void;
@@ -195,7 +196,15 @@ export async function promptComplete(
     // Accepting a prompt is a local ack, not the completion — budget it like the
     // other RPCs. Passing llmTimeoutMs here made the worst case two full LLM
     // budgets back to back (a 60s judge blocking a tool call for 120s).
-    const res = await child.request({ type: 'prompt', message: prompt }, COMPLETE_READY_TIMEOUT_MS);
+    const res = await child.request(
+      {
+        type: 'prompt',
+        message: prompt,
+        // Same shape the chat turn path sends (see runtime.sendPrompt).
+        ...(images?.length ? { images: images.map((i) => ({ type: 'image', data: i.data, mimeType: i.mimeType })) } : {})
+      },
+      COMPLETE_READY_TIMEOUT_MS
+    );
     if (!res.success) {
       throw new Error(res.error ?? 'pi rejected the prompt.');
     }

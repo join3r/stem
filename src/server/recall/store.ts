@@ -22,6 +22,7 @@ import type {
   FactCategory,
   FactDetails,
   FactEvidence,
+  FactImage,
   FactSelectionReason,
   FactSensitivity,
   FactStatus,
@@ -127,6 +128,13 @@ export interface Fact {
   disputed?: boolean;
 }
 
+
+/** A note image as written to the store (bytes still raw, not yet a data URL). */
+export interface FactImageInput {
+  name: string;
+  mime: string;
+  bytes: Buffer;
+}
 
 export interface FactWriteOptions {
   source?: string;
@@ -727,6 +735,21 @@ export class RecallStore {
       CREATE INDEX IF NOT EXISTS idx_fact_evidence_fact ON fact_evidence(fact_id);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_fact_evidence_unique
         ON fact_evidence(fact_id, IFNULL(message_id, -1), origin, excerpt);
+
+      -- Images saved with a composer note (/note + an attached picture). The
+      -- bytes live here rather than on disk so a fact and its picture share one
+      -- store: forget/reset/merge handle both together, and a recall.sqlite copy
+      -- is a complete backup. Read only from the details view — the list query
+      -- never touches this table (see getFactImageCounts).
+      CREATE TABLE IF NOT EXISTS fact_images (
+        id         INTEGER PRIMARY KEY,
+        fact_id    INTEGER NOT NULL,
+        name       TEXT NOT NULL,
+        mime       TEXT NOT NULL,
+        bytes      BLOB NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_fact_images_fact ON fact_images(fact_id);
 
       CREATE TABLE IF NOT EXISTS fact_conflicts (
         id          INTEGER PRIMARY KEY,
@@ -1920,7 +1943,52 @@ export class RecallStore {
 
 
   private toFactDetails = (fact: Fact): FactDetails => {
-    return { ...fact, evidence: this.getFactEvidence(fact.id) };
+    return { ...fact, evidence: this.getFactEvidence(fact.id), images: this.getFactImages(fact.id) };
+  };
+
+  /** Store images with a fact (note attachments). Returns the new row ids. */
+  addFactImages = (factId: number, images: FactImageInput[]): number[] => {
+    if (images.length === 0) return [];
+    const handle = this.open();
+    const insert = handle.prepare(
+      `INSERT INTO fact_images (fact_id, name, mime, bytes, created_at) VALUES (?, ?, ?, ?, ?)`
+    );
+    const now = this.nowSeconds();
+    return images.map((img) => Number(insert.run(factId, img.name, img.mime, img.bytes, now).lastInsertRowid));
+  };
+
+  /** The images stored with a fact, oldest first, as details-view data URLs. */
+  getFactImages = (factId: number): FactImage[] => {
+    const rows = this.open()
+      .prepare(`SELECT id, name, mime, bytes FROM fact_images WHERE fact_id = ? ORDER BY id ASC`)
+      .all(factId) as Array<{ id: number; name: string; mime: string; bytes: Buffer }>;
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      mime: r.mime,
+      size: r.bytes.length,
+      dataUrl: `data:${r.mime};base64,${Buffer.from(r.bytes).toString('base64')}`
+    }));
+  };
+
+  /** fact id → number of stored images, for the list view's chip (no blob reads). */
+  getFactImageCounts = (): Map<number, number> => {
+    const rows = this.open()
+      .prepare(`SELECT fact_id AS factId, COUNT(*) AS n FROM fact_images GROUP BY fact_id`)
+      .all() as Array<{ factId: number; n: number }>;
+    return new Map(rows.map((r) => [r.factId, r.n]));
+  };
+
+  /**
+   * Re-home a fact's images onto another fact — the note they came with merged
+   * into an existing claim or was split into extracted facts, and the picture
+   * belongs with whatever now carries its content, not with the retired row.
+   */
+  moveFactImages = (fromFactId: number, toFactId: number): number => {
+    if (fromFactId === toFactId) return 0;
+    return this.open()
+      .prepare(`UPDATE fact_images SET fact_id = ? WHERE fact_id = ?`)
+      .run(toFactId, fromFactId).changes as number;
   };
 
 
@@ -2406,6 +2474,7 @@ export class RecallStore {
     // No FK cascade (foreign_keys isn't globally enabled), so drop the vector by hand.
     handle.prepare(`DELETE FROM fact_vectors WHERE fact_id = ?`).run(id);
     handle.prepare(`DELETE FROM fact_evidence WHERE fact_id = ?`).run(id);
+    handle.prepare(`DELETE FROM fact_images WHERE fact_id = ?`).run(id);
     handle.prepare(`DELETE FROM fact_conflicts WHERE fact_a = ? OR fact_b = ?`).run(id, id);
     handle.prepare(`DELETE FROM fact_relation_checks WHERE fact_a = ? OR fact_b = ?`).run(id, id);
     handle.prepare(`UPDATE facts SET superseded_by = NULL WHERE superseded_by = ?`).run(id);
@@ -3050,6 +3119,7 @@ export class RecallStore {
       ).run(FACTS_GENERATION_KEY, String(nextGeneration));
       handle.exec('DELETE FROM fact_vectors');
       handle.exec('DELETE FROM fact_evidence');
+      handle.exec('DELETE FROM fact_images');
       handle.exec('DELETE FROM fact_conflicts');
       handle.exec('DELETE FROM fact_relation_checks');
       handle.exec('DELETE FROM facts');

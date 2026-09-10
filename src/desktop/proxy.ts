@@ -443,6 +443,13 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         return [{ ...mail, attachments: await attachmentsForServer(mail.attachments) }];
       }
     },
+    'memory:addNote': {
+      before: async ([text, attachments]) => {
+        const list = attachments as TurnAttachment[] | undefined;
+        if (!list?.length) return;
+        return [text, await attachmentsForServer(list)];
+      }
+    },
     'mail:reply': {
       before: async ([conversationId, body, attachments]) => {
         const list = attachments as TurnAttachment[] | undefined;

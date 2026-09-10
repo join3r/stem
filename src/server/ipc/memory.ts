@@ -46,7 +46,8 @@ import type {
   ImportModelResult,
   LocalEmbedStatus,
   LocalRerankStatus,
-  RemoteRetrievalHealth
+  RemoteRetrievalHealth,
+  TurnAttachment
 } from '../../shared/types';
 import { recallStore } from '../recall/store';
 import * as activity from '../activity';
@@ -64,17 +65,20 @@ export function registerMemoryIpc(deps: IpcDeps): void {
     return settings;
   });
   registerServer('memory:read', () => readMemoryFiles());
-  registerServer('memory:addNote', async (_e, text: string) => {
-    const result = await addMemoryNote(String(text ?? ''));
+  registerServer('memory:addNote', async (_e, text: string, attachments?: TurnAttachment[] | null) => {
+    const typed = String(text ?? '');
+    const result = await addMemoryNote(typed, attachments ?? []);
     if (result.saved && result.factId != null) {
       // Canonicalize + reconcile off the acknowledgement path (same hidden
-      // one-shot seam as distillation); the raw note is already durable.
+      // one-shot seam as distillation); the raw note is already durable. Note
+      // images ride the same complete() call so the memory model can describe
+      // them into the fact text.
       const llm: LlmClient = {
-        complete: async (prompt) =>
-          deps.runtime().complete(prompt, await memoryRunOf((s) => s.memory.model))
+        complete: async (prompt, images) =>
+          deps.runtime().complete(prompt, { ...(await memoryRunOf((s) => s.memory.model)), images })
       };
       const factId = result.factId;
-      setTimeout(() => void processExplicitNote(factId, llm), 0);
+      setTimeout(() => void processExplicitNote(factId, llm, typed.trim()), 0);
     }
     return result;
   });

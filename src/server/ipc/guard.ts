@@ -138,7 +138,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'skills:reset': [a.boolean, a.oneOf(['off', 'ask', 'auto'])],
   'skills:learn': [a.string, a.nullish(a.string)],
   'memory:setEnabled': [a.boolean],
-  'memory:addNote': [a.string],
+  'memory:addNote': [a.string, a.optional(a.nullish(a.objectArray))],
   'memory:forget': [a.number],
   'memory:setPinned': [a.number, a.boolean],
   'memory:confirmFact': [a.number],
