@@ -39,6 +39,10 @@ accessibility actions provide the same operations without a swipe.
 Both composers accept photos and files up to 100 MiB each. Files upload over the
 authenticated `/upload` endpoint before sending. Saved conversation attachments
 currently expose image previews and file names, not downloads of original files.
+HEIC/HEIF photos from Photos or Files are converted on the phone to full-resolution,
+high-quality JPEG before upload, including photos already saved in drafts. The
+original photo and draft copy are preserved for retries; conversion failures keep
+the draft and show an error. This requires a native build with `expo-image-manipulator`.
 
 Use a native build for verification: the app includes photo/document pickers, native
 swipe gestures, Keychain, and push notification entitlements. Do not build the

@@ -18,6 +18,7 @@
     "expo-document-picker": "~57.0.1",
     "expo-file-system": "~57.0.2",
     "expo-glass-effect": "^57.0.1",
+    "expo-image-manipulator": "~57.0.9",
     "expo-image-picker": "~57.0.9",
     "expo-linking": "~57.0.5",
     "expo-notifications": "~57.0.10",
