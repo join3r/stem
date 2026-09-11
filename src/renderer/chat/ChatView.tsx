@@ -34,6 +34,7 @@ import { StreamingMdxView } from './StreamingMdxView';
 import { HoverTip } from '../ui/InfoTip';
 import { MdxActionContext } from '../mdx/ActionContext';
 import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
+import { INITIAL_FOLLOW, onScrollEvent, type FollowState } from './followBottom';
 import { EFFORT_LABELS } from '../modelLabels';
 import { EmptyTips } from './EmptyTips';
 
@@ -372,11 +373,36 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   // instantly to the bottom on that first paint (no scrolling through history);
   // only smooth-scroll for subsequent updates within the same chat (streaming).
   const didInitialScroll = useRef(false);
+  // Follow new content only while the reader is at the bottom. A reader who has
+  // scrolled up into a long chat keeps their place through history refreshes
+  // (window focus, reconnect), scheduled runs and other devices' messages.
+  const follow = useRef<FollowState>(INITIAL_FOLLOW);
 
   useEffect(() => {
+    const el = messagesRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      follow.current = onScrollEvent(follow.current, el);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [messagesRef]);
+
+  useEffect(() => {
+    if (didInitialScroll.current && !follow.current.following) return;
     endRef.current?.scrollIntoView({ behavior: didInitialScroll.current ? 'smooth' : 'auto' });
     didInitialScroll.current = true;
   }, [messages, running]);
+
+  // Sending is an explicit ask to see the newest message: re-engage the follow so
+  // the optimistic user bubble and the reply that streams under it stay in view.
+  const sendAndFollow = useCallback(
+    (text: string, attachments: TurnAttachment[]) => {
+      follow.current = { ...follow.current, following: true };
+      onSend(text, attachments);
+    },
+    [onSend]
+  );
 
   function saveEdit(m: ChatMessage, rawText: string) {
     const text = rawText.trim();
@@ -412,8 +438,8 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   // Bridge for interactive MDX components (Quiz/Form): submitting routes through the
   // normal send path, so it appears as a user message just like typing would.
   const mdxActions = useMemo(
-    () => ({ submit: (text: string) => onSend(text, []), running }),
-    [onSend, running]
+    () => ({ submit: (text: string) => sendAndFollow(text, []), running }),
+    [sendAndFollow, running]
   );
 
   // Welcome-screen subtext: lead with what Stem does (memory, rich replies), not
@@ -660,7 +686,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                   type="button"
                   className="empty-starter"
                   disabled={running}
-                  onClick={() => onSend(s.prompt, [])}
+                  onClick={() => sendAndFollow(s.prompt, [])}
                 >
                   <strong>{s.title}</strong>
                   <span>{s.prompt}</span>
@@ -733,7 +759,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         messages={messages}
         running={running}
         escapeAction={escapeAction}
-        onSend={onSend}
+        onSend={sendAndFollow}
         onInterrupt={onInterrupt}
         onRetractActiveTurn={onRetractActiveTurn}
         pendingRestore={pendingRestore}
