@@ -4,7 +4,7 @@
 // A payload rather than JSON because a phone that has no Stem on it yet still
 // does something sensible with the scan — iOS offers to open `stem://`, which
 // the App Store handles — and because the same string can be copied into a
-// message. mobile/src/transport/pairing.ts reads it back; the parameter name
+// message. ios/Stem/Transport/StemClient.swift (PairLink) reads it back; the parameter name
 // `url` is the contract between the two.
 //
 // WHY REACHABILITY IS A QUESTION AT ALL. Stem's default install runs its own

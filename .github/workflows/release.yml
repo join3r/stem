@@ -30,7 +30,7 @@ jobs:
         run: |
           app=$(echo release/linux*-unpacked/resources/app)
           node "$app/node_modules/@earendil-works/pi-coding-agent/dist/cli.js" --version
-          for stray in src tests mobile docs scripts Dockerfile; do
+          for stray in src tests ios docs scripts Dockerfile; do
             if [ -e "$app/$stray" ]; then echo "::error::$stray/ leaked into the packaged app"; exit 1; fi
           done
           ls "$app/node_modules/onnxruntime-node/bin/napi-v3"
@@ -65,7 +65,7 @@ jobs:
         run: |
           app=$(echo release/linux*-unpacked/resources/app)
           node "$app/node_modules/@earendil-works/pi-coding-agent/dist/cli.js" --version
-          for stray in src tests mobile docs scripts Dockerfile; do
+          for stray in src tests ios docs scripts Dockerfile; do
             if [ -e "$app/$stray" ]; then echo "::error::$stray/ leaked into the packaged app"; exit 1; fi
           done
           ls "$app/node_modules/onnxruntime-node/bin/napi-v3"

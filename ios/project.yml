@@ -1,0 +1,67 @@
+name: Stem
+options:
+  bundleIdPrefix: sk.awantech
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: AX23G9CAL9
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.6.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Stem:
+    type: application
+    platform: iOS
+    sources:
+      - Stem
+    info:
+      path: Stem/Info.plist
+      properties:
+        CFBundleDisplayName: Stem
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIBackgroundModes: [remote-notification]
+        NSCameraUsageDescription: Stem uses the camera to read the pairing code your desktop shows, and to take photos you attach.
+        NSPhotoLibraryUsageDescription: Stem accesses selected photos so you can attach them to chats and mail.
+        NSPhotoLibraryAddUsageDescription: Stem saves generated images to your photo library when you ask it to.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: sk.awantech.stem
+            CFBundleURLSchemes: [stem]
+    entitlements:
+      path: Stem/Stem.entitlements
+      properties:
+        aps-environment: development
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: sk.awantech.stem
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_PREVIEWS: true
+  StemTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - StemTests
+    dependencies:
+      - target: Stem
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        BUNDLE_LOADER: $(TEST_HOST)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Stem.app/Stem
+schemes:
+  Stem:
+    build:
+      targets:
+        Stem: all
+    test:
+      targets:
+        - StemTests

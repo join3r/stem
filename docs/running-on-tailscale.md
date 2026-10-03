@@ -165,7 +165,7 @@ a code on the server and type it by hand.
 The address on the phone is the same `https://stem.tailxxxxx.ts.net`. The phone
 needs Tailscale (or to be on the LAN with a Host you listed). Scan the QR, or
 type the URL and the code. The code is spent once and lasts ten minutes —
-[Stem for iOS](../mobile/README.md) has the Expo / push details, which do not
+[Stem for iOS](../ios/README.md) has the build and push details, which do not
 change.
 
 ## Funnel (optional, public)
