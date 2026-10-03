@@ -36,7 +36,9 @@ by hand — nothing checks it.
 
 On the desktop: **Settings → Server → Devices → Pair a phone**. Scan the QR with the
 app's scanner, or type the address and the eight-character code. Opening a
-`stem://pair?url=…&code=…` link fills both in and pairs. The code is spent once and
+`stem://pair?url=…&code=…` link fills both in and waits for you to tap Pair; on a
+phone that is already paired it asks before switching servers, naming the host.
+Links inside replies and mail only open if they are web or mail links. The code is spent once and
 expires in ten minutes.
 
 Release builds refuse plain `http://` to anything but loopback; use the `https://`

@@ -10,6 +10,8 @@ struct PairView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var scanning = false
+    /// Filled in from a link: the address is shown for checking, not paired yet.
+    @State private var fromLink = false
 
     var body: some View {
         NavigationStack {
@@ -33,6 +35,12 @@ struct PairView: View {
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                         .font(.body.monospaced())
+                }
+                if fromLink, let host = URL(string: PairLink.normalizeURL(serverUrl))?.host {
+                    Section {
+                        Label("A link filled this in. Pair only if \(host) is your own Stem server.", systemImage: "exclamationmark.shield")
+                            .font(.footnote)
+                    }
                 }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
                 Section {
@@ -66,7 +74,8 @@ struct PairView: View {
         app.pendingPairLink = nil
         serverUrl = link.serverUrl
         code = link.code
-        Task { await pair() }
+        error = nil
+        fromLink = true
     }
 
     private func pair() async {

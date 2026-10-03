@@ -63,22 +63,33 @@ final class AppModel {
         }
     }
 
+    /// A `stem://pair` link never pairs by itself: anything can open one (a web
+    /// page, a link in a reply), and pairing to a stranger's server would send
+    /// them every message. It only fills in the pair screen, or asks first.
     func handle(url: URL) {
         guard let link = PairLink.parse(url) else { return }
-        guard let old = session else { pendingPairLink = link; return }
-        // Already paired: switch only once the new code is accepted, so a bad
-        // or expired link leaves the working pairing alone.
-        Task {
-            guard PairLink.validate(link.serverUrl) == nil,
-                  let creds = try? await StemClient.pair(serverUrl: link.serverUrl, code: link.code) else { return }
+        pendingPairLink = link
+    }
+
+    /// Already paired and the user confirmed the link: switch only once the
+    /// new code is accepted, so a bad or expired link leaves the pairing alone.
+    func switchServer(to link: (serverUrl: String, code: String)) async -> String? {
+        if let problem = PairLink.validate(link.serverUrl) { return problem }
+        guard let old = session else { return nil }
+        do {
+            let creds = try await StemClient.pair(serverUrl: link.serverUrl, code: link.code)
             let oldClient = old.client
             Task { try? await oldClient.run("devices:revoke", [.string(oldClient.creds.deviceId)]) }
             DraftStore.clearAll()
             chatPath = []
             mailPath = []
             paired(creds)
+            return nil
+        } catch {
+            return error.localizedDescription
         }
     }
+
 }
 
 /// Everything that lives as long as one pairing: the client, the stream,

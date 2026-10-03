@@ -11,6 +11,11 @@ struct StemApp: App {
         WindowGroup {
             RootView()
                 .environment(app)
+                // Links inside replies and mail are model-written: only web and
+                // mail links open; app schemes (stem://, tel:, …) are dropped.
+                .environment(\.openURL, OpenURLAction { url in
+                    ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
+                })
                 .onAppear { delegate.app = app }
                 .onOpenURL { app.handle(url: $0) }
         }
@@ -42,6 +47,7 @@ struct RootView: View {
 struct MainTabs: View {
     @Environment(AppModel.self) private var app
     @Environment(Session.self) private var session
+    @State private var switchError: String?
 
     var body: some View {
         @Bindable var app = app
@@ -53,6 +59,21 @@ struct MainTabs: View {
             Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView() }
         }
         .task { await session.refreshShared() }
+        .alert("Pair with another server?", isPresented: Binding(
+            get: { app.pendingPairLink != nil }, set: { if !$0 { app.pendingPairLink = nil } })
+        ) {
+            Button("Cancel", role: .cancel) { app.pendingPairLink = nil }
+            Button("Switch", role: .destructive) {
+                guard let link = app.pendingPairLink else { return }
+                app.pendingPairLink = nil
+                Task { switchError = await app.switchServer(to: link) }
+            }
+        } message: {
+            Text("A link asks to move this phone to \(URL(string: app.pendingPairLink?.serverUrl ?? "")?.host ?? "another server"). Everything you send would go there. Only switch if it is your own Stem server.")
+        }
+        .alert("Couldn't switch", isPresented: Binding(get: { switchError != nil }, set: { if !$0 { switchError = nil } })) {
+            Button("OK") { switchError = nil }
+        } message: { Text(switchError ?? "") }
         .overlay {
             if session.connection.status == .unauthorized {
                 ContentUnavailableView {
