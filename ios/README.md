@@ -88,6 +88,8 @@ conversation it names.
 ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_KEY_PATH=…/AuthKey_….p8 ./scripts/testflight.sh
 ```
 
-It regenerates the project, archives with automatic signing in the Awantech team
-(AX23G9CAL9) and uploads. Bump `MARKETING_VERSION` in `project.yml` for a new release;
+It regenerates the project, archives in the Awantech team (AX23G9CAL9), and exports
+with manual signing: the `Apple Distribution: Awantech s.r.o.` certificate (its key in
+the login keychain; a backup `.p12` sits beside the `.p8` keys in `stem/`) and the
+`Stem App Store 2026-10` profile. Both expire in October 2027. Bump `MARKETING_VERSION` in `project.yml` for a new release;
 the build number climbs on its own.

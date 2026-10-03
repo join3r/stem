@@ -8,9 +8,19 @@
 #   ASC_ISSUER_ID   the issuer id shown above the key list
 #   ASC_KEY_PATH    path to the downloaded AuthKey_<keyid>.p8
 #
+# Export signs manually with the "Apple Distribution: Awantech s.r.o." identity
+# (its key must be in the login keychain) and the "Stem App Store 2026-10"
+# profile, both made through the API key on 2026-10-03: the key may not use
+# Xcode's cloud signing. When either expires (Oct 2027), make new ones and
+# update export-options.plist.
+#
 # manageAppVersionAndBuildNumber in export-options.plist lets Xcode bump the
 # build number past what TestFlight already has, so re-runs just work.
 set -euo pipefail
+
+# Xcode's export shells out to rsync and breaks on Homebrew's rsync 3.x
+# ("Copy failed"); the system one must come first.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 cd "$(dirname "$0")/.."
 ARCHIVE="build/Stem.xcarchive"

@@ -2,15 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>method</key>
-	<string>app-store-connect</string>
-	<key>destination</key>
-	<string>upload</string>
-	<key>teamID</key>
-	<string>AX23G9CAL9</string>
-	<key>manageAppVersionAndBuildNumber</key>
-	<true/>
-	<key>uploadSymbols</key>
-	<true/>
+	<key>method</key><string>app-store-connect</string>
+	<key>destination</key><string>upload</string>
+	<key>teamID</key><string>AX23G9CAL9</string>
+	<key>signingStyle</key><string>manual</string>
+	<key>signingCertificate</key><string>Apple Distribution</string>
+	<key>provisioningProfiles</key>
+	<dict><key>sk.awantech.stem</key><string>Stem App Store 2026-10</string></dict>
+	<key>manageAppVersionAndBuildNumber</key><true/>
+	<key>uploadSymbols</key><true/>
 </dict>
 </plist>
