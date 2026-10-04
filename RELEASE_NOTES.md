@@ -16,6 +16,19 @@ Maintainer notes:
 
 ### Added
 
+- **Rich answers, for real.** In an MDX chat Stem now answers with a chart, table, comparison,
+  step list, diagram or form whenever the question calls for one; before, it almost never did.
+  Short and conversational replies stay plain.
+- **Charts, redrawn.** Charts fit the window at any size, show several series with a legend, and
+  come as line, area, bar (turned on their side when labels are long), stacked, donut or scatter.
+  Hover for exact values, or click **Table** to see the numbers.
+- **Stats, comparisons, diagrams and suggested replies.** Headline numbers come as tiles with the
+  change since last time; a choice between options is laid out side by side with the recommended
+  one marked; flows and architectures come as diagrams. A longer answer can end with a few
+  follow-ups you click to send.
+- **Rich answers on the phone.** The iPhone app draws charts, tables, tiles, comparisons, steps,
+  tabs, quizzes, forms and suggested replies itself instead of saying "Open on the desktop".
+  Diagrams still show their source there.
 - **Pinboard.** Keep what matters from a chat at the top of it: hover a message and click the
   pin, select a few words of a reply and click **Pin**, or type `/pin` and a note of your own. A
   strip under the chat title shows how many things are pinned and a short name for each, written
@@ -29,11 +42,25 @@ Maintainer notes:
 
 ### Changed
 
+- **Each chat has its own format.** MDX or Markdown is now chosen per chat: the composer toggle
+  sets it for new chats and switches the chat you have open. Markdown chats no longer carry the
+  instructions for rich answers, so they send the model less. An iPhone app older than this
+  version can only set the format of new chats.
+- **Sources as cards.** Under a web answer, the cited sites' icons show at a glance; open the
+  list for a card per source.
 - **Folders file chats only when you ask them to.** Making a folder now asks for a name, an
   optional description, and whether matching chats should move there automatically; the same
   dialog opens again from the folder's **Settings…**. Switching auto-filing on asks whether chats
   you already have should be looked at too. The old all-folders switch in Settings → App is gone,
   so existing folders stay as they are until you switch them on.
+
+### Fixed
+
+- **MDX answers render while they stream.** An MDX answer used to show as raw text, tags and all,
+  until it finished. It now renders as it arrives, with a short placeholder where a chart or
+  table is still being written.
+- **Chat previews no longer show chart data.** A reply that opened with a chart or table showed
+  up in the chat list as a line of raw data; it now shows the chart's title.
 
 ## 0.5.6 — 2026-10-02
 
