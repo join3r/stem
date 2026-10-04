@@ -133,7 +133,14 @@ export function registerChatsIpc(deps: IpcDeps): void {
     // Which of the board's pins the fork keeps depends on the turns it keeps —
     // read off the original before forking, while it is still the active
     // session (the fork's own file only appears on its first append).
-    const anchors = listPins(threadId).length > 0
+    // An unreadable pins database must not stop the fork itself.
+    let hasPins = false;
+    try {
+      hasPins = listPins(threadId).length > 0;
+    } catch (err) {
+      degrade('chats', 'forked a chat without its pinboard', err);
+    }
+    const anchors = hasPins
       ? await deps.runtime().readThread(threadId).then(
           (t) => forkAnchors(t.messages, turnId),
           (err) => {

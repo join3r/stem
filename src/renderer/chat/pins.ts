@@ -43,7 +43,12 @@ export function pinSource(pin: ChatPin, messages: ChatMessage[]): ChatMessage | 
   );
   if (candidates.length === 0) return null;
   const needle = pin.text.trim();
-  return candidates.find((m) => m.content.includes(needle)) ?? candidates[candidates.length - 1];
+  // Exact first: a short bubble's text can also turn up inside a longer sibling.
+  return (
+    candidates.find((m) => m.content.trim() === needle) ??
+    candidates.find((m) => m.content.includes(needle)) ??
+    candidates[candidates.length - 1]
+  );
 }
 
 const DOCKED_KEY = 'stem.pinboard.docked';

@@ -71,6 +71,14 @@ describe('pin store', () => {
     expect(listPins(t)).toHaveLength(4);
   });
 
+  it('keeps apart the bubbles of a turn that rebuilt as several', () => {
+    const t = thread();
+    const a = addPin(t, { kind: 'message', text: 'Let me check.', anchor: 'turn-a', role: 'assistant' });
+    const b = addPin(t, { kind: 'message', text: 'Cure for 5 days.', anchor: 'turn-a', role: 'assistant' });
+    expect(b.id).not.toBe(a.id);
+    expect(listPins(t)).toHaveLength(2);
+  });
+
   it('edits only a note, and drops a model label the edit made stale', () => {
     const t = thread();
     const note = addPin(t, { kind: 'note', text: 'coat 1 done' });
@@ -225,7 +233,8 @@ describe('chat lifecycle', () => {
       onAuthenticated: async () => ({}) as never,
       scheduleMemoryRebuild: () => undefined,
       scheduleFolderIndexScan: () => undefined,
-      scheduleFolderLearn: () => undefined
+      scheduleFolderLearn: () => undefined,
+      scheduleAutoFile: () => undefined
     });
     return { dispatchLocal, emitted };
   }

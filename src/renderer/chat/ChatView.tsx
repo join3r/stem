@@ -50,7 +50,7 @@ import { EFFORT_LABELS } from '../modelLabels';
 import { EmptyTips } from './EmptyTips';
 import { PinBoard } from './PinBoard';
 import { SelectionPin } from './SelectionPin';
-import { locatePassage, messageAnchor } from './pins';
+import { locatePassage, messageAnchor, pinSource } from './pins';
 import { useChatPins } from '../hooks/useChatPins';
 
 const AVATAR: Record<ChatMessage['role'], { cls: string; icon: ReactNode; label: string }> = {
@@ -508,11 +508,11 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     window.setTimeout(() => el.classList.remove('pin-flash'), 1600);
   }, [messagesRef]);
 
-  // The message's own pin, if it has one: the action row's Pin toggles it.
+  // The message's own pin, if it has one: the action row's Pin toggles it. A
+  // turn that rebuilt as several bubbles shares one anchor, so the pin belongs
+  // to the bubble its text came from, not to every bubble of the turn.
   const messagePinOf = (m: ChatMessage): ChatPin | undefined =>
-    board.pins.find(
-      (p) => p.kind === 'message' && p.role === m.role && (p.anchor === m.runtimeTurnId || p.anchor === m.turnId)
-    );
+    board.pins.find((p) => p.kind === 'message' && pinSource(p, messages) === m);
   const togglePin = (m: ChatMessage) => {
     const pinned = messagePinOf(m);
     const anchor = messageAnchor(m);

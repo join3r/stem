@@ -12,7 +12,7 @@ Maintainer notes:
   date, tag.
 -->
 
-## 0.5.7 — Unreleased
+## 0.6.0 — Unreleased
 
 ### Added
 
@@ -24,6 +24,14 @@ Maintainer notes:
   the chat, or stays put with **Keep open**. Stem also keeps everything on the board in mind for
   the rest of that chat, so a measurement or setting you pinned early on isn't forgotten once the
   conversation gets long. Chat search finds pinned notes too.
+
+### Changed
+
+- **Folders file chats only when you ask them to.** Making a folder now asks for a name, an
+  optional description, and whether matching chats should move there automatically; the same
+  dialog opens again from the folder's **Settings…**. Switching auto-filing on asks whether chats
+  you already have should be looked at too. The old all-folders switch in Settings → App is gone,
+  so existing folders stay as they are until you switch them on.
 
 ## 0.5.6 — 2026-10-02
 

@@ -114,16 +114,18 @@ export function getPin(threadId: string, pinId: string): ChatPin | null {
 
 /**
  * Pin something to the end of the chat's board. The same message pinned twice is
- * one pin — the Pin button toggles, and a double click must not make two. A
- * passage is distinct per text, so two passages of one answer are two pins.
+ * one pin — the Pin button toggles, and a double click must not make two. An
+ * older turn can rebuild as several assistant bubbles under one anchor, so a
+ * message is told apart by its text too. A passage is distinct per text, so two
+ * passages of one answer are two pins.
  */
 export function addPin(threadId: string, raw: ChatPinInput): ChatPin {
   const input = parsePinInput(raw);
   const handle = open();
   if (input.kind === 'message') {
     const existing = handle
-      .prepare(`SELECT * FROM pins WHERE thread_id = ? AND kind = 'message' AND anchor = ? AND role = ?`)
-      .get(threadId, input.anchor, input.role) as Record<string, unknown> | undefined;
+      .prepare(`SELECT * FROM pins WHERE thread_id = ? AND kind = 'message' AND anchor = ? AND role = ? AND text = ?`)
+      .get(threadId, input.anchor, input.role, input.text) as Record<string, unknown> | undefined;
     if (existing) return toPin(existing);
   }
   const { n, top } = handle

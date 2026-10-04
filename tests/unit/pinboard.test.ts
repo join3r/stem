@@ -56,6 +56,14 @@ describe('pin sources', () => {
     expect(pinSource(pin({ kind: 'passage', anchor: 'e2', role: 'assistant', text: 'gone' }), messages)?.id).toBe('a2b');
   });
 
+  it('prefers the bubble that is exactly the pinned message over one containing it', () => {
+    const turn: ChatMessage[] = [
+      { id: 'b1', role: 'assistant', content: 'Done. Next, sand it.', turnId: 'e3' },
+      { id: 'b2', role: 'assistant', content: 'Done.', turnId: 'e3' }
+    ];
+    expect(pinSource(pin({ kind: 'message', anchor: 'e3', role: 'assistant', text: 'Done.' }), turn)?.id).toBe('b2');
+  });
+
   it('has no source for a note, or once the turn left the chat', () => {
     expect(pinSource(pin({ kind: 'note' }), messages)).toBeNull();
     expect(pinSource(pin({ kind: 'message', anchor: 'r9', role: 'assistant' }), messages)).toBeNull();
