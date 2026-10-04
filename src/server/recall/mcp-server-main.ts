@@ -433,7 +433,7 @@ const FOLDER_DOCS_TOOL = {
 const GUIDE_TOOL = {
   name: 'read_stem_guide',
   description:
-    "Read Stem documentation or assistant procedures as Markdown. For questions about Stem's UI, settings, shortcuts, features or releases, use the relevant user-guide page; read `guide` first if unsure. For specialized actions, `assistant-*` pages cover managing integrations, skills, schedules, preferences, files, web sources and server execution. Read `output-format` before using rich-output components for their exact syntax. Read only pages relevant to the task; multiple pages may be read together.",
+    "Read Stem documentation or assistant procedures as Markdown. For questions about Stem's UI, settings, shortcuts, features or releases, use the relevant user-guide page; read `guide` first if unsure. For specialized actions, `assistant-*` pages cover managing integrations, skills, schedules, preferences, files, web sources and server execution. Read only pages relevant to the task; multiple pages may be read together.",
   inputSchema: {
     type: 'object',
     properties: {

@@ -44,7 +44,6 @@ import assistantSchedulingMd from '../../../docs/assistant/assistant-scheduling.
 import assistantFilesMd from '../../../docs/assistant/assistant-files.md?raw';
 import assistantWebMd from '../../../docs/assistant/assistant-web.md?raw';
 import assistantHostMd from '../../../docs/assistant/assistant-host.md?raw';
-import outputFormatMd from '../../../docs/assistant/output-format.md?raw';
 
 
 export interface StemGuidePage {
@@ -108,8 +107,7 @@ export const STEM_GUIDE_PAGES: readonly StemGuidePage[] = [
   page('assistant-scheduling', 'docs/assistant/assistant-scheduling.md', 'assistant procedure for schedules and autonomous-run notifications', assistantSchedulingMd),
   page('assistant-files', 'docs/assistant/assistant-files.md', 'assistant procedure for shared files, deliverables and scratch storage', assistantFilesMd),
   page('assistant-web', 'docs/assistant/assistant-web.md', 'assistant procedure for web search, fetching URLs and source safety', assistantWebMd),
-  page('assistant-host', 'docs/assistant/assistant-host.md', 'server execution, device routing and persistent package installation', assistantHostMd),
-  page('output-format', 'docs/assistant/output-format.md', 'supported rich-output components, exact syntax, limitations and examples', outputFormatMd)
+  page('assistant-host', 'docs/assistant/assistant-host.md', 'server execution, device routing and persistent package installation', assistantHostMd)
 ];
 
 /** Valid `page` arguments, in guide order — the tool descriptor's enum. */

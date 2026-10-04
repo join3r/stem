@@ -41,8 +41,26 @@ describe('stemAssistantInstructions', () => {
     // The whole prompt is still there, both sides of the splice.
     expect(prompt).toContain('You are Stem, a general-purpose personal assistant');
     expect(prompt).toContain('read_stem_guide');
-    expect(prompt).toContain('`output-format`');
-    expect(stemGuidePage('output-format')?.markdown).toContain('<Callout type="info|warn|success|danger">');
+  });
+
+  // The format is chosen per chat and decides what its worker is spawned with.
+  // An MDX chat carries the whole syntax card inline (a guide pointer cost a
+  // tool call the model never paid); a Markdown chat carries no component text.
+  it('carries the MDX syntax card only in an MDX chat', () => {
+    const mdx = stemAssistantInstructions('mdx');
+    expect(mdx).toContain('## Output format: MDX');
+    expect(mdx).toContain('<Callout type="warn">');
+    expect(mdx).toContain('```json\n[{"label":"Jan","value":92}');
+    expect(mdx).toContain('→ `Chart`');
+    expect(mdx).not.toContain('`output-format`');
+    expect(stemAssistantInstructions()).toBe(mdx);
+
+    const md = stemAssistantInstructions('md');
+    expect(md).toContain('## Output format\nWrite standard Markdown');
+    for (const name of ['Callout', 'Chart', 'DataTable', 'Tabs', 'Steps', 'Form', 'Quiz', 'Collapsible', 'MDX']) {
+      expect(md, name).not.toContain(name);
+    }
+    expect(md.length).toBeLessThan(mdx.length);
   });
 
   it('explains what a missing command on the wrong machine looks like', () => {
@@ -83,22 +101,25 @@ describe('stemAssistantInstructions', () => {
     expect(stemAssistantInstructions()).not.toContain('uv tool install');
   });
 
-  it('keeps initial Stem instructions under budget on both host types', () => {
+  it('keeps initial Stem instructions under budget on both host types and formats', () => {
     for (const kind of ['server', 'desktop'] as const) {
       asHost(kind);
+      // Markdown chats pay for nothing they don't use; the MDX card is the one
+      // deliberate cost, measured by npm run eval:mdx.
+      expect(stemAssistantInstructions('md').length).toBeLessThanOrEqual(5000);
+      expect(stemAssistantInstructions('mdx').length).toBeLessThanOrEqual(7500);
       const prompt = stemAssistantInstructions();
-      expect(prompt.length).toBeLessThanOrEqual(5500);
       // The large examples/procedures must remain available without being
       // transmitted on every greeting.
       expect(prompt).not.toContain('Quarterly revenue');
       expect(prompt).not.toContain('## When to use');
       expect(prompt).not.toContain('Dockerfile.local');
-      const pages = [...prompt.matchAll(/`(assistant-[a-z-]+|output-format)`/g)].map((m) => m[1]);
+      const pages = [...prompt.matchAll(/`(assistant-[a-z-]+)`/g)].map((m) => m[1]);
       // Files and web are used on nearly every turn, so their procedure is
       // inlined rather than pointed at — a pointer there just costs a tool call.
       expect(pages).not.toContain('assistant-web');
       expect(pages).not.toContain('assistant-files');
-      expect(new Set(pages).size).toBe(kind === 'server' ? 6 : 5);
+      expect(new Set(pages).size).toBe(kind === 'server' ? 5 : 4);
       for (const slug of pages) expect(stemGuidePage(slug), slug).not.toBeNull();
     }
   });

@@ -60,7 +60,7 @@ describe('stem guide pages', () => {
     expect(chats).toContain('Review this launch plan');
   });
 
-  it('preserves detailed procedures and exact component syntax behind their guide pages', () => {
+  it('preserves detailed procedures behind their guide pages', () => {
     expect(stemGuidePage('assistant-preferences')?.markdown).toContain('"quickChat"');
     expect(stemGuidePage('assistant-mcp')?.markdown).toContain("chat's history");
     expect(stemGuidePage('assistant-skills')?.markdown).toContain('initiated_by: "user"');
@@ -68,11 +68,9 @@ describe('stem guide pages', () => {
     expect(stemGuidePage('assistant-scheduling')?.markdown).toContain('5 fields, local time');
     expect(stemGuidePage('assistant-files')?.markdown).toContain('cp report.pdf files/');
     expect(stemGuidePage('assistant-web')?.markdown).toContain('UNTRUSTED DATA');
-    const output = stemGuidePage('output-format')!.markdown;
-    expect(output).toContain('```json\n[{"label":"Q1","value":12}');
-    expect(output).toContain('<Form prompt="…" submitLabel="…">');
-    expect(output).toContain('`answer` must exactly match');
-    expect(output).not.toContain('\\`');
+    // Component syntax is no longer a guide page: an MDX chat's system prompt
+    // carries it (workspace/mdx-card.md), and a Markdown chat must not find it.
+    expect(stemGuidePage('output-format')).toBeNull();
   });
 
   it('looks pages up case-insensitively and rejects anything else', () => {

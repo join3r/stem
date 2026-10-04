@@ -48,7 +48,7 @@ import { log } from '../log';
 import { degrade } from '../degrade';
 import { isContextOverflowError } from '../backend/overflow';
 import {
-  PLAIN_MD_DIRECTIVE,
+  INBOX_MDX_NOTE,
   codingDelegationInstructions,
   computerControlInstructions,
   stemAssistantInstructions
@@ -3308,12 +3308,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         '--model',
         modelId,
         '--append-system-prompt',
-        // Built per spawn: it names the machine the assistant is running on. A
+        // Built per spawn: it names the machine the assistant is running on, and
+        // carries the MDX syntax card only on an MDX worker. A
         // persona worker appends its role prompt here — spawn-time state, which
         // is why a persona owns a whole worker rather than a per-turn block.
         worker.personaPrompt
-          ? `${stemAssistantInstructions()}\n\n${worker.personaPrompt}`
-          : stemAssistantInstructions()
+          ? `${stemAssistantInstructions(worker.format)}\n\n${worker.personaPrompt}`
+          : stemAssistantInstructions(worker.format)
       ]
     });
     worker.spawnedPersonaPrompt = worker.personaPrompt;
@@ -4242,7 +4243,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // for; a turn must still go out without it, and exec reads the same
       // settings itself when a command actually runs.
     }
-    if (input.format === 'md') blocks.push(PLAIN_MD_DIRECTIVE);
+    if (input.mail || input.scheduled) blocks.push(INBOX_MDX_NOTE);
 
     // Images go to pi natively; text-like files and PDF text layers are inlined,
     // other binaries noted and dropped.

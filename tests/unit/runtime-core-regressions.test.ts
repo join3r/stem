@@ -11,6 +11,7 @@ import * as logger from '../../src/server/log';
 import { PiProcess, stderrReason } from '../../src/server/pi/rpc';
 import { updateDefaultModel } from '../../src/server/workspace/settings';
 import { removeChat, setChatPrivate } from '../../src/server/workspace/chats';
+import { INBOX_MDX_NOTE } from '../../src/server/workspace/bootstrap';
 import { settingsStorePath } from '../../src/server/workspace/paths';
 import { recallStore } from '../../src/server/recall/store';
 import { addPin, dropThreadPins } from '../../src/server/pins/store';
@@ -1136,6 +1137,24 @@ describe('scheduled-run turns', () => {
     } finally {
       dropThreadPins('pinned-chat');
     }
+  });
+
+  // Mail and scheduled replies are read in the Inbox, where a Form or Quiz has
+  // nothing to send its answers to; a chat turn needs no such note.
+  it('tells mail and scheduled turns that interactive components cannot answer back', async () => {
+    const { runtime } = await tempRuntime();
+    type Internal = {
+      buildMessage: (input: Record<string, unknown>, threadId: string, turn: null) => Promise<{ message: string }>;
+    };
+    const internal = runtime as unknown as Internal;
+    const chat = await internal.buildMessage({ input: 'x' }, 't-chat', null);
+    expect(chat.message).not.toContain(INBOX_MDX_NOTE);
+    const scheduled = await internal.buildMessage(
+      { input: 'x', scheduled: { at: '2026-10-04T08:00:00Z', taskId: 'task-1' } },
+      't-run',
+      null
+    );
+    expect(scheduled.message).toContain(INBOX_MDX_NOTE);
   });
 
   it('a private turn gets no recall block, a one-line notice, and is decided by the store, not the client', async () => {

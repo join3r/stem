@@ -12,9 +12,9 @@
 //   BAD DATA     a data child (```json inside Chart/DataTable/…) that won't parse
 //
 // Variants (STEM_MDX_EVAL_VARIANTS, comma-separated; default: all available):
-//   shipped  — the prompt as Stem builds it for an MDX chat today
-//   guide    — the pre-0.6.0 pointer prompt with the output-format guide page inlined,
-//              the best the old design could do if the model always read the guide
+//   shipped  — the prompt as Stem builds it for an MDX chat today (BASE + mdx-card.md)
+//   guide    — only while docs/assistant/output-format.md existed (before 0.6.0): the
+//              old pointer prompt with that page inlined
 //
 // Optional:
 //   STEM_MDX_EVAL_MODEL=openai-codex/gpt-6.1-sol
