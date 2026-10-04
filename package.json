@@ -36,7 +36,8 @@
     "eval:skill-retrieval": "node scripts/skill-retrieval-eval.mjs",
     "fixtures:skills": "node scripts/skill-fixtures.mjs",
     "probe:quiet": "node scripts/quiet-mutants.mjs",
-    "gen:shortcuts-doc": "node scripts/gen-shortcuts-doc.mjs"
+    "gen:shortcuts-doc": "node scripts/gen-shortcuts-doc.mjs",
+    "eval:mdx": "node scripts/mdx-usage-eval.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.99.1",
