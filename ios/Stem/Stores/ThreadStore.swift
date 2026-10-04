@@ -6,7 +6,16 @@ import Observation
 @MainActor @Observable
 final class ThreadStore {
     private(set) var threadId: String?
-    private(set) var title = ""
+    /// The chat list's row wins: it follows renames and the title written
+    /// after the first reply, which history loaded earlier doesn't see.
+    var title: String {
+        if let id = threadId, let row = session.chats.chats.first(where: { $0.threadId == id }),
+           row.subject?.isEmpty == false || !row.title.isEmpty {
+            return row.displayTitle
+        }
+        return loadedTitle
+    }
+    private var loadedTitle = ""
     private(set) var messages: [ChatMessage] = []
     private(set) var running = false
     /// "Thinking", or the running tool.
@@ -26,7 +35,6 @@ final class ThreadStore {
         self.session = session
         self.threadId = threadId
         if let id = threadId, let row = session.chats.chats.first(where: { $0.threadId == id }) {
-            title = row.displayTitle
             isPrivate = row.private == true
         }
     }
@@ -64,7 +72,7 @@ final class ThreadStore {
         guard let id = threadId else { return }
         do {
             let h = try await client.call(channel, [.string(id)], as: ChatHistory.self)
-            if !h.title.isEmpty { title = h.title }
+            if !h.title.isEmpty { loadedTitle = h.title }
             merge(history: h.messages)
             error = nil
         } catch {
