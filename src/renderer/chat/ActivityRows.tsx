@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Bot, ChevronRight, FileText, Globe, GraduationCap, ImageIcon, Pencil, Shrink, Terminal, Wrench } from 'lucide-react';
 import type { ActivityItem, SourceRef } from '../../shared/types';
 import { activityLabel, settledActivityLabel } from '../../shared/activity';
@@ -96,6 +96,54 @@ function safeSourceUrl(url: string): string | null {
   return /^https?:\/\//i.test(url) ? url : null;
 }
 
+// One fetch per site per app run, shared by every Sources panel that cites it.
+const faviconCache = new Map<string, Promise<string | null>>();
+function favicon(host: string): Promise<string | null> {
+  let hit = faviconCache.get(host);
+  if (!hit) {
+    // quiet: no icon is the letter tile, which is what the card shows meanwhile.
+    hit = window.stem.sourceFavicon(host).catch(() => null);
+    faviconCache.set(host, hit);
+  }
+  return hit;
+}
+
+/** "www.nytimes.com" → "nytimes.com": the name people know the site by. */
+function siteName(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
+function SourceIcon({ url }: { url: string }) {
+  const host = siteName(url);
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    let hostname = '';
+    try {
+      hostname = new URL(url).hostname;
+    } catch {
+      return;
+    }
+    void favicon(hostname).then((icon) => {
+      if (live) setSrc(icon);
+    });
+    return () => {
+      live = false;
+    };
+  }, [url]);
+  return src ? (
+    <img className="source-icon" src={src} alt="" />
+  ) : (
+    <span className="source-icon source-icon-letter" aria-hidden="true">
+      {host.charAt(0).toUpperCase()}
+    </span>
+  );
+}
+
 export function SourcesList({ sources }: { sources: SourceRef[] }) {
   const [open, setOpen] = useState(false);
   const safe = sources.filter((s) => safeSourceUrl(s.url));
@@ -104,20 +152,29 @@ export function SourcesList({ sources }: { sources: SourceRef[] }) {
     <div className={`sources${open ? ' open' : ''}`}>
       <button
         type="button"
-        className="activity-rows-summary"
+        className="activity-rows-summary sources-summary"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
         <ChevronRight size={12} className="activity-rows-chevron" />
+        {/* The first few sites at a glance, before the list is opened. */}
+        <span className="sources-stack" aria-hidden="true">
+          {safe.slice(0, 4).map((s) => (
+            <SourceIcon key={s.url} url={s.url} />
+          ))}
+        </span>
         Sources ({safe.length})
       </button>
       {open && (
-        <ul className="sources-list">
+        <ul className="sources-cards">
           {safe.map((s) => (
             <li key={s.url}>
-              <Globe size={12} />
-              <a href={s.url} target="_blank" rel="noreferrer" title={s.url}>
-                {s.title?.trim() || s.url}
+              <a href={s.url} target="_blank" rel="noreferrer" title={s.url} className="source-card">
+                <span className="source-site">
+                  <SourceIcon url={s.url} />
+                  {siteName(s.url)}
+                </span>
+                <span className="source-title">{s.title?.trim() || s.url}</span>
               </a>
             </li>
           ))}

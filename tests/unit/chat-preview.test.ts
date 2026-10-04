@@ -74,4 +74,37 @@ describe('previewText', () => {
     expect(previewText('---\n\n***\n')).toBe('');
     expect(previewText('')).toBe('');
   });
+
+  // A component's body can be data: JSON, Mermaid, suggested replies. The row
+  // shows the component's own title instead, then the prose around it.
+  it('keeps a data component’s title and drops its body', () => {
+    const reply = [
+      'Bills are falling.',
+      '',
+      '<Chart type="line" title="Monthly bill" unit="€">',
+      '```json',
+      '[{"label":"Jan","value":92},{"label":"Feb","value":88}]',
+      '```',
+      '</Chart>',
+      '',
+      '<Stats>',
+      '```json',
+      '[{"label":"Users","value":12400}]',
+      '```',
+      '</Stats>',
+      '',
+      'Want the yearly view?',
+      '',
+      '<Replies>',
+      '<Reply>Show the year</Reply>',
+      '</Replies>'
+    ].join('\n');
+    expect(previewText(reply)).toBe('Bills are falling. Monthly bill Want the yearly view?');
+  });
+
+  it('keeps a Quiz topic or Form prompt beside their content', () => {
+    expect(previewText('<Form prompt="A few details first">\n<Field name="d" label="Dates" />\n</Form>')).toBe(
+      'A few details first'
+    );
+  });
 });

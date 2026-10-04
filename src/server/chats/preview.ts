@@ -12,10 +12,36 @@
 /** Max length of a preview — two clamped lines can't show more than this anyway. */
 export const MAX_PREVIEW = 200;
 
+/**
+ * Components whose body is data (JSON, Mermaid) or suggestions, not prose: the
+ * preview keeps only their title or caption. Without this a reply that opens
+ * with a chart previewed as `[{"label":"Q1","value":12}…`.
+ */
+const DATA_COMPONENT = /^\s*<(Chart|DataTable|Stats|Compare|Diagram|Replies)\b([^>]*)>/;
+/** The words a component's own attributes carry (a Quiz topic, a Form prompt). */
+const LABEL_ATTR = /\b(?:title|caption|topic|prompt)="([^"]*)"/;
+
 /** Line-level constructs, stripped before the text is flattened into one line. */
 function stripBlocks(input: string): string {
   const out: string[] = [];
+  let skipping: string | null = null;
   for (let line of input.split('\n')) {
+    if (skipping) {
+      if (line.includes(`</${skipping}>`)) skipping = null;
+      continue;
+    }
+    const data = DATA_COMPONENT.exec(line);
+    if (data) {
+      const label = LABEL_ATTR.exec(data[2])?.[1];
+      if (label) out.push(label);
+      if (!line.includes(`</${data[1]}>`) && !/\/>\s*$/.test(line)) skipping = data[1];
+      continue;
+    }
+    const labelled = /^\s*<(?:Quiz|Form|Collapsible)\b([^>]*)>/.exec(line);
+    if (labelled) {
+      const label = LABEL_ATTR.exec(labelled[1])?.[1];
+      if (label) out.push(label);
+    }
     // Fence markers go; whatever is inside them stays, so a reply that is mostly
     // code still previews as something rather than as nothing.
     if (/^\s*(```|~~~)/.test(line)) continue;

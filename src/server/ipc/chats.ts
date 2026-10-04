@@ -25,6 +25,7 @@ import {
   updateFolder
 } from '../workspace/chats';
 import { IDLE_MS } from '../chats/autofile';
+import { faviconFor } from '../chats/favicon';
 import {
   markAllRead,
   noteSilentRun,
@@ -227,6 +228,9 @@ export function registerChatsIpc(deps: IpcDeps): void {
     await setChatFormat(threadId, format === 'md' ? 'md' : 'mdx');
     return chatList();
   });
+  // The Sources panel's site icons, fetched here because neither the renderer's
+  // CSP nor the phone should reach arbitrary sites (see chats/favicon.ts).
+  registerServer('sources:favicon', (_e, host: string) => faviconFor(host));
   registerServer('chats:setFolder', async (_e, threadId: string, folderId: string | null) => {
     await setChatFolder(threadId, folderId);
     return chatList();

@@ -367,6 +367,7 @@ const api: StemApi = {
   setChatFolder: (threadId: string, folderId: string | null) =>
     ipcRenderer.invoke('chats:setFolder', threadId, folderId),
   setChatFormat: (threadId: string, format: 'md' | 'mdx') => ipcRenderer.invoke('chats:setFormat', threadId, format),
+  sourceFavicon: (host: string) => ipcRenderer.invoke('sources:favicon', host),
 
   listPersonas: () => ipcRenderer.invoke('personas:list'),
   listCodingAgents: () => ipcRenderer.invoke('personas:agents'),
