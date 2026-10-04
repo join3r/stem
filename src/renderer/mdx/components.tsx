@@ -1,6 +1,9 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Children, Fragment, isValidElement, useMemo, useState } from 'react';
 import { useMdxActions } from './ActionContext';
+import { parseTable } from './data';
+import { Chart } from './chart/Chart';
+export { Chart };
 
 // The fixed, vetted component library. The MDX renderer will ONLY instantiate
 // components whose tag name appears in `componentMap`; anything else renders as
@@ -165,38 +168,6 @@ export function Tabs({ children }: { children?: ReactNode }) {
 
 // ---- DataTable ------------------------------------------------------------
 
-type Row = Record<string, unknown>;
-
-// Parse the JSON data child into columns + rows. Accepts either an array of
-// objects, or { columns: [...], rows: [[...], ...] }. Pure JSON.parse — no eval.
-function parseTable(raw: string | undefined): { columns: string[]; rows: Row[] } | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      const columns: string[] = [];
-      for (const r of parsed) {
-        if (r && typeof r === 'object') {
-          for (const k of Object.keys(r as Row)) if (!columns.includes(k)) columns.push(k);
-        }
-      }
-      return { columns, rows: parsed as Row[] };
-    }
-    if (parsed && Array.isArray(parsed.columns) && Array.isArray(parsed.rows)) {
-      const columns = parsed.columns.map(String);
-      const rows = (parsed.rows as unknown[][]).map((arr) => {
-        const o: Row = {};
-        columns.forEach((c: string, i: number) => (o[c] = arr[i]));
-        return o;
-      });
-      return { columns, rows };
-    }
-  } catch {
-    /* fall through to null */
-  }
-  return null;
-}
-
 function cellText(v: unknown): string {
   if (v === null || v === undefined) return '';
   return typeof v === 'object' ? JSON.stringify(v) : String(v);
@@ -276,116 +247,6 @@ export function DataTable({ data, caption }: { data?: string; caption?: string }
         </table>
       </div>
     </div>
-  );
-}
-
-// ---- Chart (hand-rolled SVG, no dependency) -------------------------------
-
-type Point = { label: string; value: number };
-
-function parseSeries(raw: string | undefined): Point[] | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      const pts = parsed
-        .map((d) => ({ label: String((d as Point)?.label ?? ''), value: Number((d as Point)?.value) }))
-        .filter((d) => Number.isFinite(d.value));
-      return pts.length ? pts : null;
-    }
-  } catch {
-    /* fall through */
-  }
-  return null;
-}
-
-export function Chart({ type, title, data }: { type?: string; title?: string; data?: string }) {
-  const series = useMemo(() => parseSeries(data), [data]);
-  if (!series) return <div className="chart-error">Could not read chart data.</div>;
-
-  const kind = type === 'bar' ? 'bar' : type === 'area' ? 'area' : 'line';
-  const W = 520;
-  const H = 200;
-  const padL = 40;
-  const padR = 14;
-  const padT = 12;
-  const padB = 30;
-  const iw = W - padL - padR;
-  const ih = H - padT - padB;
-  const n = series.length;
-
-  const max = Math.max(0, ...series.map((d) => d.value));
-  const min = Math.min(0, ...series.map((d) => d.value));
-  const span = max - min || 1;
-  const y = (v: number) => padT + ih - ((v - min) / span) * ih;
-  // The domain includes zero above, so every signed series has a true zero
-  // baseline. Using y(min) made the minimum negative bar disappear and made the
-  // remaining negative values look positive.
-  const baseline = y(0);
-
-  // Line/area: points spread across the full width. Bars: centered in slots.
-  const lineX = (i: number) => (n === 1 ? padL + iw / 2 : padL + (i / (n - 1)) * iw);
-  const slot = iw / n;
-  const barW = slot * 0.62;
-  const labelStep = Math.max(1, Math.ceil(n / 9));
-
-  const linePoints = series.map((d, i) => `${lineX(i)},${y(d.value)}`).join(' ');
-  const areaPath = `M ${lineX(0)},${baseline} ` +
-    series.map((d, i) => `L ${lineX(i)},${y(d.value)}`).join(' ') +
-    ` L ${lineX(n - 1)},${baseline} Z`;
-
-  const fmt = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
-
-  return (
-    <figure className="chart">
-      {title && <figcaption className="chart-title">{title}</figcaption>}
-      <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" role="img" aria-label={title ?? 'chart'}>
-        {/* y-axis range labels + baseline */}
-        <text className="chart-axis" x={padL - 6} y={y(max) + 4} textAnchor="end">{fmt(max)}</text>
-        <text className="chart-axis" x={padL - 6} y={y(min) + 4} textAnchor="end">{fmt(min)}</text>
-        <line className="chart-baseline" x1={padL} y1={baseline} x2={W - padR} y2={baseline} />
-
-        {kind === 'area' && <path className="chart-area" d={areaPath} />}
-        {(kind === 'line' || kind === 'area') && (
-          <>
-            <polyline className="chart-line" points={linePoints} fill="none" />
-            {series.map((d, i) => (
-              <circle key={i} className="chart-dot" cx={lineX(i)} cy={y(d.value)} r={2.5}>
-                <title>{`${d.label}: ${fmt(d.value)}`}</title>
-              </circle>
-            ))}
-          </>
-        )}
-        {kind === 'bar' &&
-          series.map((d, i) => {
-            const x = padL + i * slot + (slot - barW) / 2;
-            const top = Math.min(y(d.value), baseline);
-            const h = Math.abs(baseline - y(d.value));
-            return (
-              <rect key={i} className="chart-bar" x={x} y={top} width={barW} height={h} rx={2}>
-                <title>{`${d.label}: ${fmt(d.value)}`}</title>
-              </rect>
-            );
-          })}
-
-        {/* x labels (thinned when crowded) */}
-        {series.map((d, i) =>
-          i % labelStep === 0 ? (
-            <text
-              key={i}
-              className="chart-axis"
-              x={kind === 'bar' ? padL + (i + 0.5) * slot : lineX(i)}
-              y={H - 10}
-              // Line/area points reach the pad edges — anchor the end labels
-              // inward so they don't clip outside the viewBox.
-              textAnchor={kind !== 'bar' && i === n - 1 ? 'end' : kind !== 'bar' && i === 0 ? 'start' : 'middle'}
-            >
-              {d.label}
-            </text>
-          ) : null
-        )}
-      </svg>
-    </figure>
   );
 }
 
@@ -633,7 +494,9 @@ export const componentMap: Record<string, ComponentEntry> = {
   Tabs: (_props, children) => <Tabs>{children}</Tabs>,
   Tab: (props, children) => <TabPanel label={props.label}>{children}</TabPanel>,
   DataTable: (props, _children, data) => <DataTable data={data?.value} caption={props.caption} />,
-  Chart: (props, _children, data) => <Chart type={props.type} title={props.title} data={data?.value} />,
+  Chart: (props, _children, data) => (
+    <Chart type={props.type} title={props.title} unit={props.unit} data={data?.value} />
+  ),
   Quiz: (props, children) => <Quiz topic={props.topic}>{children}</Quiz>,
   Question: (props, children) => (
     <QuizQuestion prompt={props.prompt} answer={props.answer}>{children}</QuizQuestion>

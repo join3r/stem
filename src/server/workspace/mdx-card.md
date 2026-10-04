@@ -31,11 +31,13 @@ Content
 Content
 </Collapsible>
 
-<Chart type="line|bar|area" title="Monthly bill (€)">
+<Chart type="line" title="Monthly bills" unit="€">
 ```json
-[{"label":"Jan","value":92},{"label":"Feb","value":88}]
+[{"month":"Jan","power":92,"water":31},{"month":"Feb","power":88,"water":29}]
 ```
 </Chart>
+
+Chart data: the first text column is the x axis and every numeric column is a series. type is line or area for change over time, bar for categories, stacked for parts of each total, donut for shares of one whole (one numeric column), scatter for two numeric columns against each other. unit is optional ("€", "%", "km").
 
 <DataTable caption="Largest countries">
 ```json

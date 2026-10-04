@@ -57,8 +57,16 @@ function renderNode(node: MdNode, key: string): ReactNode {
   switch (node.type) {
     case 'root':
       return <Fragment key={key}>{renderChildren(node, key)}</Fragment>;
-    case 'paragraph':
+    case 'paragraph': {
+      // A component written on one line (`<Step>…</Step>`, `<Reply>…</Reply>`)
+      // parses as inline JSX inside a paragraph. Its block markup (an <li>, a
+      // <div>) must not land inside a <p>, so such a paragraph renders bare.
+      const kids = (node.children ?? []).filter((c) => !(c.type === 'text' && !(c.value ?? '').trim()));
+      if (kids.length && kids.every((c) => c.type === 'mdxJsxTextElement' && !!c.name && c.name in componentMap)) {
+        return <Fragment key={key}>{kids.map((c, i) => renderNode(c, `${key}-${i}`))}</Fragment>;
+      }
       return <p key={key}>{renderChildren(node, key)}</p>;
+    }
     case 'text':
       return node.value ?? '';
     case 'heading': {
@@ -280,8 +288,17 @@ export function provisionalTail(block: StreamBlock): { live: string; pending: st
     // Show what came before the component; the component itself waits.
     return { live: '', pending: block.open };
   }
+  // A tag opened mid-line (`<Step>**One.** Fir`) is inline JSX: its closer
+  // has to land on the same line, or the parse fails. The rest close on lines
+  // of their own.
   const closers = [...block.stack].reverse().map((name) => `</${name}>`);
-  return { live: `${text}\n\n${closers.join('\n')}`, pending: null };
+  const inner = block.stack[block.stack.length - 1];
+  const tailLine = text.split('\n').pop() ?? '';
+  const inline = new RegExp(`<${inner}\\b[^>]*>.*\\S`).test(tailLine);
+  const live = inline
+    ? `${text}${closers[0]}${closers.length > 1 ? `\n${closers.slice(1).join('\n')}` : ''}`
+    : `${text}\n\n${closers.join('\n')}`;
+  return { live, pending: null };
 }
 
 /**

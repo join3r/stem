@@ -560,11 +560,20 @@ describe('signed chart regression', () => {
         ])
       })
     );
-    const bars = html.match(/<rect[^>]*class="chart-bar"[^>]*>/g) ?? [];
-    const heights = bars.map((bar) => Number(/height="([^"]+)"/.exec(bar)?.[1]));
+    // Bars are paths now (rounded data end): read each one's vertical extent.
+    const bars = html.match(/<path[^>]*class="chart-bar"[^>]*>/g) ?? [];
+    const extents = bars.map((bar) => {
+      // Arc radii look like coordinates; drop them before reading the points.
+      const d = /d="([^"]+)"/.exec(bar)![1].replace(/A[\d.]+,[\d.]+ \d \d \d /g, '');
+      const ys = [...d.matchAll(/[\d.-]+,([\d.-]+)/g)].map((m) => Number(m[1]));
+      return { top: Math.min(...ys), bottom: Math.max(...ys) };
+    });
 
-    expect(heights).toHaveLength(2);
-    expect(heights.every((height) => height > 0)).toBe(true);
+    expect(extents).toHaveLength(2);
+    expect(extents.every((e) => e.bottom - e.top > 0)).toBe(true);
+    // The loss hangs below the zero line the gain stands on.
+    const [loss, gain] = extents;
+    expect(loss.top).toBeCloseTo(gain.bottom, 5);
   });
 });
 

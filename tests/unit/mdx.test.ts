@@ -216,7 +216,9 @@ describe('splitStreamBlocks', () => {
 describe('provisionalTail', () => {
   it('closes open prose containers so the user can read along', () => {
     const [block] = splitStreamBlocks('<Steps>\n<Step>**One.** Fir');
-    expect(provisionalTail(block)).toEqual({ live: '<Steps>\n<Step>**One.** Fir\n\n</Step>\n</Steps>', pending: null });
+    expect(provisionalTail(block)).toEqual({ live: '<Steps>\n<Step>**One.** Fir</Step>\n</Steps>', pending: null });
+    const [callout] = splitStreamBlocks('<Callout type="warn">\nCareful with');
+    expect(provisionalTail(callout).live).toBe('<Callout type="warn">\nCareful with\n\n</Callout>');
   });
 
   it('holds a data component back behind a placeholder', () => {

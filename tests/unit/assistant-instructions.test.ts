@@ -50,7 +50,7 @@ describe('stemAssistantInstructions', () => {
     const mdx = stemAssistantInstructions('mdx');
     expect(mdx).toContain('## Output format: MDX');
     expect(mdx).toContain('<Callout type="warn">');
-    expect(mdx).toContain('```json\n[{"label":"Jan","value":92}');
+    expect(mdx).toContain('```json\n[{"month":"Jan","power":92');
     expect(mdx).toContain('→ `Chart`');
     expect(mdx).not.toContain('`output-format`');
     expect(stemAssistantInstructions()).toBe(mdx);

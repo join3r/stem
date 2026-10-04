@@ -1431,15 +1431,81 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   .mdx-placeholder-bar { animation: none; }
 }
 
-.chart { margin: 0.9em 0; }
-.chart-title { font-size: var(--fs-13); font-weight: 600; color: var(--ink); margin-bottom: var(--sp-2); }
-.chart-svg { width: 100%; height: auto; display: block; }
-.chart-axis { fill: var(--muted); font-size: var(--fs-10); }
-.chart-baseline { stroke: var(--line); stroke-width: 1; }
-.chart-line { stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.chart-dot { fill: var(--accent); }
-.chart-area { fill: color-mix(in srgb, var(--accent) 18%, transparent); stroke: none; }
-.chart-bar { fill: var(--accent); }
+/* ---- Chart ----
+   Categorical hues in fixed order (dataviz reference palette), validated on
+   --content in both themes: worst adjacent CVD ΔE 9.1 light / 8.4 dark. Three
+   light hues sit under 3:1 on the surface, which is why every chart has a
+   Table view and a tooltip. Text never wears a series color. */
+.chart {
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --series-5: #e87ba4; --series-6: #008300; --series-7: #4a3aa7; --series-8: #e34948;
+  --series-other: #a29d93;
+  --chart-surface: var(--content);
+  margin: 0.9em 0;
+  position: relative;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .chart {
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+    --series-other: #6f6a61;
+  }
+}
+:root[data-theme='dark'] .chart {
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+  --series-other: #6f6a61;
+}
+.chart-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.chart-title { font-size: var(--fs-13); font-weight: 600; color: var(--ink); }
+.chart-table-toggle {
+  margin-left: auto; border: none; background: none; padding: 0 2px;
+  color: var(--muted); font-size: var(--fs-12); cursor: pointer;
+}
+.chart-table-toggle:hover { color: var(--ink); }
+.chart-legend {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; list-style: none; margin: 0 0 var(--sp-2); padding: 0;
+  font-size: var(--fs-12); color: var(--muted);
+}
+.chart-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.chart-key { display: inline-block; flex: none; }
+.chart-key-box { width: 10px; height: 10px; border-radius: 2px; }
+.chart-key-line { width: 12px; height: 2px; border-radius: 1px; }
+.chart-body { width: 100%; }
+.chart-plot { position: relative; }
+.chart-svg { display: block; overflow: visible; outline: none; }
+.chart-svg:focus-visible { box-shadow: 0 0 0 2px var(--sel); border-radius: var(--radius); }
+.chart-axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart-axis-title { font-variant-numeric: normal; }
+.chart-grid { stroke: var(--hair); stroke-width: 1; shape-rendering: crispEdges; }
+.chart-baseline { stroke: var(--line); stroke-width: 1; shape-rendering: crispEdges; }
+.chart-crosshair { stroke: var(--muted); stroke-width: 1; opacity: 0.6; shape-rendering: crispEdges; }
+.chart-band { fill: var(--ink); opacity: 0.04; }
+.chart-line { stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-dot { stroke: var(--chart-surface); stroke-width: 2; }
+.chart-area { opacity: 0.12; stroke: none; }
+.chart-bar { transition: opacity 120ms ease; }
+.chart-slice { stroke: var(--chart-surface); stroke-width: 2; transition: opacity 120ms ease; outline: none; }
+.chart-hit { fill: transparent; }
+.chart-tooltip {
+  position: absolute; pointer-events: none; z-index: 2;
+  min-width: 96px; padding: 6px 9px; border-radius: var(--radius);
+  background: var(--surface); border: 0.5px solid var(--line);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  font-size: var(--fs-12); color: var(--ink); white-space: nowrap;
+}
+.chart-tooltip-title { color: var(--muted); margin-bottom: 2px; }
+.chart-tooltip-row { display: flex; align-items: center; gap: 6px; }
+.chart-tooltip-name { color: var(--muted); }
+.chart-donut { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
+.chart-donut-total { fill: var(--ink); font-size: 18px; font-weight: 600; }
+.chart-donut-list { list-style: none; margin: 0; padding: 0; flex: 1 1 180px; font-size: var(--fs-13); }
+.chart-donut-list li { display: flex; align-items: center; gap: 8px; padding: 3px 0; color: var(--ink); }
+.chart-donut-list li.active { font-weight: 600; }
+.chart-donut-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.chart-donut-list strong { font-weight: 600; font-variant-numeric: tabular-nums; }
+.chart-donut-pct { color: var(--muted); min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
+.chart-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ---- Quiz (interactive) ---- */
 .quiz {
