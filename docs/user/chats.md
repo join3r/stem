@@ -18,14 +18,21 @@ there:
 
 - Drop a file on **This chat** for one message. Drop it on **Files** to copy it into
   Stem for reuse across chats.
-- Choose model, effort, speed, and interactive **MDX** or plain **Markdown**.
+- Choose model, effort, and speed.
+- Each chat is **MDX** or plain **Markdown**. In an MDX chat, answers can include
+  charts, tables, side-by-side comparisons, KPI tiles, diagrams, step lists, tabs,
+  quizzes, forms, and suggested follow-ups you can click. They render as the answer
+  streams in. A chart's **Table** button shows its numbers. The toggle in the
+  composer sets the format for new chats; in an open chat it switches that chat.
+  Markdown chats keep answers plain and send the model less text.
 - More effort can use more quota. **Fast** appears only for supported models and
   increases usage.
 - Watch tool activity while Stem works.
 - **Web** turns web search on or off for the next message. It stays where you leave
   it, and is the same switch as **Settings → App → Web search**. Quick Chat keeps
   its own.
-- Web answers include cited sources.
+- Web answers include cited sources: the sites' icons show under the answer;
+  open them for a card per source.
 - The context meter shows how full the conversation is.
 - Ask for a picture and Stem draws it with your ChatGPT subscription (see
   [Settings → Image generation](settings.md#image-generation)). Click it to enlarge.

@@ -15,7 +15,7 @@ Everything Stem binds to a key, and a few composer tricks that no keycap adverti
 | **Toggle inspector** — shows or hides the right-hand panel | ⌘\\ | Ctrl+\\ |
 | **Cycle effort** — steps through the effort levels the chosen model supports | ⌘E | Ctrl+E |
 | **Toggle Fast** — turns the faster service tier on or off, where the model has one | ⌘⇧F | Ctrl+Shift+F |
-| **Toggle MDX / Markdown** — switches the answer format between interactive MDX and plain Markdown | ⌘⇧M | Ctrl+Shift+M |
+| **Toggle MDX / Markdown** — switches the open chat (or, on a new chat, the default) between interactive MDX and plain Markdown | ⌘⇧M | Ctrl+Shift+M |
 | **Attach files** — opens the file picker for this message | ⌘U | Ctrl+U |
 | **Search chats** — opens the chat search box, or refocuses it when it is already open | ⌘F | Ctrl+F |
 | **Switch chat** — opens the first to ninth chat in the Chats list, counted from the top; hold ⌘ or Ctrl to see the numbers | ⌘1–9 | Ctrl+1–9 |

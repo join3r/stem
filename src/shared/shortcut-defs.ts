@@ -119,7 +119,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   {
     id: 'toggle-format',
     label: 'Toggle MDX / Markdown',
-    description: 'switches the answer format between interactive MDX and plain Markdown',
+    description: 'switches the open chat (or, on a new chat, the default) between interactive MDX and plain Markdown',
     chord: { mod: true, shift: true, key: 'M' }
   },
   {
