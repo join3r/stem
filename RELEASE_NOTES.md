@@ -24,6 +24,8 @@ Maintainer notes:
   the chat, or stays put with **Keep open**. Stem also keeps everything on the board in mind for
   the rest of that chat, so a measurement or setting you pinned early on isn't forgotten once the
   conversation gets long. Chat search finds pinned notes too.
+- **Commands at a slash.** Type `/` at the start of a message to see what the box can do —
+  `/pin`, `/note` and `/learn` — narrow it by typing, and pick one with Enter, Tab or a click.
 
 ### Changed
 

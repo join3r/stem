@@ -212,3 +212,41 @@ test('pins survive a reload and leave with their chat', async ({ mainWindow: win
   await win.evaluate((id) => (window as any).stem.deleteChat(id), threadId);
   expect(await win.evaluate(async (id) => (await (window as any).stem.listPins(id)).length, threadId)).toBe(0);
 });
+
+test('typing / lists the composer commands and completes one', async ({ mainWindow: win }, testInfo) => {
+  test.setTimeout(120_000);
+  await send(win, 'Reply with exactly the words MIX THREE TO ONE and nothing else.');
+  await expect(win.locator('.message-assistant:not(.activity-row) .message-body').last()).toContainText(
+    /MIX THREE TO ONE/,
+    { timeout: 60_000 }
+  );
+
+  const composer = win.getByPlaceholder('Ask Stem…');
+  const menu = win.getByRole('listbox', { name: 'Commands' });
+  await composer.click();
+  await composer.pressSequentially('/');
+  await expect(menu.getByRole('option')).toHaveText([/\/pin/, /\/note/, /\/learn/]);
+  await win.screenshot({ path: testInfo.outputPath('slash-menu.png') });
+
+  // Typing narrows it; Enter completes the name instead of sending.
+  await composer.pressSequentially('p');
+  await expect(menu.getByRole('option')).toHaveCount(1);
+  await composer.press('Enter');
+  await expect(composer).toHaveValue('/pin ');
+  await expect(menu).toBeHidden();
+  await composer.pressSequentially('from the menu');
+  await composer.press('Enter');
+  await expect(win.locator('.pinboard-count')).toHaveText('1');
+
+  // Escape hides it, so a message that starts with / can still be written.
+  await composer.pressSequentially('/');
+  await expect(menu).toBeVisible();
+  await composer.press('Escape');
+  await expect(menu).toBeHidden();
+  await composer.fill('');
+
+  // /note is a mode: picking it switches the composer over, with no prefix left.
+  await composer.pressSequentially('/n');
+  await composer.press('Tab');
+  await expect(win.getByPlaceholder('Save a note to memory…')).toHaveValue('');
+});

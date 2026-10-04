@@ -3,10 +3,11 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState
 } from 'react';
-import { Square, ArrowUp, Paperclip, File, X, Check, NotebookPen, Globe, Zap } from 'lucide-react';
+import { Square, ArrowUp, Paperclip, File, X, Check, NotebookPen, Globe, Zap, Pin, Wand2 } from 'lucide-react';
 import type {
   ChatMessage,
   EscapeAction,
@@ -18,6 +19,7 @@ import { ContextMeter } from './ContextMeter';
 import { useOffline } from '../hooks/useServerReachable';
 import { ShortcutHint, glyphsFor, useShortcut, useShortcutsBound, type ShortcutId } from '../shortcuts';
 import { EffortModelControl } from '../ui/EffortModelControl';
+import { slashMatches, type SlashCommand, type SlashCommandName } from './slashCommands';
 import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, noteBodyValid, useNoteMode } from '../noteMode';
 import { clearDraft, readDraft, writeDraft } from './draft-store';
 
@@ -46,8 +48,8 @@ function fileToAttachment(file: File): Promise<TurnAttachment> {
 // sending the draft to the model. Matched at submit rather than while typing —
 // unlike `/note` this is a one-shot action, not a mode the composer sits in.
 //
-// Two commands are intercepted, `/learn` and `/pin`, each a literal match: two
-// is still short of what a command table would be for.
+// Two commands are intercepted, `/learn` and `/pin`, each a literal match. The
+// `/` menu that offers them lists them in slashCommands.ts.
 export function detectLearnCommand(text: string): { focus: string } | null {
   if (text === '/learn') return { focus: '' };
   if (text.startsWith('/learn ')) return { focus: text.slice('/learn '.length).trim() };
@@ -223,6 +225,31 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   // `/note` / `//` quick-note capture: saves the draft straight to memory, no turn.
   const { noteMode, flash: noteFlash, enterNoteMode, exitNoteMode, toggleNoteMode, saveNote } = useNoteMode();
+
+  // The `/` menu. Only commands this composer can run are offered: `/pin` needs
+  // a board, `/learn` a thread. Escape hides it until the draft stops starting
+  // with `/`, so a message that really does begin with one can still be sent.
+  const slashAvailable = useMemo(() => {
+    const names = new Set<SlashCommandName>(['note']);
+    if (onPinNote) names.add('pin');
+    if (threadId) names.add('learn');
+    return names;
+  }, [onPinNote, threadId]);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slash = noteMode || offline || slashDismissed ? null : slashMatches(draft, slashAvailable);
+  const slashActive = slash ? Math.min(slashIndex, slash.length - 1) : 0;
+  const pickSlash = (cmd: SlashCommand) => {
+    setSlashIndex(0);
+    // `/note` is a mode, not a prefix: enter it the way typing `/note ` would.
+    if (cmd.name === 'note') {
+      enterNoteMode();
+      setDraft('');
+    } else {
+      setDraft(`/${cmd.name} `);
+    }
+    textareaRef.current?.focus();
+  };
 
   // `/learn` gets its own pending state rather than borrowing `running`: it starts
   // no turn, and on ask mode it stays outstanding until the user answers the
@@ -489,6 +516,32 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
       >
+        {slash && (
+          <div className="slash-menu" id="composer-slash-menu" role="listbox" aria-label="Commands">
+            {slash.map((cmd, i) => (
+              <div
+                key={cmd.name}
+                id={`composer-slash-${cmd.name}`}
+                role="option"
+                aria-selected={i === slashActive}
+                className={`slash-item${i === slashActive ? ' active' : ''}`}
+                // mousedown, not click: the textarea keeps focus and the caret.
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pickSlash(cmd);
+                }}
+                onMouseEnter={() => setSlashIndex(i)}
+              >
+                <span className="slash-icon" aria-hidden="true">
+                  {cmd.name === 'pin' ? <Pin size={13} /> : cmd.name === 'note' ? <NotebookPen size={13} /> : <Wand2 size={13} />}
+                </span>
+                <span className="slash-name">/{cmd.name}</span>
+                <span className="slash-args">{cmd.args}</span>
+                <span className="slash-desc">{cmd.description}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {noteMode && (
           <div className="composer-attachments">
             <span className="attachment-chip note-chip">
@@ -577,6 +630,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               } else {
                 setDraft(value);
               }
+              setSlashIndex(0);
+              if (!value.startsWith('/')) setSlashDismissed(false);
               if (armed) setArmed(false); // any edit disarms the second-Escape retract
             }}
             onBlur={() => {
@@ -584,6 +639,26 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             }}
             onPaste={onPaste}
             onKeyDown={(e) => {
+              if (slash) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  const step = e.key === 'ArrowDown' ? 1 : -1;
+                  setSlashIndex((slashActive + step + slash.length) % slash.length);
+                  return;
+                }
+                if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+                  e.preventDefault();
+                  pickSlash(slash[slashActive]);
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  // preventDefault also keeps Quick Chat's window-level Escape
+                  // from hiding the overlay on this press.
+                  e.preventDefault();
+                  setSlashDismissed(true);
+                  return;
+                }
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 submit();
@@ -628,6 +703,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             }
             disabled={offline}
             rows={1}
+            aria-autocomplete="list"
+            aria-expanded={!!slash}
+            aria-controls={slash ? 'composer-slash-menu' : undefined}
+            aria-activedescendant={slash ? `composer-slash-${slash[slashActive].name}` : undefined}
           />
           {running && !noteMode ? (
             <button

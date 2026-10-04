@@ -869,6 +869,38 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, calc(0.04 * var(--shadow-scale)));
 }
 .composer-field:focus-within { border-color: var(--accent); box-shadow: var(--shadow-focus); }
+/* The `/` command menu sits just above the field, the width of it. */
+.composer-field { position: relative; }
+.slash-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + var(--sp-2));
+  z-index: var(--z-menu);
+  background: var(--surface);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--sp-2);
+  box-shadow: var(--shadow-pop);
+}
+.slash-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  padding: var(--sp-3) 9px;
+  border-radius: var(--radius);
+  font-size: var(--fs-13);
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.slash-item.active { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.slash-icon { flex: none; align-self: center; display: inline-flex; color: var(--muted); }
+.slash-item.active .slash-icon { color: var(--accent); }
+.slash-name { flex: none; font-weight: 600; }
+.slash-args { flex: none; color: var(--muted); font-size: var(--fs-12); }
+.slash-desc { min-width: 0; margin-left: auto; padding-left: var(--sp-4); color: var(--muted); font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; }
 .composer-field.drag-over { border-color: var(--accent); box-shadow: var(--shadow-focus); }
 .composer-row { display: flex; align-items: flex-end; gap: var(--sp-4); }
 
