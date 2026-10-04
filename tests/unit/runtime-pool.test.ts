@@ -1,9 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { dirname, join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PiRuntime } from '../../src/server/pi/runtime';
 import type { PiWorker } from '../../src/server/pi/worker';
+import { getChatFormat, setChatFormat } from '../../src/server/workspace/chats';
+import { chatStorePath } from '../../src/server/workspace/paths';
 
 // The worker pool: the property under test is ISOLATION — a thread is bound to
 // one worker, two threads stream in parallel on two workers sharing no mutable
@@ -277,5 +279,102 @@ describe('runtime worker pool', () => {
     await second;
     expect(secondDone).toBe(true);
     for (const w of internal.workers) if (w.currentTurn) settle(harness, w);
+  });
+
+  // A chat's format picks the system prompt its worker is spawned with (the MDX
+  // syntax card, or none), so Markdown and MDX chats never share a process.
+  describe('per-chat format', () => {
+    beforeEach(async () => {
+      await mkdir(dirname(chatStorePath()), { recursive: true });
+      await rm(chatStorePath(), { force: true });
+    });
+
+    it('runs Markdown and MDX chats on different workers and stores the new chat\'s format', async () => {
+      const harness = await poolRuntime();
+      const { runtime, internal } = harness;
+
+      const rich = await runtime.startTurn({ input: 'rich', format: 'mdx' });
+      const richWorker = internal.workers[0];
+      settle(harness, richWorker);
+
+      // The MDX worker is idle, but a Markdown chat must not run on its prompt.
+      const plain = await runtime.startTurn({ input: 'plain', format: 'md' });
+      expect(internal.workers).toHaveLength(2);
+      const plainWorker = internal.workers.find((w) => w.currentTurn?.threadId === plain.threadId)!;
+      expect(plainWorker).not.toBe(richWorker);
+      expect(plainWorker.format).toBe('md');
+      expect(richWorker.format).toBe('mdx');
+      expect(await getChatFormat(plain.threadId!)).toBe('md');
+      expect(await getChatFormat(rich.threadId!)).toBe('mdx');
+      settle(harness, plainWorker);
+
+      // A later turn's own format is ignored: the chat's stored one wins.
+      await runtime.startTurn({ input: 'again', threadId: plain.threadId!, format: 'mdx' });
+      expect(plainWorker.currentTurn?.threadId).toBe(plain.threadId);
+      settle(harness, plainWorker);
+    });
+
+    it('moves a switched chat to a worker of the other kind on its next turn', async () => {
+      const harness = await poolRuntime();
+      const { runtime, internal } = harness;
+
+      const chat = await runtime.startTurn({ input: 'hello', format: 'md' });
+      const mdWorker = internal.workers[0];
+      settle(harness, mdWorker);
+
+      await setChatFormat(chat.threadId!, 'mdx');
+      await runtime.startTurn({ input: 'now rich', threadId: chat.threadId! });
+      const now = internal.threadWorkers.get(chat.threadId!)!;
+      expect(now).not.toBe(mdWorker);
+      expect(now.format).toBe('mdx');
+      expect(now.currentTurn).toBeTruthy();
+      expect(mdWorker.currentTurn).toBeFalsy();
+      settle(harness, now);
+    });
+
+    it('keeps mail and scheduled runs on MDX whatever they ask for', async () => {
+      const harness = await poolRuntime();
+      const { runtime, internal } = harness;
+
+      await runtime.startTurn({ input: 'run', format: 'md', scheduled: { at: '2026-10-04T08:00:00Z', taskId: 't1' } });
+      expect(internal.workers[0].format).toBe('mdx');
+      settle(harness, internal.workers[0]);
+    });
+
+    it('keeps warm the plain worker in the format chats last used', async () => {
+      const harness = await poolRuntime();
+      const { runtime, internal } = harness;
+      (runtime as unknown as { maxWorkers: number }).maxWorkers = 2;
+
+      await runtime.startTurn({ input: 'rich' });
+      const richWorker = internal.workers[0];
+      settle(harness, richWorker);
+      const plain = await runtime.startTurn({ input: 'plain', format: 'md' });
+      const mdWorker = internal.threadWorkers.get(plain.threadId!)!;
+      settle(harness, mdWorker);
+
+      // Pool full of idle plain workers; a persona turn needs a slot. The MDX
+      // worker is the other-format extra now, so it goes and the Markdown one
+      // (the warm slot after the last chat turn) survives.
+      await runtime.startTurn({ input: 'mail', persona: { id: 'p1', prompt: 'a' } });
+      expect(internal.workers).toHaveLength(2);
+      expect(internal.workers).toContain(mdWorker);
+      expect(internal.workers).not.toContain(richWorker);
+      for (const w of internal.workers) if (w.currentTurn) settle(harness, w);
+    });
+
+    it('resumes a Markdown chat on its own kind of worker', async () => {
+      const harness = await poolRuntime();
+      const { runtime, internal } = harness;
+
+      const chat = await runtime.startTurn({ input: 'plain', format: 'md' });
+      const mdWorker = internal.workers[0];
+      settle(harness, mdWorker);
+      // Drop the binding, as a restart or the bounded map would.
+      internal.threadWorkers.delete(chat.threadId!);
+      await runtime.resumeThread(chat.threadId!);
+      expect(internal.threadWorkers.get(chat.threadId!)?.format).toBe('md');
+      expect(internal.workers.every((w) => w.format === 'md')).toBe(true);
+    });
   });
 });

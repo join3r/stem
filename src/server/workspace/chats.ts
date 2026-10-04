@@ -33,6 +33,14 @@ interface ChatStore {
    */
   private: Record<string, true>;
   /**
+   * Chats that run as plain Markdown rather than MDX. The format is a property
+   * of the chat, because it decides which system prompt the chat's worker is
+   * spawned with (see pi/runtime.ts): set on the turn that creates the thread,
+   * switchable later from the composer. Presence means `md`; absent means
+   * `mdx`, so every chat from before 0.6.0 stays MDX with no migration.
+   */
+  plain: Record<string, true>;
+  /**
    * threadId -> who decided where the chat sits, once somebody has (see
    * server/chats/autofile.ts). `user` is any move the user made, root included;
    * `auto` a folder the idle-chat filer picked; `none` a chat the filer looked
@@ -63,7 +71,7 @@ export interface NamingState {
 }
 
 function emptyStore(): ChatStore {
-  return { version: 1, folders: [], assignments: {}, subjects: {}, naming: {}, private: {}, filing: {}, refile: {} };
+  return { version: 1, folders: [], assignments: {}, subjects: {}, naming: {}, private: {}, plain: {}, filing: {}, refile: {} };
 }
 
 /** Keep only string→string pairs; a hand-edited file can hold anything. */
@@ -96,6 +104,7 @@ async function loadStore(): Promise<ChatStore> {
     subjects: coerceMap(parsed.subjects),
     naming: coerceNaming(parsed.naming),
     private: coercePrivate(parsed.private),
+    plain: coercePrivate(parsed.plain),
     filing: coerceFiling(parsed.filing),
     refile: coercePrivate(parsed.refile)
   };
@@ -111,7 +120,7 @@ function coerceFiling(raw: unknown): Record<string, FilingMark> {
   return out;
 }
 
-/** Keep only `threadId: true` entries (the private and refile maps); anything else in a hand-edited file is dropped. */
+/** Keep only `threadId: true` entries (the private, plain and refile maps); anything else in a hand-edited file is dropped. */
 function coercePrivate(raw: unknown): Record<string, true> {
   if (!raw || typeof raw !== 'object') return {};
   const out: Record<string, true> = {};
@@ -235,6 +244,27 @@ export async function isChatPrivate(threadId: string): Promise<boolean> {
 export function setChatPrivate(threadId: string): Promise<void> {
   return update((store) => {
     store.private[threadId] = true;
+  });
+}
+
+/** The set of threads that run as plain Markdown. */
+export async function getPlainChats(): Promise<Set<string>> {
+  return new Set(Object.keys((await readStore()).plain));
+}
+
+/** A thread's output format: `md` when marked plain, otherwise `mdx`. */
+export async function getChatFormat(threadId: string): Promise<'md' | 'mdx'> {
+  return (await readStore()).plain[threadId] === true ? 'md' : 'mdx';
+}
+
+/**
+ * Set a thread's output format. Called by the runtime on the turn that creates
+ * the thread, and by `chats:setFormat` when the user switches an existing chat.
+ */
+export function setChatFormat(threadId: string, format: 'md' | 'mdx'): Promise<void> {
+  return update((store) => {
+    if (format === 'md') store.plain[threadId] = true;
+    else delete store.plain[threadId];
   });
 }
 
@@ -454,13 +484,14 @@ export function autoFileChat(threadId: string, folderId: string | null): Promise
   });
 }
 
-/** Drop a chat's assignment, subject, naming schedule and filing mark when the chat itself is deleted. */
+/** Drop a chat's assignment, subject, naming schedule, format and filing mark when the chat itself is deleted. */
 export function removeChat(threadId: string): Promise<void> {
   return update((store) => {
     delete store.assignments[threadId];
     delete store.subjects[threadId];
     delete store.naming[threadId];
     delete store.private[threadId];
+    delete store.plain[threadId];
     delete store.filing[threadId];
     delete store.refile[threadId];
   });

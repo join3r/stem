@@ -13,6 +13,7 @@ import type {
   ScheduleTaskRequest,
   ScheduledTask,
   StartTurnInput,
+  ChatFormat,
   StartTurnResult,
 } from '../../shared/types';
 import type { SkillBridge } from '../skills/bridge';
@@ -273,7 +274,8 @@ export interface ChatBackend extends EventEmitter {
   prewarm(): Promise<void>;
 
   // turns
-  createThread(model?: string): Promise<string>;
+  /** `format` picks the kind of worker the pre-created session is bound to (see StartTurnInput.format). */
+  createThread(model?: string, format?: ChatFormat): Promise<string>;
   startTurn(input: StartTurnInput): Promise<StartTurnResult>;
   /**
    * Stop a turn. `reason` names a non-user cause (the scheduler's timeout, a

@@ -27,6 +27,9 @@ struct Composer: View {
     /// `/note`: answers whether it saved and what to flash.
     var onNote: ((_ text: String, _ attachments: [DraftAttachment]) async -> (saved: Bool, message: String))?
     var onLearn: ((_ focus: String?) async -> String)?
+    /// The open chat's own format and how to switch it. Nil on a draft, where
+    /// the MDX chip sets the default for new chats instead.
+    var chatFormat: (value: String, set: (String) -> Void)?
 
     @Environment(Session.self) private var session
     @State private var noteMode = false
@@ -367,8 +370,12 @@ struct Composer: View {
                 }
                 .toggleStyle(ChipToggle())
                 Toggle(isOn: Binding(
-                    get: { session.prefs.format == "mdx" },
-                    set: { session.prefs.format = $0 ? "mdx" : "md"; session.prefs.save() })
+                    get: { (chatFormat?.value ?? session.prefs.format) == "mdx" },
+                    set: { on in
+                        let next = on ? "mdx" : "md"
+                        if let chatFormat { chatFormat.set(next) }
+                        else { session.prefs.format = next; session.prefs.save() }
+                    })
                 ) { Text("MDX") }
                     .toggleStyle(ChipToggle())
                     .disabled(busy)

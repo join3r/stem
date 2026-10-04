@@ -557,7 +557,9 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       const continuing = overlay.owns(prompt.threadId);
       let threadId = continuing ? overlay.threadId! : null;
       if (!threadId) {
-        threadId = (await deps.invoke('backend:createThread', [prompt.model ?? undefined])) as string;
+        // The format goes in at creation: it decides which kind of worker the
+        // pre-created session is bound to, and only that worker can serve it.
+        threadId = (await deps.invoke('backend:createThread', [prompt.model ?? undefined, prompt.format ?? null])) as string;
         overlay.adoptThread(threadId);
         // Before the turn, so no event of it can outrun the claim.
         // Optimistic sidebar row so the quickchat thread shows immediately.

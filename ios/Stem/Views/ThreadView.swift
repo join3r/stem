@@ -51,7 +51,8 @@ struct ThreadView: View {
                     onStop: { await store.stop() },
                     onRetract: retract,
                     onNote: note,
-                    onLearn: store.threadId == nil ? nil : { await store.learn(focus: $0) })
+                    onLearn: store.threadId == nil ? nil : { await store.learn(focus: $0) },
+                    chatFormat: store.format.map { (value: $0, set: switchFormat) })
             }
         }
         .navigationTitle(navTitle)
@@ -87,6 +88,11 @@ struct ThreadView: View {
               session.chats.inbox.entries[id]?.forcedUnread != true,
               let row = session.chats.chats.first(where: { $0.threadId == id }) else { return false }
         return session.chats.isUnread(row)
+    }
+
+    private func switchFormat(_ next: String) {
+        let store = store
+        Task { await store.setFormat(next) }
     }
 
     private var navTitle: String {

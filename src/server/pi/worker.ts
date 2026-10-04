@@ -1,6 +1,7 @@
 import { ForegroundSessionGate } from './session-gate';
 import type { PiProcess } from './rpc';
 import type { TurnContext } from './normalize';
+import type { ChatFormat } from '../../shared/types';
 
 // One slot of the pi runtime pool: a single `pi --mode rpc` child plus every
 // piece of state that is true of THAT process and no other — its active
@@ -76,7 +77,14 @@ export class PiWorker {
      * turn on a persona worker would inherit the role prompt (and vice versa) —
      * acquisition therefore only ever matches like with like.
      */
-    readonly personaId: string | null = null
+    readonly personaId: string | null = null,
+    /**
+     * The output format this worker's system prompt was built for. Fixed for
+     * the worker's life like the persona: an MDX worker carries the component
+     * syntax card in its spawn args and a Markdown one carries none, so
+     * acquisition matches format as well as persona.
+     */
+    readonly format: ChatFormat = 'mdx'
   ) {}
 
   /** Free for the pool to hand to another thread: nothing queued, nothing streaming. */

@@ -97,6 +97,7 @@ import { needsBackendRestart, needsWebSearchConfigWrite, writeWebSearchConfig } 
 import type {
   ChatsSettings,
   DefaultsSettings,
+  ChatFormat,
   CustomInstructionsSettings,
   EscapeAction,
   ExecDecision,
@@ -505,13 +506,13 @@ function registerIpc(): void {
   // the thread before its first prompt so the turn's events route to the overlay
   // from the very first event. The main window never needs this — startTurn opens
   // a thread implicitly when it has no threadId.
-  registerServer('backend:createThread', (_e, model?: string) => {
+  registerServer('backend:createThread', (_e, model?: string, format?: ChatFormat | null) => {
     // createThread enters the backend's foreground gate, exactly as startTurn
     // does, so it has to yield a scheduler-owned turn the same way — otherwise a
     // Quick Chat prompt typed during a scheduled run would sit behind it.
     lastInteractiveAt = Date.now();
     scheduler?.preemptForUser();
-    return runtime!.createThread(model);
+    return runtime!.createThread(model, format ?? undefined);
   });
   registerServer('backend:newConversation', () => runtime!.newConversation());
   registerServer('backend:listModels', () => runtime!.listModels());

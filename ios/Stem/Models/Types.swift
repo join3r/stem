@@ -16,6 +16,8 @@ struct ChatSummary: Decodable, Identifiable, Hashable {
     var subject: String?
     var preview: String?
     var `private`: Bool?
+    /// "md" when the chat runs as plain Markdown; nil means MDX.
+    var format: String?
     var createdAt: Double
     /// Unix seconds (ms for rows created this session, see `Inbox.toMs`).
     var updatedAt: Double

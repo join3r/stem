@@ -366,6 +366,7 @@ const api: StemApi = {
   moveFolder: (folderId: string, parentId: string | null) => ipcRenderer.invoke('folders:move', folderId, parentId),
   setChatFolder: (threadId: string, folderId: string | null) =>
     ipcRenderer.invoke('chats:setFolder', threadId, folderId),
+  setChatFormat: (threadId: string, format: 'md' | 'mdx') => ipcRenderer.invoke('chats:setFormat', threadId, format),
 
   listPersonas: () => ipcRenderer.invoke('personas:list'),
   listCodingAgents: () => ipcRenderer.invoke('personas:agents'),

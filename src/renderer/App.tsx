@@ -4,6 +4,7 @@ import type {
   FolderSettings,
   AppSettings,
   AuthProviderId,
+  ChatFormat,
   ChatListResult,
   ChatSummary,
   EscapeAction,
@@ -407,10 +408,19 @@ export default function App() {
   const [serviceTier, setServiceTier] = useState<string | null>(
     () => localStorage.getItem('stem.serviceTier')
   );
-  // Output format for the AI's reply — 'mdx' (rich components, default) or 'md' (plain Markdown).
-  const [format, setFormat] = useState<'md' | 'mdx'>(
+  // Output format for NEW chats — 'mdx' (rich components, default) or 'md' (plain
+  // Markdown). An existing chat has its own format, stored with it on the server
+  // (ChatSummary.format), because it picks the system prompt its worker runs on.
+  const [defaultFormat, setDefaultFormat] = useState<ChatFormat>(
     () => (localStorage.getItem('stem.format') === 'md' ? 'md' : 'mdx')
   );
+  // The open chat's format. A chat the list doesn't know yet is the one just
+  // started from the draft, so it is still in the default it was created with.
+  const activeChatFormat = useMemo<ChatFormat>(() => {
+    if (activeThreadId === null) return defaultFormat;
+    const chat = displayList.chats.find((c) => c.threadId === activeThreadId);
+    return chat ? (chat.format ?? 'mdx') : defaultFormat;
+  }, [activeThreadId, displayList, defaultFormat]);
   // Web search for main-window turns. Unlike the pickers above this one lives in
   // settings rather than localStorage — it is the same switch Settings → App
   // shows, and the server reads it when the turn starts.
@@ -649,8 +659,8 @@ export default function App() {
     else localStorage.removeItem('stem.serviceTier');
   }, [serviceTier]);
   useEffect(() => {
-    localStorage.setItem('stem.format', format);
-  }, [format]);
+    localStorage.setItem('stem.format', defaultFormat);
+  }, [defaultFormat]);
 
   // Switching models: clamp effort to what the new model supports, and drop a
   // Fast selection when the new model has no priority (Fast) tier.
@@ -760,6 +770,23 @@ export default function App() {
     };
   }, []);
 
+  // The composer's format toggle: on a draft it sets the default for new chats;
+  // on an open chat it switches that chat, whose next turn moves to a worker of
+  // the other kind. The new chat's own default is left alone either way.
+  const onChangeFormat = useCallback(
+    (next: ChatFormat) => {
+      const threadId = activeThreadIdRef.current;
+      if (threadId === null) {
+        setDefaultFormat(next);
+        return;
+      }
+      // quiet: a failed switch leaves the toggle showing the chat's real
+      // format (it reads from the list), so there is nothing to undo.
+      window.stem.setChatFormat(threadId, next).then(applyServerList, () => undefined);
+    },
+    [applyServerList]
+  );
+
   const onSend = useCallback(
     async (text: string, attachments: TurnAttachment[] = []) => {
       // Where this turn's state lives: the open thread, or DRAFT for a new chat.
@@ -789,7 +816,8 @@ export default function App() {
             model: modelId ?? undefined,
             effort: effort ?? undefined,
             serviceTier,
-            format,
+            // Only meaningful on the creating turn, like `private`.
+            ...(sendKey === DRAFT ? { format: defaultFormat } : {}),
             attachments: input.attachments.length ? input.attachments : undefined
           }),
         onStarted: (result, { pending, alreadySettled, userMsgId }) => {
@@ -887,7 +915,7 @@ export default function App() {
         }
       });
     },
-    [core, refreshChats, applyServerList, modelId, effort, serviceTier, format, setThread, noteChatOpened]
+    [core, refreshChats, applyServerList, modelId, effort, serviceTier, defaultFormat, setThread, noteChatOpened]
   );
 
   // Quick Chat hand-off → main window: adopt the overlay's conversation as the
@@ -1813,7 +1841,7 @@ export default function App() {
           model={selectedModel}
           effort={effort}
           serviceTier={serviceTier}
-          format={format}
+          format={activeChatFormat}
           draftFolderName={draftFolderName}
           draftPrivate={activeThreadId === null && draftPrivate}
           onToggleDraftPrivate={activeThreadId === null ? toggleDraftPrivate : undefined}
@@ -1823,7 +1851,7 @@ export default function App() {
           onChangeEffort={setEffort}
           onSelectModel={onSelectModel}
           onChangeSpeed={setServiceTier}
-          onChangeFormat={setFormat}
+          onChangeFormat={onChangeFormat}
           webSearch={webSearch}
           onToggleWebSearch={toggleWebSearch}
           reportDraft={previewActive}

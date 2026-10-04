@@ -10,6 +10,8 @@ import {
   createFolder,
   deleteFolder,
   getAssignments,
+  getChatFormat,
+  getPlainChats,
   getPrivateChats,
   getSubjects,
   listFolders,
@@ -19,6 +21,7 @@ import {
   removeChat,
   renameFolder,
   setChatFolder,
+  setChatFormat,
   updateFolder
 } from '../workspace/chats';
 import { IDLE_MS } from '../chats/autofile';
@@ -61,16 +64,17 @@ const RENAME_GRACE_MS = 2_000;
 
 /**
  * The sidebar payload: every chat the list shows, merged with its folder,
- * subject and privacy, plus the folder tree and Inbox state. Exported for the
+ * subject, privacy and format, plus the folder tree and Inbox state. Exported for the
  * idle-chat filer, which has to see exactly the chats the user sees.
  */
 export async function chatListOf(deps: Pick<IpcDeps, 'runtime' | 'scheduler'>): Promise<ChatListResult> {
-  const [allChats, folders, assignments, subjects, privateChats, inbox, mailThreads] = await Promise.all([
+  const [allChats, folders, assignments, subjects, privateChats, plainChats, inbox, mailThreads] = await Promise.all([
     deps.runtime().listThreads(),
     listFolders(),
     getAssignments(),
     getSubjects(),
     getPrivateChats(),
+    getPlainChats(),
     readInbox(),
     // The hidden persona sessions behind mail conversations, and the threads
     // scheduled runs left behind on their mail, are backend threads like any
@@ -88,6 +92,7 @@ export async function chatListOf(deps: Pick<IpcDeps, 'runtime' | 'scheduler'>): 
     const subject = subjects[chat.threadId];
     if (subject) chat.subject = subject;
     if (privateChats.has(chat.threadId)) chat.private = true;
+    if (plainChats.has(chat.threadId)) chat.format = 'md';
     // A write nobody should notice (a no-op rename; historically a silent
     // scheduled run) still moved the file's mtime. List the chat as of the last
     // write that meant something, so it stays where the user left it — see
@@ -150,6 +155,13 @@ export function registerChatsIpc(deps: IpcDeps): void {
         )
       : null;
     const forked = await deps.runtime().forkThread(threadId, turnId);
+    // A fork carries on the conversation it copied, in the format it was in;
+    // left unmarked, a Markdown chat's fork would quietly become MDX.
+    if ((await getChatFormat(threadId)) === 'md') {
+      await setChatFormat(forked.threadId, 'md').catch((err) =>
+        degrade('chats', 'forked a Markdown chat as MDX', err)
+      );
+    }
     if (anchors) {
       try {
         if (copyPinsToFork(threadId, forked.threadId, anchors) > 0) deps.emit('pins:changed', { threadId: forked.threadId });
@@ -206,6 +218,14 @@ export function registerChatsIpc(deps: IpcDeps): void {
       deleteThreadScratch(threadId)
     ]);
     dropChatThread(threadId); // forget it from the search index
+  });
+  // Switch an existing chat between MDX and plain Markdown. The format picks the
+  // system prompt the chat's worker is spawned with, so the next turn runs on a
+  // worker of the other kind (see acquireWorker in pi/runtime.ts); messages
+  // already written keep rendering as they are.
+  registerServer('chats:setFormat', async (_e, threadId: string, format: 'md' | 'mdx') => {
+    await setChatFormat(threadId, format === 'md' ? 'md' : 'mdx');
+    return chatList();
   });
   registerServer('chats:setFolder', async (_e, threadId: string, folderId: string | null) => {
     await setChatFolder(threadId, folderId);

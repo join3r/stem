@@ -252,6 +252,17 @@ export function QuickChat() {
     updateChatState((s) => appendSystemMessage(s, e));
   }, [updateChatState]);
 
+  // Before the first turn the toggle only picks the new chat's format; once the
+  // session has a thread it switches that chat on the server too, so its next
+  // turn runs on a worker of the other kind (see chats:setFormat).
+  const onChangeFormat = useCallback((next: 'md' | 'mdx') => {
+    setFormat(next);
+    const id = threadIdRef.current;
+    // quiet: a failed switch leaves the chat in its stored format; the next
+    // turn still runs, just in the old one.
+    if (id) void window.stem.setChatFormat(id, next).catch(() => undefined);
+  }, []);
+
   const onSend = useCallback(
     async (text: string, attachments: TurnAttachment[] = []) => {
       await sendTurn(core, {
@@ -528,7 +539,7 @@ export function QuickChat() {
             onChangeEffort={setEffort}
             onSelectModel={onSelectModel}
             onChangeSpeed={setServiceTier}
-            onChangeFormat={setFormat}
+            onChangeFormat={onChangeFormat}
             webSearch={searchOn}
             onToggleWebSearch={toggleWebSearch}
             onNoteSaved={() => window.stem.hideQuickChat()}

@@ -435,8 +435,14 @@ export interface StartTurnInput {
   effort?: string;
   /** Service tier override: 'priority' = Fast; null = Standard. */
   serviceTier?: string | null;
-  /** Output format for this turn: 'mdx' = rich components (default); 'md' = plain Markdown. */
-  format?: 'md' | 'mdx';
+  /**
+   * Output format for a NEW chat: 'mdx' = rich components (default); 'md' =
+   * plain Markdown. Honored only on the turn that creates the thread; the
+   * format is then stored with the chat (switch it with `chats:setFormat`) and
+   * read back on later turns, because it picks the system prompt the chat's
+   * worker is spawned with.
+   */
+  format?: ChatFormat;
   /**
    * Start a PRIVATE chat: nothing said in it is captured into Recall (no
    * distillation, no episodic history), no recall is injected, and the recall
@@ -2744,6 +2750,9 @@ export interface ChatPinPatch {
   label?: string | null;
 }
 
+/** A chat's output format: rich MDX components, or plain Markdown. */
+export type ChatFormat = 'md' | 'mdx';
+
 export interface ChatSummary {
   threadId: string;
   /** Computed main-side as `name ?? preview ?? 'New chat'`. */
@@ -2765,6 +2774,8 @@ export interface ChatSummary {
   folderId: string | null;
   /** The chat was started private (see StartTurnInput.private): Stem learns nothing from it. */
   private?: true;
+  /** Set when the chat runs as plain Markdown; absent means MDX (see StartTurnInput.format). */
+  format?: 'md';
   /** Unix seconds. */
   createdAt: number;
   updatedAt: number;
@@ -4374,6 +4385,8 @@ export interface StemApi {
   deleteFolder(folderId: string): Promise<ChatListResult>;
   moveFolder(folderId: string, parentId: string | null): Promise<ChatListResult>;
   setChatFolder(threadId: string, folderId: string | null): Promise<ChatListResult>;
+  /** Switch an existing chat between MDX and plain Markdown; its next turn runs on a worker of that kind. */
+  setChatFormat(threadId: string, format: ChatFormat): Promise<ChatListResult>;
 
   // Inbox: read/archive/snooze state for the Chats panel's Inbox mode. Every
   // mutator takes a list of thread ids so a bulk selection is the same call as a

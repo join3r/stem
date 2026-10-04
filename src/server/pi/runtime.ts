@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import type {
   ActivityItem,
   BackendEventEnvelope,
+  ChatFormat,
   ChatMessage,
   ChatSummary,
   GeneratedImageRef,
@@ -60,7 +61,7 @@ import { clampPinnedCwd } from '../harness/pin';
 import { hostShellAgentHint } from '../exec/host-shell';
 import { previewText } from '../chats/preview';
 import { autoTitle, nameThread, nameThreadIfDue as nameIfDue, type SubjectDeps } from '../chats/subject';
-import { isChatPrivate, setChatPrivate, setNaming } from '../workspace/chats';
+import { getChatFormat, isChatPrivate, setChatFormat, setChatPrivate, setNaming } from '../workspace/chats';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
 import { buildRecallContext, type RecallTimings } from '../recall/inject';
 import { buildPinsContext } from '../pins/context';
@@ -726,13 +727,26 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * this is the warm-chat slot, and the reaper trims persona workers as they idle.
    */
   private primaryWorker(): PiWorker {
-    const plain = this.workers.find((w) => !w.disposed && !w.personaId);
+    const plain = this.workers.find((w) => !w.disposed && this.isKeepWarm(w));
     if (plain) return plain;
     const id = this.nextWorkerId;
     this.nextWorkerId += 1;
-    const worker = new PiWorker(id, this.workerGateDir(id));
+    const worker = new PiWorker(id, this.workerGateDir(id), null, this.warmFormat);
     this.workers.push(worker);
     return worker;
+  }
+
+  /**
+   * The format of the plain worker kept warm: whichever the user's own chats
+   * last ran in. A Markdown worker and an MDX one are different processes (the
+   * syntax card rides in the spawn args), so only one of them is the warm slot;
+   * the other is reaped once it idles like any extra worker.
+   */
+  private warmFormat: ChatFormat = 'mdx';
+
+  /** The warm plain slot: not a persona's, and in the format chats last used. */
+  private isKeepWarm(w: PiWorker): boolean {
+    return !w.personaId && w.format === this.warmFormat;
   }
 
   /** Any worker with a live child — for read-only RPCs that don't care which session. */
@@ -750,25 +764,32 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * worker when the thread is new/unknown (null). `personaId` narrows the pool
    * to workers spawned for that persona (null = plain workers only): the
    * persona prompt rides in the spawn args, so a mismatched worker would run
-   * the turn under the wrong system prompt. Serialized on a chain so two
+   * the turn under the wrong system prompt. `format` narrows it the same way:
+   * MDX and Markdown workers are spawned with different system prompts.
+   * Serialized on a chain so two
    * concurrent acquisitions can't both claim the same idle worker or both spawn
    * past the bound. The rules, in order:
    *
    *  1. A thread keeps its bound worker, busy or not — queueing behind your own
    *     thread's turn is the per-thread serialization the app has always had.
-   *  2. Otherwise take an idle worker OF THE SAME PERSONA-NESS: one that has
+   *  2. Otherwise take an idle worker OF THE SAME PERSONA AND FORMAT: one that has
    *     never been bound beats evicting somebody's affinity; among
    *     bound-but-idle workers the least-recently-used loses its binding.
    *  3. Otherwise grow the pool, up to the bound.
    *  4. At the bound, retire an idle worker that cannot serve this turn (idle
-   *     persona workers first, the warm plain slot last) and grow into its
+   *     persona workers first, then plain workers of the other format, the
+   *     warm plain slot last) and grow into its
    *     place — a turn never queues behind a process that is merely parked.
    *  5. Otherwise wait for a worker to go idle and try again.
    */
-  private acquireWorker(threadId: string | null, personaId: string | null = null): Promise<PiWorker> {
+  private acquireWorker(
+    threadId: string | null,
+    personaId: string | null = null,
+    format: ChatFormat = 'mdx'
+  ): Promise<PiWorker> {
     const run = this.acquireChain.then(
-      () => this.acquireWorkerNow(threadId, personaId),
-      () => this.acquireWorkerNow(threadId, personaId)
+      () => this.acquireWorkerNow(threadId, personaId, format),
+      () => this.acquireWorkerNow(threadId, personaId, format)
     );
     this.acquireChain = run.then(
       () => undefined,
@@ -777,7 +798,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return run;
   }
 
-  private async acquireWorkerNow(threadId: string | null, personaId: string | null): Promise<PiWorker> {
+  private async acquireWorkerNow(
+    threadId: string | null,
+    personaId: string | null,
+    format: ChatFormat
+  ): Promise<PiWorker> {
     // Every return path RESERVES the worker (leases += 1) before handing it out:
     // the lease is what the idle test reads, so without the reservation two
     // concurrent acquisitions could both be given the same "idle" worker in the
@@ -792,13 +817,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     for (;;) {
       if (threadId) {
         const bound = this.threadWorkers.get(threadId);
-        // A binding to the wrong persona-ness is dropped, not honored: it can
-        // only mean the thread's role changed (or a stale map entry), and
-        // serving it would run the turn under the wrong system prompt.
-        if (bound && !bound.disposed && bound.personaId === personaId) return reserve(bound);
+        // A binding to the wrong persona or format is dropped, not honored: it
+        // can only mean the thread's role or format changed (or a stale map
+        // entry), and serving it would run the turn under the wrong system
+        // prompt. Switching a chat's format lands here: the next turn moves to
+        // a worker of the other kind and re-activates the session there.
+        if (bound && !bound.disposed && bound.personaId === personaId && bound.format === format) return reserve(bound);
         if (bound) this.threadWorkers.delete(threadId);
       }
-      const idle = this.workers.filter((w) => !w.disposed && w.idle && w.personaId === personaId);
+      const idle = this.workers.filter(
+        (w) => !w.disposed && w.idle && w.personaId === personaId && w.format === format
+      );
       if (idle.length) {
         const unbound = idle.filter((w) => ![...this.threadWorkers.values()].includes(w));
         const chosen = unbound[0] ?? idle.sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
@@ -810,7 +839,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // holding the slot it needs. Idle persona workers go first (mail is
         // async and a respawn is invisible there); the warm plain slot goes
         // last, and only so a quiet pool can never wedge an acquisition.
-        const keepWarm = this.workers.find((w) => !w.disposed && !w.personaId);
+        const keepWarm = this.workers.find((w) => !w.disposed && this.isKeepWarm(w));
         const victim = this.workers
           .filter((w) => !w.disposed && w.idle)
           .sort(
@@ -822,7 +851,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         if (victim) this.retireWorker(victim);
       }
       if (this.workers.length < this.maxWorkers) {
-        const worker = new PiWorker(this.nextWorkerId, this.workerGateDir(this.nextWorkerId), personaId);
+        const worker = new PiWorker(this.nextWorkerId, this.workerGateDir(this.nextWorkerId), personaId, format);
         this.nextWorkerId += 1;
         this.workers.push(worker);
         if (threadId) this.bindThread(threadId, worker);
@@ -876,9 +905,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
   }
 
-  /** Acquire the thread's worker and run one gated operation on it. */
+  /**
+   * Acquire the thread's worker and run one gated operation on it. The thread's
+   * own format decides the kind of worker: its live binding's when it has one
+   * (a resume or rollback must not move a Markdown chat onto an MDX worker),
+   * else the stored one.
+   */
   private async withThreadWorker<T>(threadId: string, task: (worker: PiWorker) => Promise<T>): Promise<T> {
-    const worker = await this.acquireWorker(threadId);
+    const bound = this.threadWorkers.get(threadId);
+    const format = bound && !bound.disposed && !bound.personaId ? bound.format : await this.storedFormat(threadId);
+    const worker = await this.acquireWorker(threadId, null, format);
     return this.runLeased(worker, task);
   }
 
@@ -894,7 +930,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     this.reapTimer = setInterval(() => {
       void this.acquireChain.then(() => {
         const cutoff = Date.now() - PiRuntime.WORKER_IDLE_REAP_MS;
-        const keepWarm = this.workers.find((w) => !w.personaId);
+        const keepWarm = this.workers.find((w) => this.isKeepWarm(w));
         for (const worker of [...this.workers]) {
           if (worker === keepWarm || !worker.idle || worker.lastUsedAt > cutoff) continue;
           this.retireWorker(worker);
@@ -1017,8 +1053,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   // ---- turns ----
 
-  async createThread(model?: string): Promise<string> {
-    const worker = await this.acquireWorker(null);
+  async createThread(model?: string, format: ChatFormat = 'mdx'): Promise<string> {
+    const worker = await this.acquireWorker(null, null, format);
     return this.runLeased(worker, async (w) => {
       await this.ensureWorkerStarted(w);
       // Create the session FIRST: newSession resets the active model, so applying the
@@ -1050,6 +1086,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // to a persona, not to memory. A private chat's "remember that …" goes to
     // the model like any other message — the prompt tells it nothing is kept.
     const isPrivate = await this.isPrivateTurn(input);
+    const format = await this.resolveTurnFormat(input);
     const memory = input.scheduled || input.mail || isPrivate
       ? { captured: false, shouldAcknowledge: false, factId: undefined, path: undefined }
       : await captureMemoryFromUserInput(input.input);
@@ -1095,7 +1132,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     try {
       // Acquisition can wait for pool capacity; a Stop clicked in that window
       // wins the race below the same way one clicked behind the gate does.
-      const acquired = this.acquireWorker(input.threadId ?? null, input.persona?.id ?? null);
+      // The user's own chats steer which plain worker stays warm; mail and
+      // scheduled runs are always MDX and must not flip it.
+      if (!input.persona && !input.mail && !input.scheduled) this.warmFormat = format;
+      const acquired = this.acquireWorker(input.threadId ?? null, input.persona?.id ?? null, format);
       const worker = await Promise.race([acquired, canceledAnswer.then(() => null)]);
       if (!worker || token.canceled) {
         // The acquisition (pending or already landed) still holds a reservation
@@ -1158,6 +1198,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           degrade('pi.private', 'refused the turn rather than run a private chat it could not mark', e);
           throw new Error(`Could not mark this chat private: ${e instanceof Error ? e.message : String(e)}`);
         });
+      }
+      // The format is marked the same way, so later turns find their kind of
+      // worker. Unlike privacy a failed write is survivable: the chat just
+      // reads back as MDX and the user can switch it again.
+      if (isNewThread && format === 'md' && !input.mail && !input.scheduled) {
+        await setChatFormat(threadId, 'md').catch((e) =>
+          degrade('pi.format', 'left a new Markdown chat marked as MDX', e)
+        );
       }
       // A scheduled run arrives in a fresh session (no threadId), so there is no
       // thread model to restore and nothing to condense: the pin it carries (a
@@ -1521,6 +1569,27 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    */
   isTurnRunning(): boolean {
     return this.workers.some((w) => w.currentTurn);
+  }
+
+  /**
+   * Which format a turn runs in, which picks the kind of worker it lands on.
+   * Mail and scheduled runs are read in the Inbox, which renders MDX. An
+   * existing chat runs in its stored format and the input's own is ignored; a
+   * turn that creates a chat (including Quick Chat's pre-created, still
+   * unprompted session) uses the format it asks for.
+   */
+  private async resolveTurnFormat(input: StartTurnInput): Promise<ChatFormat> {
+    if (input.mail || input.scheduled) return 'mdx';
+    if (input.threadId && !this.unnamedThreads.has(input.threadId)) return this.storedFormat(input.threadId);
+    return input.format === 'md' ? 'md' : 'mdx';
+  }
+
+  /** A chat's stored format; an unreadable store reads as MDX, the default every chat had before. */
+  private storedFormat(threadId: string): Promise<ChatFormat> {
+    return getChatFormat(threadId).catch((e) => {
+      degrade('pi.format', 'ran a chat as MDX because the chat store could not be read', e);
+      return 'mdx' as const;
+    });
   }
 
   /**
@@ -2539,8 +2608,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const primary = this.workers[0] ?? null;
     const prevThread = primary?.activeThreadId ?? null;
     const prevModel = primary?.currentModel ?? null;
+    const prevFormat = primary && !primary.personaId ? primary.format : this.warmFormat;
     await this.shutdown();
-    const worker = await this.acquireWorker(null);
+    const worker = await this.acquireWorker(null, null, prevFormat);
     await this.runLeased(worker, async (w) => {
       await this.ensureWorkerStarted(w);
       try {

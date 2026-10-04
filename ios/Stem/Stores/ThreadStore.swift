@@ -24,6 +24,9 @@ final class ThreadStore {
     private(set) var activeTurnId: String?
     private(set) var loading = false
     private(set) var isPrivate = false
+    /// The open chat's own format ("mdx" or "md"), stored with it on the server.
+    /// A draft has none yet: it starts in the composer's default.
+    private(set) var format: String?
     var error: String?
 
     let session: Session
@@ -36,10 +39,24 @@ final class ThreadStore {
         self.threadId = threadId
         if let id = threadId, let row = session.chats.chats.first(where: { $0.threadId == id }) {
             isPrivate = row.private == true
+            format = row.format ?? "mdx"
         }
     }
 
     private var client: StemClient { session.client }
+
+    /// Switch the open chat between MDX and plain Markdown. Its next turn runs on
+    /// a server worker of the other kind; messages already written stay as they are.
+    func setFormat(_ next: String) async {
+        guard let id = threadId else { return }
+        let previous = format
+        format = next
+        do { try await client.run("chats:setFormat", [.string(id), .string(next)]) }
+        catch {
+            format = previous
+            self.error = error.localizedDescription
+        }
+    }
 
     /// Running here or anywhere: another device's turn also blocks sending.
     var busy: Bool {
@@ -330,13 +347,17 @@ final class ThreadStore {
         let s = session.turnSettings()
         let input = StartTurnInput(
             input: text, threadId: threadId, turnId: turnId, model: s.model, effort: s.effort,
-            serviceTier: s.serviceTier, format: s.format, private: threadId == nil && isPrivate ? true : nil,
+            // Format and privacy only count on the turn that creates the chat;
+            // after that the server reads both back from the chat itself.
+            serviceTier: s.serviceTier, format: threadId == nil ? s.format : nil,
+            private: threadId == nil && isPrivate ? true : nil,
             attachments: attachments.isEmpty ? nil : attachments, personaId: personaId)
         do {
             let r = try await client.call("backend:startTurn", [.from(input)], as: StartTurnResult.self)
             if threadId == nil, let t = r.threadId {
                 threadId = t
                 self.isPrivate = isPrivate
+                format = s.format
             }
             pendingTurnId = nil
             if activityLabel == "Sending" { activityLabel = nil }

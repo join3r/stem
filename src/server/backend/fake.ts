@@ -18,6 +18,7 @@ import type {
   ModelSummary,
   RuntimeStatus,
   StartTurnInput,
+  ChatFormat,
   StartTurnResult
 } from '../../shared/types';
 import { previewText } from '../chats/preview';
@@ -209,7 +210,7 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
 
   // ---- turns ----
 
-  async createThread(_model?: string): Promise<string> {
+  async createThread(_model?: string, _format?: ChatFormat): Promise<string> {
     const threadId = `e2e-thread-${++this.seq}`;
     this.ensureThread(threadId);
     return threadId;
