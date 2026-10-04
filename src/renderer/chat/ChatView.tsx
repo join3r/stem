@@ -43,7 +43,7 @@ import type { PendingApproval } from '../manage/approvalQueue';
 import { MdxView } from './MdxView';
 import { StreamingMdxView } from './StreamingMdxView';
 import { HoverTip } from '../ui/InfoTip';
-import { MdxActionContext } from '../mdx/ActionContext';
+import { EARLIER_MESSAGE, LATEST_MESSAGE, MdxActionContext, MdxMessageContext } from '../mdx/ActionContext';
 import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
 import { INITIAL_FOLLOW, onScrollEvent, type FollowState } from './followBottom';
 import { EFFORT_LABELS } from '../modelLabels';
@@ -583,13 +583,12 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   // and the contents of a collapsed scheduled-run group with identical markup.
   const renderMessage = (m: ChatMessage): ReactNode => {
     const a = AVATAR[m.role];
-    // Render finalized assistant replies via the MDX renderer. Plain Markdown
-    // (.md) is safe to render live while streaming — it has no JSX to break
-    // mid-tag — so we render it progressively too (once there's content to show).
-    // MDX stays plain-text until complete to avoid flickering half-written tags.
+    // Assistant replies render through the MDX renderer, live while streaming
+    // too (once there's content to show): StreamingMdxView keeps a component
+    // that is still being written out of sight behind a placeholder, so no
+    // half-written tag ever shows. Settled replies get the exact full parse.
     const isStreaming = m.id === streamingId;
-    const renderRich =
-      m.role === 'assistant' && (!isStreaming || (format === 'md' && !!m.content));
+    const renderRich = m.role === 'assistant' && (!isStreaming || !!m.content);
     const metaText = m.role === 'assistant' ? metaTooltip(m.meta, models) : undefined;
     const stamp = m.role !== 'system' && m.createdAt ? messageStamp(m.createdAt) : undefined;
     const tps = m.role === 'assistant' ? tokensPerSecond(m) : undefined;
@@ -663,7 +662,11 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             isStreaming ? (
               <StreamingMdxView text={m.content} />
             ) : (
-              <MdxView text={m.content} />
+              <MdxMessageContext.Provider
+                value={m.id === lastAssistantId && !running ? LATEST_MESSAGE : EARLIER_MESSAGE}
+              >
+                <MdxView text={m.content} />
+              </MdxMessageContext.Provider>
             )
           ) : isStreaming && !m.content && showActivity ? (
             activityIndicator

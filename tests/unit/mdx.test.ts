@@ -159,3 +159,73 @@ describe('splitMdBlocks', () => {
     expect(prev).toEqual(splitMdBlocks(full));
   });
 });
+
+// Streaming MDX: a component spanning blank lines must stay one block (or the
+// half that is parsed alone breaks), and the tail must say which component it
+// is still inside so the view shows a placeholder, never half a tag.
+import { provisionalTail, splitStreamBlocks } from '../../src/renderer/mdx/render';
+
+describe('splitStreamBlocks', () => {
+  const steps = 'Intro line.\n<Steps>\n<Step>**One.** First.</Step>\n\n<Step>**Two.** Second.</Step>\n</Steps>\n\nOutro.';
+
+  it('keeps a component spanning blank lines in one block, split from the prose around it', () => {
+    expect(splitMdBlocks(steps)).toEqual([
+      'Intro line.',
+      '<Steps>\n<Step>**One.** First.</Step>\n\n<Step>**Two.** Second.</Step>\n</Steps>',
+      'Outro.'
+    ]);
+    expect(splitStreamBlocks(steps).every((b) => b.open === null)).toBe(true);
+  });
+
+  it('reports the component the tail is still inside, outermost first', () => {
+    const blocks = splitStreamBlocks('<Tabs>\n<Tab label="macOS">\n\nbrew install node');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].open).toBe('Tabs');
+    expect(blocks[0].stack).toEqual(['Tabs', 'Tab']);
+  });
+
+  it('does not count a tag inside a code fence', () => {
+    const text = '```mdx\n<Chart type="bar">\n\n```\n\nafter';
+    const blocks = splitStreamBlocks(text);
+    expect(blocks.map((b) => b.text)).toEqual(['```mdx\n<Chart type="bar">\n\n```', 'after']);
+    expect(blocks.every((b) => b.open === null)).toBe(true);
+  });
+
+  it('treats a tag still being typed as open, and ignores unknown capitalised words', () => {
+    expect(splitStreamBlocks('Here it is:\n\n<Cha').at(-1)!.open).toBe('');
+    expect(splitStreamBlocks('Here it is:\n\n<Chart type="li').at(-1)!.open).toBe('Chart');
+    expect(splitStreamBlocks('Compare A <B and C').at(-1)!.open).toBeNull();
+    expect(splitStreamBlocks('<Marquee>\n\nhi').every((b) => b.open === null)).toBe(true);
+  });
+
+  it('keeps self-closing tags and same-line pairs balanced', () => {
+    const form = '<Form prompt="x">\n<Field name="a" label="A" />\n\n<Field name="b" label="B" />\n</Form>';
+    expect(splitStreamBlocks(form)).toEqual([{ text: form, open: null, stack: [] }]);
+  });
+
+  it('is append-stable with components: earlier blocks never change as text grows', () => {
+    const full = `${steps}\n\n<Chart type="bar" title="t">\n\`\`\`json\n[{"label":"a","value":1}]\n\`\`\`\n</Chart>\n\nDone.`;
+    const final = splitMdBlocks(full);
+    for (let i = 1; i <= full.length; i++) {
+      const blocks = splitMdBlocks(full.slice(0, i));
+      for (let b = 0; b < blocks.length - 1; b++) expect(blocks[b]).toBe(final[b]);
+    }
+  });
+});
+
+describe('provisionalTail', () => {
+  it('closes open prose containers so the user can read along', () => {
+    const [block] = splitStreamBlocks('<Steps>\n<Step>**One.** Fir');
+    expect(provisionalTail(block)).toEqual({ live: '<Steps>\n<Step>**One.** Fir\n\n</Step>\n</Steps>', pending: null });
+  });
+
+  it('holds a data component back behind a placeholder', () => {
+    const [block] = splitStreamBlocks('<Chart type="bar">\n```json\n[{"label":"a"');
+    expect(provisionalTail(block)).toEqual({ live: '', pending: 'Chart' });
+  });
+
+  it('drops a half-typed tag and renders the prose before it', () => {
+    const blocks = splitStreamBlocks('Look:\n<Data');
+    expect(provisionalTail(blocks.at(-1)!)).toEqual({ live: 'Look:', pending: '' });
+  });
+});

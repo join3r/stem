@@ -21,3 +21,22 @@ export const MdxActionContext = createContext<MdxActions | null>(null);
 export function useMdxActions(): MdxActions | null {
   return useContext(MdxActionContext);
 }
+
+/**
+ * Where the component sits in the conversation. `isLatest` is true only inside
+ * the newest assistant reply once its turn has settled: suggestions offered
+ * there (Replies) are the live ones, and the same suggestions on an older reply
+ * have already been answered or passed over.
+ */
+export interface MdxMessage {
+  isLatest: boolean;
+}
+
+export const LATEST_MESSAGE: MdxMessage = { isLatest: true };
+export const EARLIER_MESSAGE: MdxMessage = { isLatest: false };
+
+export const MdxMessageContext = createContext<MdxMessage>(EARLIER_MESSAGE);
+
+export function useMdxMessage(): MdxMessage {
+  return useContext(MdxMessageContext);
+}

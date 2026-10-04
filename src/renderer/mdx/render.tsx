@@ -153,43 +153,142 @@ function renderNode(node: MdNode, key: string): ReactNode {
   }
 }
 
+/** Every tag the renderer instantiates; the stream splitter tracks only these. */
+export const COMPONENT_NAMES: ReadonlySet<string> = new Set(Object.keys(componentMap));
+
+/** One top-level block of a reply, and the component still being written in it, if any. */
+export interface StreamBlock {
+  text: string;
+  /**
+   * The outermost component the block opened and hasn't closed yet (or the
+   * name typed so far of a tag still being written). Only ever set on the last
+   * block: everything before it closed before the split.
+   */
+  open: string | null;
+  /** Every component open at the end of the block, outermost first. */
+  stack: string[];
+}
+
+const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})/;
+const FENCE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+// A complete opening, closing or self-closing tag. Attribute values are plain
+// strings, so a `>` inside quotes is the one case worth skipping over.
+const TAG = /<(\/?)([A-Z][A-Za-z0-9]*)\b(?:[^>"']|"[^"]*"|'[^']*')*?(\/?)>/g;
+// A tag cut off at the end of the text: `<Cha`, `<Chart type="li`, `</Ste`.
+const PARTIAL_TAG = /<\/?([A-Z][A-Za-z0-9]*)?(?:\s(?:[^>"']|"[^"]*"|'[^']*')*(?:"[^"]*|'[^']*)?)?$/;
+
 /**
- * Split markdown into top-level blocks: boundary = blank line outside a fenced
- * code block. Backs StreamingMdxView's incremental parse — in an append-only
- * stream every block except the last is final, so it's parsed exactly once.
- * Approximate on purpose (a loose list or table split by blank lines renders as
- * separate blocks until completion); the settled message re-renders via the
- * exact full parse, healing any transient artifacts.
+ * Split a (possibly still streaming) reply into top-level blocks. A boundary
+ * is a blank line outside a fenced code block AND outside any component: a
+ * `<Steps>` or `<Chart>` spanning blank lines stays one block, so each block
+ * parses on its own. A component starting at the top level also starts a new
+ * block, and one closing back to the top level ends its block.
+ *
+ * In an append-only stream every block but the last is final, which is what
+ * lets StreamingMdxView parse each exactly once; the last block reports the
+ * component it is still inside, so the view can show a placeholder instead
+ * of half a tag. Approximate on purpose (a loose list split by blank lines
+ * renders as separate blocks until completion); the settled message
+ * re-renders via the exact full parse.
  */
-export function splitMdBlocks(text: string): string[] {
-  const blocks: string[] = [];
+export function splitStreamBlocks(text: string): StreamBlock[] {
+  const blocks: StreamBlock[] = [];
   let current: string[] = [];
   let fence: string | null = null; // the opening fence marker (``` or ~~~, possibly longer)
+  const stack: string[] = [];
+  const flush = () => {
+    if (current.length) blocks.push({ text: current.join('\n'), open: null, stack: [] });
+    current = [];
+  };
   for (const line of text.split('\n')) {
-    const open = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
     if (fence) {
       current.push(line);
       // Closing fence: same char, at least as long, nothing else on the line.
-      const close = /^\s{0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      const close = FENCE_CLOSE.exec(line);
       if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
       continue;
     }
+    const open = FENCE_OPEN.exec(line);
     if (open) {
       fence = open[1];
       current.push(line);
       continue;
     }
     if (!line.trim()) {
-      if (current.length) {
-        blocks.push(current.join('\n'));
-        current = [];
-      }
+      if (stack.length === 0) flush();
+      else current.push(line);
       continue;
     }
+    const depthBefore = stack.length;
+    let opensAtTop = false;
+    for (const m of line.matchAll(TAG)) {
+      const [, closing, name, selfClosing] = m;
+      if (!COMPONENT_NAMES.has(name)) continue;
+      if (closing) {
+        const at = stack.lastIndexOf(name);
+        if (at !== -1) stack.length = at;
+      } else if (!selfClosing) {
+        if (stack.length === 0 && m.index === line.search(/\S/)) opensAtTop = true;
+        stack.push(name);
+      }
+    }
+    if (depthBefore === 0 && opensAtTop) flush();
     current.push(line);
+    if (depthBefore > 0 && stack.length === 0) flush();
   }
-  if (current.length) blocks.push(current.join('\n'));
+  flush();
+  const last = blocks[blocks.length - 1];
+  if (last) {
+    if (stack.length) {
+      last.open = stack[0];
+      last.stack = [...stack];
+    } else if (!fence) {
+      // A tag still being typed at the very end is "open" too: rendering it now
+      // would flash `<Cha` as text.
+      const tail = last.text.split('\n').pop() ?? '';
+      const partial = PARTIAL_TAG.exec(tail);
+      if (partial && (!partial[1] || [...COMPONENT_NAMES].some((n) => n.startsWith(partial[1])))) {
+        last.open = partial[1] && COMPONENT_NAMES.has(partial[1]) ? partial[1] : '';
+      }
+    }
+  }
   return blocks;
+}
+
+/**
+ * Containers whose content is prose the user can start reading before the
+ * closing tag arrives. A streaming tail open only on these is closed
+ * provisionally and rendered live; anything else (a Chart's data, a Quiz's
+ * answers) shows a placeholder until it is complete.
+ */
+const LIVE_CONTAINERS: ReadonlySet<string> = new Set(['Callout', 'Steps', 'Step', 'Tabs', 'Tab', 'Collapsible']);
+
+/**
+ * The streaming tail as something renderable now: `live` text with its open
+ * prose containers closed provisionally, and the component still being
+ * written that should show as a placeholder after it (null when none).
+ */
+export function provisionalTail(block: StreamBlock): { live: string; pending: string | null } {
+  if (block.open === null) return { live: block.text, pending: null };
+  // Drop a tag cut off mid-way; it is re-read whole on the next delta.
+  const lines = block.text.split('\n');
+  const lastLine = lines.pop() ?? '';
+  const cut = PARTIAL_TAG.exec(lastLine);
+  const text = [...lines, cut ? lastLine.slice(0, cut.index) : lastLine].join('\n').trimEnd();
+  if (block.stack.length === 0) return { live: text, pending: block.open };
+  if (!block.stack.every((name) => LIVE_CONTAINERS.has(name))) {
+    // Show what came before the component; the component itself waits.
+    return { live: '', pending: block.open };
+  }
+  const closers = [...block.stack].reverse().map((name) => `</${name}>`);
+  return { live: `${text}\n\n${closers.join('\n')}`, pending: null };
+}
+
+/**
+ * Split markdown into top-level blocks (see {@link splitStreamBlocks}), text only.
+ */
+export function splitMdBlocks(text: string): string[] {
+  return splitStreamBlocks(text).map((b) => b.text);
 }
 
 /**
@@ -200,6 +299,19 @@ export function splitMdBlocks(text: string): string[] {
  * a marker can split across delta boundaries, but the accumulated text passed
  * in always contains it whole (or as a strippable unterminated tail).
  */
+/**
+ * Render a block only if it parses as MDX; null otherwise. The streaming view
+ * uses it on a provisionally closed tail, where the plain-Markdown fallback
+ * would show the component's tags as text for a moment.
+ */
+export function tryRenderMdx(text: string): ReactNode | null {
+  try {
+    return renderNode(mdxProcessor.parse(stripCiteMarkers(text)) as unknown as MdNode, 'mdx');
+  } catch {
+    return null;
+  }
+}
+
 export function renderMdx(text: string): ReactNode {
   text = stripCiteMarkers(text);
   let tree: MdNode;

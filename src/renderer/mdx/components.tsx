@@ -15,6 +15,26 @@ export function Callout({ type, children }: { type?: string; children?: ReactNod
   return <div className={`callout callout-${kind}`}>{children}</div>;
 }
 
+// What a component still being streamed shows in its place. Keyed by tag name;
+// a name not listed (or one still being typed) gets the generic line.
+const PLACEHOLDER_LABELS: Record<string, string> = {
+  Chart: 'Drawing chart…',
+  DataTable: 'Building table…',
+  Quiz: 'Writing quiz…',
+  Form: 'Preparing form…',
+  Tabs: 'Writing…',
+  Collapsible: 'Writing…'
+};
+
+export function MdxPlaceholder({ name }: { name: string }) {
+  return (
+    <div className="mdx-placeholder" role="status" aria-live="polite">
+      <span className="mdx-placeholder-bar" aria-hidden="true" />
+      <span className="mdx-placeholder-label">{PLACEHOLDER_LABELS[name] ?? 'Writing…'}</span>
+    </div>
+  );
+}
+
 export function Steps({ children }: { children?: ReactNode }) {
   return <ol className="steps">{children}</ol>;
 }
@@ -523,6 +543,21 @@ export function Form({
     FormField
   );
   if (fields.length === 0) return <div className="mdx-form">{children}</div>;
+  // Read where nothing can be sent back (the Inbox, a fact's source): show what
+  // is being asked, and how to answer, instead of inputs that go nowhere.
+  if (!actions) {
+    return (
+      <div className="mdx-form mdx-form-readonly">
+        {prompt && <div className="mdx-form-prompt">{prompt}</div>}
+        <ul>
+          {fields.map((f, i) => (
+            <li key={keyOf(f, i)}>{f.props.label ?? f.props.name ?? keyOf(f, i)}</li>
+          ))}
+        </ul>
+        <div className="mdx-form-note">Reply with these to answer.</div>
+      </div>
+    );
+  }
 
   const keyOf = (f: ReactElement<{ name?: string; label?: string }>, i: number) =>
     f.props.name ?? f.props.label ?? `field-${i}`;

@@ -1408,6 +1408,29 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 }
 
 /* ---- Chart (SVG) ---- */
+/* ---- Streaming placeholder: a component still being written ---- */
+.mdx-placeholder {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0.9em 0;
+  padding: 10px 13px;
+  border: 0.5px dashed var(--line);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  font-size: var(--fs-13);
+}
+.mdx-placeholder-bar {
+  width: 28px;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  animation: gen-image-breathe 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mdx-placeholder-bar { animation: none; }
+}
+
 .chart { margin: 0.9em 0; }
 .chart-title { font-size: var(--fs-13); font-weight: 600; color: var(--ink); margin-bottom: var(--sp-2); }
 .chart-svg { width: 100%; height: auto; display: block; }
@@ -1474,6 +1497,8 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   gap: var(--sp-5);
 }
 .mdx-form-prompt { font-weight: 600; }
+.mdx-form-readonly ul { margin: var(--sp-1) 0; padding-left: 1.2em; }
+.mdx-form-note { color: var(--muted); font-size: var(--fs-13); }
 .mdx-field { display: flex; flex-direction: column; gap: var(--sp-2); }
 .mdx-field-label { font-size: var(--fs-12); color: var(--muted); }
 .mdx-field input, .mdx-field textarea {
