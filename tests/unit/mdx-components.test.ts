@@ -86,3 +86,13 @@ describe('Form outside a chat', () => {
     expect(html(doc, { actions: true })).toContain('<input');
   });
 });
+
+describe('hostile nesting', () => {
+  it('renders absurdly deep nesting as text instead of overflowing the stack', () => {
+    const deep = '<Callout>\n'.repeat(3000) + 'bottom' + '\n</Callout>'.repeat(3000);
+    expect(() => html(deep)).not.toThrow();
+    expect(html(deep)).toContain('bottom');
+    const quotes = '>'.repeat(5000) + ' deep quote';
+    expect(() => html(quotes)).not.toThrow();
+  });
+});

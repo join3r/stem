@@ -49,8 +49,36 @@ function stringAttributes(node: MdNode): Record<string, string> {
   return out;
 }
 
+/**
+ * How deep the rendered tree may go. Real replies nest a handful of levels
+ * (a list in a Tab in Tabs); model output nested thousands deep would overflow
+ * the stack while rendering and, with no error boundary, blank the window.
+ * Past the cap the rest of the branch renders as its plain text.
+ */
+const MAX_RENDER_DEPTH = 48;
+let renderDepth = 0;
+
+function plainText(node: MdNode): string {
+  if (node.value !== undefined) return node.value;
+  let out = '';
+  // An explicit stack, so flattening a deep branch can't recurse either.
+  const pending: MdNode[] = [...(node.children ?? [])].reverse();
+  while (pending.length) {
+    const n = pending.pop()!;
+    if (n.value !== undefined) out += n.value;
+    else pending.push(...[...(n.children ?? [])].reverse());
+  }
+  return out;
+}
+
 function renderChildren(node: MdNode, keyPrefix: string): ReactNode[] {
-  return (node.children ?? []).map((child, i) => renderNode(child, `${keyPrefix}-${i}`));
+  if (renderDepth >= MAX_RENDER_DEPTH) return [plainText(node)];
+  renderDepth += 1;
+  try {
+    return (node.children ?? []).map((child, i) => renderNode(child, `${keyPrefix}-${i}`));
+  } finally {
+    renderDepth -= 1;
+  }
 }
 
 function renderNode(node: MdNode, key: string): ReactNode {

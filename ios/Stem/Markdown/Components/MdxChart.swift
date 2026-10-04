@@ -177,7 +177,10 @@ struct MdxChartView: View {
     private func donut(_ d: MdxChartData) -> some View {
         let slices = MdxDonut.slices(labels: d.labels, values: d.series[0].values)
         let total = slices.reduce(0) { $0 + $1.value }
-        let pct = { (v: Double) in total > 0 ? "\(Int((v / total * 100).rounded()))%" : "" }
+        let pct = { (v: Double) -> String in
+            let p = (v / total * 100).rounded()
+            return total > 0 && p.isFinite ? "\(Int(p))%" : ""
+        }
         return VStack(alignment: .leading, spacing: 10) {
             Chart(Array(slices.enumerated()), id: \.offset) { _, s in
                 SectorMark(angle: .value("Value", s.value), innerRadius: .ratio(0.62), angularInset: 1.5)

@@ -92,6 +92,11 @@ enum MdxTreeParser {
         let text = stripCiteMarkers(source).replacingOccurrences(of: "\r\n", with: "\n")
         let root = Frame(name: "", attrs: [:])
         var stack: [Frame] = [root]
+        // Components nest a few levels deep at most (Tabs > Tab > Steps). Past
+        // `maxDepth` a tag is dropped (its content stays) so model output can't
+        // build a tree deep enough to overflow the stack while it is drawn.
+        let maxDepth = 16
+        var ignored: [String: Int] = [:]
         var fence: (char: Character, count: Int)?
         var dataLines: [String]?
         var dataLang = ""
@@ -142,12 +147,20 @@ enum MdxTreeParser {
                 case .text(let t):
                     if !t.trimmingCharacters(in: .whitespaces).isEmpty { top.md.append(t) }
                 case .open(let name, let attrs):
+                    if stack.count > maxDepth {
+                        ignored[name, default: 0] += 1
+                        continue
+                    }
                     top.flush()
                     stack.append(Frame(name: name, attrs: attrs))
                 case .selfClosing(let name, let attrs):
                     top.flush()
                     top.children.append(.component(MdxComponent(name: name, attrs: attrs, data: nil, children: [])))
                 case .close(let name):
+                    if let n = ignored[name], n > 0 {
+                        ignored[name] = n - 1
+                        continue
+                    }
                     guard let at = stack.lastIndex(where: { $0.name == name }), at > 0 else { continue }
                     while stack.count > at {
                         let frame = stack.removeLast()

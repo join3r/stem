@@ -67,8 +67,12 @@ indirect enum OJSON: Equatable {
     }
 
     private struct Parser {
+        /// Model-written data never nests this deep; past it the input is
+        /// refused rather than recursed into until the stack runs out.
+        static let maxDepth = 64
         let s: [Unicode.Scalar]
         var i = 0
+        var depth = 0
         init(_ s: [Unicode.Scalar]) { self.s = s }
 
         mutating func skipWS() { while i < s.count, " \t\n\r".unicodeScalars.contains(s[i]) { i += 1 } }
@@ -81,7 +85,9 @@ indirect enum OJSON: Equatable {
         }
 
         mutating func value() -> OJSON? {
-            guard i < s.count else { return nil }
+            guard i < s.count, depth < Parser.maxDepth else { return nil }
+            depth += 1
+            defer { depth -= 1 }
             switch s[i] {
             case "{":
                 i += 1
@@ -154,7 +160,9 @@ indirect enum OJSON: Equatable {
                         guard let u = hex4() else { return nil }
                         if (0xD800...0xDBFF).contains(u), i + 1 < s.count, s[i] == "\\", s[i + 1] == "u" {
                             i += 2
-                            guard let lo = hex4() else { return nil }
+                            // A high surrogate must be followed by a low one; anything
+                            // else is malformed (and `lo - 0xDC00` would trap on UInt32).
+                            guard let lo = hex4(), (0xDC00...0xDFFF).contains(lo) else { return nil }
                             let code = 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00)
                             if let sc = Unicode.Scalar(code) { out.append(sc) }
                         } else if let sc = Unicode.Scalar(u) {

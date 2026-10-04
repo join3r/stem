@@ -87,4 +87,32 @@ final class MdxDataTests: XCTestCase {
         XCTAssertEqual(stats[3].value, "12.5k")
         XCTAssertEqual(stats[3].change?.text, "12.5k")
     }
+
+    // Data and structure are model output: malformed or hostile input must be
+    // refused or flattened, never trap or overflow the stack.
+    func testMalformedSurrogatePairIsRefusedNotTrapped() {
+        XCTAssertNil(OJSON.parse(#"["\uD800\u0041"]"#))
+        XCTAssertNotNil(OJSON.parse(#"["\uD83D\uDE00"]"#))
+    }
+
+    func testDeepJSONIsRefused() {
+        XCTAssertNil(OJSON.parse(String(repeating: "[", count: 100_000)))
+        XCTAssertNotNil(OJSON.parse(String(repeating: "[", count: 10) + String(repeating: "]", count: 10)))
+    }
+
+    func testDeepComponentNestingIsCapped() {
+        let deep = String(repeating: "<Callout>\n", count: 5_000) + "bottom" + String(repeating: "\n</Callout>", count: 5_000)
+        let tree = MdxTreeParser.parse(deep)
+        var depth = 0
+        var blocks = tree.blocks
+        while let next = blocks.compactMap({ block -> [MdxBlock]? in
+            if case .component(let c) = block { return c.children }
+            return nil
+        }).first {
+            depth += 1
+            blocks = next
+        }
+        XCTAssertLessThanOrEqual(depth, 17)
+    }
 }
+
