@@ -337,6 +337,8 @@ async function rpc(channel, args = [], { headers = auth } = {}) {
   return { status: res.status, body };
 }
 
+/** The chat the pinboard check pinned a note in — looked for again after the move. */
+let pinnedThreadId = null;
 let sse = null;
 try {
   // The event stream, opened BEFORE the turn that has to arrive on it.
@@ -450,6 +452,25 @@ try {
 
   const listed = await rpc('chats:list');
   check('the thread joined the chat list', (listed.body?.result?.chats ?? []).some((c) => c.threadId === threadId));
+
+  // -- the chat's pinboard: a write answers with the board and is pushed --
+  pinnedThreadId = threadId;
+  const pinned = await rpc('pins:add', [threadId, { kind: 'note', text: 'headless note' }]);
+  check(
+    'pins:add answers with the board',
+    pinned.status === 200 && (pinned.body?.result ?? []).some((p) => p.text === 'headless note'),
+    JSON.stringify(pinned.body?.error ?? '').slice(0, 120)
+  );
+  const badPin = await rpc('pins:add', [threadId, { kind: 'message', text: 'no source' }]);
+  check('pins:add refuses a quoted pin without its turn', badPin.body?.ok !== true);
+  const pinDeadline = Date.now() + 5_000;
+  while (Date.now() < pinDeadline && !events.some((e) => e.channel === 'pins:changed')) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  check(
+    'pins:changed reaches the stream',
+    events.some((e) => e.channel === 'pins:changed' && e.payload?.threadId === threadId)
+  );
 
   // -- and the gates are on --
   const anonymous = await rpc('settings:get', [], { headers: {} });
@@ -682,6 +703,18 @@ if (existsSync(archive)) {
           'the moved Stem serves the state that travelled with it',
           folders.some((f) => f.name === 'Moved with me'),
           JSON.stringify(folders).slice(0, 160)
+        );
+        const pinsRes = await fetch(`${secondUrl}/rpc`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${grantThere.token}` },
+          body: JSON.stringify({ channel: 'pins:list', args: [pinnedThreadId] }),
+          signal: AbortSignal.timeout(30_000)
+        });
+        const movedPins = (await pinsRes.json().catch(() => null))?.result ?? [];
+        check(
+          'and the chat it pinned a note in still has the note',
+          movedPins.some((p) => p.text === 'headless note'),
+          JSON.stringify(movedPins).slice(0, 160)
         );
       }
     }

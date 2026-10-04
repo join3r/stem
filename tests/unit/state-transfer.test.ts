@@ -55,6 +55,7 @@ function useStateRoot(root: string): void {
   setHost({ stateRoot: () => root, keyWrapper: () => KEYCHAIN });
   process.env.STEM_RECALL_DB = join(root, 'recall.sqlite');
   process.env.STEM_CHAT_SEARCH_DB = join(root, 'chat_search.sqlite');
+  process.env.STEM_CHAT_PINS_DB = join(root, 'chat_pins.sqlite');
   process.env.STEM_CONNECTED_FOLDERS_STORE = join(root, 'connected-folders.json');
   process.env.STEM_FOLDER_INDEX_DIR = join(root, 'folder-index');
   process.env.STEM_SECRET_KEY_FILE = join(root, 'pi-home', 'secret.key');

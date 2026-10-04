@@ -1800,6 +1800,7 @@ export default function App() {
           onToggleWebSearch={toggleWebSearch}
           reportDraft={previewActive}
           onDraftChange={setPreviewDraft}
+          pinboard
         />
         </div>
       </main>

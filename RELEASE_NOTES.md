@@ -12,6 +12,19 @@ Maintainer notes:
   date, tag.
 -->
 
+## 0.5.7 — Unreleased
+
+### Added
+
+- **Pinboard.** Keep what matters from a chat at the top of it: hover a message and click the
+  pin, select a few words of a reply and click **Pin**, or type `/pin` and a note of your own. A
+  strip under the chat title shows how many things are pinned and a short name for each, written
+  for you in the chat's language (click **Rename** to choose your own). Open it to see them all,
+  jump back to where each came from, or drag them into order; it closes when you click back into
+  the chat, or stays put with **Keep open**. Stem also keeps everything on the board in mind for
+  the rest of that chat, so a measurement or setting you pinned early on isn't forgotten once the
+  conversation gets long. Chat search finds pinned notes too.
+
 ## 0.5.6 — 2026-10-02
 
 ### Added

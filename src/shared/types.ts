@@ -2679,6 +2679,52 @@ export interface Folder {
 export type ThreadStatus = 'idle' | 'running' | 'done' | 'error';
 
 /** A chat row in the sidebar — a backend thread merged with its folder assignment. */
+// ---- Chat pinboard ----
+
+/**
+ * What the user kept from one chat: a whole message, a passage of one, or a note
+ * of their own. Shown on the chat's pinboard and sent to the model on every turn
+ * of that chat (see docs/chat-pinboard-plan.md).
+ */
+export type ChatPinKind = 'message' | 'passage' | 'note';
+
+export interface ChatPin {
+  id: string;
+  threadId: string;
+  kind: ChatPinKind;
+  /**
+   * Which turn the pinned text came from: the message's `runtimeTurnId` when it
+   * has one (the same live, after a reload and in a fork), else its `turnId`.
+   * Null for notes. A pin whose turn is no longer in the chat (retry, edit,
+   * delete-from-here) keeps its text and just loses the jump.
+   */
+  anchor: string | null;
+  /** The pinned message's role; null for notes. */
+  role: 'user' | 'assistant' | null;
+  /** A snapshot of the pinned text (message / passage) or the note's body. */
+  text: string;
+  /** A 2–4 word label for the collapsed board. Null until one is written. */
+  label: string | null;
+  /** Who wrote the label: a background model call, or the user (never overwritten). */
+  labelSource: 'auto' | 'user' | null;
+  /** Unix milliseconds. */
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ChatPinInput {
+  kind: ChatPinKind;
+  text: string;
+  anchor?: string | null;
+  role?: 'user' | 'assistant' | null;
+}
+
+/** Fields a pin can change after it is made. `text` only for notes; `label: null` clears it. */
+export interface ChatPinPatch {
+  text?: string;
+  label?: string | null;
+}
+
 export interface ChatSummary {
   threadId: string;
   /** Computed main-side as `name ?? preview ?? 'New chat'`. */
@@ -4294,6 +4340,15 @@ export interface StemApi {
   rollbackToTurn(threadId: string, turnId: string): Promise<void>;
   /** Branch the thread into a new chat, trimmed to end at the given turn. */
   forkThread(threadId: string, turnId: string): Promise<{ threadId: string }>;
+  /** The chat's pinboard, in board order. Each mutator answers with the fresh list. */
+  listPins(threadId: string): Promise<ChatPin[]>;
+  addPin(threadId: string, input: ChatPinInput): Promise<ChatPin[]>;
+  updatePin(threadId: string, pinId: string, patch: ChatPinPatch): Promise<ChatPin[]>;
+  removePin(threadId: string, pinId: string): Promise<ChatPin[]>;
+  /** Put the chat's pins in this order (every id of the chat, once). */
+  reorderPins(threadId: string, pinIds: string[]): Promise<ChatPin[]>;
+  /** A chat's pins changed — on another client, or a label just written. Refetch that chat. */
+  onPinsChanged(listener: (payload: { threadId: string }) => void): () => void;
   renameChat(threadId: string, name: string): Promise<void>;
   deleteChat(threadId: string): Promise<void>;
   createFolder(name: string, parentId: string | null): Promise<ChatListResult>;

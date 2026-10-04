@@ -19,11 +19,21 @@ import {
   Copy,
   Check,
   Trash2,
+  Pin,
+  PinOff,
   ChevronRight,
   Clock,
   Lock
 } from 'lucide-react';
-import type { ActivityItem, ChatMessage, EscapeAction, ModelSummary, TurnAttachment, TurnTiming } from '../../shared/types';
+import type {
+  ActivityItem,
+  ChatMessage,
+  ChatPin,
+  EscapeAction,
+  ModelSummary,
+  TurnAttachment,
+  TurnTiming
+} from '../../shared/types';
 import { formatSystemVersion } from '../../shared/sys-version';
 import { ActivityRows, SourcesList } from './ActivityRows';
 import { GeneratedImages } from './GeneratedImage';
@@ -38,6 +48,10 @@ import { useAutoHideScroll } from '../hooks/useAutoHideScroll';
 import { INITIAL_FOLLOW, onScrollEvent, type FollowState } from './followBottom';
 import { EFFORT_LABELS } from '../modelLabels';
 import { EmptyTips } from './EmptyTips';
+import { PinBoard } from './PinBoard';
+import { SelectionPin } from './SelectionPin';
+import { locatePassage, messageAnchor } from './pins';
+import { useChatPins } from '../hooks/useChatPins';
 
 const AVATAR: Record<ChatMessage['role'], { cls: string; icon: ReactNode; label: string }> = {
   user: { cls: 'you', icon: <User size={15} />, label: 'You' },
@@ -156,6 +170,8 @@ interface ChatViewProps {
   /** Called after a memory note is saved and its confirmation flash has shown
    *  (Quick Chat collapses the overlay here). */
   onNoteSaved?: () => void;
+  /** Show the chat's pinboard. Main window only — Quick Chat is too narrow and too brief. */
+  pinboard?: boolean;
 }
 
 // Build the inline meta label: "Claude Opus · Claude · High". Resolves the model
@@ -333,6 +349,39 @@ function MessageEditBox({
   );
 }
 
+/** The DOM range a pinned passage covers inside a rendered message, if it is still there. */
+function passageRange(messageEl: HTMLElement, text: string): Range | null {
+  const body = messageEl.querySelector('.message-body');
+  if (!body) return null;
+  const nodes: Text[] = [];
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    // The author line and the action row are chrome, not the message.
+    if (!(n.parentElement?.closest('.message-who, .message-actions'))) nodes.push(n as Text);
+  }
+  const at = locatePassage(nodes.map((n) => n.data), text);
+  if (!at) return null;
+  const range = document.createRange();
+  range.setStart(nodes[at.startPiece], at.startOffset);
+  range.setEnd(nodes[at.endPiece], at.endOffset);
+  return range;
+}
+
+let passageTimer: number | null = null;
+
+/** Light the passage up for a moment (CSS Custom Highlight: no DOM rewriting). */
+function highlightPassage(range: Range): void {
+  const highlights = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights;
+  const HighlightCtor = (window as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
+  if (!highlights || !HighlightCtor) return;
+  highlights.set('pin-passage', new HighlightCtor(range));
+  if (passageTimer !== null) window.clearTimeout(passageTimer);
+  passageTimer = window.setTimeout(() => {
+    highlights.delete('pin-passage');
+    passageTimer = null;
+  }, 2200);
+}
+
 export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView({
   messages,
   running,
@@ -372,8 +421,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   onToggleWebSearch,
   reportDraft = false,
   onDraftChange,
-  onNoteSaved
+  onNoteSaved,
+  pinboard = false
 }: ChatViewProps, ref) {
+  const board = useChatPins(pinboard ? threadId : null);
   // Which user message is being edited inline (the working text lives in the box).
   const [editingId, setEditingId] = useState<string | null>(null);
   // Transient per-message UI: which bubble just got copied (check icon), and which
@@ -434,6 +485,52 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     },
     [onSend]
   );
+
+  // Bring a pin's source message into view and flash it. Scrolling up is
+  // reading history, so the follow-the-stream behaviour lets go of the bottom.
+  const jumpToPin = useCallback((pin: ChatPin, source: ChatMessage) => {
+    const el = messagesRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(source.id)}"]`);
+    if (!el) return;
+    follow.current = { ...follow.current, following: false };
+    // A passage lights up exactly where it is, when it can still be found.
+    const passage = pin.kind === 'passage' ? passageRange(el, pin.text) : null;
+    if (passage) {
+      const target = passage.startContainer.parentElement ?? el;
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      highlightPassage(passage);
+      return;
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('pin-flash');
+    // Restart the animation when the same message is jumped to twice in a row.
+    void el.offsetWidth;
+    el.classList.add('pin-flash');
+    window.setTimeout(() => el.classList.remove('pin-flash'), 1600);
+  }, [messagesRef]);
+
+  // The message's own pin, if it has one: the action row's Pin toggles it.
+  const messagePinOf = (m: ChatMessage): ChatPin | undefined =>
+    board.pins.find(
+      (p) => p.kind === 'message' && p.role === m.role && (p.anchor === m.runtimeTurnId || p.anchor === m.turnId)
+    );
+  const togglePin = (m: ChatMessage) => {
+    const pinned = messagePinOf(m);
+    const anchor = messageAnchor(m);
+    if (pinned) void board.remove(pinned.id);
+    else if (anchor && (m.role === 'user' || m.role === 'assistant')) {
+      void board.add({ kind: 'message', text: m.content, anchor, role: m.role });
+    }
+  };
+  const pinPassage = useCallback(
+    (text: string, m: ChatMessage) => {
+      const anchor = messageAnchor(m);
+      if (!anchor || (m.role !== 'user' && m.role !== 'assistant')) return;
+      void board.add({ kind: 'passage', text, anchor, role: m.role });
+    },
+    [board]
+  );
+  const pinNote = useCallback((text: string) => board.add({ kind: 'note', text }), [board]);
+  const pinsOn = pinboard && !!threadId;
 
   function saveEdit(m: ChatMessage, rawText: string) {
     const text = rawText.trim();
@@ -518,7 +615,11 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     })();
     const canAct = !running && (!!m.turnId || failedSend || m.role === 'system');
     return (
-      <div key={m.id} className={`message message-${m.role}`}>
+      <div
+        key={m.id}
+        className={`message message-${m.role}`}
+        data-message-id={m.id}
+      >
         {stamp && (
           <div className="message-stamp" title={stamp.full}>
             <span>{stamp.time}</span>
@@ -530,6 +631,11 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         <div className="message-body">
           <div className="message-who">
             {a.label}
+            {pinsOn && m.role !== 'system' && messagePinOf(m) && (
+              <span className="message-pinned" title="Pinned to this chat" aria-label="Pinned to this chat">
+                <Pin size={11} />
+              </span>
+            )}
             {metaText && (
               <span
                 className="message-meta"
@@ -635,6 +741,23 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                   </button>
                 </ActionTip>
               )}
+              {pinsOn && m.role !== 'system' && m.turnId && m.content.trim() && (() => {
+                const pinned = !!messagePinOf(m);
+                const tip = pinned ? 'Unpin from this chat' : 'Pin to this chat';
+                return (
+                  <ActionTip tip={tip}>
+                    <button
+                      type="button"
+                      className={`message-action${pinned ? ' on' : ''}`}
+                      aria-label={tip}
+                      aria-pressed={pinned}
+                      onClick={() => togglePin(m)}
+                    >
+                      {pinned ? <PinOff size={13} /> : <Pin size={13} />}
+                    </button>
+                  </ActionTip>
+                );
+              })()}
               {m.role !== 'system' && m.turnId && (
                 <>
                   <ActionTip tip="Fork into a new chat from here">
@@ -721,6 +844,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   return (
     <MdxActionContext.Provider value={mdxActions}>
     <div className="chat">
+      {pinboard && threadId && (
+        <PinBoard threadId={threadId} board={board} messages={messages} onJump={jumpToPin} />
+      )}
       <div className="messages" ref={messagesRef}>
         {messages.length === 0 && (
           <div className="empty">
@@ -790,6 +916,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         )}
         <div ref={endRef} />
       </div>
+      {pinsOn && (
+        <SelectionPin containerRef={messagesRef} messages={messages} streamingId={streamingId} onPin={pinPassage} />
+      )}
 
       {/* Outside the scroller on purpose: a card that could scroll off the
           bottom is a turn that silently hangs. */}
@@ -829,6 +958,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         reportDraft={reportDraft}
         onDraftChange={onDraftChange}
         onNoteSaved={onNoteSaved}
+        onPinNote={pinsOn ? pinNote : undefined}
       />
     </div>
     </MdxActionContext.Provider>

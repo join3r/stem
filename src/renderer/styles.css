@@ -85,6 +85,7 @@
 
   /* Z-index ladder. */
   --z-sticky: 1;     /* sticky headers inside a scroll pane */
+  --z-board: 20;     /* the chat pinboard's list, dropped over the transcript */
   --z-menu: 50;      /* context menus */
   --z-popover: 60;   /* picker popovers (above menus) */
   --z-overlay: 1000; /* full-window overlays (drag-to-place) */
@@ -602,6 +603,152 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   color: var(--danger);
   border-color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+/* ---- chat pinboard (docs/chat-pinboard-plan.md) ----
+   A strip under the chat header naming what the user kept from this chat. Its
+   list drops OVER the transcript while floating (any click outside closes it);
+   docked, it takes its place in the column and pushes the transcript down. */
+.pinboard {
+  /* Content sits on the transcript's reading column, not the window's edges. */
+  --pinboard-inline: max(var(--sp-8), calc((100% - var(--measure)) / 2));
+  position: relative;
+  flex: none;
+  border-bottom: 0.5px solid var(--line);
+  background: var(--panel);
+  font-size: var(--fs-12);
+}
+.pinboard-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: var(--ctl-h);
+  padding: var(--sp-2) var(--pinboard-inline);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pinboard-strip:hover { color: var(--ink); background: var(--sel); }
+.pinboard-strip-icon { flex: none; color: var(--accent); }
+.pinboard-count { flex: none; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.pinboard-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pinboard-chevron { flex: none; transition: transform var(--motion-fast) ease; }
+.pinboard-chevron.open { transform: rotate(180deg); }
+
+.pinboard-drop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: var(--z-board);
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: var(--sp-3) var(--pinboard-inline) var(--sp-4);
+  background: var(--panel);
+  border-bottom: 0.5px solid var(--line);
+  box-shadow: var(--shadow-pop);
+}
+.pinboard.docked .pinboard-drop { position: static; box-shadow: none; border-bottom: 0; }
+.pinboard-list { list-style: none; margin: 0; padding: 0; }
+.pinboard-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  padding: var(--sp-3) 0;
+  border-top: 0.5px solid var(--line);
+}
+.pinboard-item:first-child { border-top: 0; }
+.pinboard-item-icon { flex: none; margin-top: 2px; color: var(--muted); }
+.pinboard-item-body { flex: 1; min-width: 0; }
+.pinboard-item-label { color: var(--ink); font-weight: 600; }
+.pinboard-item-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+/* Under a label the text is the detail; without one it is the name, in full ink. */
+.pinboard-item-label + .pinboard-item-text { color: var(--muted); }
+.pinboard-item.gone .pinboard-item-text { opacity: 0.7; }
+.pinboard-item-gone { margin-top: var(--sp-1); color: var(--muted); font-size: var(--fs-11); font-style: italic; }
+.pinboard-item-actions { display: flex; gap: var(--sp-1); opacity: 0; transition: opacity var(--motion-fast) ease; }
+.pinboard-item:hover .pinboard-item-actions,
+.pinboard-item:focus-within .pinboard-item-actions { opacity: 1; }
+.pinboard-foot { display: flex; align-items: center; gap: var(--sp-6); margin-top: var(--sp-3); }
+.pinboard-foot .link-btn { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.pinboard-dock { margin-left: auto; }
+.pinboard-error { margin: var(--sp-3) 0 0; color: var(--danger); font-size: var(--fs-12); }
+.pinboard-editor { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
+.pinboard-editor textarea {
+  font: inherit;
+  font-size: var(--fs-13);
+  padding: var(--sp-3) var(--sp-4);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  resize: vertical;
+}
+.pinboard-editor textarea:focus { outline: none; box-shadow: var(--shadow-focus); }
+.pinboard-label-input {
+  width: 100%;
+  max-width: 320px;
+  font: inherit;
+  font-weight: 600;
+  padding: var(--sp-1) var(--sp-3);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+}
+.pinboard-label-input:focus { outline: none; box-shadow: var(--shadow-focus); }
+.pinboard-editor-actions { display: flex; justify-content: flex-end; gap: var(--sp-6); }
+/* Drag to reorder: the moving row dims, a rule marks where it would land. */
+.pinboard-item[draggable='true'] { cursor: grab; }
+.pinboard-item.dragging { opacity: 0.4; }
+.pinboard-item.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.pinboard-item.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+/* A pinned message says so at rest, beside its author; the toggle lives in the hover row. */
+.message-action.on { color: var(--accent); }
+.message-pinned { display: inline-flex; margin-left: var(--sp-3); color: var(--accent); vertical-align: -1px; }
+/* Select text in a message → this floats over the selection. Fixed to the
+   viewport because the selection rect is; withdrawn on scroll. */
+.selection-pin {
+  position: fixed;
+  z-index: var(--z-popover);
+  transform: translate(-50%, calc(-100% - var(--sp-3)));
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--ctl-h-sm);
+  padding: 0 var(--sp-4);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-12);
+  box-shadow: var(--shadow-pop);
+  cursor: pointer;
+}
+.selection-pin:hover { color: var(--accent); border-color: var(--accent); }
+.selection-pin svg { color: var(--accent); }
+/* A pinned passage the user jumped to, lit where it stands. */
+::highlight(pin-passage) { background-color: color-mix(in srgb, var(--accent) 28%, transparent); }
+
+/* The source of a pin the user jumped to: a brief accent wash, then back. */
+.message.pin-flash { animation: pin-flash 1.6s ease-out; border-radius: var(--radius-md); }
+@keyframes pin-flash {
+  0%, 30% { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  100% { background: transparent; }
 }
 
 /* Inline editor that replaces a user message's body while editing. */

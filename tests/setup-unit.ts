@@ -24,6 +24,7 @@ const devicesStore = join(tmpdir(), `stem-devices-${process.pid}.json`);
 const pairingStore = join(tmpdir(), `stem-pairing-${process.pid}.json`);
 const clientStore = join(tmpdir(), `stem-client-${process.pid}.json`);
 const chatCacheDb = join(tmpdir(), `stem-chat-cache-${process.pid}.sqlite`);
+const chatPinsDb = join(tmpdir(), `stem-chat-pins-${process.pid}.sqlite`);
 const stateDir = join(tmpdir(), `stem-state-${process.pid}`);
 
 process.env.STEM_RECALL_DB = recallDb;
@@ -39,12 +40,16 @@ process.env.STEM_DEVICES_FILE = devicesStore;
 process.env.STEM_PAIRING_FILE = pairingStore;
 process.env.STEM_CLIENT_FILE = clientStore;
 process.env.STEM_CHAT_CACHE_FILE = chatCacheDb;
+process.env.STEM_CHAT_PINS_DB = chatPinsDb;
 process.env.STEM_STATE_DIR = stateDir;
 
 for (const p of [recallDb, `${recallDb}-wal`, `${recallDb}-shm`]) {
   rmSync(p, { force: true });
 }
 for (const p of [chatSearchDb, `${chatSearchDb}-wal`, `${chatSearchDb}-shm`]) {
+  rmSync(p, { force: true });
+}
+for (const p of [chatPinsDb, `${chatPinsDb}-wal`, `${chatPinsDb}-shm`]) {
   rmSync(p, { force: true });
 }
 for (const p of [chatCacheDb, `${chatCacheDb}-wal`, `${chatCacheDb}-shm`]) {

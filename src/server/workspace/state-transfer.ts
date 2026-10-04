@@ -15,6 +15,7 @@ import { adoptSessionCwds } from '../pi/session-cwd';
 import { archivePath, extractTar, readTarMember, writeTar, type TarInput } from './tar';
 import type { SecretsState, StateExportReport, TransferGroup } from '../../shared/types';
 import {
+  chatPinsDbPath,
   chatSearchDbPath,
   chatStorePath,
   connectedFoldersStorePath,
@@ -126,7 +127,9 @@ function members(): Array<{ archive: string; source: string; kind: 'dir' | 'file
     { archive: 'tasks.json', source: tasksStorePath(), kind: 'file' },
     { archive: 'settings.json', source: settingsStorePath(), kind: 'file' },
     { archive: 'recall.sqlite', source: recallDbPath(), kind: 'sqlite' },
-    { archive: 'chat_search.sqlite', source: chatSearchDbPath(), kind: 'sqlite' }
+    { archive: 'chat_search.sqlite', source: chatSearchDbPath(), kind: 'sqlite' },
+    // The chat pinboards: the user's own data, not an index — nothing rebuilds them.
+    { archive: 'chat_pins.sqlite', source: chatPinsDbPath(), kind: 'sqlite' }
   ];
 }
 

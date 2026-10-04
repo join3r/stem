@@ -18,4 +18,5 @@ export { registerMcpIpc } from './mcp';
 export { registerMailIpc } from './mail';
 export { registerMemoryIpc } from './memory';
 export { registerPersonasIpc } from './personas';
+export { registerPinsIpc } from './pins';
 export { registerWorkspaceIpc } from './workspace';

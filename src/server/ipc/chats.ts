@@ -4,6 +4,8 @@ import type { IpcDeps } from './deps';
 import { searchChats, searchChatsLexical } from '../chatsearch/search';
 import { reindexChatThread, dropChatThread } from '../chatsearch/index-sync';
 import { copyThreadScratch, deleteThreadScratch } from '../exec/scratch';
+import { copyPinsToFork, dropThreadPins, listPins } from '../pins/store';
+import { forkAnchors } from './pins';
 import {
   createFolder,
   deleteFolder,
@@ -124,7 +126,27 @@ export function registerChatsIpc(deps: IpcDeps): void {
     deps.runtime().rollbackToTurn(threadId, turnId)
   );
   registerServer('chats:forkThread', async (_e, threadId: string, turnId: string) => {
+    // Which of the board's pins the fork keeps depends on the turns it keeps —
+    // read off the original before forking, while it is still the active
+    // session (the fork's own file only appears on its first append).
+    const anchors = listPins(threadId).length > 0
+      ? await deps.runtime().readThread(threadId).then(
+          (t) => forkAnchors(t.messages, turnId),
+          (err) => {
+            degrade('chats', 'forked a chat keeping only its notes, not its pinned messages', err);
+            return new Set<string>();
+          }
+        )
+      : null;
     const forked = await deps.runtime().forkThread(threadId, turnId);
+    if (anchors) {
+      try {
+        if (copyPinsToFork(threadId, forked.threadId, anchors) > 0) deps.emit('pins:changed', { threadId: forked.threadId });
+      } catch (err) {
+        // The fork is real either way; it just opens with an empty board.
+        degrade('chats', 'forked a chat without its pinboard', err);
+      }
+    }
     // The fork's history already talks about files the original built, so give it
     // a copy of them — otherwise its first act is to look for something it can
     // see itself creating. Best-effort: a fork whose files didn't copy is still
@@ -164,6 +186,9 @@ export function registerChatsIpc(deps: IpcDeps): void {
     await Promise.all([
       deps.runtime().deleteThread(threadId),
       removeChat(threadId),
+      // The board goes with its chat. Synchronous and local; wrapped so a
+      // failure surfaces like the rest rather than skipping the others.
+      Promise.resolve().then(() => dropThreadPins(threadId)),
       removeInboxEntry(threadId),
       // The chat's scratch folder goes with it — that is the whole point of
       // keeping scratch per chat (see server/exec/scratch.ts).

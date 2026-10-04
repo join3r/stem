@@ -6,6 +6,8 @@ import type {
   AuthProviderId,
   AuthUiEvent,
   BackendEventEnvelope,
+  ChatPinInput,
+  ChatPinPatch,
   ChatsSettings,
   DefaultsSettings,
   ConnectedFolderPatch,
@@ -346,6 +348,12 @@ const api: StemApi = {
   rollbackToTurn: (threadId: string, turnId: string) =>
     ipcRenderer.invoke('chats:rollbackToTurn', threadId, turnId),
   forkThread: (threadId: string, turnId: string) => ipcRenderer.invoke('chats:forkThread', threadId, turnId),
+  listPins: (threadId: string) => ipcRenderer.invoke('pins:list', threadId),
+  addPin: (threadId: string, input: ChatPinInput) => ipcRenderer.invoke('pins:add', threadId, input),
+  updatePin: (threadId: string, pinId: string, patch: ChatPinPatch) =>
+    ipcRenderer.invoke('pins:update', threadId, pinId, patch),
+  removePin: (threadId: string, pinId: string) => ipcRenderer.invoke('pins:remove', threadId, pinId),
+  reorderPins: (threadId: string, pinIds: string[]) => ipcRenderer.invoke('pins:reorder', threadId, pinIds),
   renameChat: (threadId: string, name: string) => ipcRenderer.invoke('chats:rename', threadId, name),
   deleteChat: (threadId: string) => ipcRenderer.invoke('chats:delete', threadId),
   createFolder: (name: string, parentId: string | null) => ipcRenderer.invoke('folders:create', name, parentId),
@@ -411,6 +419,11 @@ const api: StemApi = {
     ipcRenderer.invoke('inbox:setRead', threadIds, read),
   markInboxAllRead: () => ipcRenderer.invoke('inbox:markAllRead'),
   writeChatSubject: (threadId: string) => ipcRenderer.invoke('chats:writeSubject', threadId),
+  onPinsChanged: (listener: (payload: { threadId: string }) => void) => {
+    const handler = (_e: unknown, payload: { threadId: string }) => listener(payload);
+    ipcRenderer.on('pins:changed', handler);
+    return () => ipcRenderer.removeListener('pins:changed', handler);
+  },
   onChatsChanged: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on('chats:changed', handler);

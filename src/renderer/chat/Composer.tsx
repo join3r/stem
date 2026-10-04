@@ -46,14 +46,26 @@ function fileToAttachment(file: File): Promise<TurnAttachment> {
 // sending the draft to the model. Matched at submit rather than while typing —
 // unlike `/note` this is a one-shot action, not a mode the composer sits in.
 //
-// `/learn` is the only command the composer intercepts. That is why this is a
-// literal match and not a command table: a framework for one command would be
-// mostly guesses about the second one. Add it when there is a second one.
+// Two commands are intercepted, `/learn` and `/pin`, each a literal match: two
+// is still short of what a command table would be for.
 export function detectLearnCommand(text: string): { focus: string } | null {
   if (text === '/learn') return { focus: '' };
   if (text.startsWith('/learn ')) return { focus: text.slice('/learn '.length).trim() };
   return null;
 }
+
+// `/pin <text>` pins a note to this chat's board (docs/chat-pinboard-plan.md)
+// — the way to start a board in a chat that has nothing pinned yet. Like a
+// memory note it starts no turn, so it works mid-turn. A bare `/pin` has
+// nothing to pin and is left in the draft.
+export function detectPinCommand(text: string): { note: string } | null {
+  if (text === '/pin') return { note: '' };
+  if (text.startsWith('/pin ')) return { note: text.slice('/pin '.length).trim() };
+  return null;
+}
+
+/** How long "Pinned to this chat" stays up under the composer. */
+const PIN_NOTICE_MS = 2000;
 
 /** Imperative surface so App can push files into the composer (drop overlay). */
 export interface ComposerHandle {
@@ -97,6 +109,9 @@ interface ComposerProps {
   draftKey?: string;
   onDraftChange?: (text: string) => void;
   onNoteSaved?: () => void;
+  /** Pin a note to this chat (`/pin <text>`). Absent where there is no board: a
+   *  draft, Quick Chat — there the text takes the normal send path. */
+  onPinNote?: (text: string) => Promise<boolean>;
 }
 
 /**
@@ -130,7 +145,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   threadId,
   draftKey,
   onDraftChange,
-  onNoteSaved
+  onNoteSaved,
+  onPinNote
 }: ComposerProps, ref) {
   const [draft, setDraft] = useState(() => (draftKey ? readDraft(draftKey).text : ''));
   const [attachments, setAttachments] = useState<TurnAttachment[]>(
@@ -211,6 +227,12 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   // `/learn` gets its own pending state rather than borrowing `running`: it starts
   // no turn, and on ask mode it stays outstanding until the user answers the
   // approval card — which may be a while, so nothing here may block the composer.
+  const [pinNotice, setPinNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    if (!pinNotice) return;
+    const t = window.setTimeout(() => setPinNotice(null), PIN_NOTICE_MS);
+    return () => window.clearTimeout(t);
+  }, [pinNotice]);
   const [learning, setLearning] = useState(false);
   const [learnNotice, setLearnNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const learnTimer = useRef<number | null>(null);
@@ -249,6 +271,17 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         setAttachments([]);
         if (draftKey) clearDraft(draftKey);
         if (onNoteSaved) window.setTimeout(onNoteSaved, NOTE_CONFIRM_MS);
+      });
+      return;
+    }
+    const pin = onPinNote ? detectPinCommand(text) : null;
+    if (pin) {
+      if (!pin.note) return;
+      void onPinNote!(pin.note).then((ok) => {
+        setPinNotice(ok ? { ok, text: 'Pinned to this chat' } : { ok, text: "Couldn't pin that note" });
+        if (!ok) return;
+        setDraft('');
+        if (draftKey) clearDraft(draftKey);
       });
       return;
     }
@@ -476,6 +509,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           <div className="composer-attachments">
             <span className={`note-flash${noteFlash === 'saved' ? ' ok' : ''}`} role="status" aria-live="polite">
               {noteFlash === 'saved' && <Check size={13} />} {NOTE_FLASH_TEXT[noteFlash]}
+            </span>
+          </div>
+        )}
+        {pinNotice && (
+          <div className="composer-attachments">
+            <span className={`note-flash${pinNotice.ok ? ' ok' : ''}`} role="status" aria-live="polite">
+              {pinNotice.ok && <Check size={13} />} {pinNotice.text}
             </span>
           </div>
         )}

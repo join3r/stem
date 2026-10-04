@@ -62,3 +62,19 @@ describe('chat search store', () => {
     expect(hits[0]).toMatchObject({ threadId: 'live-lower-rank', title: 'Current title' });
   });
 });
+
+describe('chat search and the pinboard', () => {
+  it("finds a chat by what was pinned in it — a note's text, or a pin's label", async () => {
+    const { addPin, updatePin } = await import('../../src/server/pins/store');
+    const rt = {
+      listThreads: async () => [],
+      readThread: async () => ({ title: 'Table finishing', messages: [{ role: 'user', content: 'what oil?' }] })
+    };
+    addPin('pinned-search', { kind: 'note', text: 'bought quartzwhite accelerator' });
+    const labelled = addPin('pinned-search', { kind: 'note', text: 'three to one' });
+    updatePin('pinned-search', labelled.id, { label: 'Ochrecobalt ratio' });
+    await reindexChatThread(rt, 'pinned-search');
+    expect(searchChatDocs('"quartzwhite"').map((h) => h.threadId)).toEqual(['pinned-search']);
+    expect(searchChatDocs('"ochrecobalt"').map((h) => h.threadId)).toEqual(['pinned-search']);
+  });
+});

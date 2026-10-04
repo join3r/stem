@@ -13,6 +13,7 @@ import { updateDefaultModel } from '../../src/server/workspace/settings';
 import { removeChat, setChatPrivate } from '../../src/server/workspace/chats';
 import { settingsStorePath } from '../../src/server/workspace/paths';
 import { recallStore } from '../../src/server/recall/store';
+import { addPin, dropThreadPins } from '../../src/server/pins/store';
 import * as factRetrieval from '../../src/server/recall/retrieval';
 import * as recallInjection from '../../src/server/recall/inject';
 import * as workspaceMemory from '../../src/server/workspace/memory';
@@ -1110,6 +1111,30 @@ describe('scheduled-run turns', () => {
       expect(cold.message).not.toMatch(/remember|recall|memory/i);
     } finally {
       recallStore.resetFacts();
+    }
+  });
+
+  it("every turn carries the chat's pinboard, private chats included, and no other chat's", async () => {
+    const { runtime } = await tempRuntime();
+    type Internal = {
+      buildMessage: (
+        input: { input: string },
+        threadId: string,
+        turn: { isPrivate?: boolean } | null
+      ) => Promise<{ message: string }>;
+    };
+    const internal = runtime as unknown as Internal;
+    addPin('pinned-chat', { kind: 'note', text: 'Rubio: 3 parts oil to 1 accelerator' });
+    try {
+      const turn = await internal.buildMessage({ input: 'And the second coat?' }, 'pinned-chat', null);
+      expect(turn.message).toContain('Pinned in this chat by the user');
+      expect(turn.message).toContain('Rubio: 3 parts oil to 1 accelerator');
+      const privateTurn = await internal.buildMessage({ input: 'x' }, 'pinned-chat', { isPrivate: true });
+      expect(privateTurn.message).toContain('Rubio: 3 parts oil to 1 accelerator');
+      const elsewhere = await internal.buildMessage({ input: 'x' }, 'other-chat', null);
+      expect(elsewhere.message).not.toContain('Pinned in this chat');
+    } finally {
+      dropThreadPins('pinned-chat');
     }
   });
 

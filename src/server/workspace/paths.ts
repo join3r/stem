@@ -496,6 +496,16 @@ export function folderIndexDbPath(folderId: string): string {
 }
 
 /**
+ * The chat pinboards (server/pins/store.ts): what the user pinned in each chat.
+ * Its own database rather than a map in folders.json — pins are edited often and
+ * a long chat can collect many — and rather than a table in chat_search.sqlite,
+ * which is a rebuildable index, while pins are the user's own data.
+ */
+export function chatPinsDbPath(): string {
+  return process.env.STEM_CHAT_PINS_DB ?? join(userDataRoot(), 'chat_pins.sqlite');
+}
+
+/**
  * Stem-owned chat-search index (FTS5 over every chat's title + messages). Kept in
  * its OWN database, physically separate from recall.sqlite, because "search my own
  * chats" deliberately does NOT obey the AI's memorize/taint rules — you must be able

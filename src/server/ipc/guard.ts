@@ -166,6 +166,11 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'chats:delete': [a.string],
   'chats:setFolder': [a.string, a.nullish(a.string)],
   'chats:writeSubject': [a.string],
+  'pins:list': [a.string],
+  'pins:add': [a.string, a.object],
+  'pins:update': [a.string, a.string, a.object],
+  'pins:remove': [a.string, a.string],
+  'pins:reorder': [a.string, a.stringArray],
   // Inbox mutators take a list of thread ids so bulk selection and a single row
   // are one code path. ('inbox:markAllRead' takes no arguments, so it is absent.)
   // Personas: save takes the whole persona (reshaped where it lands, see

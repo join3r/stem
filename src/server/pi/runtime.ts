@@ -63,6 +63,7 @@ import { autoTitle, nameThread, nameThreadIfDue as nameIfDue, type SubjectDeps }
 import { isChatPrivate, setChatPrivate, setNaming } from '../workspace/chats';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
 import { buildRecallContext, type RecallTimings } from '../recall/inject';
+import { buildPinsContext } from '../pins/context';
 import { getFactRerankClient } from '../recall/retrieval';
 import { previousFactUserMessages } from '../recall/fact-query';
 import { reconcileExplicitFact } from '../recall/reconcile';
@@ -4021,6 +4022,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         'This is a private chat: nothing said here is saved to memory, and no memory of the user is available ' +
           'to you in it. If asked to remember something, say that this chat is private and it will not be kept.'
       );
+    }
+    // The chat's pinboard: what the user chose to keep in view. Every turn, so
+    // it outlives pi compacting a long thread. Private chats included — the
+    // pins are the user's explicit content, and nothing here reaches Recall.
+    try {
+      const pinned = buildPinsContext(threadId);
+      if (pinned) blocks.push(pinned);
+    } catch (error) {
+      degrade('pi.pins', 'sent the turn without the chat\'s pinboard', error);
     }
     // A persona with recall off sees none of the user's memory: no facts, no
     // episodic history, no indexed folder excerpts. The block is skipped

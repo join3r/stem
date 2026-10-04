@@ -1,12 +1,14 @@
 import { getIndexedWatermark, reindexThread, dropThread, type IndexDoc } from './store';
 import * as activity from '../activity';
 import { degrade } from '../degrade';
+import { listPins } from '../pins/store';
 
 // Keeps the chat-search index in step with the JSONL sessions:
 //   - backfillChatIndex: a background sweep on launch that indexes every chat whose
 //     on-disk updatedAt is newer than what we last indexed (so it's a near no-op on
 //     relaunch, and catches externally-edited sessions).
-//   - reindexChatThread: re-index one chat right after a turn completes or a rename.
+//   - reindexChatThread: re-index one chat right after a turn completes, a rename, or a
+//     change to its pinboard (a chat's pins are indexed with it).
 //   - dropChatThread: forget a chat on delete.
 //
 // Deliberately independent of Stem Recall's capture path: chat search indexes the
@@ -36,6 +38,19 @@ async function reindexOne(rt: IndexRuntime, threadId: string, updatedAt: number)
     if (m.role !== 'user' && m.role !== 'assistant') continue;
     if (!m.content || !m.content.trim()) continue;
     docs.push({ role: m.role, text: m.content, ts: toSeconds(m.createdAt) ?? Math.floor(updatedAt / 1000) });
+  }
+  // What the user pinned is searchable as part of its chat — a note exists
+  // nowhere else, and a label ("Rubio mix") is often the word they remember.
+  try {
+    for (const pin of listPins(threadId)) {
+      docs.push({
+        role: 'pin',
+        text: pin.label ? `${pin.label}: ${pin.text}` : pin.text,
+        ts: Math.floor(pin.updatedAt / 1000)
+      });
+    }
+  } catch (error) {
+    degrade('chatsearch.index', 'indexed a chat without its pinboard', error);
   }
   reindexThread(threadId, title, docs, updatedAt);
 }
