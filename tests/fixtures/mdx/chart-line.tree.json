@@ -1,0 +1,48 @@
+{
+  "blocks": [
+    {
+      "kind": "md",
+      "text": "Power dominates the bill and dips in spring."
+    },
+    {
+      "kind": "component",
+      "name": "Chart",
+      "attrs": {
+        "type": "line",
+        "title": "Monthly bills",
+        "unit": "€"
+      },
+      "data": {
+        "lang": "json",
+        "value": "[{\"month\":\"Jan\",\"power\":92,\"water\":31},{\"month\":\"Feb\",\"power\":88,\"water\":29},{\"month\":\"Mar\",\"power\":75,\"water\":30},{\"month\":\"Apr\",\"power\":61,\"water\":28}]"
+      },
+      "children": []
+    },
+    {
+      "kind": "component",
+      "name": "Chart",
+      "attrs": {
+        "type": "donut",
+        "title": "Where it went"
+      },
+      "data": {
+        "lang": "json",
+        "value": "[{\"label\":\"Rent\",\"value\":900},{\"label\":\"Food\",\"value\":420},{\"label\":\"Transport\",\"value\":120},{\"label\":\"Fun\",\"value\":80},{\"label\":\"Gifts\",\"value\":40},{\"label\":\"Books\",\"value\":30},{\"label\":\"Other stuff\",\"value\":20}]"
+      },
+      "children": []
+    },
+    {
+      "kind": "component",
+      "name": "Chart",
+      "attrs": {
+        "type": "bar",
+        "title": "Visitors by country"
+      },
+      "data": {
+        "lang": "json",
+        "value": "{\"columns\":[\"Country\",\"2025\",\"2026\"],\"rows\":[[\"SK\",120,180],[\"CZ\",90,140],[\"AT\",40,52]]}"
+      },
+      "children": []
+    }
+  ]
+}

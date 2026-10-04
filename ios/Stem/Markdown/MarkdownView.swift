@@ -1,21 +1,23 @@
 import SwiftUI
 
+/// A reply, mail or skill body: MDX components drawn natively, the Markdown
+/// between them by the block renderer below.
 struct MarkdownView: View {
     let source: String
-    private let blocks: [MDBlock]
+    private let tree: MdxTree
 
     init(_ source: String) {
         self.source = source
-        blocks = MarkdownParser.parse(source)
+        tree = MdxTreeParser.parse(source)
     }
 
     var body: some View {
-        BlockList(blocks: blocks)
+        MdxBlocksView(blocks: tree.blocks)
             .textSelection(.enabled)
     }
 }
 
-private struct BlockList: View {
+struct MarkdownBlocksList: View {
     let blocks: [MDBlock]
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -41,7 +43,7 @@ private struct BlockView: View {
         case .quote(let inner):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1.5).fill(.secondary.opacity(0.4)).frame(width: 3)
-                BlockList(blocks: inner).foregroundStyle(.secondary)
+                MarkdownBlocksList(blocks: inner).foregroundStyle(.secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
         case .list(let ordered, let start, let items):
@@ -52,7 +54,7 @@ private struct BlockView: View {
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                             .frame(minWidth: ordered ? 22 : 12, alignment: .trailing)
-                        BlockList(blocks: item)
+                        MarkdownBlocksList(blocks: item)
                     }
                 }
             }
@@ -60,19 +62,10 @@ private struct BlockView: View {
             TableBlock(header: header, rows: rows)
         case .rule:
             Divider()
-        case .component(let name, let text):
-            VStack(alignment: .leading, spacing: 4) {
-                Label(name, systemImage: name.lowercased().contains("chart") ? "chart.bar" : "square.dashed")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                if !text.isEmpty { Inline(text).font(.callout) }
-                Text("Open on the desktop to see this.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+        case .component(_, let text):
+            // A tag the component parser left inside Markdown (say, nested in a
+            // list): like the desktop, the tag goes and its content stays.
+            if !text.isEmpty { Inline(text) }
         }
     }
 }
@@ -87,7 +80,18 @@ struct Inline: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    static func attributed(_ s: String) -> AttributedString {
+    /// Component tags written mid-sentence (`<Kbd>Cmd</Kbd>`): like the
+    /// desktop, the tag goes and its text stays. Code spans keep theirs.
+    static func dropInlineTags(_ s: String) -> String {
+        guard s.contains("<") else { return s }
+        return s.components(separatedBy: "`").enumerated().map { i, part in
+            i % 2 == 1 ? part : part.replacingOccurrences(
+                of: #"</?[A-Z][A-Za-z0-9]*(?:\s(?:[^>"']|"[^"]*"|'[^']*')*)?/?>"#, with: "", options: .regularExpression)
+        }.joined(separator: "`")
+    }
+
+    static func attributed(_ raw: String) -> AttributedString {
+        let s = dropInlineTags(raw)
         let opts = AttributedString.MarkdownParsingOptions(
             allowsExtendedAttributes: true,
             interpretedSyntax: .inlineOnlyPreservingWhitespace,
@@ -101,7 +105,7 @@ struct Inline: View {
     }
 }
 
-private struct CodeBlock: View {
+struct CodeBlock: View {
     let lang: String
     let text: String
     @State private var copied = false

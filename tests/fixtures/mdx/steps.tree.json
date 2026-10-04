@@ -1,0 +1,52 @@
+{
+  "blocks": [
+    {
+      "kind": "md",
+      "text": "Here is how to set it up:"
+    },
+    {
+      "kind": "component",
+      "name": "Steps",
+      "attrs": {},
+      "children": [
+        {
+          "kind": "component",
+          "name": "Step",
+          "attrs": {},
+          "children": [
+            {
+              "kind": "md",
+              "text": "**Install.** Run `brew install stem`."
+            }
+          ]
+        },
+        {
+          "kind": "component",
+          "name": "Step",
+          "attrs": {},
+          "children": [
+            {
+              "kind": "md",
+              "text": "**Pair.** Scan the code on the desktop."
+            }
+          ]
+        },
+        {
+          "kind": "component",
+          "name": "Step",
+          "attrs": {},
+          "children": [
+            {
+              "kind": "md",
+              "text": "**Chat.** Ask anything."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "md",
+      "text": "Done in three steps."
+    }
+  ]
+}

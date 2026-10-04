@@ -1,0 +1,82 @@
+{
+  "blocks": [
+    {
+      "kind": "md",
+      "text": "Press <Kbd>Cmd</Kbd> and K to search."
+    },
+    {
+      "kind": "component",
+      "name": "Tabs",
+      "attrs": {},
+      "children": [
+        {
+          "kind": "component",
+          "name": "Tab",
+          "attrs": {
+            "label": "Usage"
+          },
+          "children": [
+            {
+              "kind": "component",
+              "name": "Callout",
+              "attrs": {
+                "type": "info"
+              },
+              "children": [
+                {
+                  "kind": "md",
+                  "text": "Numbers are from **last week**."
+                }
+              ]
+            },
+            {
+              "kind": "component",
+              "name": "Chart",
+              "attrs": {
+                "type": "stacked",
+                "title": "Requests",
+                "unit": "k"
+              },
+              "data": {
+                "lang": "json",
+                "value": "[{\"day\":\"Mon\",\"web\":12,\"api\":30},{\"day\":\"Tue\",\"web\":\"14\",\"api\":\"28\"}]"
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "kind": "component",
+          "name": "Tab",
+          "attrs": {
+            "label": "Raw"
+          },
+          "children": [
+            {
+              "kind": "component",
+              "name": "Collapsible",
+              "attrs": {
+                "title": "Scatter"
+              },
+              "children": [
+                {
+                  "kind": "component",
+                  "name": "Chart",
+                  "attrs": {
+                    "type": "scatter",
+                    "title": "Size vs time"
+                  },
+                  "data": {
+                    "lang": "json",
+                    "value": "[{\"size\":1,\"ms\":12},{\"size\":2,\"ms\":19},{\"size\":4,\"ms\":41}]"
+                  },
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

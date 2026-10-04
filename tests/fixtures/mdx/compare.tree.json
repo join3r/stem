@@ -1,0 +1,20 @@
+{
+  "blocks": [
+    {
+      "kind": "component",
+      "name": "Compare",
+      "attrs": {
+        "recommend": "SQLite"
+      },
+      "data": {
+        "lang": "json",
+        "value": "[{\"name\":\"SQLite\",\"summary\":\"A file, zero ops\",\"pros\":[\"Nothing to run\",\"Fast reads\"],\"cons\":[\"One writer\"]},{\"name\":\"Postgres\",\"summary\":\"A real server\",\"pros\":[\"Many writers\"],\"cons\":[\"Something to run\",\"Backups\"]}]"
+      },
+      "children": []
+    },
+    {
+      "kind": "md",
+      "text": "SQLite wins because you have one writer."
+    }
+  ]
+}

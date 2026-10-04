@@ -50,6 +50,10 @@ targets:
     platform: iOS
     sources:
       - StemTests
+      # The MDX corpus shared with tests/unit/mdx-fixtures.test.ts.
+      - path: ../tests/fixtures/mdx
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: Stem
     settings:

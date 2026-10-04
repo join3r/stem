@@ -20,8 +20,9 @@ struct ThreadView: View {
             LazyVStack(alignment: .leading, spacing: 14) {
                 if store.threadId == nil && store.messages.isEmpty { newChatHeader }
                 if store.loading { ProgressView().frame(maxWidth: .infinity).padding() }
+                let latest = latestReplyId
                 ForEach(store.messages) { m in
-                    MessageRow(message: m, store: store)
+                    MessageRow(message: m, store: store, isLatest: m.id == latest, submit: submitFromReply)
                         .id(m.id)
                 }
                 if store.busy {
@@ -127,6 +128,17 @@ struct ThreadView: View {
         .padding(.top, 8)
     }
 
+    /// The newest reply once its turn has settled: where suggested replies show.
+    private var latestReplyId: String? {
+        guard !store.busy, let last = store.messages.last(where: { $0.role != "system" }), last.role != "user" else { return nil }
+        return last.id
+    }
+
+    /// A tap on a Quiz, Form or suggested reply: sent like a typed message.
+    private func submitFromReply(_ text: String) {
+        Task { _ = await send(text, []) }
+    }
+
     private func send(_ text: String, _ files: [DraftAttachment]) async -> Bool {
         let personaId = store.threadId == nil ? draft.personaId : nil
         let client = session.client
@@ -188,6 +200,8 @@ struct LiveActivity: View {
 struct MessageRow: View {
     let message: ChatMessage
     let store: ThreadStore
+    var isLatest = false
+    var submit: ((String) -> Void)?
 
     var body: some View {
         switch message.role {
@@ -219,7 +233,11 @@ struct MessageRow: View {
         default:
             VStack(alignment: .leading, spacing: 8) {
                 if let acts = message.activity, !acts.isEmpty { ActivityList(items: acts) }
-                if !message.content.isEmpty { MarkdownView(message.content) }
+                if !message.content.isEmpty {
+                    MarkdownView(message.content)
+                        .environment(\.mdxActions, submit.map { MdxActions(submit: $0, running: store.busy) })
+                        .environment(\.mdxIsLatest, isLatest)
+                }
                 ForEach(message.images ?? [], id: \.id) { ref in GeneratedImage(ref: ref, store: store) }
                 if let sources = message.sources, !sources.isEmpty { SourcesList(sources: sources) }
             }
@@ -288,19 +306,64 @@ struct ActivityList: View {
     }
 }
 
+/// Web sources of a reply as cards: the site, the page title, a letter tile.
 struct SourcesList: View {
     let sources: [SourceRef]
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Sources").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            ForEach(Array(sources.prefix(8).enumerated()), id: \.offset) { i, s in
-                if let url = URL(string: s.url) {
-                    Link(destination: url) {
-                        Text("\(i + 1). \(s.title ?? url.host ?? s.url)").font(.caption).lineLimit(1)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 8) {
+                    ForEach(Array(sources.prefix(8).enumerated()), id: \.offset) { _, s in
+                        if let url = URL(string: s.url) { SourceCard(source: s, url: url) }
                     }
                 }
             }
         }
+    }
+}
+
+struct SourceCard: View {
+    let source: SourceRef
+    let url: URL
+
+    /// The hostname without "www.", as people say a site's name.
+    static func site(_ url: URL) -> String {
+        let host = url.host() ?? url.absoluteString
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    var body: some View {
+        let site = Self.site(url)
+        let title = source.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        Link(destination: url) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(site.first.map { String($0).uppercased() } ?? "?")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 18, height: 18)
+                        .background(tint(site), in: RoundedRectangle(cornerRadius: 4))
+                    Text(site).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Text(title?.isEmpty == false ? title! : url.absoluteString)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .padding(10)
+            .frame(width: 170, height: 76, alignment: .topLeading)
+            .background(Color(.secondarySystemBackground).opacity(0.7), in: RoundedRectangle(cornerRadius: 10))
+        }
+        .accessibilityLabel("\(title ?? site), \(site)")
+    }
+
+    /// A steady color per site, so the same site always looks the same.
+    private func tint(_ site: String) -> Color {
+        let sum = site.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xffff }
+        return Color(hue: Double(sum % 360) / 360, saturation: 0.45, brightness: 0.62)
     }
 }
 

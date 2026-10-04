@@ -1,0 +1,33 @@
+{
+  "blocks": [
+    {
+      "kind": "component",
+      "name": "Steps",
+      "attrs": {},
+      "children": [
+        {
+          "kind": "component",
+          "name": "Step",
+          "attrs": {},
+          "children": [
+            {
+              "kind": "md",
+              "text": "**Open Settings.** Then pick *Server*."
+            }
+          ]
+        },
+        {
+          "kind": "component",
+          "name": "Step",
+          "attrs": {},
+          "children": [
+            {
+              "kind": "md",
+              "text": "**Copy the code.**\n\n```bash\nstem pair --show\n```"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+To draw a chart, write this:
+
+````mdx
+<Chart type="line" title="Not a chart">
+```json
+[{"x":"a","y":1}]
+```
+</Chart>
+````
+
+An unknown tag keeps its content:
+
+<Aside>
+This is **still shown**, just without the box.
+</Aside>
+
+| Name | Value |
+| --- | --- |
+| a | 1 |

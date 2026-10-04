@@ -1,0 +1,92 @@
+{
+  "blocks": [
+    {
+      "kind": "md",
+      "text": "Let's see what stuck."
+    },
+    {
+      "kind": "component",
+      "name": "Quiz",
+      "attrs": {
+        "topic": "Capitals"
+      },
+      "children": [
+        {
+          "kind": "component",
+          "name": "Question",
+          "attrs": {
+            "prompt": "Capital of Peru?",
+            "answer": "Lima"
+          },
+          "children": [
+            {
+              "kind": "component",
+              "name": "Choice",
+              "attrs": {},
+              "children": [
+                {
+                  "kind": "md",
+                  "text": "Lima"
+                }
+              ]
+            },
+            {
+              "kind": "component",
+              "name": "Choice",
+              "attrs": {},
+              "children": [
+                {
+                  "kind": "md",
+                  "text": "Quito"
+                }
+              ]
+            },
+            {
+              "kind": "component",
+              "name": "Choice",
+              "attrs": {},
+              "children": [
+                {
+                  "kind": "md",
+                  "text": "Bogotá"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "component",
+          "name": "Question",
+          "attrs": {
+            "prompt": "Capital of Slovakia?",
+            "answer": "Bratislava"
+          },
+          "children": [
+            {
+              "kind": "component",
+              "name": "Choice",
+              "attrs": {},
+              "children": [
+                {
+                  "kind": "md",
+                  "text": "Košice"
+                }
+              ]
+            },
+            {
+              "kind": "component",
+              "name": "Choice",
+              "attrs": {},
+              "children": [
+                {
+                  "kind": "md",
+                  "text": "Bratislava"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

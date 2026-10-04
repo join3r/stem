@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "kind": "component",
+      "name": "DataTable",
+      "attrs": {
+        "caption": "Largest countries"
+      },
+      "data": {
+        "lang": "json",
+        "value": "[{\"Country\":\"Russia\",\"Area (km²)\":17098246},{\"Country\":\"Canada\",\"Area (km²)\":9984670},{\"Country\":\"China\",\"Area (km²)\":9596961}]"
+      },
+      "children": []
+    },
+    {
+      "kind": "component",
+      "name": "Diagram",
+      "attrs": {
+        "title": "Order flow"
+      },
+      "data": {
+        "lang": "mermaid",
+        "value": "flowchart LR\n  App --> Gateway --> Orders --> DB[(Postgres)]"
+      },
+      "children": []
+    }
+  ]
+}

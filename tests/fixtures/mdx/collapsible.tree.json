@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "kind": "md",
+      "text": "The short answer is yes."
+    },
+    {
+      "kind": "component",
+      "name": "Collapsible",
+      "attrs": {
+        "title": "Why it works"
+      },
+      "children": [
+        {
+          "kind": "md",
+          "text": "The cache keys on the **content hash**, so a renamed file still hits.\n\n> A quote inside, too."
+        }
+      ]
+    }
+  ]
+}

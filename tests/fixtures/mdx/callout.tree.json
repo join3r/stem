@@ -1,0 +1,62 @@
+{
+  "blocks": [
+    {
+      "kind": "md",
+      "text": "Before you wipe the disk, read this."
+    },
+    {
+      "kind": "component",
+      "name": "Callout",
+      "attrs": {
+        "type": "warn"
+      },
+      "children": [
+        {
+          "kind": "md",
+          "text": "This **erases everything** on the drive.\n\n- Back up first\n- Double-check the device name"
+        }
+      ]
+    },
+    {
+      "kind": "component",
+      "name": "Callout",
+      "attrs": {
+        "type": "success"
+      },
+      "children": [
+        {
+          "kind": "md",
+          "text": "Backups finished at 03:00."
+        }
+      ]
+    },
+    {
+      "kind": "component",
+      "name": "Callout",
+      "attrs": {
+        "type": "danger"
+      },
+      "children": [
+        {
+          "kind": "md",
+          "text": "The key in `config.json` is exposed. Rotate it now."
+        }
+      ]
+    },
+    {
+      "kind": "component",
+      "name": "Callout",
+      "attrs": {},
+      "children": [
+        {
+          "kind": "md",
+          "text": "A callout with no type is an info note."
+        }
+      ]
+    },
+    {
+      "kind": "md",
+      "text": "That's all."
+    }
+  ]
+}

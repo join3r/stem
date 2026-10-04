@@ -1,0 +1,48 @@
+{
+  "blocks": [
+    {
+      "kind": "md",
+      "text": "I need a couple of things before planning."
+    },
+    {
+      "kind": "component",
+      "name": "Form",
+      "attrs": {
+        "prompt": "A few details first",
+        "submitLabel": "Plan my trip"
+      },
+      "children": [
+        {
+          "kind": "component",
+          "name": "Field",
+          "attrs": {
+            "name": "dates",
+            "label": "Travel dates",
+            "placeholder": "e.g. 3–10 May"
+          },
+          "children": []
+        },
+        {
+          "kind": "component",
+          "name": "Field",
+          "attrs": {
+            "name": "budget",
+            "label": "Budget (€)",
+            "type": "number"
+          },
+          "children": []
+        },
+        {
+          "kind": "component",
+          "name": "Field",
+          "attrs": {
+            "name": "notes",
+            "label": "Anything else?",
+            "type": "textarea"
+          },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "blocks": [
+    {
+      "kind": "md",
+      "text": "To draw a chart, write this:\n\n````mdx\n<Chart type=\"line\" title=\"Not a chart\">\n```json\n[{\"x\":\"a\",\"y\":1}]\n```\n</Chart>\n````\n\nAn unknown tag keeps its content:"
+    },
+    {
+      "kind": "component",
+      "name": "Aside",
+      "attrs": {},
+      "children": [
+        {
+          "kind": "md",
+          "text": "This is **still shown**, just without the box."
+        }
+      ]
+    },
+    {
+      "kind": "md",
+      "text": "| Name | Value |\n| --- | --- |\n| a | 1 |"
+    }
+  ]
+}

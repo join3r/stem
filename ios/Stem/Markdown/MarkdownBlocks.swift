@@ -36,11 +36,18 @@ enum MarkdownParser {
             // Fenced code.
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
                 flush()
-                let fence = String(trimmed.prefix(3))
-                let lang = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                // A fence closes on a line of the same character, at least as
+                // long, and nothing else: ````mdx can quote a ``` block.
+                let char = trimmed.first!
+                let run = trimmed.prefix { $0 == char }.count
+                let lang = String(trimmed.dropFirst(run)).trimmingCharacters(in: .whitespaces)
+                func closes(_ l: String) -> Bool {
+                    let t = l.trimmingCharacters(in: .whitespaces)
+                    return t.count >= run && t.allSatisfy { $0 == char }
+                }
                 var body: [String] = []
                 i += 1
-                while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix(fence) {
+                while i < lines.count, !closes(lines[i]) {
                     body.append(lines[i]); i += 1
                 }
                 i += 1

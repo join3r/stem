@@ -1,0 +1,41 @@
+{
+  "blocks": [
+    {
+      "kind": "md",
+      "text": "Install it for your platform."
+    },
+    {
+      "kind": "component",
+      "name": "Tabs",
+      "attrs": {},
+      "children": [
+        {
+          "kind": "component",
+          "name": "Tab",
+          "attrs": {
+            "label": "macOS"
+          },
+          "children": [
+            {
+              "kind": "md",
+              "text": "1. Download the dmg\n2. Drag Stem to Applications\n\nThen open it."
+            }
+          ]
+        },
+        {
+          "kind": "component",
+          "name": "Tab",
+          "attrs": {
+            "label": "Linux"
+          },
+          "children": [
+            {
+              "kind": "md",
+              "text": "- Install the deb:\n\n```bash\nsudo apt install ./stem.deb\n```"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

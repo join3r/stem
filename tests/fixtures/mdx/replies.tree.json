@@ -1,0 +1,48 @@
+{
+  "blocks": [
+    {
+      "kind": "md",
+      "text": "Your spending is mostly rent and food."
+    },
+    {
+      "kind": "component",
+      "name": "Replies",
+      "attrs": {},
+      "children": [
+        {
+          "kind": "component",
+          "name": "Reply",
+          "attrs": {},
+          "children": [
+            {
+              "kind": "md",
+              "text": "Compare with last year"
+            }
+          ]
+        },
+        {
+          "kind": "component",
+          "name": "Reply",
+          "attrs": {},
+          "children": [
+            {
+              "kind": "md",
+              "text": "Where can I cut back?"
+            }
+          ]
+        },
+        {
+          "kind": "component",
+          "name": "Reply",
+          "attrs": {},
+          "children": [
+            {
+              "kind": "md",
+              "text": "Show it by week"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

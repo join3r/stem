@@ -34,6 +34,18 @@ struct RootView: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-mdxGallery") {
+            MdxGallery()
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+
+    @ViewBuilder private var content: some View {
         if let session = app.session {
             MainTabs()
                 .environment(session)
