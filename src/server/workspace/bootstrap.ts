@@ -50,7 +50,7 @@ Write standard Markdown: headings, lists, links, tables, fenced code blocks, emp
  * Per-turn note for mail deliveries and scheduled runs, read in the Inbox where
  * nothing can be sent back from inside a message.
  */
-export const INBOX_MDX_NOTE = `This reply is read in the Inbox, where interactive components cannot send anything back: do not use Form or Quiz. Every other component works.`;
+export const INBOX_MDX_NOTE = `This reply is read in the Inbox, where interactive components cannot send anything back: do not use Form, Quiz or Replies. Every other component works.`;
 
 function osName(platform: NodeJS.Platform = process.platform): string {
   if (platform === 'darwin') return 'macOS';

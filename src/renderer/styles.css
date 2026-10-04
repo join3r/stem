@@ -1408,6 +1408,65 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 }
 
 /* ---- Chart (SVG) ---- */
+/* ---- Stats: KPI tiles ---- */
+.stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--sp-3); margin: 0.9em 0;
+}
+.stat {
+  padding: 10px 12px; border: 0.5px solid var(--line); border-radius: var(--radius-md);
+  background: var(--surface); min-width: 0;
+}
+.stat-label { color: var(--muted); font-size: var(--fs-12); }
+.stat-value { font-size: 24px; font-weight: 600; color: var(--ink); line-height: 1.25; margin: 2px 0; overflow-wrap: anywhere; }
+.stat-change { font-size: var(--fs-12); color: var(--muted); font-variant-numeric: tabular-nums; }
+.stat-change.good { color: var(--success); }
+.stat-change.bad { color: var(--danger); }
+.stat-change .sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.stat-spark { display: block; margin-top: 6px; overflow: visible; }
+.stat-spark polyline { stroke: var(--muted); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; opacity: 0.7; }
+.stat-spark circle { fill: var(--accent); }
+
+/* ---- Compare: options side by side ---- */
+.compare {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--sp-3); margin: 0.9em 0;
+}
+.compare-card {
+  padding: 10px 13px; border: 0.5px solid var(--line); border-radius: var(--radius-md);
+  background: var(--surface); min-width: 0;
+}
+.compare-card.picked { border: 1.5px solid var(--accent); }
+.compare-card header { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+.compare-card h4 { margin: 0; font-size: var(--fs-14); }
+.compare-badge {
+  font-size: var(--fs-11); font-weight: 600; color: var(--accent-ink); background: var(--accent);
+  border-radius: 999px; padding: 1px 7px;
+}
+.compare-summary { margin: 4px 0 6px; color: var(--muted); font-size: var(--fs-13); }
+.compare-pros, .compare-cons { list-style: none; margin: 4px 0 0; padding: 0; font-size: var(--fs-13); }
+.compare-pros li, .compare-cons li { position: relative; padding-left: 18px; margin: 2px 0; }
+.compare-pros li::before { content: '+'; position: absolute; left: 2px; color: var(--success); font-weight: 700; }
+.compare-cons li::before { content: '−'; position: absolute; left: 2px; color: var(--danger); font-weight: 700; }
+
+/* ---- Diagram (Mermaid) ---- */
+.mdx-diagram { margin: 0.9em 0; }
+.mdx-diagram-svg { overflow-x: auto; }
+.mdx-diagram-svg svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.mdx-diagram-note { color: var(--muted); font-size: var(--fs-12); margin-bottom: var(--sp-1); }
+
+/* ---- Suggested replies ---- */
+.mdx-replies { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: 0.9em 0 0.2em; }
+.mdx-reply {
+  border: 0.5px solid var(--line); background: var(--surface); color: var(--ink);
+  border-radius: 999px; padding: 4px 12px; font: inherit; font-size: var(--fs-13); cursor: pointer;
+  text-align: left;
+}
+.mdx-reply:hover:not(:disabled) { border-color: var(--accent); }
+.mdx-reply:disabled { opacity: 0.55; cursor: default; }
+
 /* ---- Streaming placeholder: a component still being written ---- */
 .mdx-placeholder {
   display: flex;
@@ -3294,7 +3353,7 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-older-system { color: var(--muted); font-style: normal; }
 .mail-item-body-plain { margin: 0; white-space: pre-wrap; }
 /* A scheduled firing's own headline, then its one-line notice, then the run's reply. */
-.mail-item-subject { margin: 0 0 var(--sp-3); font-size: var(--fs-14, 14px); font-weight: 600; }
+.mail-item-subject { margin: 0 0 var(--sp-3); font-size: var(--fs-14); font-weight: 600; }
 .mail-item-result { margin-top: var(--sp-5); padding-top: var(--sp-5); border-top: 0.5px solid var(--hair); }
 /* A code persona's mail: the coding agent's own words, collapsed under the persona's relay of them. */
 .mail-item-agent { margin-top: var(--sp-5); border: 0.5px solid var(--hair); border-radius: var(--radius-md); font-size: var(--fs-12); }

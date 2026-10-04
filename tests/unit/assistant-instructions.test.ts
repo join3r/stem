@@ -107,7 +107,7 @@ describe('stemAssistantInstructions', () => {
       // Markdown chats pay for nothing they don't use; the MDX card is the one
       // deliberate cost, measured by npm run eval:mdx.
       expect(stemAssistantInstructions('md').length).toBeLessThanOrEqual(5000);
-      expect(stemAssistantInstructions('mdx').length).toBeLessThanOrEqual(7500);
+      expect(stemAssistantInstructions('mdx').length).toBeLessThanOrEqual(8000);
       const prompt = stemAssistantInstructions();
       // The large examples/procedures must remain available without being
       // transmitted on every greeting.

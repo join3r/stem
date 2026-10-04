@@ -3,6 +3,10 @@ import { Children, Fragment, isValidElement, useMemo, useState } from 'react';
 import { useMdxActions } from './ActionContext';
 import { parseTable } from './data';
 import { Chart } from './chart/Chart';
+import { Stats } from './Stats';
+import { Compare } from './Compare';
+import { Diagram } from './Diagram';
+import { Replies, Reply } from './Replies';
 export { Chart };
 
 // The fixed, vetted component library. The MDX renderer will ONLY instantiate
@@ -25,11 +29,16 @@ const PLACEHOLDER_LABELS: Record<string, string> = {
   DataTable: 'Building table…',
   Quiz: 'Writing quiz…',
   Form: 'Preparing form…',
+  Stats: 'Adding up…',
+  Compare: 'Lining up the options…',
+  Diagram: 'Drawing diagram…',
   Tabs: 'Writing…',
   Collapsible: 'Writing…'
 };
 
 export function MdxPlaceholder({ name }: { name: string }) {
+  // Suggested replies appear once the reply is done, or not at all.
+  if (name === 'Replies' || name === 'Reply') return null;
   return (
     <div className="mdx-placeholder" role="status" aria-live="polite">
       <span className="mdx-placeholder-bar" aria-hidden="true" />
@@ -122,7 +131,7 @@ export function TabPanel({ label, children }: { label?: string; children?: React
 // through Fragments and host (string-typed) elements — but NOT into other
 // components — so collected matches aren't recursed into and nested compound
 // components stay isolated.
-function collectByType<P>(children: ReactNode, type: unknown): ReactElement<P>[] {
+export function collectByType<P>(children: ReactNode, type: unknown): ReactElement<P>[] {
   const out: ReactElement<P>[] = [];
   const visit = (nodes: ReactNode) => {
     Children.toArray(nodes).forEach((c) => {
@@ -404,6 +413,8 @@ export function Form({
     FormField
   );
   if (fields.length === 0) return <div className="mdx-form">{children}</div>;
+  const keyOf = (f: ReactElement<{ name?: string; label?: string }>, i: number) =>
+    f.props.name ?? f.props.label ?? `field-${i}`;
   // Read where nothing can be sent back (the Inbox, a fact's source): show what
   // is being asked, and how to answer, instead of inputs that go nowhere.
   if (!actions) {
@@ -420,8 +431,6 @@ export function Form({
     );
   }
 
-  const keyOf = (f: ReactElement<{ name?: string; label?: string }>, i: number) =>
-    f.props.name ?? f.props.label ?? `field-${i}`;
 
   const submit = () => {
     if (!actions || actions.running || sent) return;
@@ -507,11 +516,17 @@ export const componentMap: Record<string, ComponentEntry> = {
   ),
   Field: (props) => (
     <FormField name={props.name} label={props.label} placeholder={props.placeholder} type={props.type} />
-  )
+  ),
+  Stats: (_props, _children, data) => <Stats data={data?.value} />,
+  Compare: (props, _children, data) => <Compare recommend={props.recommend} data={data?.value} />,
+  Diagram: (props, _children, data) => <Diagram title={props.title} source={data?.value} />,
+  Replies: (_props, children) => <Replies>{children}</Replies>,
+  Reply: (_props, children) => <Reply>{children}</Reply>
 };
 
 /** User-facing names of the top-level MDX features, in display order.
  * Keep in sync with componentMap when adding/removing a top-level component. */
 export const mdxFeatureLabels = [
   'callouts', 'steps', 'checklists', 'collapsibles', 'tabs', 'tables', 'charts', 'quizzes', 'forms',
+  'stats', 'comparisons', 'diagrams', 'suggested replies',
 ];
