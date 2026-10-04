@@ -19,6 +19,8 @@ const MAX_BYTES = 64 * 1024;
 const TIMEOUT_MS = 3_000;
 const MAX_HOPS = 2;
 const CACHE_LIMIT = 500;
+/** Fetches in flight at once; the rest wait. A long Sources list can't fan out. */
+const MAX_CONCURRENT = 4;
 
 const cache = new Map<string, Promise<string | null>>();
 
@@ -40,14 +42,20 @@ export function isFetchableHost(host: string): boolean {
 const PRIVATE = new BlockList();
 for (const [net, bits] of [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
-  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3]
+  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3]
 ] as const) {
   PRIVATE.addSubnet(net, bits, 'ipv4');
 }
 // IPv4-mapped IPv6 (::ffff:a.b.c.d) is unwrapped and checked as IPv4 below
 // rather than listed here: BlockList matches plain IPv4 against a mapped
 // subnet too, which would refuse every IPv4 address.
-for (const [net, bits] of [['::', 127], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]] as const) {
+// ::/96 also covers the deprecated IPv4-compatible form; NAT64, 6to4 and
+// Teredo embed an IPv4 address that may well be private, so they go whole.
+for (const [net, bits] of [
+  ['::', 96], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['100::', 64], ['2001::', 32], ['2001:db8::', 32],
+  ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]
+] as const) {
   PRIVATE.addSubnet(net, bits, 'ipv6');
 }
 
@@ -124,9 +132,30 @@ function getOnce(url: URL): Promise<Hop> {
         res.on('error', () => resolve(null));
       }
     );
+    // `timeout` above is per idle gap; this is the whole request. A server
+    // dripping a byte a second would otherwise hold it open indefinitely.
+    const deadline = setTimeout(() => {
+      req.destroy();
+      resolve(null);
+    }, TIMEOUT_MS);
+    req.on('close', () => clearTimeout(deadline));
     req.on('timeout', () => req.destroy());
     req.on('error', () => resolve(null));
   });
+}
+
+let running = 0;
+const waiting: Array<() => void> = [];
+
+async function limited<T>(task: () => Promise<T>): Promise<T> {
+  if (running >= MAX_CONCURRENT) await new Promise<void>((go) => waiting.push(go));
+  running += 1;
+  try {
+    return await task();
+  } finally {
+    running -= 1;
+    waiting.shift()?.();
+  }
 }
 
 async function fetchIcon(host: string): Promise<string | null> {
@@ -149,7 +178,7 @@ export function faviconFor(host: string): Promise<string | null> {
   let hit = cache.get(h);
   if (!hit) {
     // quiet: a missing icon is the letter tile the panel already draws.
-    hit = fetchIcon(h).catch(() => null);
+    hit = limited(() => fetchIcon(h)).catch(() => null);
     cache.set(h, hit);
     if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
   }
