@@ -297,7 +297,8 @@ final class ThreadStore {
     // MARK: Actions
 
     /// Starts a turn. Returns false when the send failed and the draft should stay.
-    func send(text: String, attachments: [TurnAttachment], previews: [MessageAttachment],
+    /// The message shows before `upload` runs, so the bubble doesn't wait on the attachments.
+    func send(text: String, previews: [MessageAttachment], upload: () async throws -> [TurnAttachment],
               personaId: String?, private isPrivate: Bool) async -> Bool {
         let turnId = UUID().uuidString.lowercased()
         let localId = "local-\(turnId)"
@@ -307,7 +308,17 @@ final class ThreadStore {
         pendingTurnId = turnId
         activeTurnId = turnId
         running = true
-        activityLabel = "Sending"
+        activityLabel = previews.isEmpty ? "Sending" : "Uploading"
+        let attachments: [TurnAttachment]
+        do { attachments = try await upload() }
+        catch {
+            pendingTurnId = nil
+            messages.removeAll { $0.id == localId }
+            settleLocally()
+            self.error = error.localizedDescription
+            return false
+        }
+        if activityLabel == "Uploading" { activityLabel = "Sending" }
         let s = session.turnSettings()
         let input = StartTurnInput(
             input: text, threadId: threadId, turnId: turnId, model: s.model, effort: s.effort,

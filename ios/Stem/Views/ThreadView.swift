@@ -3,6 +3,7 @@ import SwiftUI
 /// A chat, or a new one when `threadId` is nil (it becomes a chat on first send).
 struct ThreadView: View {
     @Environment(Session.self) private var session
+    @Environment(\.scenePhase) private var phase
     @State private var store: ThreadStore
     @State private var draft: Draft
     @State private var draftKey: String
@@ -66,6 +67,12 @@ struct ThreadView: View {
         .refreshable { await store.reload() }
         .onAppear { store.open() }
         .onDisappear { store.close() }
+        // Anything that lands in the chat on screen is read: a title written
+        // after the first reply, a reply from another device. A chat marked
+        // unread on purpose stays unread.
+        .onChange(of: unreadOnScreen, initial: true) { _, unread in
+            if unread, let id = store.threadId { Task { await session.chats.setRead([id], true) } }
+        }
         .onChange(of: store.threadId) { old, new in
             // The new-chat draft moves to the chat it became.
             if old == nil, let new {
@@ -73,6 +80,13 @@ struct ThreadView: View {
                 draftKey = "chat:\(new)"
             }
         }
+    }
+
+    private var unreadOnScreen: Bool {
+        guard phase == .active, let id = store.threadId,
+              session.chats.inbox.entries[id]?.forcedUnread != true,
+              let row = session.chats.chats.first(where: { $0.threadId == id }) else { return false }
+        return session.chats.isUnread(row)
     }
 
     private var navTitle: String {
@@ -108,11 +122,10 @@ struct ThreadView: View {
     }
 
     private func send(_ text: String, _ files: [DraftAttachment]) async -> Bool {
-        let uploads: [TurnAttachment]
-        do { uploads = try await Uploads.upload(files, client: session.client) }
-        catch { store.error = error.localizedDescription; return false }
         let personaId = store.threadId == nil ? draft.personaId : nil
-        return await store.send(text: text, attachments: uploads, previews: files.map(\.preview),
+        let client = session.client
+        return await store.send(text: text, previews: files.map(\.preview),
+                                upload: { try await Uploads.upload(files, client: client) },
                                 personaId: personaId, private: draft.isPrivate)
     }
 

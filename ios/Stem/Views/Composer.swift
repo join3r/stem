@@ -294,7 +294,24 @@ struct Composer: View {
             return
         }
 
-        if await onSend(text, files) { clearDraft(keepingMeta: true) }
+        // The field empties at once; the message waits in the transcript while
+        // its attachments upload, and comes back here if the send fails.
+        let sent = draft
+        draft.text = ""
+        draft.attachments = []
+        if await onSend(text, files) {
+            files.forEach { $0.delete() }
+            var fresh = Draft()
+            fresh.personaId = draft.personaId
+            fresh.isPrivate = draft.isPrivate
+            fresh.to = draft.to
+            fresh.text = draft.text
+            fresh.attachments = draft.attachments
+            draft = fresh
+        } else {
+            draft.text = draft.text.isEmpty ? sent.text : sent.text + "\n" + draft.text
+            draft.attachments = sent.attachments + draft.attachments
+        }
     }
 
     private func clearDraft(keepingMeta: Bool) {
