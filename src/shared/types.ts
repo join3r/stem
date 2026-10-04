@@ -2667,6 +2667,25 @@ export interface Folder {
   parentId: string | null;
   /** Sort order among siblings. */
   order: number;
+  /** What belongs here, in the user's words. The idle-chat filer reads it beside the name. */
+  description?: string;
+  /**
+   * Idle chats may be filed into this folder (see server/chats/autofile.ts).
+   * Absent = off: a folder only receives chats once the user opts it in.
+   */
+  autoFile?: boolean;
+  /**
+   * Epoch ms. While set, only chats started at or after it are filed here — the
+   * folder takes new chats only. Cleared when the user asks for older chats too.
+   */
+  autoFileSince?: number;
+}
+
+/** What the folder settings dialog edits. */
+export interface FolderSettings {
+  name: string;
+  description: string;
+  autoFile: boolean;
 }
 
 /**
@@ -2960,14 +2979,6 @@ export interface ChatsSettings {
   subjectEffort: string | null;
   /** Lines of the latest message under each Inbox row: 0 (none), 1 or 2. */
   previewLines: 0 | 1 | 2;
-  /**
-   * File idle chats into folders: once a chat has sat untouched for a day, the
-   * subject writer's model picks one of the user's existing folders for it, or
-   * leaves it at root. Once per chat; never a chat the user placed themselves,
-   * a private chat, or a folder that doesn't exist yet. Absent (an older
-   * server) = on.
-   */
-  autoFile?: boolean;
 }
 
 /**
@@ -4351,8 +4362,15 @@ export interface StemApi {
   onPinsChanged(listener: (payload: { threadId: string }) => void): () => void;
   renameChat(threadId: string, name: string): Promise<void>;
   deleteChat(threadId: string): Promise<void>;
-  createFolder(name: string, parentId: string | null): Promise<ChatListResult>;
+  /** `settings` (name aside) is the folder settings dialog's answer; absent = a plain folder. */
+  createFolder(name: string, parentId: string | null, settings?: Omit<FolderSettings, 'name'>): Promise<ChatListResult>;
   renameFolder(folderId: string, name: string): Promise<ChatListResult>;
+  updateFolder(folderId: string, settings: FolderSettings): Promise<ChatListResult>;
+  /**
+   * Let an auto-filing folder take older chats too: every chat at root that has
+   * sat idle for a day is looked at once more, in the background.
+   */
+  includeOldChats(folderId: string): Promise<ChatListResult>;
   deleteFolder(folderId: string): Promise<ChatListResult>;
   moveFolder(folderId: string, parentId: string | null): Promise<ChatListResult>;
   setChatFolder(threadId: string, folderId: string | null): Promise<ChatListResult>;

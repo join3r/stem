@@ -112,6 +112,8 @@ const CHAT_LIST_CHANNELS = new Set([
   'inbox:markAllRead',
   'folders:create',
   'folders:rename',
+  'folders:update',
+  'folders:includeOldChats',
   'folders:delete',
   'folders:move'
 ]);

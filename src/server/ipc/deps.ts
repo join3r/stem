@@ -31,4 +31,6 @@ export interface IpcDeps {
   scheduleFolderIndexScan(delayMs?: number): void;
   /** Kick the folder fact-learning drain (e.g. right after a learn-mode change). */
   scheduleFolderLearn(delayMs?: number): void;
+  /** Ask the idle-chat filer for a sweep soon (a folder just asked for older chats). */
+  scheduleAutoFile(delayMs?: number): void;
 }

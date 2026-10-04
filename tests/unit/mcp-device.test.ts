@@ -364,7 +364,8 @@ describe('a call to a device, end to end', () => {
     onAuthenticated: () => Promise.reject(new Error('no sign-in here')),
     scheduleMemoryRebuild: () => undefined,
     scheduleFolderIndexScan: () => undefined,
-    scheduleFolderLearn: () => undefined
+    scheduleFolderLearn: () => undefined,
+    scheduleAutoFile: () => undefined
   };
 
   beforeAll(async () => {

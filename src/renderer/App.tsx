@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Lock, MailPlus, SquarePen, PanelRight } from 'lucide-react';
 import type {
+  FolderSettings,
   AppSettings,
   AuthProviderId,
   ChatListResult,
@@ -1198,9 +1199,36 @@ export default function App() {
 
   // Folder mutations return the fresh list; apply it (through the guard that
   // re-applies any optimistic inbox patches still in flight).
+  // The create answer is the whole list, not the new folder, so the id is
+  // picked out by what is new: the one folder of that name under that parent the
+  // list didn't have before. Another client making the same folder in the same
+  // instant leaves two candidates, and null skips the follow-up question.
+  const knownFolderIds = useRef<Set<string>>(new Set());
+  knownFolderIds.current = new Set(chatList.folders.map((f) => f.id));
   const onCreateFolder = useCallback(
-    (name: string, parentId: string | null) => {
-      window.stem.createFolder(name, parentId).then(applyServerList);
+    async (settings: FolderSettings, parentId: string | null): Promise<string | null> => {
+      const before = knownFolderIds.current;
+      const list = await window.stem.createFolder(settings.name, parentId, {
+        description: settings.description,
+        autoFile: settings.autoFile
+      });
+      applyServerList(list);
+      const added = list.folders.filter(
+        (f) => !before.has(f.id) && f.parentId === parentId && f.name === settings.name.trim()
+      );
+      return added.length === 1 ? added[0].id : null;
+    },
+    [applyServerList]
+  );
+  const onUpdateFolder = useCallback(
+    async (folderId: string, settings: FolderSettings) => {
+      applyServerList(await window.stem.updateFolder(folderId, settings));
+    },
+    [applyServerList]
+  );
+  const onIncludeOldChats = useCallback(
+    (folderId: string) => {
+      window.stem.includeOldChats(folderId).then(applyServerList);
     },
     [applyServerList]
   );
@@ -1824,6 +1852,8 @@ export default function App() {
               onNewChat={newConversation}
               onCreateFolder={onCreateFolder}
               onRenameFolder={onRenameFolder}
+              onUpdateFolder={onUpdateFolder}
+              onIncludeOldChats={onIncludeOldChats}
               onDeleteFolder={onDeleteFolder}
               onMoveFolder={onMoveFolder}
               onRenameChat={onRenameChat}

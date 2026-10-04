@@ -31,7 +31,8 @@ const deps = {
   sendToMain: () => undefined,
   scheduleMemoryRebuild: () => undefined,
   scheduleFolderIndexScan: () => undefined,
-  scheduleFolderLearn: () => undefined
+  scheduleFolderLearn: () => undefined,
+  scheduleAutoFile: () => undefined
 } as unknown as IpcDeps;
 
 let dir: string;

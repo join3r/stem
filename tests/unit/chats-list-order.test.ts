@@ -37,7 +37,8 @@ const deps = {
   onAuthenticated: async () => ({}) as never,
   scheduleMemoryRebuild: () => {},
   scheduleFolderIndexScan: () => {},
-  scheduleFolderLearn: () => {}
+  scheduleFolderLearn: () => {},
+  scheduleAutoFile: () => {}
 } as IpcDeps;
 
 const inboxPath = inboxStorePath();

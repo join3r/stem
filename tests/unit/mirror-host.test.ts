@@ -87,7 +87,8 @@ beforeEach(async () => {
     onAuthenticated: () => Promise.reject(new Error('not needed')),
     scheduleMemoryRebuild: () => {},
     scheduleFolderIndexScan: () => {},
-    scheduleFolderLearn: () => {}
+    scheduleFolderLearn: () => {},
+    scheduleAutoFile: () => {}
   } as IpcDeps);
   host = createMirrorHost({
     invoke: (channel, args) => dispatchLocal(channel, args, { deviceId: macId }),

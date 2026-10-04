@@ -88,7 +88,7 @@ const DEFAULTS: ServerSettings = {
   // keeps one name per thread (list, search, window title all agree); a name the
   // user typed is never overwritten in any mode. Two preview lines under each
   // Inbox row, which is what makes the list readable without opening anything.
-  chats: { subjects: 'everywhere', subjectModel: null, subjectEffort: null, previewLines: 2, autoFile: true },
+  chats: { subjects: 'everywhere', subjectModel: null, subjectEffort: null, previewLines: 2 },
   // Scheduled tasks: a run that calls notify_user takes the screen by default —
   // the watch tasks this was built for ("tell me when the build goes red") are
   // worth an interruption, and a native OS notification was judged too easy to
@@ -462,10 +462,7 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
     previewLines:
       rawChats.previewLines === 0 || rawChats.previewLines === 1 || rawChats.previewLines === 2
         ? rawChats.previewLines
-        : DEFAULTS.chats.previewLines,
-    // Only an explicit false turns it off: a file from before the setting
-    // existed gets the default, like subjects above.
-    autoFile: rawChats.autoFile !== false
+        : DEFAULTS.chats.previewLines
   };
   const rawTasks = (parsed?.tasks ?? {}) as Partial<TasksSettings>;
   const tasks: TasksSettings = {
@@ -831,7 +828,7 @@ export function updateSkillsSettings(patch: Partial<SkillsSettings>): Promise<Se
   });
 }
 
-/** Patch the Chats panel settings (subject mode/model, preview lines, idle-chat filing) and persist. */
+/** Patch the Chats panel settings (subject mode/model, preview lines) and persist. */
 export function updateChatsSettings(patch: Partial<ChatsSettings>): Promise<ServerSettings> {
   return enqueue(async () => {
     const cur = await readForUpdate();

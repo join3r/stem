@@ -18,6 +18,7 @@ import type {
   ChatSearchHit,
   ChatSummary,
   Folder,
+  FolderSettings,
   MailListResult,
   Persona,
   ThreadStatus
@@ -28,6 +29,7 @@ import { stripCiteMarkers } from '../../shared/citations';
 import { Kbd, glyphsFor, runKeyGlyphs, useShortcut, useShortcutHintMode, type ShortcutId } from '../shortcuts';
 import { MailList } from '../mail/MailList';
 import type { ReturnChatRow } from './return-chat';
+import { FolderSettingsDialog, IncludeOldChatsDialog } from './FolderSettingsDialog';
 
 export interface ChatListProps {
   data: ChatListResult;
@@ -51,8 +53,12 @@ export interface ChatListProps {
   onOpen: (threadId: string) => void;
   /** Open a fresh draft targeted at this folder (null = root). */
   onNewChat: (folderId: string | null) => void;
-  onCreateFolder: (name: string, parentId: string | null) => void;
+  /** Answers the new folder's id, or null when it couldn't be told apart. */
+  onCreateFolder: (settings: FolderSettings, parentId: string | null) => Promise<string | null>;
   onRenameFolder: (folderId: string, name: string) => void;
+  onUpdateFolder: (folderId: string, settings: FolderSettings) => Promise<void>;
+  /** Let an auto-filing folder take the idle chats already at root too. */
+  onIncludeOldChats: (folderId: string) => void;
   onDeleteFolder: (folderId: string) => void;
   onMoveFolder: (folderId: string, parentId: string | null) => void;
   onRenameChat: (threadId: string, name: string) => void;
@@ -169,7 +175,8 @@ const STATUS_LABEL: Record<ThreadStatus, string> = {
 
 /** `initial` is the name the row had when editing began: committing it unchanged is a no-op, not a rename. */
 type Editing = { kind: 'chat' | 'folder'; id: string; value: string; initial: string };
-type Creating = { parentId: string | null; value: string };
+/** The folder settings dialog: making a folder (under `parentId`) or editing one. */
+type FolderDialog = { mode: 'create'; parentId: string | null } | { mode: 'edit'; folderId: string };
 type Menu =
   | { kind: 'chat'; id: string; x: number; y: number }
   | { kind: 'folder'; id: string; x: number; y: number };
@@ -178,7 +185,9 @@ export function ChatList(props: ChatListProps) {
   const { data, activeThreadId, onOpen, chatsTab: tab, onChatsTabChange: setTab, inboxReturn } = props;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<Editing | null>(null);
-  const [creating, setCreating] = useState<Creating | null>(null);
+  const [folderDialog, setFolderDialog] = useState<FolderDialog | null>(null);
+  // Auto-filing was just switched on for this folder: ask about the chats already at root.
+  const [askOldChats, setAskOldChats] = useState<{ id: string; name: string } | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -388,11 +397,18 @@ export function ChatList(props: ChatListProps) {
     }
     setEditing(null);
   };
-  const commitCreate = () => {
-    if (!creating) return;
-    const value = creating.value.trim();
-    if (value) props.onCreateFolder(value, creating.parentId);
-    setCreating(null);
+  const saveFolderDialog = async (settings: FolderSettings) => {
+    const dialog = folderDialog;
+    if (!dialog) return;
+    setFolderDialog(null);
+    if (dialog.mode === 'create') {
+      const id = await props.onCreateFolder(settings, dialog.parentId);
+      if (id && settings.autoFile) setAskOldChats({ id, name: settings.name });
+      return;
+    }
+    const wasOn = data.folders.find((f) => f.id === dialog.folderId)?.autoFile === true;
+    await props.onUpdateFolder(dialog.folderId, settings);
+    if (settings.autoFile && !wasOn) setAskOldChats({ id: dialog.folderId, name: settings.name });
   };
 
   const editInput = (value: string, onChange: (v: string) => void, onCommit: () => void) => (
@@ -404,10 +420,7 @@ export function ChatList(props: ChatListProps) {
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         if (e.key === 'Enter') onCommit();
-        if (e.key === 'Escape') {
-          setEditing(null);
-          setCreating(null);
-        }
+        if (e.key === 'Escape') setEditing(null);
       }}
       onBlur={onCommit}
     />
@@ -470,7 +483,6 @@ export function ChatList(props: ChatListProps) {
           <>
             {childFolders(folder.id).map((f) => renderFolder(f, depth + 1))}
             {folderChats(folder.id).map((c) => renderChat(c, depth + 1))}
-            {creating && creating.parentId === folder.id && renderCreateRow(depth + 1)}
           </>
         )}
       </div>
@@ -549,18 +561,6 @@ export function ChatList(props: ChatListProps) {
       </div>
     );
   };
-
-  const renderCreateRow = (depth: number) =>
-    creating && (
-      <div className="group-row" style={{ paddingLeft: 12 + depth * 14 }}>
-        <span className="row-icon folder">
-          <FolderIcon size={14} />
-        </span>
-        <span className="row-main">
-          {editInput(creating.value, (v) => setCreating({ ...creating, value: v }), commitCreate)}
-        </span>
-      </div>
-    );
 
   // Flat, ranked search results replace the tree while a search is active. Rows reuse
   // the chat-row look but carry a why-it-matched snippet and skip drag/drop (there is
@@ -679,7 +679,7 @@ export function ChatList(props: ChatListProps) {
             <button
               className="grp-head-add"
               title="New folder"
-              onClick={() => setCreating({ parentId: null, value: '' })}
+              onClick={() => setFolderDialog({ mode: 'create', parentId: null })}
             >
               <FolderPlus size={14} />
             </button>
@@ -759,7 +759,7 @@ export function ChatList(props: ChatListProps) {
           renderResults()
         ) : tab === 'chats' ? (
           <>
-            {isEmpty && !creating && (
+            {isEmpty && (
               <div className="group-row">
                 <span className="row-main">
                   <em>No chats yet — start a conversation.</em>
@@ -784,7 +784,6 @@ export function ChatList(props: ChatListProps) {
               }
               return rows;
             })()}
-            {creating && creating.parentId === null && renderCreateRow(0)}
           </>
         ) : (
           <MailList
@@ -809,12 +808,22 @@ export function ChatList(props: ChatListProps) {
           {menu.kind === 'folder' && (
             <button
               onClick={() => {
-                setCreating({ parentId: menu.id, value: '' });
+                setFolderDialog({ mode: 'create', parentId: menu.id });
                 setExpanded((prev) => new Set(prev).add(menu.id));
                 closeMenu();
               }}
             >
               <FolderPlus size={13} /> New subfolder
+            </button>
+          )}
+          {menu.kind === 'folder' && (
+            <button
+              onClick={() => {
+                setFolderDialog({ mode: 'edit', folderId: menu.id });
+                closeMenu();
+              }}
+            >
+              Settings…
             </button>
           )}
           {menu.kind === 'chat' &&
@@ -895,6 +904,32 @@ export function ChatList(props: ChatListProps) {
             </>
           )}
         </div>
+      )}
+      {folderDialog &&
+        (() => {
+          const folder = folderDialog.mode === 'edit' ? data.folders.find((f) => f.id === folderDialog.folderId) : null;
+          if (folderDialog.mode === 'edit' && !folder) return null;
+          return (
+            <FolderSettingsDialog
+              mode={folderDialog.mode}
+              initial={{
+                name: folder?.name ?? '',
+                description: folder?.description ?? '',
+                autoFile: folder?.autoFile === true
+              }}
+              onSave={(settings) => void saveFolderDialog(settings)}
+              onCancel={() => setFolderDialog(null)}
+            />
+          );
+        })()}
+      {askOldChats && (
+        <IncludeOldChatsDialog
+          folderName={askOldChats.name}
+          onAnswer={(includeOld) => {
+            if (includeOld) props.onIncludeOldChats(askOldChats.id);
+            setAskOldChats(null);
+          }}
+        />
       )}
     </div>
   );

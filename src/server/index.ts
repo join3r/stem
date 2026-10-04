@@ -201,6 +201,7 @@ let lastInteractiveAt = 0;
 const USER_ACTIVE_WINDOW_MS = 2 * 60 * 1000;
 let scheduleMemoryRebuild: () => void = () => {};
 let scheduleFolderIndexScan: (delayMs?: number) => void = () => {};
+let scheduleAutoFile: (delayMs?: number) => void = () => {};
 let scheduleFolderLearn: (delayMs?: number) => void = () => {};
 // Late-bound by initRecallTasks; initSkills (wired earlier in boot) closes over it.
 let scheduleCurateAfterCreate: (() => void) | null = null;
@@ -389,6 +390,7 @@ function registerIpc(): void {
     onAuthenticated,
     scheduleMemoryRebuild: () => scheduleMemoryRebuild(),
     scheduleFolderIndexScan: (delayMs) => scheduleFolderIndexScan(delayMs),
+    scheduleAutoFile: (delayMs) => scheduleAutoFile(delayMs),
     scheduleFolderLearn: (delayMs) => scheduleFolderLearn(delayMs)
   };
   registerAuthIpc(deps);
@@ -1020,12 +1022,12 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   scheduleFolderIndexScan = folderIndexTasks.scheduleFolderIndexScan;
   scheduleFolderLearn = folderIndexTasks.scheduleFolderLearn;
 
-  // Filing idle chats into the user's folders (Settings → App). Off under
+  // Filing idle chats into the folders switched on for it. Off under
   // STEM_E2E unless a spec asks for it with STEM_AUTOFILE=1: a sweep moving
   // chats between folders behind a spec's back would make folder specs flaky.
   // See startup/autofile-tasks.ts.
   if (!E2E || process.env.STEM_AUTOFILE === '1') {
-    initAutoFileTasks({
+    scheduleAutoFile = initAutoFileTasks({
       runtime: () => runtime!,
       busyWithin,
       listChats: async () => (await chatListOf({ runtime: () => runtime!, scheduler: () => scheduler })).chats,

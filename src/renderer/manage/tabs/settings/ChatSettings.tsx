@@ -107,29 +107,6 @@ export function ConversationSections({ models }: { models: ModelSummary[] }) {
         <ValueRow
           label={
             <>
-              File idle chats into folders{' '}
-              <InfoTip label="About filing idle chats">
-                Once a chat has sat untouched for a day, Stem moves it into one of your folders if one
-                clearly fits, and otherwise leaves it where it is. It only uses folders you made, looks
-                at each chat once, and never moves a chat you placed yourself or a private chat. To
-                undo a move, drag the chat back — it stays wherever you put it. Runs on the same
-                model as subjects, under Models.
-              </InfoTip>
-            </>
-          }
-        >
-          <input
-            type="checkbox"
-            className="vcheck"
-            aria-label="File idle chats into folders"
-            // Absent on an older server = its default, on.
-            checked={chats ? chats.autoFile !== false : true}
-            onChange={(e) => updateChats({ autoFile: e.target.checked })}
-          />
-        </ValueRow>
-        <ValueRow
-          label={
-            <>
               Preview lines in the Inbox{' '}
               <InfoTip label="About preview lines">
                 How much of the newest message each Inbox row shows underneath its subject. The Chats

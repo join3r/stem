@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
+  FolderSettings,
   ActivitySnapshot,
   ApprovalResolvedPayload,
   ApiKeyProviderId,
@@ -356,8 +357,11 @@ const api: StemApi = {
   reorderPins: (threadId: string, pinIds: string[]) => ipcRenderer.invoke('pins:reorder', threadId, pinIds),
   renameChat: (threadId: string, name: string) => ipcRenderer.invoke('chats:rename', threadId, name),
   deleteChat: (threadId: string) => ipcRenderer.invoke('chats:delete', threadId),
-  createFolder: (name: string, parentId: string | null) => ipcRenderer.invoke('folders:create', name, parentId),
+  createFolder: (name: string, parentId: string | null, settings?: Omit<FolderSettings, 'name'>) =>
+    ipcRenderer.invoke('folders:create', name, parentId, settings ?? null),
   renameFolder: (folderId: string, name: string) => ipcRenderer.invoke('folders:rename', folderId, name),
+  updateFolder: (folderId: string, settings: FolderSettings) => ipcRenderer.invoke('folders:update', folderId, settings),
+  includeOldChats: (folderId: string) => ipcRenderer.invoke('folders:includeOldChats', folderId),
   deleteFolder: (folderId: string) => ipcRenderer.invoke('folders:delete', folderId),
   moveFolder: (folderId: string, parentId: string | null) => ipcRenderer.invoke('folders:move', folderId, parentId),
   setChatFolder: (threadId: string, folderId: string | null) =>

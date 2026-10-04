@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
-import type { Folder } from '../../shared/types';
+import type { Folder, FolderSettings } from '../../shared/types';
 import { degrade } from '../degrade';
 import { chatStorePath } from './paths';
 
@@ -40,6 +40,12 @@ interface ChatStore {
    * never auto-filed again, whatever the entry says.
    */
   filing: Record<string, FilingMark>;
+  /**
+   * Chats the filer is to look at once more although they carry a mark: the
+   * user asked a folder to take older chats too (see {@link queueRefile}).
+   * Each entry goes as soon as the chat gets its new verdict.
+   */
+  refile: Record<string, true>;
 }
 
 export type FilingMark = 'user' | 'auto' | 'none';
@@ -57,7 +63,7 @@ export interface NamingState {
 }
 
 function emptyStore(): ChatStore {
-  return { version: 1, folders: [], assignments: {}, subjects: {}, naming: {}, private: {}, filing: {} };
+  return { version: 1, folders: [], assignments: {}, subjects: {}, naming: {}, private: {}, filing: {}, refile: {} };
 }
 
 /** Keep only string→string pairs; a hand-edited file can hold anything. */
@@ -90,7 +96,8 @@ async function loadStore(): Promise<ChatStore> {
     subjects: coerceMap(parsed.subjects),
     naming: coerceNaming(parsed.naming),
     private: coercePrivate(parsed.private),
-    filing: coerceFiling(parsed.filing)
+    filing: coerceFiling(parsed.filing),
+    refile: coercePrivate(parsed.refile)
   };
 }
 
@@ -104,7 +111,7 @@ function coerceFiling(raw: unknown): Record<string, FilingMark> {
   return out;
 }
 
-/** Keep only `threadId: true` entries; anything else in a hand-edited file is dropped. */
+/** Keep only `threadId: true` entries (the private and refile maps); anything else in a hand-edited file is dropped. */
 function coercePrivate(raw: unknown): Record<string, true> {
   if (!raw || typeof raw !== 'object') return {};
   const out: Record<string, true> = {};
@@ -274,16 +281,70 @@ export function bumpNaming(threadId: string, fallbackStep: number): Promise<Nami
   });
 }
 
-export function createFolder(name: string, parentId: string | null): Promise<Folder[]> {
+/**
+ * Write a folder's description and auto-filing switch. Turning filing on starts
+ * the folder on new chats only (`autoFileSince` = now); older chats come in only
+ * through {@link queueRefile}, which the user asks for separately.
+ */
+function applySettings(folder: Folder, settings: Omit<FolderSettings, 'name'>, nowMs: number): void {
+  const description = settings.description.trim();
+  if (description) folder.description = description;
+  else delete folder.description;
+  if (settings.autoFile && !folder.autoFile) {
+    folder.autoFile = true;
+    folder.autoFileSince = nowMs;
+  } else if (!settings.autoFile) {
+    delete folder.autoFile;
+    delete folder.autoFileSince;
+  }
+}
+
+export function createFolder(
+  name: string,
+  parentId: string | null,
+  settings?: Omit<FolderSettings, 'name'>
+): Promise<Folder[]> {
   return update((store) => {
     const validParent = parentId && store.folders.some((f) => f.id === parentId) ? parentId : null;
-    store.folders.push({
+    const folder: Folder = {
       id: randomUUID(),
       name: name.trim() || 'New folder',
       parentId: validParent,
       order: nextOrder(store.folders, validParent)
-    });
+    };
+    if (settings) applySettings(folder, settings, Date.now());
+    store.folders.push(folder);
     return store.folders;
+  });
+}
+
+/** The folder settings dialog's Save. A blank name keeps the old one, as a rename does. */
+export function updateFolder(folderId: string, settings: FolderSettings): Promise<Folder[]> {
+  return update((store) => {
+    const folder = store.folders.find((f) => f.id === folderId);
+    if (!folder) return store.folders;
+    folder.name = settings.name.trim() || folder.name;
+    applySettings(folder, settings, Date.now());
+    return store.folders;
+  });
+}
+
+/**
+ * "Move older chats too": the folder drops its new-chats-only floor, and the
+ * given chats are queued for one more look — `threadIds` is the caller's pick of
+ * idle chats at root. Under the lock it keeps only those still at root and not
+ * placed by the user, so a chat moved meanwhile is left alone. A folder that is
+ * gone or not filing queues nothing.
+ */
+export function queueRefile(folderId: string, threadIds: string[]): Promise<void> {
+  return update((store) => {
+    const folder = store.folders.find((f) => f.id === folderId);
+    if (!folder?.autoFile) return;
+    delete folder.autoFileSince;
+    for (const threadId of threadIds) {
+      if (store.assignments[threadId] || store.filing[threadId] === 'user' || store.private[threadId]) continue;
+      store.refile[threadId] = true;
+    }
   });
 }
 
@@ -356,13 +417,15 @@ export async function getFilingState(): Promise<{
   assignments: Record<string, string>;
   filing: Record<string, FilingMark>;
   private: Set<string>;
+  refile: Set<string>;
 }> {
   const store = await readStore();
   return {
     folders: store.folders,
     assignments: store.assignments,
     filing: store.filing,
-    private: new Set(Object.keys(store.private))
+    private: new Set(Object.keys(store.private)),
+    refile: new Set(Object.keys(store.refile))
   };
 }
 
@@ -371,12 +434,17 @@ export async function getFilingState(): Promise<{
  * root with `null`. Re-checks everything under the write lock, because the model
  * call before it took seconds and the user may have moved the chat meanwhile —
  * a chat that has since gained an assignment or a filing mark, or a folder that
- * has since gone, is left exactly as it is. Returns true when the chat moved.
+ * has since gone or been switched off, is left exactly as it is. A chat queued for another look
+ * (`refile`) may carry a filer mark; only the user's mark still stops it.
+ * Returns true when the chat moved.
  */
 export function autoFileChat(threadId: string, folderId: string | null): Promise<boolean> {
   return update((store) => {
-    if (store.filing[threadId] || store.assignments[threadId]) return false;
-    if (folderId !== null && store.folders.some((f) => f.id === folderId)) {
+    const requeued = store.refile[threadId] === true;
+    delete store.refile[threadId];
+    if (store.assignments[threadId]) return false;
+    if (store.filing[threadId] && !(requeued && store.filing[threadId] !== 'user')) return false;
+    if (folderId !== null && store.folders.some((f) => f.id === folderId && f.autoFile)) {
       store.assignments[threadId] = folderId;
       store.filing[threadId] = 'auto';
       return true;
@@ -394,5 +462,6 @@ export function removeChat(threadId: string): Promise<void> {
     delete store.naming[threadId];
     delete store.private[threadId];
     delete store.filing[threadId];
+    delete store.refile[threadId];
   });
 }

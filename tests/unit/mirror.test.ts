@@ -137,7 +137,8 @@ describe('the mirror channels are caller-scoped', () => {
       onAuthenticated: () => Promise.reject(new Error('not needed')),
       scheduleMemoryRebuild: () => {},
       scheduleFolderIndexScan: () => {},
-      scheduleFolderLearn: () => {}
+      scheduleFolderLearn: () => {},
+      scheduleAutoFile: () => {}
     } as IpcDeps);
 
     await addClientFolder({ deviceId: macId, clientPath: '/Users/v/notes' });

@@ -13,11 +13,15 @@ import {
   getPrivateChats,
   getSubjects,
   listFolders,
+  getFilingState,
   moveFolder,
+  queueRefile,
   removeChat,
   renameFolder,
-  setChatFolder
+  setChatFolder,
+  updateFolder
 } from '../workspace/chats';
+import { IDLE_MS } from '../chats/autofile';
 import {
   markAllRead,
   noteSilentRun,
@@ -31,7 +35,7 @@ import { listedUpdatedAt, toMs } from '../../shared/inbox';
 import { mailSessionThreadIds } from '../workspace/mail';
 import { memoryRunOf } from '../workspace/settings';
 import type { LlmClient } from '../recall/llm';
-import type { ChatListResult } from '../../shared/types';
+import type { ChatListResult, FolderSettings } from '../../shared/types';
 
 /**
  * Chats + chat folders. Chats come from the backend's thread store;
@@ -239,8 +243,28 @@ export function registerChatsIpc(deps: IpcDeps): void {
     return chatList();
   });
 
-  registerServer('folders:create', async (_e, name: string, parentId: string | null) => {
-    await createFolder(name, parentId);
+  registerServer(
+    'folders:create',
+    async (_e, name: string, parentId: string | null, settings?: Omit<FolderSettings, 'name'> | null) => {
+      await createFolder(name, parentId, settings ? folderSettingsOf({ name, ...settings }) : undefined);
+      return chatList();
+    }
+  );
+  registerServer('folders:update', async (_e, folderId: string, settings: FolderSettings) => {
+    await updateFolder(folderId, folderSettingsOf(settings));
+    return chatList();
+  });
+  // "Move older chats too": every chat at root that has sat idle for a day gets
+  // one more look, whatever an earlier sweep decided — except chats the user
+  // placed, which queueRefile skips under the lock.
+  registerServer('folders:includeOldChats', async (_e, folderId: string) => {
+    const [list, state] = await Promise.all([chatList(), getFilingState()]);
+    const idleBefore = Date.now() - IDLE_MS;
+    const idle = list.chats
+      .filter((c) => c.folderId === null && !c.private && toMs(c.updatedAt) <= idleBefore && state.filing[c.threadId] !== 'user')
+      .map((c) => c.threadId);
+    await queueRefile(folderId, idle);
+    deps.scheduleAutoFile();
     return chatList();
   });
   registerServer('folders:rename', async (_e, folderId: string, name: string) => {
@@ -255,4 +279,13 @@ export function registerChatsIpc(deps: IpcDeps): void {
     await moveFolder(folderId, parentId);
     return chatList();
   });
+}
+
+/** The dialog's answer as a typed shape: the guard checked it is an object, not what is in it. */
+function folderSettingsOf(raw: FolderSettings): FolderSettings {
+  return {
+    name: typeof raw.name === 'string' ? raw.name : '',
+    description: typeof raw.description === 'string' ? raw.description.slice(0, 2_000) : '',
+    autoFile: raw.autoFile === true
+  };
 }
