@@ -1817,6 +1817,8 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .mcp-list .task-head .row-main em.mcp-failed { font-family: inherit; }
 /* The switch sits on the title line, as tall as it. */
 .mcp-list .task-head .switch { margin-top: 1px; }
+/* The dot is centred on the switch beside it (1px + 21px / 2), not pinned to the row's top. */
+.mcp-list .task-head .mcp-dot { margin-top: 7.5px; }
 /* The editor a server row expands into — the persona editor's shell. */
 .mcp-editor { display: flex; flex-direction: column; gap: var(--sp-3); padding-left: var(--sp-1); }
 .mcp-editor .vfield {

@@ -988,9 +988,10 @@ function McpTab() {
               {dirty && !isOpen ? ' · unsaved' : ''}
             </em>
           </span>
-          {/* One slot, one vocabulary: a dot when the row is being told
-              something, a sign-in button when this machine is being asked for
-              something, nothing when there is nothing true to say. */}
+          {/* One slot, one vocabulary: a dot when something is wrong or still
+              starting, a sign-in button when this machine is being asked for
+              something, nothing when the server is simply running — a healthy
+              row is the normal case and needs no mark. */}
           {state === 'needs-login' ? (
             <button
               className="icon-action sm"
@@ -1001,11 +1002,11 @@ function McpTab() {
             >
               <LogIn size={14} />
             </button>
-          ) : state === 'connected' || state === 'pending' || state === 'failed' ? (
+          ) : state === 'pending' || state === 'failed' ? (
             <span
-              className={`mcp-dot${state === 'pending' ? ' pending' : ''}${state === 'failed' ? ' failed' : ''}`}
+              className={`mcp-dot ${state}`}
               title={stateTitle(s, state)}
-              aria-label={state === 'failed' ? 'Not running' : state === 'pending' ? 'Starting' : 'Running'}
+              aria-label={state === 'failed' ? 'Not running' : 'Starting'}
             />
           ) : null}
           <button
