@@ -378,6 +378,9 @@ export async function writeTurnContextGate(
     computer?: boolean;
     computerChoose?: boolean;
     computerRefusal?: string | null;
+    browser?: boolean;
+    browserChoose?: boolean;
+    browserRefusal?: string | null;
     recall: boolean;
     relay: boolean;
     imageGen?: boolean;
@@ -415,6 +418,10 @@ export async function writeTurnContextGate(
         computer: ctx.computer === true,
         computerChoose: ctx.computerChoose === true,
         computerRefusal: ctx.computerRefusal ?? null,
+        // `browser`: the same trio for the `browser` tool.
+        browser: ctx.browser === true,
+        browserChoose: ctx.browserChoose === true,
+        browserRefusal: ctx.browserRefusal ?? null,
         recall: ctx.recall,
         relay: ctx.relay,
         // `imageGen`: whether generate_image is offered this turn (the bridge

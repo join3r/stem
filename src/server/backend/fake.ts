@@ -3,6 +3,7 @@ import { deflateSync } from 'node:zlib';
 import type {
   ApprovalId,
   ChatBackend,
+  BrowserBridge,
   ComputerBridge,
   ExecBridge,
   HarnessBridge,
@@ -442,6 +443,9 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
 
   /** Accepted and ignored: no scripted turn calls `computer`. */
   setComputerBridge(_bridge: ComputerBridge | null): void {}
+
+  /** Accepted and ignored: no scripted turn calls `browser`. */
+  setBrowserBridge(_bridge: BrowserBridge | null): void {}
 
   // ---- scripted turn execution ----
 

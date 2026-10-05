@@ -1,5 +1,6 @@
 import { createAgentRegistry } from 'acpx/runtime';
 import { harnessDeviceRouter } from './device-host';
+import { browserDeviceRouter } from '../browser-device/router';
 import { computerDeviceRouter } from '../computer-device/router';
 import { connectedDeviceIds } from '../startup/transport';
 import { readDevices } from '../transport/auth';
@@ -54,4 +55,15 @@ export async function computerChoicesText(): Promise<string> {
         'A Mac marked NOT connected cannot be driven until it is awake with Stem running — say so instead of trying it.'
     : 'The computer tool in this chat: no Mac lets Stem control it right now (each one switches it on under ' +
         'Settings → Features → Computer control, on that Mac). Tell the user that instead of trying.';
+}
+
+/** The per-turn block for a chat whose browser Mac the model names. */
+export async function browserChoicesText(): Promise<string> {
+  // quiet: same as computerChoicesText — an unreadable store names no Mac, and the model says so.
+  const macs = await browserDeviceRouter().hosts().then(listed).catch(() => [] as string[]);
+  return macs.length
+    ? `The browser tool in this chat: name the Mac in \`device\`. Macs that let Stem drive their browser: ${macs.join(', ')}. ` +
+        'A Mac marked NOT connected cannot be driven until it is awake with Stem running — say so instead of trying it.'
+    : 'The browser tool in this chat: no Mac lets Stem drive its browser right now (each one switches it on under ' +
+        'Settings → Features → Browser control, on that Mac). Tell the user that instead of trying.';
 }

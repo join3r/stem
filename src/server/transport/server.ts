@@ -258,7 +258,7 @@ export interface TransportServerOptions {
    * second check written here is a second check that can disagree with the one
    * the `files:*` channels already enforce. Omitted = no /files route.
    */
-  openDownload?(rel: string): Promise<DownloadTarget | null>;
+  openDownload?(rel: string, deviceId: string): Promise<DownloadTarget | null>;
   /**
    * What is happening right now, handed to every client the moment its stream
    * opens. Whatever this returns is sent verbatim as the `snapshot` control
@@ -820,7 +820,7 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
       sendJson(res, 400, { ok: false, error: 'that is not a valid file path' });
       return;
     }
-    const target = await opts.openDownload(rel);
+    const target = await opts.openDownload(rel, gated.device.id);
     if (!target) {
       // Deliberately the same answer for "no such file" and "not yours": a 403
       // would confirm that something is there, which is the one thing a caller

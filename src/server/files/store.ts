@@ -5,7 +5,7 @@
 // read tools reach these files because the folder is inside its cwd.
 
 import { constants } from 'node:fs';
-import { copyFile, mkdir, readdir, realpath, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve, sep } from 'node:path';
 import type { FileEntry, FilesListing } from '../../shared/types';
 import { degrade } from '../degrade';
@@ -74,14 +74,30 @@ let seq = 0;
  * COPYFILE_EXCL makes reserving the destination and copying one atomic
  * operation from the perspective of concurrent addFiles calls.
  */
-async function copyToUniquePath(src: string, dir: string, name: string): Promise<void> {
+export async function copyToUniquePath(src: string, dir: string, name: string): Promise<string> {
   const ext = extname(name);
   const stem = basename(name, ext);
   for (let i = 0; ; i++) {
     const candidate = join(dir, i === 0 ? name : `${stem}-${i}${ext}`);
     try {
       await copyFile(src, candidate, constants.COPYFILE_EXCL);
-      return;
+      return candidate;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
+      throw error;
+    }
+  }
+}
+
+/** The same, for bytes in memory: the `wx` flag reserves the name and writes in one step. */
+export async function writeToUniquePath(bytes: Buffer, dir: string, name: string): Promise<string> {
+  const ext = extname(name);
+  const stem = basename(name, ext);
+  for (let i = 0; ; i++) {
+    const candidate = join(dir, i === 0 ? name : `${stem}-${i}${ext}`);
+    try {
+      await writeFile(candidate, bytes, { flag: 'wx' });
+      return candidate;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
       throw error;

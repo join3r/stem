@@ -43,6 +43,7 @@ export async function personaTurnFields(persona: Persona, opts: { notes?: boolea
       prompt: persona.prompt,
       ...(persona.harness ? { harness: persona.harness } : {}),
       ...(persona.computer ? { computer: persona.computer } : {}),
+      ...(persona.browser ? { browser: persona.browser } : {}),
       ...(notes ? { notes } : {}),
       ...(answers ? { answers } : {}),
       ...(persona.recall === false ? { recall: false as const } : {}),

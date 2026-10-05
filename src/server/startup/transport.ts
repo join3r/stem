@@ -1,6 +1,7 @@
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import { readableFilePath } from '../files/store';
+import { OUTBOX_PREFIX, outboxTake } from '../files/outbox';
 import { liveTurnSnapshot } from '../live-turns';
 import { stageUpload, startStagingSweeper, stopStagingSweeper } from '../files/staging';
 import { dispatchLocal, serverChannels } from '../ipc/guard';
@@ -129,7 +130,10 @@ function trustedHosts(): string[] {
  * construction one the Files panel already lists. A second containment check
  * written here would be a second check that could disagree with that one.
  */
-export async function resolveDownload(rel: string): Promise<DownloadTarget | null> {
+export async function resolveDownload(rel: string, deviceId?: string): Promise<DownloadTarget | null> {
+  // A file the server put in this device's outbox (a browser upload): single
+  // use and bound to the caller, see files/outbox.ts.
+  if (rel.startsWith(OUTBOX_PREFIX)) return deviceId ? outboxTake(deviceId, rel.slice(OUTBOX_PREFIX.length)) : null;
   const path = await readableFilePath(rel);
   if (!path) return null;
   return { path, name: basename(path), size: (await stat(path)).size };

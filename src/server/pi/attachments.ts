@@ -12,9 +12,10 @@
 // first and sends a staging handle in that field instead; resolving one is the only
 // difference here, and it happens in bytesOf() so nothing else has to know.
 
-import { readFile } from 'node:fs/promises';
-import { extname } from 'node:path';
+import { mkdir, readFile } from 'node:fs/promises';
+import { basename, extname } from 'node:path';
 import { isUploadHandle, resolveUploadHandle } from '../files/staging';
+import { writeToUniquePath } from '../files/store';
 import { extractPdfText } from '../folder-index/pdf';
 import { heicToJpeg, isHeicAttachment, isHeicNameOrMime } from './heic';
 import type { MessageAttachment, TurnAttachment } from '../../shared/types';
@@ -205,6 +206,26 @@ export async function attachmentPreviews(atts: TurnAttachment[]): Promise<Messag
       return dataUrl ? { ...base, dataUrl } : base;
     })
   );
+}
+
+/**
+ * Keep each attachment's bytes as a file in `dir` and answer the paths, in
+ * order (unreadable ones are skipped — resolveAttachments already names them).
+ * Only for a turn that may drive a browser: pi keeps images as base64 in the
+ * session and PDFs as their text, so without this copy a "upload the PDF I
+ * attached" has no file to upload.
+ */
+export async function saveAttachmentsTo(atts: TurnAttachment[], dir: string): Promise<string[]> {
+  if (!atts.length) return [];
+  await mkdir(dir, { recursive: true });
+  const paths: string[] = [];
+  for (const att of atts) {
+    const bytes = await bytesOf(att);
+    if (!bytes) continue;
+    const name = basename(att.name || att.path || 'attachment') || 'attachment';
+    paths.push(await writeToUniquePath(bytes, dir, name));
+  }
+  return paths;
 }
 
 export async function resolveAttachments(atts: TurnAttachment[]): Promise<ResolvedAttachments> {

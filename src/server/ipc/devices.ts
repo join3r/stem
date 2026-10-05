@@ -5,10 +5,11 @@ import { createPairingCode, pendingPairings } from '../transport/pairing';
 import { dropDeviceStreams } from '../startup/transport';
 import { deviceMcpRouter } from '../mcp-device/router';
 import { execDeviceRouter } from '../exec-device/router';
+import { browserDeviceRouter } from '../browser-device/router';
 import { computerDeviceRouter } from '../computer-device/router';
 import { harnessDeviceRouter } from '../harness/device-host';
 import { log } from '../log';
-import type { DeviceComputerEvent, DeviceInfo, DevicesSnapshot, PairingCodeInfo } from '../../shared/types';
+import type { DeviceBrowserEvent, DeviceComputerEvent, DeviceInfo, DevicesSnapshot, PairingCodeInfo } from '../../shared/types';
 
 /**
  * The device registry, as Settings → Server → Devices sees it: which clients can reach
@@ -60,6 +61,7 @@ export function registerDevicesIpc(): void {
     // answered now rather than left to time out against cut streams.
     if (removed) await execDeviceRouter().forget(id);
     if (removed) await computerDeviceRouter().forget(id);
+    if (removed) await browserDeviceRouter().forget(id);
     // And what it said about running coding agents, for the same reason — its
     // in-flight turns are failed now rather than left to the idle timeout.
     if (removed) await harnessDeviceRouter().forget(id);
@@ -157,15 +159,39 @@ export function registerDevicesIpc(): void {
       computerDeviceRouter().humanInput(caller.deviceId, e.threadId);
     }
   });
+  // The channels a Mac that hosts browser control speaks on — same rule again.
+  registerServer('browserHost:announce', (caller: CallerContext, report: unknown): Promise<void> => {
+    if (!caller) {
+      throw new Error('browserHost:announce needs a paired device — it answers for the CALLER’s machine.');
+    }
+    return browserDeviceRouter().announce(caller.deviceId, report);
+  });
+  registerServer('browserHost:result', (caller: CallerContext, requestId: string, result: unknown): void => {
+    if (!caller) {
+      throw new Error('browserHost:result needs a paired device — it answers for the CALLER’s machine.');
+    }
+    browserDeviceRouter().settle(caller.deviceId, requestId, result);
+  });
+  // The user pressed Stop (the tab's marker or the extension): that thread's run is over.
+  registerServer('browserHost:event', (caller: CallerContext, event: unknown): void => {
+    if (!caller) {
+      throw new Error('browserHost:event needs a paired device — it answers for the CALLER’s machine.');
+    }
+    const e = event as Partial<DeviceBrowserEvent> | null;
+    if (e && typeof e === 'object' && e.kind === 'stopped' && typeof e.threadId === 'string' && e.threadId) {
+      browserDeviceRouter().stopped(caller.deviceId, e.threadId);
+    }
+  });
 }
 
 async function snapshot(): Promise<DevicesSnapshot> {
-  const [devices, pending, execHosts, harnessHosts, computerHosts] = await Promise.all([
+  const [devices, pending, execHosts, harnessHosts, computerHosts, browserHosts] = await Promise.all([
     readDevices(),
     pendingPairings(),
     execDeviceRouter().hosts(),
     harnessDeviceRouter().hosts(),
-    computerDeviceRouter().hosts()
+    computerDeviceRouter().hosts(),
+    browserDeviceRouter().hosts()
   ]);
   return {
     devices: devices.map(
@@ -183,7 +209,8 @@ async function snapshot(): Promise<DevicesSnapshot> {
         ...(execHosts[d.id]?.enabled ? { runsCommands: true } : {}),
         // Same rule as runsCommands: only an announced yes earns the tag.
         ...(harnessHosts[d.id]?.enabled ? { runsCodingAgents: true } : {}),
-        ...(computerHosts[d.id]?.enabled ? { runsComputer: true } : {})
+        ...(computerHosts[d.id]?.enabled ? { runsComputer: true } : {}),
+        ...(browserHosts[d.id]?.enabled ? { runsBrowser: true } : {})
       })
     ),
     pending: pending.map((p) => ({ label: p.label, expiresAt: p.expiresAt }))

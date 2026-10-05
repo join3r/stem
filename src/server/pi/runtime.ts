@@ -49,14 +49,16 @@ import { degrade } from '../degrade';
 import { isContextOverflowError } from '../backend/overflow';
 import {
   INBOX_MDX_NOTE,
+  browserControlInstructions,
   codingDelegationInstructions,
   computerControlInstructions,
   stemAssistantInstructions
 } from '../workspace/bootstrap';
 import { readSettings } from '../workspace/settings';
-import { resolveCodingGrant, resolveComputerGrant } from '../harness/chat-grants';
-import { codingChoicesText, computerChoicesText } from '../harness/chat-hosts';
+import { resolveBrowserGrant, resolveCodingGrant, resolveComputerGrant } from '../harness/chat-grants';
+import { browserChoicesText, codingChoicesText, computerChoicesText } from '../harness/chat-hosts';
 import { resolveHostShell } from '../exec/git-bash';
+import { ensureThreadScratch } from '../exec/scratch';
 import { clampPinnedCwd } from '../harness/pin';
 import { hostShellAgentHint } from '../exec/host-shell';
 import { previewText } from '../chats/preview';
@@ -71,10 +73,12 @@ import { reconcileExplicitFact } from '../recall/reconcile';
 import { buildFilesContext } from '../files/inject';
 import { buildConnectedFoldersContext } from '../connected-folders/inject';
 import { getPrivateRoots } from '../workspace/connected-folders';
-import { resolveAttachments, type PiImageContent } from './attachments';
+import { resolveAttachments, saveAttachmentsTo, type PiImageContent } from './attachments';
 import { captureUserMessage } from '../recall/capture';
 import type {
   ApprovalId,
+  BrowserBridge,
+  BrowserRequest,
   ChatBackend,
   ComputerBridge,
   ComputerRequest,
@@ -155,6 +159,7 @@ import {
   ENV_SECRET_KEY,
   ENV_SKILLS_DIR,
   EXEC_BRIDGE_TITLE,
+  BROWSER_BRIDGE_TITLE,
   COMPUTER_BRIDGE_TITLE,
   HARNESS_BRIDGE_TITLE,
   INSTRUCTIONS_APPROVAL_TITLE,
@@ -645,6 +650,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   /** Wired by main to route the assistant's coding_agent tool. */
   private harnessBridge: HarnessBridge | null = null;
   private computerBridge: ComputerBridge | null = null;
+  private browserBridge: BrowserBridge | null = null;
   /** Wired by main to route the assistant's manage_skill tool through the validator + policy. */
   private skillBridge: SkillBridge | null = null;
   /** Set when an admin add/remove was approved; reloads MCP servers once every turn ends. */
@@ -1159,12 +1165,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // dispose so the exit handler reads it as deliberate, not a crash.
         // A code persona's brief (which agent, where) rides the role prompt, so
         // editing the pin re-spawns the worker exactly like editing the prompt.
-        // The same for a computer-control pin: how to drive the pinned Mac is
-        // spawn-time state too.
+        // The same for a computer-control or browser pin: how to drive the
+        // pinned Mac is spawn-time state too.
         w.personaPrompt = [
           input.persona.prompt,
           input.persona.harness ? codingDelegationInstructions(input.persona.harness) : '',
-          input.persona.computer ? computerControlInstructions(input.persona.computer) : ''
+          input.persona.computer ? computerControlInstructions(input.persona.computer) : '',
+          input.persona.browser ? browserControlInstructions(input.persona.browser, !!input.persona.computer) : ''
         ]
           .filter(Boolean)
           .join('\n\n');
@@ -1243,12 +1250,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (input.persona) turn.personaId = input.persona.id;
       if (input.persona?.harness) turn.personaHarness = input.persona.harness;
       if (input.persona?.computer) turn.personaComputer = input.persona.computer;
-      // coding_agent / computer: the persona's pins, or for a chat run as no
-      // persona, Settings → Features.
+      if (input.persona?.browser) turn.personaBrowser = input.persona.browser;
+      // coding_agent / computer / browser: the persona's pins, or for a chat
+      // run as no persona, Settings → Features.
       // quiet: readSettings answers coerced defaults rather than rejecting; a failure here leaves both tools off, with the "off for chats" refusal, which is the default anyway.
       const chatFeatures = (await readSettings().catch(() => null))?.chatFeatures ?? {
         coding: { allow: false, target: null },
-        computer: { allow: false, target: null }
+        computer: { allow: false, target: null },
+        browser: { allow: false, target: null }
       };
       const grantTurn = { persona: input.persona, unattended: turn.isScheduled === true };
       const coding = resolveCodingGrant(grantTurn, chatFeatures.coding);
@@ -1257,6 +1266,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const computer = resolveComputerGrant(grantTurn, chatFeatures.computer);
       if (computer.ok) turn.computerGrant = computer.grant;
       else turn.computerRefusal = computer.refusal;
+      const browser = resolveBrowserGrant(grantTurn, chatFeatures.browser);
+      if (browser.ok) turn.browserGrant = browser.grant;
+      else turn.browserRefusal = browser.refusal;
       // generate_image: one Settings switch for every kind of turn, on the
       // user's ChatGPT sign-in; a code persona is a relay and never gets it.
       const imageGen = await this.imageGenGrant(chatFeatures.images, !!turn.personaHarness);
@@ -1314,6 +1326,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             computer: !!turn.computerGrant,
             computerChoose: turn.computerGrant?.kind === 'chat' && turn.computerGrant.device === null,
             computerRefusal: turn.computerRefusal ?? null,
+            // And for the `browser` tool.
+            browser: !!turn.browserGrant,
+            browserChoose: turn.browserGrant?.kind === 'chat' && turn.browserGrant.device === null,
+            browserRefusal: turn.browserRefusal ?? null,
             // Mirrors buildMessage's recall gate: a recall-off persona (or a
             // private chat) gets neither the injected block nor the search
             // tools that would reproduce it on demand.
@@ -1519,6 +1535,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     this.execBridge?.abortThread(turn.threadId);
     this.harnessBridge?.abortThread(turn.threadId, reason);
     this.computerBridge?.endThread(turn.threadId, 'The turn was stopped.');
+    this.browserBridge?.endThread(turn.threadId, 'The turn was stopped.');
     worker.proc?.send({ type: 'abort' });
   }
 
@@ -2572,6 +2589,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // cards; the sessions themselves survive on disk for the next call.
     this.harnessBridge?.settleAll('the backend restarted');
     this.computerBridge?.settleAll('the backend restarted');
+    this.browserBridge?.settleAll('the backend restarted');
   }
 
   /**
@@ -2597,6 +2615,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       this.execBridge?.abortThread(threadId);
       this.harnessBridge?.abortThread(threadId, 'the backend process died');
       this.computerBridge?.endThread(threadId, 'The backend process died.');
+      this.browserBridge?.endThread(threadId, 'The backend process died.');
     }
   }
 
@@ -2645,6 +2664,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   setComputerBridge(bridge: ComputerBridge | null): void {
     this.computerBridge = bridge;
+  }
+
+  setBrowserBridge(bridge: BrowserBridge | null): void {
+    this.browserBridge = bridge;
   }
 
   setSkillBridge(bridge: SkillBridge | null): void {
@@ -2844,31 +2867,83 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * process that ASKED, like the other bridges.
    */
   private handleComputerBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    const turn = worker.currentTurn;
+    this.handleMacToolBridge(worker, id, payload, {
+      tool: 'computer',
+      bridge: () => this.computerBridge,
+      grant: turn?.computerGrant,
+      refusal:
+        turn?.computerRefusal ??
+        'Computer control is not available in this conversation. Do not retry, and do not work around it ' +
+          'by scripting the GUI over run_command — that is refused too. Tell the user which persona should ' +
+          'take it, or that chats can be allowed in Settings → Features → Computer control.',
+      unavailable: 'Computer control is unavailable.',
+      choices: computerChoicesText,
+      call: (bridge, device, action) =>
+        bridge.handleComputerRequest({
+          device,
+          action: action as ComputerRequest['action'],
+          threadId: turn?.threadId ?? ''
+        })
+    });
+  }
+
+  /** The `browser` tool's round-trip (BROWSER_BRIDGE_TITLE): the same contract as `computer`. */
+  private handleBrowserBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    const turn = worker.currentTurn;
+    this.handleMacToolBridge(worker, id, payload, {
+      tool: 'browser',
+      bridge: () => this.browserBridge,
+      grant: turn?.browserGrant,
+      refusal:
+        turn?.browserRefusal ??
+        'Browser control is not available in this conversation. Do not retry. Tell the user which persona ' +
+          'should take it, or that chats can be allowed in Settings → Features → Browser control.',
+      unavailable: 'Browser control is unavailable.',
+      choices: browserChoicesText,
+      call: (bridge, device, action) =>
+        bridge.handleBrowserRequest({
+          device,
+          action: action as BrowserRequest['action'],
+          threadId: turn?.threadId ?? ''
+        })
+    });
+  }
+
+  /**
+   * The shared body of the two Mac-pinned tools: refuse without a grant (with
+   * the turn's reason), resolve a model-chooses chat's named Mac, call the
+   * bridge, and answer the process that asked — never a later one.
+   */
+  private handleMacToolBridge<B extends { resolveNamedMac: ComputerBridge['resolveNamedMac'] }>(
+    worker: PiWorker,
+    id: string,
+    payload: string | undefined,
+    spec: {
+      tool: string;
+      bridge: () => B | null;
+      grant: { device: string | null } | undefined;
+      refusal: string;
+      unavailable: string;
+      choices: () => Promise<string>;
+      call: (bridge: B, device: string, action: object) => Promise<unknown>;
+    }
+  ): void {
     const requestProcess = worker.proc;
     const respond = (value: unknown): void => {
       if (worker.proc !== requestProcess) return;
       requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
     };
-    const turn = worker.currentTurn;
     void (async () => {
       try {
-        const bridge = this.computerBridge;
-        if (!bridge) return respond({ ok: false, error: 'Computer control is unavailable.' });
-        const grant = turn?.computerGrant;
-        if (!grant) {
-          return respond({
-            ok: false,
-            error:
-              turn?.computerRefusal ??
-              'Computer control is not available in this conversation. Do not retry, and do not work around it ' +
-                'by scripting the GUI over run_command — that is refused too. Tell the user which persona should ' +
-                'take it, or that chats can be allowed in Settings → Features → Computer control.'
-          });
-        }
+        const bridge = spec.bridge();
+        if (!bridge) return respond({ ok: false, error: spec.unavailable });
+        const grant = spec.grant;
+        if (!grant) return respond({ ok: false, error: spec.refusal });
         const req = JSON.parse(payload ?? '{}') as { action?: unknown; device?: unknown };
         const action = req.action;
         if (!action || typeof action !== 'object' || typeof (action as { kind?: unknown }).kind !== 'string') {
-          return respond({ ok: false, error: 'The computer tool sent no action.' });
+          return respond({ ok: false, error: `The ${spec.tool} tool sent no action.` });
         }
         let device = grant.device;
         if (device === null) {
@@ -2876,18 +2951,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           // it, and be connected — each refusal carries the real options.
           const named = typeof req.device === 'string' ? req.device.trim() : '';
           // quiet: every refusal below still says what went wrong; the options are an addendum.
-          const choices = await computerChoicesText().catch(() => '');
+          const choices = await spec.choices().catch(() => '');
           if (!named) return respond({ ok: false, error: `Name the Mac in \`device\`. ${choices}`.trim() });
           const target = await bridge.resolveNamedMac(named);
           if (!target.ok) return respond({ ok: false, error: `${target.error} ${choices}`.trim() });
           device = target.deviceId;
         }
-        const result = await bridge.handleComputerRequest({
-          device,
-          action: action as ComputerRequest['action'],
-          threadId: turn?.threadId ?? ''
-        });
-        respond(result);
+        respond(await spec.call(bridge, device, action));
       } catch (e) {
         respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
       }
@@ -3437,6 +3507,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         this.handleComputerBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
+      // The `browser` tool round-trip: one browser action on the pinned Mac.
+      if (ev.method === 'input' && ev.title === BROWSER_BRIDGE_TITLE) {
+        this.handleBrowserBridgeRequest(worker, id, ev.placeholder as string | undefined);
+        return;
+      }
       // An MCP server that runs on one of the user's own devices: the call
       // leaves this machine entirely (transport → that device's MCP host) and
       // the elicitation is held open until it comes back or times out.
@@ -3555,6 +3630,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // A computer-control run lives exactly as long as its turn: the Mac drops
     // its banner and helper now, whatever the turn's outcome was.
     if (turn.computerGrant) this.computerBridge?.endThread(turn.threadId);
+    // The same for a browser run: the extension detaches and drops its markers.
+    if (turn.browserGrant) this.browserBridge?.endThread(turn.threadId);
     if (turn.aborted) {
       log('pi.interrupt', 'turn ended aborted', {
         threadId: turn.threadId,
@@ -4232,6 +4309,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const choices = await computerChoicesText().catch(() => '');
       if (choices) blocks.push(choices);
     }
+    if (turn?.browserGrant?.kind === 'chat' && turn.browserGrant.device === null) {
+      // quiet: same as the coding list above.
+      const choices = await browserChoicesText().catch(() => '');
+      if (choices) blocks.push(choices);
+    }
     try {
       const exec = (await readSettings()).exec;
       if (exec.enabled) {
@@ -4256,6 +4338,18 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       blocks.push(
         `<!--stem:images ids="${ids.join(',')}"-->\nImages attached to this message, in order (ids for generate_image \`references\`): ${ids.join(', ')}`
       );
+    }
+    // A turn that may drive a browser keeps the attachments as files too, so
+    // "upload the PDF I attached" has bytes to upload (pi keeps only images, as
+    // base64, and a PDF's text). The paths ride the context fence like the ids.
+    if (turn?.browserGrant && input.attachments?.length) {
+      try {
+        const dir = join(await ensureThreadScratch(threadId), 'attachments');
+        const saved = await saveAttachmentsTo(input.attachments, dir);
+        if (saved.length) blocks.push(`Attached files, saved for browser uploads: ${saved.join(', ')}`);
+      } catch (e) {
+        degrade('pi.attachments', 'could not keep attachments as files for browser uploads', e);
+      }
     }
 
     // The user's text comes last; context blocks precede it across a `---` rule, while

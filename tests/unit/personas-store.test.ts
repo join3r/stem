@@ -239,6 +239,14 @@ describe('save', () => {
     expect((await getPersona('p1'))?.computer).toBeUndefined();
   });
 
+  it('keeps a browser pin with a device, independent of the computer pin, and drops a blank one', async () => {
+    await savePersona(persona({ browser: { device: ' mac-1 ' } }));
+    expect((await getPersona('p1'))?.browser).toEqual({ device: 'mac-1' });
+    expect((await getPersona('p1'))?.computer).toBeUndefined();
+    await savePersona(persona({ browser: { device: '' } }));
+    expect((await getPersona('p1'))?.browser).toBeUndefined();
+  });
+
   it('keeps a harness pin with a blank cwd (mid-edit save) but drops one without an agent', async () => {
     // The editor saves per keystroke: the agent name lands before the cwd is
     // typed, and dropping the pin would wipe the field under the user's cursor.

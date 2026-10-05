@@ -518,6 +518,8 @@ export interface StartTurnInput {
     harness?: PersonaHarnessPin;
     /** The persona's computer-control pin; the `computer` tool exists for the turn exactly when present. */
     computer?: PersonaComputerPin;
+    /** The persona's browser pin; the `browser` tool exists for the turn exactly when present. */
+    browser?: PersonaBrowserPin;
     /**
      * The persona's memory-note index (id + title, newest first), rendered
      * into the mail preamble so the persona sees what it knows every turn and
@@ -1559,6 +1561,133 @@ export interface ComputerHostLocalState {
   access: ComputerAccess | null;
 }
 
+// ---- Browser control on the user's own Mac (the `browser` tool) ----
+//
+// The computer-control rails again — addressed control frames out, ordinary
+// authenticated RPCs back, 128-bit single-use requestIds — but the far end is
+// the Stem extension in the user's own browser (Arc, Chrome, Dia, Brave),
+// reached from the desktop client through a native-messaging host. The guards
+// are the computer-control ones by the user's choice (2026-10-05): the persona
+// pin or the chat setting, a client-local switch on the Mac, the marker in the
+// tab, and Stop. Any ordinary tab, no per-tab grants, no submit approvals.
+
+export const BROWSER_REQUEST_FRAME = 'browser-request';
+/** The run for a thread is over: the extension detaches and takes its markers down. */
+export const BROWSER_END_FRAME = 'browser-end';
+
+/**
+ * A file the server put in its outbox for one upload: the Mac fetches the bytes
+ * by `id` (single-use, bound to that device) before the extension needs them.
+ */
+export interface BrowserOutboxFile {
+  id: string;
+  name: string;
+  size: number;
+}
+
+/**
+ * One browser action. `tab` is a tab id from `tabs`; absent = the run's current
+ * tab (the one it last opened or acted in). `ref` is an element reference from
+ * the tab's last `snapshot` (e.g. "e12"); x/y are CSS pixels of the viewport,
+ * as in the last screenshot.
+ */
+export type BrowserAction =
+  | { kind: 'tabs' }
+  | { kind: 'open'; url: string }
+  | { kind: 'navigate'; tab?: number; url?: string; to?: 'back' | 'forward' | 'reload' }
+  | { kind: 'snapshot'; tab?: number }
+  | { kind: 'screenshot'; tab?: number; fullPage?: boolean }
+  | { kind: 'click'; tab?: number; ref?: string; x?: number; y?: number; button?: 'left' | 'right' | 'middle'; count?: 1 | 2 }
+  | { kind: 'hover'; tab?: number; ref?: string; x?: number; y?: number }
+  | { kind: 'type'; tab?: number; ref?: string; text: string; submit?: boolean }
+  | { kind: 'fill'; tab?: number; ref: string; value: string }
+  | { kind: 'press'; tab?: number; key: string }
+  | { kind: 'scroll'; tab?: number; ref?: string; dir?: 'up' | 'down' | 'left' | 'right'; amount?: number }
+  | { kind: 'wait'; tab?: number; text?: string; url?: string; ms?: number }
+  | { kind: 'dialog'; tab?: number; accept: boolean; text?: string }
+  | { kind: 'evaluate'; tab?: number; script: string }
+  | { kind: 'console'; tab?: number; errorsOnly?: boolean }
+  | { kind: 'network'; tab?: number; filter?: string; request?: string }
+  | { kind: 'upload'; tab?: number; ref: string; files: BrowserOutboxFile[] }
+  | { kind: 'downloads'; wait?: boolean; ms?: number }
+  | { kind: 'close'; tab?: number };
+
+export interface DeviceBrowserRequest {
+  /** Unguessable and single-use — same defence as {@link DeviceComputerRequest.requestId}. */
+  requestId: string;
+  /** The turn's thread; the extension keeps the run's tabs under it. */
+  threadId: string;
+  action: BrowserAction;
+}
+
+/** A finished download the Mac streamed up (POST /upload); the server files it for the thread. */
+export interface BrowserDownloadReceipt {
+  /** Staging handle from /upload. */
+  handle: string;
+  name: string;
+  size: number;
+  mime?: string;
+}
+
+export type DeviceBrowserResult =
+  | {
+      ok: true;
+      /** The outline, the tab list, the script's value, the log — or a one-line account of the action. */
+      text?: string;
+      screenshot?: { jpegBase64: string; width: number; height: number };
+      /** The tab the action ran in (becomes the run's current tab). */
+      tab?: number;
+      downloads?: BrowserDownloadReceipt[];
+    }
+  | {
+      ok: false;
+      error: string;
+      /** The user pressed Stop (in the tab or the extension): the rest of the turn is refused. */
+      stopped?: true;
+    };
+
+/** A browser with the Stem extension, as the Mac knows it. */
+export interface BrowserInfo {
+  /** Stable key: the app bundle path the native host was launched from. */
+  id: string;
+  /** Display name ("Arc", "Google Chrome"). */
+  name: string;
+  connected: boolean;
+  /** The extension's version, when connected. */
+  version?: string;
+}
+
+/** A device's account of whether it lets Stem drive its browser — `browserHost:announce`. */
+export interface DeviceBrowserAnnouncement {
+  enabled: boolean;
+  platform: 'darwin';
+  browsers: BrowserInfo[];
+  /** The browser Stem uses on this Mac (BrowserInfo.id); absent = none known yet. */
+  chosen?: string;
+}
+
+export interface DeviceBrowserHostEntry extends DeviceBrowserAnnouncement {
+  deviceId: string;
+  announcedAt: string;
+}
+
+/** `browserHost:event` — the user pressed Stop for this thread's run. */
+export interface DeviceBrowserEvent {
+  threadId: string;
+  kind: 'stopped';
+}
+
+/** The answer to `browserHost:localState` — client-owned, never on the wire. */
+export interface BrowserHostLocalState {
+  /** False on every platform but macOS for now. */
+  supported: boolean;
+  enabled: boolean;
+  browsers: BrowserInfo[];
+  chosen: string | null;
+  /** Where Set up put the extension (for Load unpacked); null before Set up ran. */
+  extensionPath: string | null;
+}
+
 // ---- Coding agents on the user's own devices (coding_agent's `device`) ----
 //
 // Same rails as the exec device path: addressed control frames out (one
@@ -2345,6 +2474,16 @@ export interface PersonaComputerPin {
   device: string;
 }
 
+/**
+ * A persona's browser pin: the paired Mac whose browser it drives with the
+ * `browser` tool, through the Stem extension. Same rule as the computer pin —
+ * the pin IS the capability, in every kind of turn.
+ */
+export interface PersonaBrowserPin {
+  /** Paired computer id (a desktop that announced browser control). */
+  device: string;
+}
+
 export interface Persona {
   /** Stable id (built-ins use fixed slugs; user personas a UUID). */
   id: string;
@@ -2358,6 +2497,7 @@ export interface Persona {
   effort?: string;
   harness?: PersonaHarnessPin;
   computer?: PersonaComputerPin;
+  browser?: PersonaBrowserPin;
   /**
    * Run via the sessionless one-shot path (ChatBackend.complete) instead of a
    * worker: cheaper, but no tools and no memory between mails. For pure-text
@@ -3148,6 +3288,15 @@ export interface ChatFeatureSettings {
     target: { device: string } | null;
   };
   /**
+   * Browser control (the Stem extension on a paired Mac), same shape and same
+   * reach as `computer`. Absent (an older server) = off.
+   */
+  browser?: {
+    allow: boolean;
+    /** A paired Mac's device id. */
+    target: { device: string } | null;
+  };
+  /**
    * Image generation (`generate_image`, the user's ChatGPT subscription).
    * Unlike the two above this covers EVERY chat, persona, mail and scheduled
    * run — not just chats run as no persona; code personas never get it. It
@@ -3896,6 +4045,11 @@ export interface DeviceInfo {
    * editor can offer it as a computer-control pin.
    */
   runsComputer?: boolean;
+  /**
+   * Whether this Mac said it lets Stem drive its browser (`browserHost:announce`).
+   * Same rule as runsComputer; surfaced for the persona editor's browser pin.
+   */
+  runsBrowser?: boolean;
 }
 
 /**
@@ -4294,6 +4448,16 @@ export interface StemApi {
   setComputerHostEnabled(enabled: boolean): Promise<ComputerHostLocalState>;
   /** Ask macOS for the grants the helper is missing; answers with the current state. */
   requestComputerAccess(): Promise<ComputerHostLocalState>;
+  /** Whether THIS Mac lets its server drive its browser (client-owned). */
+  browserHostState(): Promise<BrowserHostLocalState>;
+  /** Flip the local browser-control consent switch (client-owned). */
+  setBrowserHostEnabled(enabled: boolean): Promise<BrowserHostLocalState>;
+  /** Pick the browser Stem drives on this Mac (BrowserInfo.id). */
+  chooseBrowser(id: string): Promise<BrowserHostLocalState>;
+  /** Copy the extension and register it with the installed browsers; answers with the new state. */
+  setUpBrowserControl(): Promise<BrowserHostLocalState>;
+  /** Open a browser's extensions page (or Finder at the extension folder when that fails). */
+  openBrowserExtensionsPage(browserId?: string): Promise<void>;
 
   getMemorySettings(): Promise<MemorySettings>;
   setMemoryEnabled(enabled: boolean): Promise<MemorySettings>;

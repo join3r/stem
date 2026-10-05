@@ -90,6 +90,13 @@ export const HARNESS_BRIDGE_TITLE = 'stem-harness-bridge';
 export const COMPUTER_BRIDGE_TITLE = 'stem-computer-bridge';
 
 /**
+ * `browser` tool round-trip (`input`): one browser action rides in
+ * `placeholder`; PiRuntime resolves the Mac from the turn's browser grant (never
+ * from the payload) and sends it through the browser-device router.
+ */
+export const BROWSER_BRIDGE_TITLE = 'stem-browser-bridge';
+
+/**
  * manage_skill tool round-trip (`input`): the write payload rides in
  * `placeholder`; PiRuntime routes it to the main-process SkillBridge, which owns
  * the contract validator, the Off/Ask/Auto policy, and the approval card. The

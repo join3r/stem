@@ -203,6 +203,11 @@ const api: StemApi = {
   computerHostState: () => ipcRenderer.invoke('computerHost:localState'),
   setComputerHostEnabled: (enabled: boolean) => ipcRenderer.invoke('computerHost:setEnabled', enabled),
   requestComputerAccess: () => ipcRenderer.invoke('computerHost:requestAccess'),
+  browserHostState: () => ipcRenderer.invoke('browserHost:localState'),
+  setBrowserHostEnabled: (enabled: boolean) => ipcRenderer.invoke('browserHost:setEnabled', enabled),
+  chooseBrowser: (id: string) => ipcRenderer.invoke('browserHost:choose', id),
+  setUpBrowserControl: () => ipcRenderer.invoke('browserHost:setUp'),
+  openBrowserExtensionsPage: (browserId?: string) => ipcRenderer.invoke('browserHost:openExtensions', browserId),
   onMcpAdminApproval: (listener: (proposal: McpAdminProposal) => void) => {
     const handler = (_e: unknown, proposal: McpAdminProposal) => listener(proposal);
     ipcRenderer.on('mcp:adminApproval', handler);

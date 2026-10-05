@@ -1,11 +1,20 @@
 import { workDetail } from '../../shared/work-detail';
 import type { PiEvent } from './rpc';
-import type { ActivityItem, GeneratedImageRef, PersonaComputerPin, PersonaHarnessPin, SourceRef, TurnUsage, TurnOrigin } from '../../shared/types';
+import type {
+  ActivityItem,
+  GeneratedImageRef,
+  PersonaBrowserPin,
+  PersonaComputerPin,
+  PersonaHarnessPin,
+  SourceRef,
+  TurnUsage,
+  TurnOrigin
+} from '../../shared/types';
 import { stripCiteMarkers } from '../../shared/citations';
 import { WEB_ACCESS_TOOL_NAMES } from '../../shared/activity';
 import { SECRET_ENVELOPE_KEY, toolArgsOf } from './protocol';
 import type { InlinedSkill } from '../skills/inject';
-import type { CodingGrant, ComputerGrant } from '../harness/chat-grants';
+import type { BrowserGrant, CodingGrant, ComputerGrant } from '../harness/chat-grants';
 import type { SkillIssue } from '../skills/grade';
 import { extractSources } from './web-search';
 import { IMAGE_TOOL_NAME } from './image-gen.mjs';
@@ -161,6 +170,8 @@ export interface TurnContext {
   personaHarness?: PersonaHarnessPin;
   /** The turn's persona computer-control pin: the Mac the `computer` tool drives. */
   personaComputer?: PersonaComputerPin;
+  /** The turn's persona browser pin: the Mac whose browser the `browser` tool drives. */
+  personaBrowser?: PersonaBrowserPin;
   /**
    * What coding_agent may do this turn — the persona pin, or a plain chat's
    * Settings → Features choice — or, absent, why not (`codingRefusal`).
@@ -172,6 +183,9 @@ export interface TurnContext {
   /** The same for the `computer` tool. */
   computerGrant?: ComputerGrant;
   computerRefusal?: string;
+  /** And for the `browser` tool. */
+  browserGrant?: BrowserGrant;
+  browserRefusal?: string;
   /** The raw user message that started this turn — intent context for the exec safety judge. */
   userText?: string;
   phase: 'pending' | 'thinking' | 'tool' | 'answer';

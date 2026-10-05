@@ -944,11 +944,12 @@ describe('chats settings', () => {
 
 
 describe('chat features setting', () => {
-  it('starts with both off and no target, and image generation on', async () => {
+  it('starts with coding, computer and browser off and no target, and image generation on', async () => {
     writeFileSync(path, JSON.stringify({}));
     expect((await readSettings()).chatFeatures).toEqual({
       coding: { allow: false, target: null },
       computer: { allow: false, target: null },
+      browser: { allow: false, target: null },
       images: { allow: true }
     });
   });
@@ -966,13 +967,15 @@ describe('chat features setting', () => {
       JSON.stringify({
         chatFeatures: {
           coding: { allow: true, target: { agent: ' claude ', device: ' dev-1 ' } },
-          computer: { allow: 'yes', target: { device: '   ' } }
+          computer: { allow: 'yes', target: { device: '   ' } },
+          browser: { allow: true, target: { device: ' mac-2 ' } }
         }
       })
     );
     expect((await readSettings()).chatFeatures).toEqual({
       coding: { allow: true, target: { agent: 'claude', device: 'dev-1' } },
       computer: { allow: false, target: null },
+      browser: { allow: true, target: { device: 'mac-2' } },
       images: { allow: true }
     });
     writeFileSync(path, JSON.stringify({ chatFeatures: { coding: { allow: true, target: { device: 'dev-1' } } } }));
@@ -986,6 +989,7 @@ describe('chat features setting', () => {
     expect(next.chatFeatures).toEqual({
       coding: { allow: true, target: { agent: 'codex' } },
       computer: { allow: true, target: { device: 'mac-1' } },
+      browser: { allow: false, target: null },
       images: { allow: true }
     });
   });

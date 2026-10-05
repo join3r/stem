@@ -1,6 +1,11 @@
-import type { ChatFeatureSettings, PersonaComputerPin, PersonaHarnessPin } from '../../shared/types';
+import type {
+  ChatFeatureSettings,
+  PersonaBrowserPin,
+  PersonaComputerPin,
+  PersonaHarnessPin
+} from '../../shared/types';
 
-// Who may use coding_agent and `computer` this turn, and on what. A persona's
+// Who may use coding_agent, `computer` and `browser` this turn, and on what. A persona's
 // pin is the whole story for a persona turn (chat, mail or schedule) — a persona
 // without one gets neither tool whatever Settings says. A chat run as NO
 // persona follows Settings → Features (chatFeatures, 2026-09-27): off, a fixed
@@ -18,10 +23,18 @@ export type ComputerGrant =
   /** `device: null` = the model names the Mac per call. */
   | { kind: 'chat'; device: string | null };
 
+/** Same shape as ComputerGrant: a Mac, fixed by a pin or the chat setting, or the model's pick. */
+export type BrowserGrant = ComputerGrant;
+
 export type Granted<G> = { ok: true; grant: G } | { ok: false; refusal: string };
 
 export interface GrantTurn {
-  persona?: { name?: string; harness?: PersonaHarnessPin; computer?: PersonaComputerPin };
+  persona?: {
+    name?: string;
+    harness?: PersonaHarnessPin;
+    computer?: PersonaComputerPin;
+    browser?: PersonaBrowserPin;
+  };
   /** A scheduled run or a mail delivery — never a plain chat, persona or not. */
   unattended: boolean;
 }
@@ -61,42 +74,90 @@ export function resolveCodingGrant(turn: GrantTurn, chat: ChatFeatureSettings['c
   return { ok: true, grant: { kind: 'chat', target: chat.target } };
 }
 
-export function resolveComputerGrant(turn: GrantTurn, chat: ChatFeatureSettings['computer']): Granted<ComputerGrant> {
-  const device = turn.persona?.computer?.device?.trim();
+/** The words that differ between the two Mac-pinned tools' refusals. */
+interface MacGrantTexts {
+  /** "computer control" / "browser control" — sentence-initial forms are capitalised here. */
+  feature: string;
+  /** What a persona without the pin is told it lacks: "controls no computer". */
+  personaLacks: string;
+  /** Where the pin is set: 'its computer pin (Manage → Personas → "Computer this persona controls")'. */
+  pinWhere: string;
+  /** "a persona pinned to a computer". */
+  pinnedPersona: string;
+  /** The Settings → Features group. */
+  settingsGroup: string;
+  /** Appended to every refusal: what is not a way around it. */
+  noWorkaround: string;
+}
+
+const capitalise = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+
+function resolveMacGrant(
+  turn: GrantTurn,
+  chat: { allow: boolean; target: { device: string } | null } | undefined,
+  pin: { device?: string } | undefined,
+  t: MacGrantTexts
+): Granted<ComputerGrant> {
+  const device = pin?.device?.trim();
   if (device) return { ok: true, grant: { kind: 'pin', device } };
-  // Every refusal ends the same way: scripting the GUI over run_command is not
-  // a way around it (ExecService refuses it on a Mac someone owns).
-  const noWorkaround =
-    'Do not work around it by scripting the GUI over run_command (osascript at System Events, cliclick) — ' +
-    'that is refused too.';
   if (turn.persona) {
     return {
       ok: false,
       refusal:
-        `This conversation runs as ${personaLabel(turn.persona.name)}, which controls no computer, so it has ` +
-        'no computer control. A persona gets it from its computer pin (Manage → Personas → "Computer this ' +
-        'persona controls"); only chats that run as no persona follow Settings → Features → Computer control. ' +
-        `Do not retry. ${noWorkaround} Hand the task to the pinned persona (add_persona + send_mail in a mail ` +
-        'thread), or tell the user which persona should take it, or that one needs setting up.'
+        `This conversation runs as ${personaLabel(turn.persona.name)}, which ${t.personaLacks}, so it has ` +
+        `no ${t.feature}. A persona gets it from ${t.pinWhere}; only chats that run as no persona follow ` +
+        `Settings → Features → ${t.settingsGroup}. Do not retry. ${t.noWorkaround} Hand the task to the ` +
+        'pinned persona (add_persona + send_mail in a mail thread), or tell the user which persona should ' +
+        'take it, or that one needs setting up.'
     };
   }
   if (turn.unattended) {
     return {
       ok: false,
       refusal:
-        'Computer control in scheduled runs needs a persona pinned to a computer (Manage → Personas). This run ' +
-        `has no persona, so do not retry. ${noWorkaround} Tell the user to run the task as such a persona.`
+        `${capitalise(t.feature)} in scheduled runs needs ${t.pinnedPersona} (Manage → Personas). This run ` +
+        `has no persona, so do not retry. ${t.noWorkaround} Tell the user to run the task as such a persona.`
     };
   }
-  if (!chat.allow) {
+  if (!chat?.allow) {
     return {
       ok: false,
       refusal:
-        'Computer control is off for chats that run as no persona. Do not retry. ' +
-        `${noWorkaround} Tell the user they can turn it on in Settings → Features → Computer control ` +
-        '("Allow in chats"), or hand the task to a persona pinned to a computer.'
+        `${capitalise(t.feature)} is off for chats that run as no persona. Do not retry. ` +
+        `${t.noWorkaround} Tell the user they can turn it on in Settings → Features → ${t.settingsGroup} ` +
+        `("Allow in chats"), or hand the task to ${t.pinnedPersona}.`
     };
   }
   return { ok: true, grant: { kind: 'chat', device: chat.target?.device ?? null } };
 }
 
+export function resolveComputerGrant(turn: GrantTurn, chat: ChatFeatureSettings['computer']): Granted<ComputerGrant> {
+  // Every refusal ends the same way: scripting the GUI over run_command is not
+  // a way around it (ExecService refuses it on a Mac someone owns).
+  return resolveMacGrant(turn, chat, turn.persona?.computer, {
+    feature: 'computer control',
+    personaLacks: 'controls no computer',
+    pinWhere: 'its computer pin (Manage → Personas → "Computer this persona controls")',
+    pinnedPersona: 'a persona pinned to a computer',
+    settingsGroup: 'Computer control',
+    noWorkaround:
+      'Do not work around it by scripting the GUI over run_command (osascript at System Events, cliclick) — ' +
+      'that is refused too.'
+  });
+}
+
+export function resolveBrowserGrant(
+  turn: GrantTurn,
+  chat: ChatFeatureSettings['browser'] | undefined
+): Granted<BrowserGrant> {
+  return resolveMacGrant(turn, chat, turn.persona?.browser, {
+    feature: 'browser control',
+    personaLacks: 'drives no browser',
+    pinWhere: 'its browser pin (Manage → Personas → "Browser this persona controls")',
+    pinnedPersona: 'a persona pinned to a browser',
+    settingsGroup: 'Browser control',
+    noWorkaround:
+      'Do not work around it by driving the browser with the computer tool or over run_command (open, ' +
+      'osascript) — the user chose who drives their browser.'
+  });
+}

@@ -1,9 +1,9 @@
-// Who gets coding_agent / computer in a turn (harness/chat-grants.ts): a
+// Who gets coding_agent / computer / browser in a turn (harness/chat-grants.ts): a
 // persona's pin is the whole story for a persona turn; only a chat run as no
 // persona follows Settings → Features, and every refusal names its reason so
 // Stem can explain it to the user.
 import { describe, expect, it } from 'vitest';
-import { resolveCodingGrant, resolveComputerGrant } from '../../src/server/harness/chat-grants';
+import { resolveBrowserGrant, resolveCodingGrant, resolveComputerGrant } from '../../src/server/harness/chat-grants';
 
 const OFF = { allow: false, target: null };
 
@@ -83,5 +83,36 @@ describe('resolveComputerGrant', () => {
       grant: { kind: 'chat', device: null }
     });
     expect(resolveComputerGrant({ unattended: true }, { allow: true, target: null }).ok).toBe(false);
+  });
+});
+
+describe('resolveBrowserGrant', () => {
+  it('the browser pin is its own: a computer pin does not grant the browser, nor the reverse', () => {
+    expect(resolveBrowserGrant({ persona: { browser: { device: 'mac-1' } }, unattended: true }, OFF)).toEqual({
+      ok: true,
+      grant: { kind: 'pin', device: 'mac-1' }
+    });
+    const computerOnly = resolveBrowserGrant(
+      { persona: { name: 'MacControl', computer: { device: 'mac-1' } }, unattended: false },
+      OFF
+    );
+    expect(computerOnly.ok).toBe(false);
+    if (!computerOnly.ok) {
+      expect(computerOnly.refusal).toContain('“MacControl”');
+      expect(computerOnly.refusal).toContain('Browser this persona controls');
+      expect(computerOnly.refusal).toContain('computer tool');
+    }
+    expect(resolveComputerGrant({ persona: { browser: { device: 'mac-1' } }, unattended: false }, OFF).ok).toBe(false);
+  });
+
+  it('a plain chat follows chatFeatures.browser; an older server without it means off', () => {
+    const off = resolveBrowserGrant({ unattended: false }, undefined);
+    expect(off.ok).toBe(false);
+    if (!off.ok) expect(off.refusal).toContain('Settings → Features → Browser control');
+    expect(resolveBrowserGrant({ unattended: false }, { allow: true, target: null })).toEqual({
+      ok: true,
+      grant: { kind: 'chat', device: null }
+    });
+    expect(resolveBrowserGrant({ unattended: true }, { allow: true, target: null }).ok).toBe(false);
   });
 });

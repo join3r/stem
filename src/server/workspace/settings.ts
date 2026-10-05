@@ -130,6 +130,7 @@ const DEFAULTS: ServerSettings = {
   chatFeatures: {
     coding: { allow: false, target: null },
     computer: { allow: false, target: null },
+    browser: { allow: false, target: null },
     // Image generation: ON for every chat, persona and run with a ChatGPT
     // sign-in until switched off (2026-09-28).
     images: { allow: true }
@@ -683,10 +684,12 @@ function coerceChatFeatures(raw: unknown): ChatFeatureSettings {
   const r = obj(raw);
   const coding = obj(r.coding);
   const computer = obj(r.computer);
+  const browser = obj(r.browser);
   const codingTarget = obj(coding.target);
   const agent = str(codingTarget.agent);
   const codingDevice = str(codingTarget.device);
   const computerDevice = str(obj(computer.target).device);
+  const browserDevice = str(obj(browser.target).device);
   return {
     coding: {
       allow: coding.allow === true,
@@ -695,6 +698,10 @@ function coerceChatFeatures(raw: unknown): ChatFeatureSettings {
     computer: {
       allow: computer.allow === true,
       target: computerDevice ? { device: computerDevice } : null
+    },
+    browser: {
+      allow: browser.allow === true,
+      target: browserDevice ? { device: browserDevice } : null
     },
     images: { allow: obj(r.images).allow !== false }
   };

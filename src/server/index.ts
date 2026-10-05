@@ -35,6 +35,7 @@ import { detectGitBash } from './exec/git-bash';
 import { startScratchSweeper, stopScratchSweeper } from './exec/scratch';
 import { initExecService } from './startup/exec';
 import { initComputerControl } from './startup/computer';
+import { initBrowserControl } from './startup/browser';
 import { initHarness } from './startup/harness';
 import type { HarnessService } from './harness/service';
 import { registerHarnessIpc } from './harness/ipc';
@@ -56,6 +57,7 @@ import { closeApns } from './push/apns';
 import { closeDeviceMcpRouter } from './mcp-device/router';
 import { closeExecDeviceRouter, resolveHarnessTarget } from './exec-device/router';
 import { closeComputerDeviceRouter } from './computer-device/router';
+import { closeBrowserDeviceRouter } from './browser-device/router';
 import { initRetrieval } from './startup/retrieval';
 import { initRecallTasks } from './startup/recall-tasks';
 import { ensureUsageTracking } from './skills/usage';
@@ -928,6 +930,9 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   // Mac a persona is pinned to; no cards — the Mac's own switch and the
   // person's own input are the guards.
   initComputerControl({ runtime });
+  // Browser control (the `browser` tool): the same rails, out to the Stem
+  // extension in the browser of the Mac the turn is pinned to.
+  initBrowserControl({ runtime });
 
   // Coding agents (the coding_agent tool): the HarnessService owns the host
   // resolution, session continuity and the blocking harness turn; its approval cards
@@ -1234,6 +1239,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
       closeHarnessDeviceRouter();
       // And every held screen action.
       closeComputerDeviceRouter();
+      // And every held browser action.
+      closeBrowserDeviceRouter();
       // Cancel live coding-agent turns gracefully and close the acpx adapters;
       // their sessions persist on disk for the next boot.
       void harness?.close();

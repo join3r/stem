@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ADMIN_APPROVAL_TITLE,
+  BROWSER_BRIDGE_TITLE,
   DEVICE_MCP_BRIDGE_TITLE,
   ENV_GATE_DIR,
   ENV_SECRET_KEY,
@@ -55,6 +56,9 @@ describe('sentinel titles match the bridge extension', () => {
   });
   it('skill bridge', () => {
     expect(extensionConst('SKILL_BRIDGE_TITLE')).toBe(SKILL_BRIDGE_TITLE);
+  });
+  it('browser bridge', () => {
+    expect(extensionConst('BROWSER_BRIDGE_TITLE')).toBe(BROWSER_BRIDGE_TITLE);
   });
   it('device MCP bridge', () => {
     expect(extensionConst('DEVICE_MCP_BRIDGE_TITLE')).toBe(DEVICE_MCP_BRIDGE_TITLE);

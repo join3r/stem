@@ -1,7 +1,9 @@
 import type { HistoricalWorkRun } from '../mail/work-history';
 import type { EventEmitter } from 'node:events';
 import type {
+  BrowserAction,
   ComputerAction,
+  DeviceBrowserResult,
   DeviceComputerResult,
   ChatMessage,
   ChatSummary,
@@ -146,6 +148,37 @@ export interface ComputerBridge {
   /** The turn is over, however it ended: fail what is in flight, drop the Mac's banner. */
   endThread(threadId: string, reason?: string): void;
   /** Everything (the backend restarted). */
+  settleAll(reason?: string): void;
+}
+
+/**
+ * A browser action as the assistant's `browser` tool sends it: the device's
+ * vocabulary, except that an upload names files the way the model knows them
+ * (`files/…`, a scratch or connected-folder path, an `img_…` id) — the bridge
+ * turns those into outbox entries the Mac can fetch.
+ */
+export type BrowserToolAction =
+  | Exclude<BrowserAction, { kind: 'upload' }>
+  | { kind: 'upload'; tab?: number; ref: string; files: string[] };
+
+/** What the `browser` tool sends over its round-trip, after PiRuntime fills in the turn. */
+export interface BrowserRequest {
+  /** The Mac, from the turn's browser grant or resolveNamedMac in a model-chooses chat. */
+  device: string;
+  action: BrowserToolAction;
+  /** Injected from the live turn. */
+  threadId: string;
+}
+
+/**
+ * The seam the backend uses to reach the browser-device router. Same contract
+ * as ComputerBridge. Downloads in the device's answer arrive here already
+ * filed into the thread's scratch folder and named in `text`.
+ */
+export interface BrowserBridge {
+  handleBrowserRequest(req: BrowserRequest): Promise<DeviceBrowserResult>;
+  resolveNamedMac(name: string): Promise<{ ok: true; deviceId: string } | { ok: false; error: string }>;
+  endThread(threadId: string, reason?: string): void;
   settleAll(reason?: string): void;
 }
 
@@ -392,4 +425,8 @@ export interface ChatBackend extends EventEmitter {
   // Computer control: wire the bridge the assistant's `computer` tool routes
   // through. Pass null to detach. No-op on a backend without it.
   setComputerBridge(bridge: ComputerBridge | null): void;
+
+  // Browser control: wire the bridge the assistant's `browser` tool routes
+  // through. Pass null to detach. No-op on a backend without it.
+  setBrowserBridge(bridge: BrowserBridge | null): void;
 }
