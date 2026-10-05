@@ -26,6 +26,9 @@ import { createExecHost, type ExecHost } from './exec-host';
 import { createDesktopHarnessHost, type DesktopHarnessHost } from './harness-host';
 import { createComputerHost, type ComputerHost } from './computer-host';
 import { createComputerBanner } from './computer-host/banner';
+import { createBrowserHost, type BrowserHost } from './browser-host';
+import { downloadFile, uploadFile } from './file-transfer';
+import { BROWSER_EXTENSION_DIR, BROWSER_NATIVE_HOST_SCRIPT } from './renderer-assets';
 import { createMirrorHost, type MirrorHost } from './mirror-host';
 import { createOAuthCourier, type OAuthCourier } from './oauth-courier';
 import { enableGlobalShortcutPortal, isLinux, isMac, mainWindowChromeOptions, requestAttention, timeLocaleArguments } from './platform';
@@ -333,6 +336,7 @@ let mcpHost: McpHost | null = null;
 let execHost: ExecHost | null = null;
 let harnessHost: DesktopHarnessHost | null = null;
 let computerHost: ComputerHost | null = null;
+let browserHost: BrowserHost | null = null;
 let mirrorHost: MirrorHost | null = null;
 
 /**
@@ -461,6 +465,20 @@ app.whenReady().then(async () => {
     banner: createComputerBanner()
   });
 
+  // The browser actions the server addresses to THIS Mac (the `browser` tool),
+  // handed to the Stem extension through its native-messaging host. Off until
+  // the switch in Settings is flipped on this computer.
+  browserHost = createBrowserHost({
+    invoke: (channel, args) => proxy!.invoke(channel, args),
+    uploadFile: (path) => uploadFile(endpoint, path),
+    downloadOutbox: (id, dir, name) => downloadFile(endpoint, `stem-outbox:${id}`, dir, name),
+    installSource: () => ({
+      extensionSource: BROWSER_EXTENSION_DIR,
+      hostScript: BROWSER_NATIVE_HOST_SCRIPT,
+      nodeCommand: process.execPath
+    })
+  });
+
   proxy = createServerProxy({
     ...endpoint,
     // The one `if` above decides this too: a server we did not start is a server
@@ -471,6 +489,7 @@ app.whenReady().then(async () => {
     execHost,
     harnessHost,
     computerHost,
+    browserHost,
     sendToMain,
     sendToOverlay: (channel, payload) => quickChat.sendToOverlay(channel, payload),
     revealIfOwns: (threadId) => quickChat.revealIfOwns(threadId),
@@ -506,6 +525,7 @@ app.whenReady().then(async () => {
       if (reachable) void harnessHost?.refresh();
       // And whether it lets Stem drive its screen.
       if (reachable) void computerHost?.refresh();
+      if (reachable) void browserHost?.refresh();
       // And reconcile + rescan the mirrored folders: edits made while the
       // stream was down are exactly what a reconnect has to catch up on.
       if (reachable) void mirrorHost?.refresh();
@@ -538,6 +558,7 @@ app.whenReady().then(async () => {
     execHost,
     harnessHost,
     computerHost,
+    browserHost,
     mirrorHost,
     themeChanged
   });
@@ -591,6 +612,7 @@ app.whenReady().then(async () => {
     void execHost?.start();
     void harnessHost?.start();
     void computerHost?.start();
+    void browserHost?.start();
     void mirrorHost?.start();
   });
 
@@ -652,6 +674,8 @@ app.on('before-quit', (event) => {
   void harnessHost?.close();
   // And a screen run: the helper is a child of this process too.
   computerHost?.close();
+  // And the browser host's socket: the extension's native host retries until Stem is back.
+  browserHost?.close();
   // Nothing to drain when the server is somebody else's process.
   if (!server) return;
   event.preventDefault();

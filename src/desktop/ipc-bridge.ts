@@ -60,6 +60,10 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   'harnessHost:setEnabled': [a.boolean],
   // The computer host's switch ('computerHost:localState' / ':requestAccess' take no arguments).
   'computerHost:setEnabled': [a.boolean],
+  // The browser host's switch and browser pick ('browserHost:localState' / ':setUp' take no arguments).
+  'browserHost:setEnabled': [a.boolean],
+  'browserHost:choose': [a.string],
+  'browserHost:openExtensions': [a.optional(a.nullish(a.string))],
   // Folders this machine mirrors: the native picker's absolute paths.
   // ('mirror:localState' takes no arguments, so it is absent.)
   'mirror:addLocal': [a.stringArray],

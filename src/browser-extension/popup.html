@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Stem</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="icons/icon-32.png" alt="" width="20" height="20" />
+      <h1>Stem</h1>
+      <span id="version" class="muted"></span>
+    </header>
+    <p id="status" class="status"><span class="dot"></span><span id="status-text">Checking…</span></p>
+    <p id="hint" class="hint" hidden></p>
+    <section id="runs-section" hidden>
+      <h2 id="runs-title"></h2>
+      <ul id="runs"></ul>
+      <button id="stop-all" type="button">Stop all</button>
+    </section>
+    <p id="idle" class="muted">Stem isn’t working in this browser right now.</p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

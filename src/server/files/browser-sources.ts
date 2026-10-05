@@ -83,7 +83,10 @@ async function snapshotChecked(ref: string, found: string): Promise<Checked> {
     if (held.size > MAX_UPLOAD_FILE_BYTES) {
       return { ok: false, error: `“${ref}” is larger than ${MAX_UPLOAD_FILE_BYTES / 1024 / 1024} MB.` };
     }
+    // quiet: a path that no longer resolves fails the identity check below,
+    // which refuses with the reason.
     const again = await realpath(found).catch(() => null);
+    // quiet: same — a vanished file is refused as "changed while checked".
     const there = again === found ? await stat(found).catch(() => null) : null;
     if (!there || there.ino !== held.ino || there.dev !== held.dev) {
       return { ok: false, error: `“${ref}” changed while it was being checked; try again.` };
@@ -91,6 +94,7 @@ async function snapshotChecked(ref: string, found: string): Promise<Checked> {
     const snap = await snapshotFromHandle(fh);
     return { ok: true, file: { path: snap.path, name: basename(found), size: snap.size } };
   } finally {
+    // quiet: a read-only handle that fails to close has nothing to lose.
     await fh.close().catch(() => undefined);
   }
 }
@@ -110,6 +114,7 @@ export async function resolveUploadSources(
   const files: UploadSource[] = [];
   const res = await collect(threadId, refs, deps, files);
   // A refusal part way through drops the copies already taken for this call.
+  // quiet: a copy that will not delete is swept with the outbox folder on the next start.
   if (!res.ok) for (const f of files) await rm(f.path, { force: true }).catch(() => undefined);
   return res.ok ? { ok: true, files } : res;
 }

@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Stem",
+  "version": "0.6.0",
+  "description": "Lets Stem work in this browser for you.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0jGhtzqKIOKH8I/12oqqJ0rDxMrVvPqQbtyhqBTST7T/bSQqFeguD6e7YpErlnmqAdXJbQQ3m6DhiHEveRFuwTV53hNVPef/JhmLFEOBVHyBuUaYkKgosgOZMusqaAqvKpdF5UEY4LCSY8Tm2lqOP/jSMeiZHLQYexH5cohjVToKDa9qI4XWvnCatxsxHQVlow7tU5KKua47rMNHjuHvAYUJqKIqDQdhuCdNpA0TkGcI+nIWrlhqed8d7z7WnBuD7HdWVvEA658kw+WnglrfRLJ5RW9qeinUauLvMZdfbHip/78dRD7U2wiAbIx1K06m8z9zbww8AtTfCjISCcn2aQIDAQAB",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "downloads",
+    "nativeMessaging",
+    "storage",
+    "alarms",
+    "webNavigation"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Stem",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "incognito": "not_allowed"
+}

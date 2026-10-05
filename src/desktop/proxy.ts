@@ -3,6 +3,8 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { log } from '../server/log';
 import {
+  BROWSER_END_FRAME,
+  BROWSER_REQUEST_FRAME,
   COMPUTER_END_FRAME,
   COMPUTER_REQUEST_FRAME,
   EXEC_REQUEST_FRAME,
@@ -12,6 +14,7 @@ import {
   MCP_REQUEST_FRAME,
   type AuthUiEvent,
   type BackendEventEnvelope,
+  type DeviceBrowserRequest,
   type DeviceComputerRequest,
   type DeviceExecRequest,
   type DeviceHarnessCancel,
@@ -277,6 +280,12 @@ export interface DeviceComputerHostBinding {
   onEnd(end: { threadId: string }): void;
 }
 
+/** And for the browser actions this Mac hands to its Stem extension (the `browser` tool). */
+export interface DeviceBrowserHostBinding {
+  onRequest(request: DeviceBrowserRequest): void;
+  onEnd(end: { threadId: string }): void;
+}
+
 export interface ProxyDeps {
   /** HUD lifecycle is separate from HTTP reachability and renderer replay. */
   hudDisconnected?(): void;
@@ -339,6 +348,8 @@ export interface ProxyDeps {
   harnessHost: DeviceHarnessHostBinding;
   /** Performs the screen actions addressed to this device. See DeviceComputerHostBinding. */
   computerHost: DeviceComputerHostBinding;
+  /** Hands the browser actions addressed to this device to the extension. Optional so older test fakes stand. */
+  browserHost?: DeviceBrowserHostBinding;
   /** Quick Chat settings were persisted: apply the parts that are not settings. */
   applyQuickChatSettings(patch: Partial<QuickChatSettings>, next: QuickChatSettings): void;
 }
@@ -719,6 +730,17 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       if (typeof threadId === 'string' && threadId) deps.computerHost.onEnd({ threadId });
       return;
     }
+    // A browser action for THIS Mac, and the end of a browser run. Same rules.
+    if (name === BROWSER_REQUEST_FRAME) {
+      const request = asBrowserRequest(data);
+      if (request) deps.browserHost?.onRequest(request);
+      return;
+    }
+    if (name === BROWSER_END_FRAME) {
+      const threadId = (data as { threadId?: unknown } | null)?.threadId;
+      if (typeof threadId === 'string' && threadId) deps.browserHost?.onEnd({ threadId });
+      return;
+    }
     if (name === 'hudSnapshot') {
       const snapshot = data as { deviceId?: unknown; state?: { liveTurns?: unknown } };
       if (typeof snapshot.deviceId === 'string' && Array.isArray(snapshot.state?.liveTurns)) {
@@ -781,6 +803,16 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     if (!action || typeof action !== 'object' || typeof action.kind !== 'string') return null;
     // The action's fields are validated where they land (the helper refuses
     // what it cannot do); the shape here is only what the host keys off.
+    return { requestId: frame.requestId, threadId: frame.threadId, action: frame.action! };
+  }
+
+  function asBrowserRequest(data: unknown): DeviceBrowserRequest | null {
+    const frame = data as Partial<DeviceBrowserRequest> | null;
+    if (!frame || typeof frame.requestId !== 'string' || !frame.requestId) return null;
+    if (typeof frame.threadId !== 'string' || !frame.threadId) return null;
+    const action = frame.action as { kind?: unknown } | undefined;
+    if (!action || typeof action !== 'object' || typeof action.kind !== 'string') return null;
+    // As with the screen: the extension refuses what it cannot do.
     return { requestId: frame.requestId, threadId: frame.threadId, action: frame.action! };
   }
 

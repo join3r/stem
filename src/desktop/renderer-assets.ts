@@ -12,6 +12,10 @@ import type { BrowserWindow } from 'electron';
 // status pill).
 const distMain = fileURLToPath(new URL('.', import.meta.url));
 
+/** The Stem browser extension as built (copied from src/browser-extension), and its native-messaging host. */
+export const BROWSER_EXTENSION_DIR = join(distMain, '../browser-extension');
+export const BROWSER_NATIVE_HOST_SCRIPT = join(distMain, 'browser-native-host.js');
+
 /** The sandboxed preload every window shares (CommonJS — sandboxed preloads must be). */
 export const PRELOAD_SCRIPT = join(distMain, '../preload/index.cjs');
 

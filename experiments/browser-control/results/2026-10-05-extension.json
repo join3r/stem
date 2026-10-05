@@ -1,0 +1,580 @@
+{
+  "headless=new": {
+    "recordedOn": "2026-10-05",
+    "recordedAt": "2026-10-05T16:19:30.832Z",
+    "display": {
+      "asleep": false,
+      "locked": false
+    },
+    "mode": "headless=new",
+    "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.0.0 Safari/537.36",
+    "executable": "/Users/join3r/Library/Caches/ms-playwright/chromium-1228/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "extensionId": "bbadcpfklblgjocjcaemcmojkikjnoao",
+    "status": "passed",
+    "passed": 28,
+    "failed": 0,
+    "checks": [
+      {
+        "name": "hello: protocol 1, the manifest-derived id, version",
+        "ok": true,
+        "ms": 0,
+        "detail": "bbadcpfklblgjocjcaemcmojkikjnoao v0.6.0"
+      },
+      {
+        "name": "tabs lists the user’s own tab as active",
+        "ok": true,
+        "ms": 2,
+        "detail": "1 open tab. \"active\" is the tab showing in its window — the user may be looking at it; the rest are in the background. Pass an id as `tab` to work in it.\nWindow 1 (last focused: new tabs open here):\n- 442773629 · The user’s own page — http://127.0.0.1:58345/user (active)"
+      },
+      {
+        "name": "open: new background tab, the user’s tab stays active",
+        "ok": true,
+        "ms": 150,
+        "detail": "Opened tab 442773630 in the background: Fixture form — http://127.0.0.1:58345/form?tab=F\n2 open tabs. \"active\" is the tab showing in its window — the user may be looking at it; the rest are in the background. Pass an id as `tab` to work in it.\nWindow 1 (last focused: new tabs open here):\n- 442773629 · The user’s own page — http://127.0.0.1:58345/user (active)\n- 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F (yours, your current tab)"
+      },
+      {
+        "name": "snapshot: outline with refs, same-origin iframe spliced in",
+        "ok": true,
+        "ms": 13,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\n- banner\n  - navigation \"Main\"\n    - link \"Page two\" [ref=e1] → /page2\n    - link \"Open help\" [ref=e2] → /help\n    - link \"Download report\" [ref=e3] → /download\n- main\n  - heading \"Order form\" [level=1] [ref=e4]\n  - paragraph: Fill in the form below and press Greet.\n  - textbox \"Name\" [ref=e5]: Ada\n  - textbox \"Email\" [ref=e6]\n  - textbox \"Password\" [ref=e7]\n  - combobox \"Colour\" [ref=e8]: Green\n    - option \"Red\"\n    - option \"Green\" [selected]\n    - option \"Blue\"\n  - checkbox \"Subscribe\" [ref=e9]\n  - group \"Size\"\n    - radio \"Small\" [checked] [ref=e10]\n    - radio \"Large\" [ref=e11]\n  - textbox \"Notes\" [ref=e12]: hello\n  - button \"Greet\" [ref=e13]\n  - button \"Alert me\" [ref=e14]\n  - button \"Ask my name\" [ref=e15]\n  - search\n    - textbox \"Search\" [ref=e16]\n    - button \"Go\" [ref=e17]\n  - list\n    - listitem: One\n    - listitem\n      - text: Two\n      - link \"anchor\" [ref=e18] → #t\n  - table\n    - row: Item | Price\n    - row: Tea | 3\n  - region \"Files\"\n    - button \"Choose file\" [ref=e19]\n    - button \"Send file\" [ref=e20]\n  - iframe \"Same-origin frame\":\n    - paragraph: Inside the frame\n    - button \"Frame button\" [ref=e21]\n  - text: Tall section\n  - paragraph: The end of the page."
+      },
+      {
+        "name": "fill: text field, select by option text, checkbox",
+        "ok": true,
+        "ms": 22,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nSet textbox \"Name\" (e5) to \"Bob\".\nTab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nSelected \"Blue\" in combobox \"Colour\" (e8).\nTab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nChecked checkbox \"Subscribe\" (e9); it is now checked.\nTab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\ncheckbox \"Subscribe\" (e9) was already checked."
+      },
+      {
+        "name": "click by ref in a background tab",
+        "ok": true,
+        "ms": 618,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nClicked button \"Greet\" (e13)."
+      },
+      {
+        "name": "console: load-time and click messages, errorsOnly",
+        "ok": true,
+        "ms": 5,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\n3 console messages (oldest first; Stem attached at 18:19:15):\n18:19:15 log   form loaded 42 (form:31)\n18:19:15 debug [recommendation] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o (form)\n18:19:15 error greet clicked Bob (form:35)"
+      },
+      {
+        "name": "network: list and one request with its body",
+        "ok": true,
+        "ms": 3,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\n1 requests matching \"/api/data\" since Stem attached at 18:19:15 (oldest first; `network` with `request`: an id for its headers and body):\nr5 GET 200 fetch 239 B http://127.0.0.1:58345/api/data?name=Bob\n---\nTab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nr5 GET http://127.0.0.1:58345/api/data?name=Bob\nStatus: 200 OK · type fetch · application/json · 239 B\nRequest headers:\n  Accept-Language: en-US,en;q=0.9\n  Referer: http://127.0.0.1:58345/form?tab=F\n  User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.0.0 Safari/537.36\n  sec-ch-ua: \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"\n  sec-ch-ua-mobile: ?0\n  sec-ch-ua-platform: \"macOS\"\nResponse headers:\n  Connection: keep-alive\n  Date: Mon, 05 Oct 2026 16:19:15 GMT\n  Keep-Alive: timeout=5\n  Transfer-Encoding: chunked\n  cache-control: no-store\n  content-type: application/json\nResponse body:\n{\"greeting\":\"Hello Bob\",\"items\":[1,2,3]}"
+      },
+      {
+        "name": "type + submit navigates; wait for text",
+        "ok": true,
+        "ms": 311,
+        "detail": "Tab 442773630 · Search results — http://127.0.0.1:58345/search?q=stem+rocks\nTyped 10 characters into textbox \"Search\" (e16) and pressed Enter. The tab went to http://127.0.0.1:58345/search?q=stem+rocks.\nTab 442773630 · Search results — http://127.0.0.1:58345/search?q=stem+rocks\nThe text \"Results for stem rocks\" appeared after 0.0 s."
+      },
+      {
+        "name": "navigate back, then wait for delayed text and a timeout",
+        "ok": true,
+        "ms": 2784,
+        "detail": "Tab 442773630 · Delayed — http://127.0.0.1:58345/delayed\nThe text \"ready NOW\" appeared after 1.5 s.\nTab 442773630 · Delayed — http://127.0.0.1:58345/delayed\nThe text \"never there\" did not appear within 1 s.\nTab 442773630 · Delayed — http://127.0.0.1:58345/delayed\nA URL containing \"/delayed\" appeared after 0.0 s."
+      },
+      {
+        "name": "press: Meta+A then Backspace clears a field (Mac editing commands), Tab moves focus",
+        "ok": true,
+        "ms": 781,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nPressed Meta+A."
+      },
+      {
+        "name": "scroll: wheel down in a background tab, then a ref into view",
+        "ok": true,
+        "ms": 462,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nScrolled the page down: it is now at y=330 of 2592 (the view is 413 px high).\nTab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nScrolled button \"Greet\" (e13) into view: its top is 196 px from the top of the 413 px high view."
+      },
+      {
+        "name": "evaluate: value, top-level await, a thrown error",
+        "ok": true,
+        "ms": 157,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\n\"Fixture form\"\nTab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\n{\n  \"n\": 42\n}\nThe script threw: ReferenceError: nope is not defined at <anonymous>:1:1"
+      },
+      {
+        "name": "dialog: an alert during a click does not hang; other actions refuse; prompt answered with text",
+        "ok": true,
+        "ms": 670,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nClicked button \"Alert me\" (e14). The page opened a dialog: alert \"Hi there\". Answer it with `dialog` (accept: true or false) before doing anything else in this tab. (18 ms)"
+      },
+      {
+        "name": "screenshot of a background tab: CSS-pixel size, not blank, marker hidden",
+        "ok": true,
+        "ms": 189,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nScreenshot of the visible part of the page, 741×413; coordinates are CSS pixels of this picture. | view 756x413 | stdev 34.0 | edge 255,255,255 | Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nFull-page screenshot, 741×1652 (the top 1652 px of a 3039 px page). Its coordinates are page coordinates; `coordinate` clicks use the visible part of the page, so scroll first or use a ref."
+      },
+      {
+        "name": "upload through a hidden file input; the server receives the bytes",
+        "ok": true,
+        "ms": 343,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nAttached upload-me.txt (33 B) to the file input (from button \"Choose file\" (e19)). Many sites upload as soon as a file is chosen; if this one has a send or upload button, click it."
+      },
+      {
+        "name": "a click on an upload button is answered by a file chooser, not a native dialog",
+        "ok": true,
+        "ms": 310,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F\nClicked button \"Choose file\" (e19). It opened a file chooser: answer it with `upload` (same ref, and the files)."
+      },
+      {
+        "name": "download: reported on the next result exactly once, with its path",
+        "ok": true,
+        "ms": 318,
+        "detail": "{\"path\":\"/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-extension-live-wlUdpY/downloads/report.txt\",\"name\":\"report.txt\",\"size\":28,\"mime\":\"text/plain\"} | Downloads from this run:\n- report.txt — done, 28 B"
+      },
+      {
+        "name": "a download the user makes during a run is never the run’s",
+        "ok": true,
+        "ms": 618,
+        "detail": "report (1).txt, report.txt on disk; run lists: Downloads from this run: | - report.txt — done, 28 B"
+      },
+      {
+        "name": "a target=_blank click opens a background tab; the user’s view does not switch",
+        "ok": true,
+        "ms": 830,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F#stem-test-user-download\nClicked link \"Open help\" (e2).\nIt opened tab 442773631 in the background (yours to use or close): http://127.0.0.1:58345/help"
+      },
+      {
+        "name": "close: own tab closes, the user’s tab is refused",
+        "ok": true,
+        "ms": 8,
+        "detail": "Closed tab 442773631 (Help). | You can only close tabs you opened."
+      },
+      {
+        "name": "refuses chrome:// and file: (open, and acting in a tab showing one)",
+        "ok": true,
+        "ms": 1,
+        "detail": "Stem can't open that: it shows a browser page (chrome://settings/), which extensions are not allowed to control (chrome: pages).\nStem can't open that: it is a file on this Mac, which Stem never opens — uploads go through `upload` with files Stem holds.\nStem can't open that: it is a file on this Mac, which Stem never opens — uploads go through `upload` with files Stem holds."
+      },
+      {
+        "name": "two runs at once in different tabs; a shared tab gets a warning; actions serialize",
+        "ok": true,
+        "ms": 649,
+        "detail": "Note: another Stem run also worked in this tab in the last 2 minutes, so the page may have changed under you. | A: Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F#stem-test-user-download B: Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F#stem-test-user-download"
+      },
+      {
+        "name": "minimized window: click and scroll still work in a background tab; screenshot works or says why",
+        "ok": true,
+        "ms": 2376,
+        "detail": "click 308 ms | Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F#stem-test-minimize | screenshot ok 741x413 (56 ms) | visibilityState visible"
+      },
+      {
+        "name": "marker: present, invisible to page script (no binding, closed shadow root)",
+        "ok": true,
+        "ms": 2,
+        "detail": "[\"undefined\",true,true]"
+      },
+      {
+        "name": "marker Stop button → `stopped` for every run using that tab; later requests refused",
+        "ok": true,
+        "ms": 1518,
+        "detail": "stopped: thread-a, thread-b; marker removed"
+      },
+      {
+        "name": "end: runs forgotten; a new run re-attaches with fresh history",
+        "ok": true,
+        "ms": 2009,
+        "detail": "Tab 442773630 · Fixture form — http://127.0.0.1:58345/form?tab=F#stem-test-press-stop\n3 console messages (oldest first; 3 from before Stem attached at 18:19:29):\n18:19:19 log   form loaded 42 (form:31)\n18:19:26 error greet clicked (form:35)\n18:19:19 debug [recommendation] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o (form)"
+      },
+      {
+        "name": "stale and unknown refs say so",
+        "ok": true,
+        "ms": 5,
+        "detail": "Ref e3 is stale: take a new snapshot."
+      }
+    ],
+    "markerLog": [
+      {
+        "at": 1791217155147,
+        "href": "http://127.0.0.1:58345/user",
+        "present": false,
+        "doc": "6asn3v498kb"
+      },
+      {
+        "at": 1791217155599,
+        "href": "http://127.0.0.1:58345/form?tab=F",
+        "present": false,
+        "doc": "nkmxikffj67"
+      },
+      {
+        "at": 1791217156403,
+        "href": "http://127.0.0.1:58345/search?q=stem+rocks",
+        "present": false,
+        "doc": "4m6t2l9dceh"
+      },
+      {
+        "at": 1791217156692,
+        "href": "http://127.0.0.1:58345/form?tab=F",
+        "present": false,
+        "doc": "tpxjqoy9u"
+      },
+      {
+        "at": 1791217156813,
+        "href": "http://127.0.0.1:58345/delayed",
+        "present": false,
+        "doc": "3lc4ba4bdaj"
+      },
+      {
+        "at": 1791217157903,
+        "href": "http://127.0.0.1:58345/delayed",
+        "present": true,
+        "doc": "3lc4ba4bdaj"
+      },
+      {
+        "at": 1791217159489,
+        "href": "http://127.0.0.1:58345/form?tab=F",
+        "present": false,
+        "doc": "uye1ndq8vgl"
+      },
+      {
+        "at": 1791217160222,
+        "href": "http://127.0.0.1:58345/form?tab=F",
+        "present": true,
+        "doc": "uye1ndq8vgl"
+      },
+      {
+        "at": 1791217163350,
+        "href": "http://127.0.0.1:58345/help",
+        "present": false,
+        "doc": "yl7jw5t70n8"
+      },
+      {
+        "at": 1791217164207,
+        "href": "http://127.0.0.1:58345/page2",
+        "present": false,
+        "doc": "pcnwgbfstf"
+      },
+      {
+        "at": 1791217165216,
+        "href": "http://127.0.0.1:58345/page2",
+        "present": true,
+        "doc": "pcnwgbfstf"
+      },
+      {
+        "at": 1791217167203,
+        "href": "http://127.0.0.1:58345/form?tab=F#stem-test-press-stop",
+        "present": false,
+        "doc": "uye1ndq8vgl"
+      },
+      {
+        "at": 1791217167205,
+        "href": "http://127.0.0.1:58345/page2",
+        "present": false,
+        "doc": "pcnwgbfstf"
+      },
+      {
+        "at": 1791217169211,
+        "href": "http://127.0.0.1:58345/form?tab=F#stem-test-press-stop",
+        "present": true,
+        "doc": "uye1ndq8vgl"
+      },
+      {
+        "at": 1791217169214,
+        "href": "http://127.0.0.1:58345/form?tab=F#stem-test-press-stop",
+        "present": false,
+        "doc": "uye1ndq8vgl"
+      },
+      {
+        "at": 1791217170721,
+        "href": "http://127.0.0.1:58345/form?tab=F#stem-test-press-stop",
+        "present": true,
+        "doc": "uye1ndq8vgl"
+      }
+    ]
+  },
+  "headed, display asleep or locked": {
+    "recordedOn": "2026-10-05",
+    "recordedAt": "2026-10-05T16:21:11.768Z",
+    "display": {
+      "asleep": true,
+      "locked": false
+    },
+    "mode": "headed",
+    "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "executable": "/Users/join3r/Library/Caches/ms-playwright/chromium-1228/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "extensionId": "bbadcpfklblgjocjcaemcmojkikjnoao",
+    "status": "failed",
+    "passed": 27,
+    "failed": 1,
+    "checks": [
+      {
+        "name": "hello: protocol 1, the manifest-derived id, version",
+        "ok": true,
+        "ms": 0,
+        "detail": "bbadcpfklblgjocjcaemcmojkikjnoao v0.6.0"
+      },
+      {
+        "name": "tabs lists the user’s own tab as active",
+        "ok": true,
+        "ms": 2,
+        "detail": "1 open tab. \"active\" is the tab showing in its window — the user may be looking at it; the rest are in the background. Pass an id as `tab` to work in it.\nWindow 1 (last focused: new tabs open here):\n- 70556418 · The user’s own page — http://127.0.0.1:58436/user (active)"
+      },
+      {
+        "name": "open: new background tab, the user’s tab stays active",
+        "ok": true,
+        "ms": 153,
+        "detail": "Opened tab 70556419 in the background: Fixture form — http://127.0.0.1:58436/form?tab=F\n2 open tabs. \"active\" is the tab showing in its window — the user may be looking at it; the rest are in the background. Pass an id as `tab` to work in it.\nWindow 1 (last focused: new tabs open here):\n- 70556418 · The user’s own page — http://127.0.0.1:58436/user (active)\n- 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F (yours, your current tab)"
+      },
+      {
+        "name": "snapshot: outline with refs, same-origin iframe spliced in",
+        "ok": true,
+        "ms": 8,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\n- banner\n  - navigation \"Main\"\n    - link \"Page two\" [ref=e1] → /page2\n    - link \"Open help\" [ref=e2] → /help\n    - link \"Download report\" [ref=e3] → /download\n- main\n  - heading \"Order form\" [level=1] [ref=e4]\n  - paragraph: Fill in the form below and press Greet.\n  - textbox \"Name\" [ref=e5]: Ada\n  - textbox \"Email\" [ref=e6]\n  - textbox \"Password\" [ref=e7]\n  - combobox \"Colour\" [ref=e8]: Green\n    - option \"Red\"\n    - option \"Green\" [selected]\n    - option \"Blue\"\n  - checkbox \"Subscribe\" [ref=e9]\n  - group \"Size\"\n    - radio \"Small\" [checked] [ref=e10]\n    - radio \"Large\" [ref=e11]\n  - textbox \"Notes\" [ref=e12]: hello\n  - button \"Greet\" [ref=e13]\n  - button \"Alert me\" [ref=e14]\n  - button \"Ask my name\" [ref=e15]\n  - search\n    - textbox \"Search\" [ref=e16]\n    - button \"Go\" [ref=e17]\n  - list\n    - listitem: One\n    - listitem\n      - text: Two\n      - link \"anchor\" [ref=e18] → #t\n  - table\n    - row: Item | Price\n    - row: Tea | 3\n  - region \"Files\"\n    - button \"Choose file\" [ref=e19]\n    - button \"Send file\" [ref=e20]\n  - iframe \"Same-origin frame\":\n    - paragraph: Inside the frame\n    - button \"Frame button\" [ref=e21]\n  - text: Tall section\n  - paragraph: The end of the page."
+      },
+      {
+        "name": "fill: text field, select by option text, checkbox",
+        "ok": true,
+        "ms": 11,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nSet textbox \"Name\" (e5) to \"Bob\".\nTab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nSelected \"Blue\" in combobox \"Colour\" (e8).\nTab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nChecked checkbox \"Subscribe\" (e9); it is now checked.\nTab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\ncheckbox \"Subscribe\" (e9) was already checked."
+      },
+      {
+        "name": "click by ref in a background tab",
+        "ok": true,
+        "ms": 618,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nClicked button \"Greet\" (e13)."
+      },
+      {
+        "name": "console: load-time and click messages, errorsOnly",
+        "ok": true,
+        "ms": 3,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\n3 console messages (oldest first; Stem attached at 18:20:25):\n18:20:25 log   form loaded 42 (form:31)\n18:20:25 debug [recommendation] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o (form)\n18:20:25 error greet clicked Bob (form:35)"
+      },
+      {
+        "name": "network: list and one request with its body",
+        "ok": true,
+        "ms": 3,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\n1 requests matching \"/api/data\" since Stem attached at 18:20:25 (oldest first; `network` with `request`: an id for its headers and body):\nr5 GET 200 fetch 239 B http://127.0.0.1:58436/api/data?name=Bob\n---\nTab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nr5 GET http://127.0.0.1:58436/api/data?name=Bob\nStatus: 200 OK · type fetch · application/json · 239 B\nRequest headers:\n  Accept-Language: en-US,en;q=0.9\n  Referer: http://127.0.0.1:58436/form?tab=F\n  User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36\n  sec-ch-ua: \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"\n  sec-ch-ua-mobile: ?0\n  sec-ch-ua-platform: \"macOS\"\nResponse headers:\n  Connection: keep-alive\n  Date: Mon, 05 Oct 2026 16:20:25 GMT\n  Keep-Alive: timeout=5\n  Transfer-Encoding: chunked\n  cache-control: no-store\n  content-type: application/json\nResponse body:\n{\"greeting\":\"Hello Bob\",\"items\":[1,2,3]}"
+      },
+      {
+        "name": "type + submit navigates; wait for text",
+        "ok": true,
+        "ms": 316,
+        "detail": "Tab 70556419 · Search results — http://127.0.0.1:58436/search?q=stem+rocks\nTyped 10 characters into textbox \"Search\" (e16) and pressed Enter. The tab went to http://127.0.0.1:58436/search?q=stem+rocks.\nTab 70556419 · Search results — http://127.0.0.1:58436/search?q=stem+rocks\nThe text \"Results for stem rocks\" appeared after 0.0 s."
+      },
+      {
+        "name": "navigate back, then wait for delayed text and a timeout",
+        "ok": true,
+        "ms": 2829,
+        "detail": "Tab 70556419 · Delayed — http://127.0.0.1:58436/delayed\nThe text \"ready NOW\" appeared after 1.6 s.\nTab 70556419 · Delayed — http://127.0.0.1:58436/delayed\nThe text \"never there\" did not appear within 1 s.\nTab 70556419 · Delayed — http://127.0.0.1:58436/delayed\nA URL containing \"/delayed\" appeared after 0.0 s."
+      },
+      {
+        "name": "press: Meta+A then Backspace clears a field (Mac editing commands), Tab moves focus",
+        "ok": true,
+        "ms": 767,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nPressed Meta+A."
+      },
+      {
+        "name": "scroll: wheel down in a background tab, then a ref into view",
+        "ok": true,
+        "ms": 2023,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nScrolled the page down (by script: the browser isn't drawing right now, so the mouse wheel stalled): it is now at y=566 of 2278 (the view is 707 px high).\nTab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nScrolled button \"Greet\" (e13) into view: its top is 238 px from the top of the 707 px high view."
+      },
+      {
+        "name": "evaluate: value, top-level await, a thrown error",
+        "ok": true,
+        "ms": 245,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\n\"Fixture form\"\nTab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\n{\n  \"n\": 42\n}\nThe script threw: ReferenceError: nope is not defined at <anonymous>:1:1"
+      },
+      {
+        "name": "dialog: an alert during a click does not hang; other actions refuse; prompt answered with text",
+        "ok": true,
+        "ms": 680,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nClicked button \"Alert me\" (e14). The page opened a dialog: alert \"Hi there\". Answer it with `dialog` (accept: true or false) before doing anything else in this tab. (17 ms)"
+      },
+      {
+        "name": "screenshot of a background tab: CSS-pixel size, not blank, marker hidden",
+        "ok": false,
+        "ms": 10258,
+        "detail": "Error: request failed: {\"ok\":false,\"error\":\"The browser isn't drawing right now — the Mac's display is probably asleep or the screen locked — so there is no picture to take. `snapshot`, clicks and typing still work.\"}\n    at assert (file:///Users/join3r/local/vibe/stem/desktop/scripts/browser-extension-live.mjs:549:22)\n    at ok (file:///Users/join3r/local/vibe/stem/desktop/scripts/browser-extension-live.mjs:552:5)\n    at file:///Users/join3r/local/vibe/stem/desktop/scripts/browser-extension-live.mjs:746:17\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async check (file:///Users/join3r/local/vibe/stem/desktop/scripts/browser-extension-live.mjs:541:22)\n    at async nativeHost (file:///Users/join3r/local/vibe/stem/desktop/scripts/browser-extension-live.mjs:740:5)\n    at async file:///Users/join3r/local/vibe/stem/desktop/scripts/browser-extension-live.mjs:961:3"
+      },
+      {
+        "name": "upload through a hidden file input; the server receives the bytes",
+        "ok": true,
+        "ms": 359,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nAttached upload-me.txt (33 B) to the file input (from button \"Choose file\" (e19)). Many sites upload as soon as a file is chosen; if this one has a send or upload button, click it."
+      },
+      {
+        "name": "a click on an upload button is answered by a file chooser, not a native dialog",
+        "ok": true,
+        "ms": 312,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F\nClicked button \"Choose file\" (e19). It opened a file chooser: answer it with `upload` (same ref, and the files)."
+      },
+      {
+        "name": "download: reported on the next result exactly once, with its path",
+        "ok": true,
+        "ms": 321,
+        "detail": "{\"path\":\"/var/folders/9g/7y5ws8zs42jckrc1h2363fw80000gn/T/stem-extension-live-ItLdML/downloads/report.txt\",\"name\":\"report.txt\",\"size\":28,\"mime\":\"text/plain\"} | Downloads from this run:\n- report.txt — done, 28 B"
+      },
+      {
+        "name": "a download the user makes during a run is never the run’s",
+        "ok": true,
+        "ms": 614,
+        "detail": "report (1).txt, report.txt on disk; run lists: Downloads from this run: | - report.txt — done, 28 B"
+      },
+      {
+        "name": "a target=_blank click opens a background tab; the user’s view does not switch",
+        "ok": true,
+        "ms": 860,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F#stem-test-user-download\nClicked link \"Open help\" (e2).\nIt opened tab 70556420 in the background (yours to use or close): http://127.0.0.1:58436/help"
+      },
+      {
+        "name": "close: own tab closes, the user’s tab is refused",
+        "ok": true,
+        "ms": 10,
+        "detail": "Closed tab 70556420 (Help). | You can only close tabs you opened."
+      },
+      {
+        "name": "refuses chrome:// and file: (open, and acting in a tab showing one)",
+        "ok": true,
+        "ms": 3,
+        "detail": "Stem can't open that: it shows a browser page (chrome://settings/), which extensions are not allowed to control (chrome: pages).\nStem can't open that: it is a file on this Mac, which Stem never opens — uploads go through `upload` with files Stem holds.\nStem can't open that: it is a file on this Mac, which Stem never opens — uploads go through `upload` with files Stem holds."
+      },
+      {
+        "name": "two runs at once in different tabs; a shared tab gets a warning; actions serialize",
+        "ok": true,
+        "ms": 599,
+        "detail": "Note: another Stem run also worked in this tab in the last 2 minutes, so the page may have changed under you. | A: Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F#stem-test-user-download B: Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F#stem-test-user-download"
+      },
+      {
+        "name": "minimized window: click and scroll still work in a background tab; screenshot works or says why",
+        "ok": true,
+        "ms": 21025,
+        "detail": "click 316 ms | Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F#stem-test-minimize | screenshot refused: The browser isn't drawing right now — the Mac's display is probably asleep or the screen locked — so there is no picture to take. `snapshot`, clicks and typing still work. (10323 ms) | visibilityState visible"
+      },
+      {
+        "name": "marker: present, invisible to page script (no binding, closed shadow root)",
+        "ok": true,
+        "ms": 3,
+        "detail": "[\"undefined\",true,true]"
+      },
+      {
+        "name": "marker Stop button → `stopped` for every run using that tab; later requests refused",
+        "ok": true,
+        "ms": 1519,
+        "detail": "stopped: thread-a, thread-b; marker removed"
+      },
+      {
+        "name": "end: runs forgotten; a new run re-attaches with fresh history",
+        "ok": true,
+        "ms": 2017,
+        "detail": "Tab 70556419 · Fixture form — http://127.0.0.1:58436/form?tab=F#stem-test-press-stop\n3 console messages (oldest first; 3 from before Stem attached at 18:21:09):\n18:20:29 log   form loaded 42 (form:31)\n18:20:49 error greet clicked (form:35)\n18:20:29 debug [recommendation] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o (form)"
+      },
+      {
+        "name": "stale and unknown refs say so",
+        "ok": true,
+        "ms": 5,
+        "detail": "Ref e3 is stale: take a new snapshot."
+      }
+    ],
+    "markerLog": [
+      {
+        "at": 1791217225364,
+        "href": "http://127.0.0.1:58436/user",
+        "present": false,
+        "doc": "v4haqiu4a4i"
+      },
+      {
+        "at": 1791217225785,
+        "href": "http://127.0.0.1:58436/form?tab=F",
+        "present": false,
+        "doc": "dt67fhoz9r"
+      },
+      {
+        "at": 1791217226805,
+        "href": "http://127.0.0.1:58436/form?tab=F",
+        "present": true,
+        "doc": "dt67fhoz9r"
+      },
+      {
+        "at": 1791217226824,
+        "href": "http://127.0.0.1:58436/search?q=stem+rocks",
+        "present": false,
+        "doc": "hlpzgkp83pj"
+      },
+      {
+        "at": 1791217226872,
+        "href": "http://127.0.0.1:58436/form?tab=F",
+        "present": false,
+        "doc": "j7s4c1kxx0e"
+      },
+      {
+        "at": 1791217226990,
+        "href": "http://127.0.0.1:58436/delayed",
+        "present": false,
+        "doc": "7p3zjeg8kjy"
+      },
+      {
+        "at": 1791217228140,
+        "href": "http://127.0.0.1:58436/delayed",
+        "present": true,
+        "doc": "7p3zjeg8kjy"
+      },
+      {
+        "at": 1791217229711,
+        "href": "http://127.0.0.1:58436/form?tab=F",
+        "present": false,
+        "doc": "ghpopc8aku"
+      },
+      {
+        "at": 1791217230439,
+        "href": "http://127.0.0.1:58436/form?tab=F",
+        "present": true,
+        "doc": "ghpopc8aku"
+      },
+      {
+        "at": 1791217245326,
+        "href": "http://127.0.0.1:58436/help",
+        "present": false,
+        "doc": "4d9nchf8kc5"
+      },
+      {
+        "at": 1791217246199,
+        "href": "http://127.0.0.1:58436/page2",
+        "present": false,
+        "doc": "d84etxx44ww"
+      },
+      {
+        "at": 1791217247367,
+        "href": "http://127.0.0.1:58436/page2",
+        "present": true,
+        "doc": "d84etxx44ww"
+      },
+      {
+        "at": 1791217267791,
+        "href": "http://127.0.0.1:58436/form?tab=F#stem-test-press-stop",
+        "present": false,
+        "doc": "ghpopc8aku"
+      },
+      {
+        "at": 1791217267792,
+        "href": "http://127.0.0.1:58436/page2",
+        "present": false,
+        "doc": "d84etxx44ww"
+      },
+      {
+        "at": 1791217269806,
+        "href": "http://127.0.0.1:58436/form?tab=F#stem-test-press-stop",
+        "present": true,
+        "doc": "ghpopc8aku"
+      },
+      {
+        "at": 1791217269811,
+        "href": "http://127.0.0.1:58436/form?tab=F#stem-test-press-stop",
+        "present": false,
+        "doc": "ghpopc8aku"
+      },
+      {
+        "at": 1791217271316,
+        "href": "http://127.0.0.1:58436/form?tab=F#stem-test-press-stop",
+        "present": true,
+        "doc": "ghpopc8aku"
+      },
+      {
+        "at": 1791217271528,
+        "href": "http://127.0.0.1:58436/form?tab=F#stem-test-press-stop",
+        "present": false,
+        "doc": "ghpopc8aku"
+      }
+    ]
+  }
+}

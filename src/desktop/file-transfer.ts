@@ -182,14 +182,16 @@ async function reserve(dir: string, name: string): Promise<{ path: string; out: 
 export async function downloadFile(
   creds: ServerCredentials,
   rel: string,
-  destDir: string
+  destDir: string,
+  /** The name to save under, when `rel` is not one (a browser-upload outbox id). */
+  saveAs?: string
 ): Promise<string> {
   const url = new URL(`${creds.url.replace(/\/$/, '')}/files/${encodeRelPath(rel)}`);
   const req = open(url, { method: 'GET', headers: { authorization: `Bearer ${creds.token}` } });
   const answered = response(req);
   req.end();
 
-  const name = basename(rel) || 'download';
+  const name = (saveAs && basename(saveAs)) || basename(rel) || 'download';
   let res: IncomingMessage;
   try {
     res = await answered;

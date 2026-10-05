@@ -1,6 +1,6 @@
 import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeSystemVersion } from './scripts/sys-version.mjs';
@@ -26,6 +26,13 @@ function copyMainRuntimeAssets() {
         mkdirSync(dirname(to), { recursive: true });
         copyFileSync(join(rootDir, src), to);
       }
+      // The Stem browser extension: plain MV3 files with no build step, shipped
+      // beside dist/main so Set up can copy them out for Load unpacked
+      // (desktop/browser-host/install.ts). Replaced whole so a deleted file
+      // does not linger in the bundle.
+      const ext = join(rootDir, 'dist/browser-extension');
+      rmSync(ext, { recursive: true, force: true });
+      cpSync(join(rootDir, 'src/browser-extension'), ext, { recursive: true });
     }
   };
 }
@@ -56,7 +63,11 @@ export default defineConfig({
           server: 'src/server/main.ts',
           'embed-worker': 'src/server/recall/embed-worker.ts',
           'recall-mcp-server': 'src/server/recall/mcp-server-main.ts',
-          'scan-worker': 'src/server/recall/scan-worker.ts'
+          'scan-worker': 'src/server/recall/scan-worker.ts',
+          // The browser extension's native-messaging host: plain Node, run by
+          // the Stem binary with ELECTRON_RUN_AS_NODE from the wrapper script
+          // Set up writes (desktop/browser-host/install.ts).
+          'browser-native-host': 'src/desktop/browser-host/native-host-main.ts'
         },
         // transformers.js must stay external: it lazily loads onnxruntime-node's
         // native .node binary, which cannot live inside a rollup bundle. Resolved

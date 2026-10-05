@@ -1,0 +1,143 @@
+:root {
+  --bg: #fbf8f4;
+  --fg: #2a211a;
+  --muted: #7d7166;
+  --line: #e7ddd2;
+  --accent: #9a6230;
+  --accent-ink: #ffffff;
+  --on: #3f8f4f;
+  --warn: #c48a1d;
+  --off: #b4483c;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1d1915;
+    --fg: #efe6dc;
+    --muted: #a39586;
+    --line: #3a322a;
+    --accent: #c79257;
+    --accent-ink: #22150a;
+    --on: #6cc07a;
+    --warn: #e0ae4c;
+    --off: #e07a6e;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 300px;
+  padding: 14px 16px 16px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+header img {
+  border-radius: 5px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+h2 {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+#version {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  font-weight: 500;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status[data-tone='on'] .dot {
+  background: var(--on);
+}
+
+.status[data-tone='warn'] .dot {
+  background: var(--warn);
+}
+
+.status[data-tone='off'] .dot {
+  background: var(--off);
+}
+
+.hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+li {
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#idle {
+  margin: 12px 0 0;
+  font-size: 12px;
+}
+
+button {
+  margin-top: 10px;
+  width: 100%;
+  padding: 7px 0;
+  border: 0;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 600 13px/1 inherit;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

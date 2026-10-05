@@ -73,6 +73,8 @@ export async function snapshotFromHandle(fh: FileHandle): Promise<{ path: string
   try {
     await pipeline(fh.createReadStream({ autoClose: false, start: 0 }), createWriteStream(path, { flags: 'wx', mode: 0o600 }));
   } catch (e) {
+    // quiet: the copy failed and the caller hears why from the rethrow; a
+    // partial file left behind is swept with the folder on the next start.
     await rm(path, { force: true }).catch(() => undefined);
     throw e;
   }

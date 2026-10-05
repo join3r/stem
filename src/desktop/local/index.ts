@@ -18,6 +18,8 @@ import type { McpHost } from '../mcp-host';
 import type { ExecHost, ExecHostLocalState } from '../exec-host';
 import type { DesktopHarnessHost } from '../harness-host';
 import type { ComputerHost, ComputerHostLocalState } from '../computer-host';
+import type { BrowserHost } from '../browser-host';
+import type { BrowserHostLocalState } from '../../shared/types';
 import type { HarnessHostLocalState } from '../../shared/types';
 import type { MirrorFolderLocalState, MirrorHost } from '../mirror-host';
 import type { Updates } from '../updates';
@@ -92,6 +94,8 @@ export interface LocalIpcDeps {
   harnessHost: DesktopHarnessHost;
   /** Whether this Mac lets its server drive the screen (see desktop/computer-host/). */
   computerHost: ComputerHost;
+  /** Whether this Mac lets its server drive its browser (see desktop/browser-host/). */
+  browserHost: BrowserHost;
   /**
    * The folders THIS machine mirrors to its server (see desktop/mirror-host/).
    * Null when the server runs on this computer — a folder here is connected
@@ -251,6 +255,20 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     (_e, enabled: boolean): Promise<ComputerHostLocalState> => deps.computerHost.setEnabled(enabled)
   );
   handleLocal('computerHost:requestAccess', (): Promise<ComputerHostLocalState> => deps.computerHost.requestAccess());
+
+  // Whether THIS Mac lets Stem drive its browser, and which one. Client-owned
+  // for the same reason: the switch is the consent, and Set up writes into this
+  // machine's browsers.
+  handleLocal('browserHost:localState', (): Promise<BrowserHostLocalState> => deps.browserHost.localState());
+  handleLocal(
+    'browserHost:setEnabled',
+    (_e, enabled: boolean): Promise<BrowserHostLocalState> => deps.browserHost.setEnabled(enabled)
+  );
+  handleLocal('browserHost:choose', (_e, id: string): Promise<BrowserHostLocalState> => deps.browserHost.choose(id));
+  handleLocal('browserHost:setUp', (): Promise<BrowserHostLocalState> => deps.browserHost.setUp());
+  handleLocal('browserHost:openExtensions', (_e, id?: string | null): Promise<void> =>
+    deps.browserHost.openExtensionsPage(id ?? undefined)
+  );
 
   // Connect folders that live on THIS machine. Client-owned for the mcpHost
   // reason at its sharpest: the machine-local mirror list is the authority over
