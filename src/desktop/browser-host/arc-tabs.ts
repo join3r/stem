@@ -5,7 +5,8 @@ import { execFile } from 'node:child_process';
 // even a sleeping one, so `chrome.tabs` never sees it (found 2026-10-06: 2 of
 // 101 tabs listed). Arc's AppleScript dictionary does see every sidebar tab,
 // so for Arc the tab list is completed from there. Reading only: Stem never
-// selects a sidebar tab, which would switch the user's view.
+// selects a sidebar tab, which would switch the user's view. Incognito windows
+// are skipped, as the extension skips them.
 
 export interface ArcSidebarTab {
   space: string;
@@ -25,7 +26,7 @@ set RS to ASCII character 30
 set US to ASCII character 31
 set out to {}
 tell application "Arc"
-  repeat with w in windows
+  repeat with w in (every window whose incognito is false)
     repeat with s in spaces of w
       set sn to title of s
       set us_ to URL of every tab of s
