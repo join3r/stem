@@ -1,6 +1,6 @@
 // What a browser upload may attach (only files Stem holds) and how the bytes
 // reach the Mac (a single-use outbox entry bound to that device).
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -66,20 +66,24 @@ describe('resolveUploadSources', () => {
 describe('outbox', () => {
   afterEach(() => clearOutbox());
 
-  it('hands an entry to its own device once, through the /files route', async () => {
-    // A real path, as resolveUploadSources hands over (tmpdir is a symlink on macOS).
-    const path = realpathSync(join(workspaceRoot(), 'files', 'cv.pdf'));
-    const entry = outboxPut('mac-1', { path, name: 'cv.pdf', size: 3 });
+  it('hands a private snapshot to its own device once, through the /files route', async () => {
+    const resolved = await resolveUploadSources('thread-a', ['files/cv.pdf'], { ...noImages, readRoots: roots });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const snap = resolved.files[0]!;
+    expect(snap.path.startsWith(realpathSync(workspaceRoot()))).toBe(false);
+    const entry = outboxPut('mac-1', snap);
     expect(entry.id).toMatch(/^[0-9a-f]{32}$/);
     expect(await resolveDownload(`${OUTBOX_PREFIX}${entry.id}`, 'mac-2')).toBeNull();
     expect(await resolveDownload(`${OUTBOX_PREFIX}${entry.id}`)).toBeNull();
-    expect(await resolveDownload(`${OUTBOX_PREFIX}${entry.id}`, 'mac-1')).toEqual({ path, name: 'cv.pdf', size: 3 });
+    const served = await resolveDownload(`${OUTBOX_PREFIX}${entry.id}`, 'mac-1');
+    expect(served).toEqual({ path: snap.path, name: 'cv.pdf', size: 3 });
+    expect(readFileSync(served!.path, 'utf8')).toBe('PDF');
     expect(await resolveDownload(`${OUTBOX_PREFIX}${entry.id}`, 'mac-1')).toBeNull();
   });
 
-  it('refuses a file swapped for a symlink after it was queued', async () => {
-    const dir = join(workspaceRoot(), 'files');
-    const path = join(dir, 'swap.txt');
+  it('serves the checked copy even when the original is swapped for a symlink afterwards', async () => {
+    const path = join(workspaceRoot(), 'files', 'swap.txt');
     writeFileSync(path, 'ok');
     const resolved = await resolveUploadSources('thread-a', ['files/swap.txt'], { ...noImages, readRoots: roots });
     expect(resolved.ok).toBe(true);
@@ -87,11 +91,14 @@ describe('outbox', () => {
     const entry = outboxPut('mac-1', resolved.files[0]!);
     rmSync(path);
     symlinkSync(join(outside, 'id_rsa'), path);
-    expect(await outboxTake('mac-1', entry.id)).toBeNull();
+    const served = await outboxTake('mac-1', entry.id);
+    expect(readFileSync(served!.path, 'utf8')).toBe('ok');
   });
 
   it('expires after ten minutes', async () => {
-    const entry = outboxPut('mac-1', { path: join(workspaceRoot(), 'files', 'cv.pdf'), name: 'cv.pdf', size: 3 }, 0);
+    const resolved = await resolveUploadSources('thread-a', ['files/cv.pdf'], { ...noImages, readRoots: roots });
+    if (!resolved.ok) throw new Error(resolved.error);
+    const entry = outboxPut('mac-1', resolved.files[0]!, 0);
     expect(await outboxTake('mac-1', entry.id, 10 * 60_000 + 1)).toBeNull();
   });
 });

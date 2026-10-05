@@ -1,6 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { realpath, stat } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { lstat, mkdir, rm, writeFile, type FileHandle } from 'node:fs/promises';
+import { join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import type { DownloadTarget } from '../transport/server';
+import { browserOutboxRoot } from '../workspace/paths';
 import type { BrowserOutboxFile } from '../../shared/types';
 
 // Files the server hands ONE paired device for ONE job — today, a browser
@@ -10,6 +14,12 @@ import type { BrowserOutboxFile } from '../../shared/types';
 // because a control frame is the wrong place for megabytes (it would hold up
 // every chat stream on that desktop) and native messaging caps what reaches
 // the extension at 1 MB anyway.
+//
+// What is served is a SNAPSHOT in Stem's private outbox folder, copied from a
+// file handle the check verified (files/browser-sources.ts) — never the
+// original path. The original lives where the assistant can write, and a path
+// checked now and opened by name later is a path a run_command can swap for a
+// symlink in between; a copy taken through the verified handle cannot be.
 //
 // An entry is single-use, bound to the device it was made for, and gone after
 // ten minutes. The id is 128 CSPRNG bits and is the whole authorization, on
@@ -30,16 +40,53 @@ interface Entry {
 }
 
 const entries = new Map<string, Entry>();
+let rootReady: Promise<string> | null = null;
 
-function sweep(now: number): void {
-  for (const [id, e] of entries) if (e.expires <= now) entries.delete(id);
+/** The outbox folder, emptied once per process: entries do not survive a restart, so neither do their copies. */
+function outboxRoot(): Promise<string> {
+  rootReady ??= (async () => {
+    const root = browserOutboxRoot();
+    await rm(root, { recursive: true, force: true });
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    return root;
+  })();
+  return rootReady;
 }
 
-/**
- * Put an already-checked server file in `deviceId`'s outbox. `path` must be the
- * resolved real path the check approved: outboxTake refuses it if that stops
- * being true.
- */
+function forget(id: string, e: Entry): void {
+  entries.delete(id);
+  // quiet: an orphaned copy is swept with the folder on the next start.
+  void rm(e.path, { force: true }).catch(() => undefined);
+}
+
+function sweep(now: number): void {
+  for (const [id, e] of entries) if (e.expires <= now) forget(id, e);
+}
+
+async function snapshotPath(): Promise<string> {
+  return join(await outboxRoot(), randomBytes(16).toString('hex'));
+}
+
+/** Copy what an already-verified handle reads into a private snapshot. */
+export async function snapshotFromHandle(fh: FileHandle): Promise<{ path: string; size: number }> {
+  const path = await snapshotPath();
+  try {
+    await pipeline(fh.createReadStream({ autoClose: false, start: 0 }), createWriteStream(path, { flags: 'wx', mode: 0o600 }));
+  } catch (e) {
+    await rm(path, { force: true }).catch(() => undefined);
+    throw e;
+  }
+  return { path, size: (await lstat(path)).size };
+}
+
+/** The same for bytes already in memory (an attached image by its id). */
+export async function snapshotFromBytes(bytes: Buffer): Promise<{ path: string; size: number }> {
+  const path = await snapshotPath();
+  await writeFile(path, bytes, { flag: 'wx', mode: 0o600 });
+  return { path, size: bytes.length };
+}
+
+/** Put a snapshot (from snapshotFrom*) in `deviceId`'s outbox. */
 export function outboxPut(
   deviceId: string,
   file: { path: string; name: string; size: number },
@@ -62,25 +109,20 @@ export async function outboxTake(deviceId: string, id: string, now = Date.now())
   if (!e || e.deviceId !== deviceId) return null;
   entries.delete(id);
   try {
-    // The file was checked when it went in, but up to ten minutes have passed:
-    // a run_command in between could have swapped it, or a folder above it, for
-    // a symlink to something the check would have refused. The entry holds the
-    // real path that was approved, so anything that now resolves elsewhere is
-    // refused, and what is served is that same real path, not a fresh lookup.
-    if ((await realpath(e.path)) !== e.path) return null;
-    const info = await stat(e.path);
+    const info = await lstat(e.path);
     if (!info.isFile()) return null;
-    // The size at fetch time: the model may have rewritten the file since, and
-    // content-length must be true.
+    // The copy must outlive the response that streams it; the TTL is the
+    // deadline for that, after which it goes like an unclaimed one.
+    setTimeout(() => forget(id, e), TTL_MS).unref?.();
     return { path: e.path, name: e.name, size: info.size };
   } catch {
-    // quiet: gone since it was queued — the device is told "no such file" and
-    // the extension reports the upload as failed.
+    // quiet: the copy is gone (the folder was swept) — the device is told "no
+    // such file" and the extension reports the upload as failed.
     return null;
   }
 }
 
 /** Tests only. */
 export function clearOutbox(): void {
-  entries.clear();
+  for (const [id, e] of [...entries]) forget(id, e);
 }

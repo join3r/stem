@@ -1,6 +1,6 @@
 import { host } from '../host';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { MCP_DEVICE_CATALOG_FILE, PROTECTED_ROOTS_FILE } from '../pi/protocol';
 
 // All app state lives under Electron's userData dir, fully isolated from the
@@ -223,6 +223,16 @@ export function uploadStagingRoot(): string {
   // STEM_UPLOADS_DIR lets unit tests point at a throwaway directory (and avoids
   // touching Electron's `app` when run outside the app), like its neighbours.
   return process.env.STEM_UPLOADS_DIR ?? join(userDataRoot(), 'uploads');
+}
+
+/**
+ * Private copies of files queued for a browser upload (files/outbox.ts): the
+ * Mac fetches Stem's own snapshot, never the model-reachable original, so a
+ * file swapped after its check cannot be what is served. Beside the upload
+ * staging area, for the same reason — nothing the assistant lists or writes.
+ */
+export function browserOutboxRoot(): string {
+  return join(dirname(uploadStagingRoot()), 'browser-outbox');
 }
 
 /**
