@@ -1,6 +1,6 @@
 // What a browser upload may attach (only files Stem holds) and how the bytes
 // reach the Mac (a single-use outbox entry bound to that device).
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -67,13 +67,27 @@ describe('outbox', () => {
   afterEach(() => clearOutbox());
 
   it('hands an entry to its own device once, through the /files route', async () => {
-    const path = join(workspaceRoot(), 'files', 'cv.pdf');
+    // A real path, as resolveUploadSources hands over (tmpdir is a symlink on macOS).
+    const path = realpathSync(join(workspaceRoot(), 'files', 'cv.pdf'));
     const entry = outboxPut('mac-1', { path, name: 'cv.pdf', size: 3 });
     expect(entry.id).toMatch(/^[0-9a-f]{32}$/);
     expect(await resolveDownload(`${OUTBOX_PREFIX}${entry.id}`, 'mac-2')).toBeNull();
     expect(await resolveDownload(`${OUTBOX_PREFIX}${entry.id}`)).toBeNull();
     expect(await resolveDownload(`${OUTBOX_PREFIX}${entry.id}`, 'mac-1')).toEqual({ path, name: 'cv.pdf', size: 3 });
     expect(await resolveDownload(`${OUTBOX_PREFIX}${entry.id}`, 'mac-1')).toBeNull();
+  });
+
+  it('refuses a file swapped for a symlink after it was queued', async () => {
+    const dir = join(workspaceRoot(), 'files');
+    const path = join(dir, 'swap.txt');
+    writeFileSync(path, 'ok');
+    const resolved = await resolveUploadSources('thread-a', ['files/swap.txt'], { ...noImages, readRoots: roots });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const entry = outboxPut('mac-1', resolved.files[0]!);
+    rmSync(path);
+    symlinkSync(join(outside, 'id_rsa'), path);
+    expect(await outboxTake('mac-1', entry.id)).toBeNull();
   });
 
   it('expires after ten minutes', async () => {
