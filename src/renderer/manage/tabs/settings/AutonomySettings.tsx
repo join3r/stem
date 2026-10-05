@@ -717,54 +717,21 @@ export function AutonomySections() {
               />
             </ValueRow>
             {browserHost.enabled && (
-              <ValueRow
-                label={
-                  <>
-                    Stem extension{' '}
-                    <InfoTip label="Installing the extension">
-                      Set up puts the extension in a folder and tells Arc, Chrome, Dia and Brave how to reach
-                      Stem. Then, in your browser, open its extensions page (chrome://extensions, or
-                      arc://extensions in Arc), turn on Developer mode, click Load unpacked and choose the
-                      folder Stem shows. You do this once per browser; Stem updates the extension itself
-                      afterwards.
-                    </InfoTip>
-                  </>
-                }
-                hint={
-                  browserHost.browsers.length === 0
-                    ? browserHost.extensionPath
-                      ? 'Waiting for the extension — load the folder Stem showed with Load unpacked'
-                      : 'Not set up yet'
-                    : browserHost.browsers
-                        .map((b) => `${b.name}${b.connected ? ` — connected${b.version ? ` (${b.version})` : ''}` : ' — not running'}`)
-                        .join(' · ')
-                }
-              >
-                <span className="row-actions">
-                  <button
-                    className="btn sm"
-                    disabled={browserBusy}
-                    onClick={() => {
-                      setBrowserBusy(true);
-                      void window.stem
-                        .setUpBrowserControl()
-                        .then((s) => {
-                          setBrowserHost(s);
-                          return window.stem.openBrowserExtensionsPage();
-                        })
-                        .catch(() => undefined)
-                        .finally(() => setBrowserBusy(false));
-                    }}
-                  >
-                    {browserHost.extensionPath ? 'Set up again' : 'Set up…'}
-                  </button>
-                  {browserHost.extensionPath && (
-                    <button className="btn sm" onClick={() => void window.stem.openBrowserExtensionsPage()}>
-                      Show folder
-                    </button>
-                  )}
-                </span>
-              </ValueRow>
+              <BrowserExtensionRow
+                state={browserHost}
+                busy={browserBusy}
+                onSetUp={() => {
+                  setBrowserBusy(true);
+                  void window.stem
+                    .setUpBrowserControl()
+                    .then((s) => {
+                      setBrowserHost(s);
+                      return window.stem.openBrowserExtensionsPage();
+                    })
+                    .catch(() => undefined)
+                    .finally(() => setBrowserBusy(false));
+                }}
+              />
             )}
             {browserHost.enabled && browserHost.browsers.length > 1 && (
               <ValueRow label="Use" hint="The browser Stem drives on this Mac; it starts it when it is closed">
@@ -780,5 +747,57 @@ export function AutonomySections() {
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * The extension's status as one row with one button: Set up before there is a
+ * copy, Show folder while waiting for Load unpacked, Set up again once a
+ * browser is connected. Status first, so the row reads at a glance.
+ */
+function BrowserExtensionRow({
+  state,
+  busy,
+  onSetUp
+}: {
+  state: BrowserHostLocalState;
+  busy: boolean;
+  onSetUp: () => void;
+}) {
+  const connected = state.browsers.filter((b) => b.connected);
+  const status =
+    connected.length > 0
+      ? connected.map((b) => `${b.name} connected${b.version ? ` · ${b.version}` : ''}`).join(', ')
+      : state.browsers.length > 0
+        ? `${state.browsers.map((b) => b.name).join(', ')} not running`
+        : state.extensionPath
+          ? 'Waiting for Load unpacked'
+          : 'Not set up yet';
+  const waiting = !!state.extensionPath && state.browsers.length === 0;
+  return (
+    <ValueRow
+      label="Stem extension"
+      hint={
+        <>
+          <span className={`ext-status${connected.length > 0 ? ' ok' : ''}`}>{status}</span>{' '}
+          <InfoTip label="Installing the extension">
+            Set up puts the extension in a folder and tells Arc, Chrome, Dia and Brave how to reach Stem. Then,
+            in your browser, open its extensions page (chrome://extensions, or arc://extensions in Arc), turn on
+            Developer mode, click Load unpacked and choose the folder Stem shows. You do this once per browser;
+            Stem updates the extension itself afterwards.
+          </InfoTip>
+        </>
+      }
+    >
+      {waiting ? (
+        <button className="btn sm" onClick={() => void window.stem.openBrowserExtensionsPage()}>
+          Show folder
+        </button>
+      ) : (
+        <button className="btn sm" disabled={busy} onClick={onSetUp}>
+          {state.extensionPath ? 'Set up again' : 'Set up…'}
+        </button>
+      )}
+    </ValueRow>
   );
 }

@@ -192,7 +192,7 @@ const MAC_FEATURES = {
         tab Stem works in shows a marker with a Stop button.
       </>
     ),
-    targetLabel: 'In chats, use the browser on',
+    targetLabel: 'Browser for chats',
     targetAria: 'Mac whose browser chats use',
     fixedHint: 'Every chat uses this Mac’s browser'
   }
