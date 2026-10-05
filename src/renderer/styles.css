@@ -3268,6 +3268,8 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   font-size: var(--fs-12);
 }
 .cfolder-learn-model { max-width: 60%; min-width: 0; }
+.cfolder-learn-hint { font-size: var(--fs-11); margin-top: calc(-1 * var(--sp-1)); }
+.cfolder-learn-tip { margin: var(--sp-1) 0; padding-left: 1.2em; }
 .cfolder-learn-model .mp-trigger { padding: 3px 7px; font-size: var(--fs-12); }
 /* The one-time Full-history cost confirm: estimate line + Start/Cancel. */
 .cfolder-learn-confirm {

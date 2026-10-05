@@ -62,6 +62,14 @@ const LEARN_LABELS: Record<LearnMode, string> = {
   all: 'Full history'
 };
 
+/** What each mode does, shown under the select so the choice reads without a hover. */
+const LEARN_HINTS: Record<LearnMode, string> = {
+  off: 'Stem never learns facts from this folder. Search and recall still work.',
+  use: 'Learns only from excerpts that come up in your chats. No extra model calls.',
+  new: 'Also reads files added or edited from now on, in the background. Existing files are left alone.',
+  all: 'Reads every file already in the folder once (you confirm the cost), then keeps up with new and edited files.'
+};
+
 /** Average prompt chars one learning call consumes (MAX_TRANSCRIPT_CHARS-ish). */
 const LEARN_CHARS_PER_CALL = 14_000;
 
@@ -608,13 +616,16 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
                         Learn facts
                         <InfoTip label="How fact learning works">
                           Whether Stem distills durable facts (amounts, dates, clients, plans) from
-                          this folder into its memory. On use: only from excerpts that actually
-                          surface in your chats — free, rides the normal memory pass. New &amp;
-                          changed: also processes files added or edited from now on, in the
-                          background. Full history: first sweeps every indexed file (you confirm
-                          the cost), then continues like New &amp; changed. Learned facts appear in
-                          the Memory tab attributed to this folder and are kept even if a file is
-                          later deleted.
+                          this folder into its memory.
+                          <ul className="cfolder-learn-tip">
+                            {(Object.keys(LEARN_LABELS) as LearnMode[]).map((m) => (
+                              <li key={m}>
+                                <b>{LEARN_LABELS[m]}:</b> {LEARN_HINTS[m]}
+                              </li>
+                            ))}
+                          </ul>
+                          Learned facts appear in the Memory tab attributed to this folder and are
+                          kept even if a file is later deleted.
                         </InfoTip>
                       </span>
                       <select
@@ -639,6 +650,7 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
                       </select>
                     </div>
                   )}
+                  {learnRows && <div className="muted cfolder-learn-hint">{LEARN_HINTS[mode]}</div>}
                   {learnRows && confirmAll[f.id] && (
                     <div className="cfolder-learn-confirm">
                       <span className="muted">
