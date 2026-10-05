@@ -15,6 +15,7 @@ Pick the feature you see in Stem.
 | [Connected folders](user/connected-folders.md) | Use folders where they already live |
 | [Scheduled tasks](user/scheduled-tasks.md) | Run a prompt later or repeatedly |
 | [Settings](user/settings.md) | Choose providers, permissions, and defaults |
+| [Browser control](user/browser-control.md) | Let Stem work in your own browser through the Stem extension |
 | [Shortcuts & tricks](user/shortcuts.md) | Keyboard shortcuts and composer tricks |
 | [Moving and backups](user/moving-and-backups.md) | Take your Stem to another computer, or keep a copy |
 

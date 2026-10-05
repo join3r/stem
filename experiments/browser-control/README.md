@@ -4,8 +4,8 @@ This is a development experiment, **not the installable Stem integration**. It
 controls only fictional loopback pages in newly created browser profiles. Do not
 register it as a trusted MCP tool or install it into a normal browsing profile.
 
-The agreed product behavior and integration sequence are in
-[the browser-control plan](../../docs/browser-control-plan.md).
+The production design (which superseded the September plan this probe served) is in
+[docs/browser-control.md](../../docs/browser-control.md).
 
 ## Results — 2026-09-07
 

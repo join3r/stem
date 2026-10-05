@@ -424,6 +424,7 @@ function DevicesSection() {
                       itself lives on that machine, this is just the fact. */}
                   {d.runsCommands && <span className="muted"> · runs commands</span>}
                   {d.runsComputer && <span className="muted"> · controls screen</span>}
+                  {d.runsBrowser && <span className="muted"> · drives browser</span>}
                 </strong>
                 <em>{seenLabel(d.lastSeenAt)}</em>
               </span>

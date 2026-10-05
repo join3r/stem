@@ -37,6 +37,15 @@ Maintainer notes:
   the chat, or stays put with **Keep open**. Stem also keeps everything on the board in mind for
   the rest of that chat, so a measurement or setting you pinned early on isn't forgotten once the
   conversation gets long. Chat search finds pinned notes too.
+- **Stem in your browser.** With the new Stem extension in Arc, Chrome, Dia or Brave, Stem can
+  work in your own browser, signed in as you: open pages in background tabs, read them, click,
+  fill in forms, upload files you gave it, download, and look at a page's console and network
+  requests. The tab it works in shows a border and a Stop button, and your view never switches.
+  Give it to a persona with its new browser pin, or to plain chats under Settings → Features →
+  Browser control, where **Set up** also installs the extension. No special browser launch, and
+  no open debugging port.
+- **Computer control without a server.** "Let Stem control this Mac" now shows when Stem runs
+  entirely on your Mac too, not only when its server is elsewhere.
 - **Commands at a slash.** Type `/` at the start of a message to see what the box can do —
   `/pin`, `/note` and `/learn` — narrow it by typing, and pick one with Enter, Tab or a click.
 

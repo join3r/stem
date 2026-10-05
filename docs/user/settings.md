@@ -209,6 +209,11 @@ approvals apply to what a coding agent runs, the same as for personas.
 If Stem says it cannot use a coding agent or control the computer, it names the
 reason: the chat runs as a persona without that setup, or chats are switched off here.
 
+**Browser control** follows the same rules with its own pin and its own switch: a
+persona's "Browser this persona controls", or Settings → Features → Browser control →
+Allow in chats, plus **Let Stem control this Mac's browser** on the Mac itself. Setting
+up the extension is described on the [Browser control](browser-control.md) page.
+
 ## Image generation
 
 Ask for a picture in plain words ("draw a sprout in a terracotta pot", "make a logo for

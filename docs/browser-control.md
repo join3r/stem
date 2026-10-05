@@ -1,130 +1,78 @@
 # Browser control through a Chromium extension
 
-Status: product decisions agreed; feasibility prototype in `experiments/browser-control`.
-The production extension, installer, and Stem integration are not implemented yet.
+Status: built on the 0.6.0 branch (October 2026). User-facing page:
+[user/browser-control.md](user/browser-control.md).
 
-## Purpose
+Stem drives the user's own, signed-in browser through the Stem extension, replacing
+the earlier setup of launching Arc with `--remote-debugging-port` and pointing a
+DevTools MCP server at it, which needed a special launch and left an unauthenticated
+CDP port open to every local process.
 
-Control the user's existing signed-in browser tabs without an open DevTools TCP
-endpoint. Initial support is Arc and Chrome on macOS. Keep the protocol portable
-for later Windows/Linux support.
+## Decisions (2026-10-05)
 
-## Agreed behavior
+These replace the stricter plan of 7 September 2026, which had per-tab grants, origin
+gates, approval before submits, and an automatic pause when the user touched a tab.
+The user chose the computer-control posture instead.
 
 | Area | Decision |
 | --- | --- |
-| Installation | Settings offers Install browser control; prepare the bundled helper, open the extension store listing, let the browser confirm installation, detect the connection. |
-| Access modes | Selected tabs, selected sites, or all ordinary tabs; configurable by the user. |
-| Default | Selected tabs, plus automatic access to tabs Stem opens at their initial origin. |
-| Discovery | List titles and URLs of ordinary tabs on request, including unapproved tabs. Reading their content still requires a grant. |
-| Tab grants | Expire on tab close or browser restart. An extension restart may conservatively discard grants too. |
-| Persistent grants | Site and all-tab access persist until changed/revoked. |
-| Navigation | Crossing an origin requires a grant for the destination unless already covered by site/all-tab permission. This also applies to Stem-created tabs. |
-| New tab approvals | Approve inside the browser, not remotely from a phone. |
-| Remote and scheduled use | Allowed while the browser's desktop is connected and awake, under the same permissions. New tab grants wait for browser approval. |
-| Consequential actions | Separate configurable policy. By default, ordinary navigation/filling proceeds and consequential submissions require confirmation in Stem, including on the phone. Semantic classification is a heuristic, not a security boundary. |
-| User takeover | Interaction in the controlled tab pauses its automation. Explicit Resume is required; unrelated tabs may continue. |
-| Focus | Operate in the background where possible; ask before taking focus. |
-| Connection loss | Reconnect and inspect before continuing. Never automatically repeat an action with an unknown outcome. |
-| Private windows | Excluded from v1. |
-| Visibility | Show the controlled tab, provide Stop in the extension, retain browser actions in existing Work history. |
-| Page features | Reading, screenshots, navigation, clicking, typing, forms, uploads and downloads. |
-| Uploads | Explicit attachments or files allowed through Stem's file permissions. Permission to read a file is distinct from authorization to submit it to a website. |
-| Downloads | Save to a configured folder. |
-| Exclusions | Browser configuration management, bookmarks/history management, extension management, and saved-password management. |
+| Reach | Any ordinary tab, signed-in ones included. No tab grants, no origin gates, no approval before a submit. Incognito is excluded. |
+| Who | Its own persona pin, `Persona.browser {device}`, separate from the computer pin. Chats with no persona follow `chatFeatures.browser` (Settings → Features → Browser control → Allow in chats), either a fixed Mac or the model's pick. It applies to chats, mail and scheduled runs, as for computer control. |
+| Consent | A client-local switch on the Mac, off by default and never sent over the wire. |
+| Where | Pages Stem opens are background tabs in the user's last-focused window (in Arc, the current Space). Stem never switches the view, and the tabs stay open after the run. The model may also act in any existing tab, but closes only tabs it opened. |
+| Debugging bar | `chrome.debugger` is attached on the first touch of a tab and detached at the end of the run, or after 3 idle minutes, so the bar shows only during runs. Cancelling the bar counts as Stop. |
+| Marker | A border and a "Stem is working · Stop" pill inside the tab, drawn in a CDP isolated world and hidden while a screenshot is taken. There is no automatic pause, and no floating screen pill. |
+| Actions | `tabs`, `open`, `navigate`, `snapshot` (an accessibility outline with refs), `screenshot`, `click`, `hover`, `type`, `fill`, `press`, `scroll`, `wait`, `dialog`, `evaluate`, `console`, `network`, `upload`, `downloads`, `close`. |
+| Uploads | Only files Stem holds: Files, scratch, connected folders, `img_` ids, and the conversation's attachments, which a browser turn keeps as files. Never an arbitrary path on the Mac. |
+| Downloads | Copied into the conversation's scratch `downloads/` on the server. |
+| Several browsers | One per Mac, chosen in that Mac's Settings. The chosen browser is started (`open -g -a`) when a run needs it and it is closed. |
+| Concurrency | Several runs at once, each keeping track of its own tabs, with one action queue per tab. A run is warned when another run used the same tab recently. |
+| Platform | macOS only for now: Arc, Chrome, Dia, Brave, plus Chromium, Edge and Chrome for Testing when they are installed. |
+| Install | An unpacked extension: Set up copies it into the profile's state folder and writes native-messaging manifests. The extension id is fixed by the manifest `key`. A Web Store listing comes later. |
+| Local server | Works when the server runs on the same Mac. Computer control was opened up to that case at the same time. |
 
-## Proposed technical implementation
+## How a call travels
 
-Commands flow from Stem's existing device-routed tools to a desktop browser
-controller, through a bundled native helper and Native Messaging, to the extension.
-The browser launches the helper and communicates on stdin/stdout. No public or
-unauthenticated localhost browser-control server is needed.
+```
+pi `browser` tool ──ctx.ui.input(stem-browser-bridge)──▶ PiRuntime.handleMacToolBridge
+  └▶ startup/browser.ts (files) ──▶ browser-device/router.ts ──SSE 'browser-request'──▶ Mac
+       └▶ desktop/browser-host ──unix socket (0600, token)──▶ native host (Stem binary as Node)
+            └▶ native messaging ──▶ extension service worker ──chrome.debugger/tabs/downloads──▶ tab
+  ◀── answers return the same way; the Mac replies with RPC `browserHost:result`
+```
 
-The extension ID allowlist restricts browser-originated Native Messaging clients;
-it does not authenticate arbitrary local processes to Stem. The desktop/helper
-connection needs its own authenticated, bounded protocol and lifecycle. A host
-origin command-line argument is not proof of caller identity. Do not claim this
-design protects an already-compromised OS account from its own malware.
+- The wire messages and framing are defined in `src/shared/browser-native.ts`. Both
+  legs use Chrome's 4-byte length framing, so the native host relays frames without
+  re-serialising them.
+- File bytes never travel in SSE frames or native messages (Chrome caps host→extension
+  messages at 1 MB). For an upload, the server checks each file and copies it through
+  the verified handle into a private outbox (`files/outbox.ts`, `files/browser-sources.ts`).
+  The Mac fetches it once through `GET /files/stem-outbox:<id>`, the extension attaches
+  it with `DOM.setFileInputFiles`, and the local copy is removed when the run ends.
+- Downloads: the native host copies a finished download out of `~/Downloads` into the
+  spool. It runs as the browser's child, so macOS attributes that read to the browser.
+  The desktop then streams the copy up with `POST /upload`, and the server files it into
+  scratch.
+- The native host keeps retrying the socket while Stem is down. The open native port
+  keeps the extension's service worker alive, so it sees Stem come back.
 
-Use the existing device MCP host/router infrastructure for naming and routing, but
-do not inherit trusted MCP's lack of per-action approval for consequential browser
-actions. Keep access grants in the browser, distinguish them from submission
-approvals in Stem, and validate both at execution time.
+## Security notes
 
-Relevant current code:
+- The token in `<state>/browser/config.json` (0600) proves only that the native host was
+  installed by this Stem profile. It does not protect against malware running as the
+  same user, which could read the same file.
+- `allowed_origins` limits which extension the browser lets start the host.
+- Page content is untrusted. The tool description and the persona brief tell the model
+  never to follow instructions found on a page. That is the main defence against a
+  hostile page steering a run into the user's other signed-in tabs, and it is a
+  prompt, not a boundary. The user accepted that trade for the no-approvals posture.
 
-- `src/desktop/mcp-host/index.ts`: device-local MCP execution and remembered catalogs.
-- `src/server/mcp-device/router.ts`: calls addressed to the paired desktop.
-- `src/desktop/local/index.ts`: client-owned approval/settings channels.
-- `src/server/workspace/connected-folders.ts`: folders and their source devices.
-- `src/server/files/staging.ts`: uploaded file handles.
-- `src/server/mail/work.ts`, `src/shared/work-detail.ts`: persisted activity and display.
-- `src/renderer/manage/tabs/settings/SettingsTab.tsx`: current Settings organization.
+## Feasibility probe
 
-Resolve file IDs against the device which owns the bytes; a server pathname is not
-a pathname on the Mac. Stage permitted attachments on the browser's desktop and
-pass short-lived file handles through the controller. Never expose raw
-`DOM.setFileInputFiles` or arbitrary filesystem paths as a model-facing escape
-from the file gate. Check download destinations against the configured folder.
-
-Expose bounded commands such as list/open/inspect/fill/click/screenshot, not a raw
-CDP relay or a general JavaScript evaluator. Revalidate the tab, origin, document,
-permission revision, connection session and pause state when a queued command runs.
-Bind evaluations to unique document contexts. Do not permit an allowed top-level
-tab to grant access automatically to unrelated iframe origins.
-
-Use request IDs and explicit action outcomes: not started, completed, failed, or
-unknown. A disconnected or timed-out submission is unknown unless completion can
-be established. Reconnection cannot turn an unknown result into a fresh submission.
-Stop/revoke must cancel pending work and invalidate approvals for stale documents.
-Log useful action metadata while redacting credentials, form values and sensitive
-URL parameters; avoid automatically retaining full-page captures in activity logs.
-
-## Prototype and validation gates
-
-The probe has a scripted native peer, not a running Stem integration. It only
-controls fictional loopback pages, uses temporary profiles, and never registers a
-helper in a normal browser profile. It validates the communication path and CDP
-capabilities independently of Playwright/CDP control of the browser itself.
-
-Chrome for Testing and installed Chrome have completed live Native Messaging,
-tabs, form, screenshot, file-selection/download and origin/frame/Stop checks.
-See the experiment README and recorded evidence for exact final coverage.
-
-The initial Arc attempt did not initialize the requested temporary Chromium
-profile or connect the native host while the normal Arc instance was already
-running. The probe process was stopped. This establishes a test-harness limitation,
-not that Arc lacks extension or Native Messaging support. Arc remains unverified.
-Do not silently replace this test with control of the user's existing Arc profile.
-
-One live finding changes the takeover implementation: `Input.insertText` dispatched
-through extension CDP produces `isTrusted: true` input events. That property alone
-cannot distinguish human input from automation. Prototype a conservative policy
-using correlated automation events and independent interaction signals; if reliable
-distinction cannot be established, return with that limitation and an explicit UX
-tradeoff before promising automatic pause.
-
-Whole-tab captures include cross-origin frames. The prototype refuses screenshots
-containing unapproved frame origins and inspects only top-document text. Production
-must preserve that boundary, or implement verified masking/additional frame grants.
-The current probe is not evidence for adversarial frame/navigation race safety,
-OOPIF interaction, native OS dialogs, CAPTCHA handling or arbitrary-site fidelity.
-
-## Delivery sequence
-
-1. Complete Arc compatibility and takeover experiments; record exact evidence.
-2. Build authenticated desktop/helper sessions and bounded browser commands.
-3. Implement browser-owned grants, frame/document enforcement, pause/Stop/revoke.
-4. Integrate submission approvals, permitted file transfer, remote routing and Work.
-5. Add Settings and extension onboarding/control UI, then distribution packaging.
-6. Validate fresh installation, both browsers, restarts, navigation races, user
-   takeover, remote/scheduled flows, file permissions, uncertain actions and revocation.
-
-## Primary references
-
-- [Chrome debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger)
-- [Chrome tabs API](https://developer.chrome.com/docs/extensions/reference/api/tabs)
-- [Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
-- [Chrome extension installation](https://developer.chrome.com/docs/extensions/how-to/distribute/install-extensions)
-- [Chrome's removal of the load-extension launch flag](https://groups.google.com/a/chromium.org/g/chromium-extensions/c/1-g8EFx2BBY/m/S0ET5wPjCAAJ)
-- [Arc extension support](https://resources.arc.net/hc/en-us/articles/19434259167767-Extensions-in-Arc-How-to-Import-Add-Open)
+`experiments/browser-control/` holds the September probe, which passed 14/14 checks in
+Chrome and Chrome for Testing. Arc stayed unverified because Arc ignores
+`--user-data-dir`, so an isolated second instance never started. Arc is reported to read
+native-messaging manifests from Chrome's folder, so Set up writes to both Arc's folder
+and Chrome's. One probe finding still holds: `Input.insertText` through extension CDP
+produces `isTrusted: true` events, which is part of why automatic pause on takeover was
+dropped.

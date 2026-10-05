@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import type {
+  BrowserHostLocalState,
   ComputerHostLocalState,
   DeviceInfo,
   ExecHostShellInfo,
@@ -11,7 +12,7 @@ import type {
 import { InfoTip } from '../../../ui/InfoTip';
 import { useRemoteServer } from '../../../hooks/useRemoteServer';
 import { DisclosureRow, RowSelect, ValueRow } from './rows';
-import { ChatCodingRows, ChatComputerRows } from './ChatFeatureRows';
+import { ChatBrowserRows, ChatCodingRows, ChatComputerRows } from './ChatFeatureRows';
 
 /** How long a chat's scratch folder survives being ignored. null = never sweep. */
 const SCRATCH_TTLS: { label: string; days: number | null }[] = [
@@ -79,6 +80,10 @@ export function AutonomySections() {
   // Whether THIS Mac lets the server drive its screen, plus the macOS grants
   // the helper has. Null until asked; `supported: false` off macOS.
   const [computerHost, setComputerHost] = useState<ComputerHostLocalState | null>(null);
+  // Whether THIS Mac lets the server drive its browser, which browsers have the
+  // extension, and where Set up put it. Null until asked.
+  const [browserHost, setBrowserHost] = useState<BrowserHostLocalState | null>(null);
+  const [browserBusy, setBrowserBusy] = useState(false);
   // Labels for the per-device allowlist groups. Devices that were unpaired keep
   // their entries readable (and deletable) under the raw id.
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
@@ -107,7 +112,11 @@ export function AutonomySections() {
     // user comes back here rather than making them press Re-check.
     const refreshComputer = () => {
       void window.stem.computerHostState().then(setComputerHost).catch(() => undefined);
+      // The same for the browser: the extension is loaded in the browser, so
+      // coming back here is when its connection should show.
+      void window.stem.browserHostState().then(setBrowserHost).catch(() => undefined);
     };
+    void window.stem.browserHostState().then(setBrowserHost).catch(() => undefined);
     window.addEventListener('focus', refreshComputer);
     refreshDevices();
     void window.stem
@@ -572,13 +581,15 @@ export function AutonomySections() {
       {/* Computer control: whether chats with no persona may drive a Mac
           (server-wide, ChatComputerRows), and whether THIS Mac lets Stem see the
           screen and move the mouse and keyboard. Same shape as the coding-agent
-          consent above — offered when the server is elsewhere, client-local
-          state, never on the wire — plus the three macOS grants the helper
-          needs, requested from here because the prompts appear on this display. */}
+          consent above — client-local state, never on the wire — plus the
+          three macOS grants the helper needs, requested from here because the
+          prompts appear on this display. Offered with the server on this Mac
+          too (2026-10-05): a one-machine Stem drives its own screen through
+          the same device rails. */}
       <div className="grp-head">Computer control</div>
       <div className="group">
         <ChatComputerRows devices={devices} clientDeviceId={clientDeviceId} />
-        {remote && computerHost?.supported && (
+        {computerHost?.supported && (
           <>
             <ValueRow
               label={<strong>Let Stem control this Mac</strong>}
@@ -659,6 +670,110 @@ export function AutonomySections() {
                     ? 'Re-check'
                     : 'Grant…'}
                 </button>
+              </ValueRow>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Browser control: whether chats with no persona may use a Mac's browser
+          (server-wide, ChatBrowserRows), and whether THIS Mac lets Stem drive
+          its browser through the Stem extension — client-local like the switch
+          above. Set up copies the extension out for Load unpacked and registers
+          its native host with the installed browsers (desktop/browser-host). */}
+      <div className="grp-head">Browser control</div>
+      <div className="group">
+        <ChatBrowserRows devices={devices} clientDeviceId={clientDeviceId} />
+        {browserHost?.supported && (
+          <>
+            <ValueRow
+              label={<strong>Let Stem control this Mac’s browser</strong>}
+              hint={
+                <>
+                  Stem can work in your browser here, signed in as you{' '}
+                  <InfoTip label="What switching this on means">
+                    A persona pinned to this Mac’s browser in Manage → Personas — or a chat, when “Allow in
+                    chats” above sends it here — gets a <code>browser</code> tool: it opens pages in background
+                    tabs, reads them, clicks, types, fills forms, uploads files Stem holds and downloads, in
+                    any ordinary tab, with no per-action approval. The tab it works in shows a coloured border
+                    and a Stop button, and the browser shows that an extension is debugging it while a run is
+                    on. It never switches the tab you are looking at. Switching this off stops new runs
+                    immediately. Leave it off if this Stem server isn’t yours alone.
+                  </InfoTip>
+                </>
+              }
+            >
+              <button
+                className={`switch${browserHost.enabled ? ' on' : ''}`}
+                role="switch"
+                aria-checked={browserHost.enabled}
+                aria-label="Let Stem control this Mac’s browser"
+                onClick={() =>
+                  void window.stem.setBrowserHostEnabled(!browserHost.enabled).then((s) => {
+                    setBrowserHost(s);
+                    refreshDevices();
+                  })
+                }
+              />
+            </ValueRow>
+            {browserHost.enabled && (
+              <ValueRow
+                label={
+                  <>
+                    Stem extension{' '}
+                    <InfoTip label="Installing the extension">
+                      Set up puts the extension in a folder and tells Arc, Chrome, Dia and Brave how to reach
+                      Stem. Then, in your browser, open its extensions page (chrome://extensions, or
+                      arc://extensions in Arc), turn on Developer mode, click Load unpacked and choose the
+                      folder Stem shows. You do this once per browser; Stem updates the extension itself
+                      afterwards.
+                    </InfoTip>
+                  </>
+                }
+                hint={
+                  browserHost.browsers.length === 0
+                    ? browserHost.extensionPath
+                      ? 'Waiting for the extension — load the folder Stem showed with Load unpacked'
+                      : 'Not set up yet'
+                    : browserHost.browsers
+                        .map((b) => `${b.name}${b.connected ? ` — connected${b.version ? ` (${b.version})` : ''}` : ' — not running'}`)
+                        .join(' · ')
+                }
+              >
+                <span className="row-actions">
+                  <button
+                    className="btn sm"
+                    disabled={browserBusy}
+                    onClick={() => {
+                      setBrowserBusy(true);
+                      void window.stem
+                        .setUpBrowserControl()
+                        .then((s) => {
+                          setBrowserHost(s);
+                          return window.stem.openBrowserExtensionsPage();
+                        })
+                        .catch(() => undefined)
+                        .finally(() => setBrowserBusy(false));
+                    }}
+                  >
+                    {browserHost.extensionPath ? 'Set up again' : 'Set up…'}
+                  </button>
+                  {browserHost.extensionPath && (
+                    <button className="btn sm" onClick={() => void window.stem.openBrowserExtensionsPage()}>
+                      Show folder
+                    </button>
+                  )}
+                </span>
+              </ValueRow>
+            )}
+            {browserHost.enabled && browserHost.browsers.length > 1 && (
+              <ValueRow label="Use" hint="The browser Stem drives on this Mac; it starts it when it is closed">
+                <RowSelect
+                  ariaLabel="Browser Stem uses"
+                  value={browserHost.chosen ?? browserHost.browsers[0]!.id}
+                  options={browserHost.browsers.map((b) => ({ value: b.id, label: b.name }))}
+                  onChange={(id) => void window.stem.chooseBrowser(id).then(setBrowserHost)}
+                />
               </ValueRow>
             )}
           </>

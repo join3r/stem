@@ -35,6 +35,7 @@ import shortcutsMd from '../../../docs/user/shortcuts.md?raw';
 import connectedFoldersMd from '../../../docs/user/connected-folders.md?raw';
 import scheduledTasksMd from '../../../docs/user/scheduled-tasks.md?raw';
 import settingsMd from '../../../docs/user/settings.md?raw';
+import browserControlMd from '../../../docs/user/browser-control.md?raw';
 import movingAndBackupsMd from '../../../docs/user/moving-and-backups.md?raw';
 import releaseNotesMd from '../../../RELEASE_NOTES.md?raw';
 import assistantPreferencesMd from '../../../docs/assistant/assistant-preferences.md?raw';
@@ -97,7 +98,8 @@ export const STEM_GUIDE_PAGES: readonly StemGuidePage[] = [
   page('shortcuts', 'docs/user/shortcuts.md', 'keyboard shortcuts and tricks across the app', shortcutsMd),
   page('connected-folders', 'docs/user/connected-folders.md', 'using folders where they live: indexing, Memorize, Learn facts', connectedFoldersMd),
   page('scheduled-tasks', 'docs/user/scheduled-tasks.md', 'running a prompt later or on a repeating schedule, and its controls', scheduledTasksMd),
-  page('settings', 'docs/user/settings.md', 'the App/Features/Server/Models tabs: providers and models, image generation, command approvals, coding agents and computer control in chats (vs persona pins), Esc, notifications, Quick Chat defaults', settingsMd),
+  page('settings', 'docs/user/settings.md', 'the App/Features/Server/Models tabs: providers and models, image generation, command approvals, coding agents, computer control and browser control in chats (vs persona pins), Esc, notifications, Quick Chat defaults', settingsMd),
+  page('browser-control', 'docs/user/browser-control.md', 'the Stem extension: setting it up in Arc/Chrome, who may drive the browser, the marker and Stop, uploads and downloads, error messages', browserControlMd),
   page('moving-and-backups', 'docs/user/moving-and-backups.md', 'moving Stem to another computer, what travels, and backups', movingAndBackupsMd),
   page('release-notes', 'RELEASE_NOTES.md', 'what changed in each Stem version, newest first', releaseNotesMd),
   // Detailed assistant procedures are loaded only for the task that needs them.

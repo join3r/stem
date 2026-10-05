@@ -54,6 +54,9 @@ function summaryLabel(
   if (p.computer) {
     parts.push(`controls ${devices.find((d) => d.id === p.computer?.device)?.label ?? p.computer.device}`);
   }
+  if (p.browser) {
+    parts.push(`uses the browser on ${devices.find((d) => d.id === p.browser?.device)?.label ?? p.browser.device}`);
+  }
   if (p.createdBy) {
     parts.push(`created by ${personas.find((x) => x.id === p.createdBy)?.name ?? p.createdBy}`);
   }
@@ -144,6 +147,7 @@ function sameEdit(a: Persona, b: Persona): boolean {
     (a.harness?.device ?? '') === (b.harness?.device ?? '') &&
     (a.harness?.model ?? '') === (b.harness?.model ?? '') &&
     (a.computer?.device ?? '') === (b.computer?.device ?? '') &&
+    (a.browser?.device ?? '') === (b.browser?.device ?? '') &&
     (a.canManagePersonas ?? false) === (b.canManagePersonas ?? false) &&
     (a.memory ?? true) === (b.memory ?? true) &&
     (a.recall ?? true) === (b.recall ?? true) &&
@@ -805,6 +809,40 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                         so pick a model that accepts image input.
                       </div>
                     )}
+                  </div>
+                  {/* Browser control: the Mac whose browser this persona drives through
+                      the Stem extension. Same rule as the computer pin, and its own pin:
+                      a persona can have the browser without the screen. Page outlines
+                      are text, so no image-model warning here. */}
+                  <div className="persona-harness">
+                    <select
+                      className="vfield"
+                      aria-label="Browser this persona controls"
+                      value={p.browser?.device ?? ''}
+                      onChange={(e) =>
+                        setDraft({
+                          ...p,
+                          browser: e.target.value ? { device: e.target.value } : undefined
+                        })
+                      }
+                    >
+                      <option value="">Uses no browser</option>
+                      {p.browser?.device &&
+                        !devices.some((d) => d.id === p.browser?.device && d.runsBrowser) && (
+                          <option value={p.browser.device}>
+                            Uses the browser on {devices.find((d) => d.id === p.browser?.device)?.label ??
+                              p.browser.device}{' '}
+                            (not letting Stem drive it)
+                          </option>
+                        )}
+                      {devices
+                        .filter((d) => d.runsBrowser)
+                        .map((d) => (
+                          <option key={d.id} value={d.id}>
+                            Uses the browser on {d.label}
+                          </option>
+                        ))}
+                    </select>
                   </div>
                   <label className="persona-cap">
                     <input

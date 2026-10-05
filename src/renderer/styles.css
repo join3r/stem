@@ -3920,6 +3920,8 @@ summary.mail-work-action { cursor: pointer; }
 .group .set-vbody + .set-vrow,
 .group .set-vbody + .set-vbody { border-top: 0.5px solid var(--hair); }
 button.set-vrow { border: none; background: none; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+/* Two small buttons as one row's control (Browser control → Set up / Show folder). */
+.set-vrow .row-actions { display: flex; gap: var(--sp-2); flex-shrink: 0; }
 button.set-vrow:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
 .set-vrow .vlab { flex: 1; min-width: 0; font-size: var(--fs-13); }
 .set-vrow .vlab em { display: block; font-style: normal; font-size: var(--fs-11); color: var(--muted); overflow-wrap: anywhere; }

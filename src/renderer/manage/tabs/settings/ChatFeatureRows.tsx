@@ -158,44 +158,87 @@ export function ChatCodingRows({
   );
 }
 
-export function ChatComputerRows({
+/** What differs between the two "drive a Mac" features' chat rows. */
+const MAC_FEATURES = {
+  computer: {
+    qualifies: (d: DeviceInfo) => !!d.runsComputer,
+    notLetting: 'not letting Stem control it',
+    allowLabel: 'Allow computer control in chats',
+    tipLabel: 'About computer control in chats',
+    tip: (
+      <>
+        With this on, a chat that runs as no persona can see and drive a Mac when you ask it to do something
+        there. Personas are not affected: a persona controls a computer only if it is pinned to one in Manage →
+        Personas, even with this on. This is a setting of your Stem server, so it applies to chats from every
+        device — the Mac itself still needs its own “Let Stem control this Mac” switch, and shows a banner while
+        it is being driven. The chat’s model has to accept images.
+      </>
+    ),
+    targetLabel: 'In chats, control',
+    targetAria: 'Mac chats control',
+    fixedHint: 'Every chat drives this Mac'
+  },
+  browser: {
+    qualifies: (d: DeviceInfo) => !!d.runsBrowser,
+    notLetting: 'not letting Stem drive its browser',
+    allowLabel: 'Allow browser control in chats',
+    tipLabel: 'About browser control in chats',
+    tip: (
+      <>
+        With this on, a chat that runs as no persona can work in your browser — your real one, signed in —
+        when you ask it to. Personas are not affected: a persona drives a browser only if it is pinned to one in
+        Manage → Personas, even with this on. This is a setting of your Stem server, so it applies to chats from
+        every device — the Mac itself still needs its own “Let Stem control this Mac’s browser” switch, and the
+        tab Stem works in shows a marker with a Stop button.
+      </>
+    ),
+    targetLabel: 'In chats, use the browser on',
+    targetAria: 'Mac whose browser chats use',
+    fixedHint: 'Every chat uses this Mac’s browser'
+  }
+} as const;
+
+function ChatMacRows({
+  feature,
   devices,
   clientDeviceId
 }: {
+  feature: keyof typeof MAC_FEATURES;
   devices: DeviceInfo[];
   clientDeviceId: string | null;
 }) {
-  const [computer, setComputer] = useState<ChatFeatureSettings['computer'] | null>(null);
+  const f = MAC_FEATURES[feature];
+  const [value, setValue] = useState<ChatFeatureSettings['computer'] | null>(null);
 
   useEffect(() => {
-    void window.stem.getSettings().then((s) => setComputer(s.chatFeatures?.computer ?? OFF));
-  }, []);
+    void window.stem.getSettings().then((s) => setValue(s.chatFeatures?.[feature] ?? OFF));
+  }, [feature]);
 
   function save(next: ChatFeatureSettings['computer']) {
-    setComputer(next); // optimistic; reconcile below
+    setValue(next); // optimistic; reconcile below
     window.stem
-      .updateChatFeatureSettings({ computer: next })
-      .then((s) => setComputer(s.chatFeatures?.computer ?? OFF))
-      .catch(() => void window.stem.getSettings().then((s) => setComputer(s.chatFeatures?.computer ?? OFF)));
+      .updateChatFeatureSettings({ [feature]: next })
+      .then((s) => setValue(s.chatFeatures?.[feature] ?? OFF))
+      .catch(() => void window.stem.getSettings().then((s) => setValue(s.chatFeatures?.[feature] ?? OFF)));
   }
 
-  if (!computer) return null;
-  const macs = devices.filter((d) => d.runsComputer);
+  if (!value) return null;
+  const macs = devices.filter(f.qualifies);
 
   function allow(on: boolean) {
-    if (!on || computer!.target) return save({ ...computer!, allow: on });
-    const here = thisComputer(devices, clientDeviceId, (d) => !!d.runsComputer);
+    if (!on || value!.target) return save({ ...value!, allow: on });
+    const here = thisComputer(devices, clientDeviceId, f.qualifies);
     save({ allow: true, target: here ? { device: here.id } : null });
   }
 
   const options = [
     { value: CHOOSE, label: 'Let the model choose' },
     ...macs.map((d) => ({ value: d.id, label: d.label })),
-    ...(computer.target && !macs.some((d) => d.id === computer.target?.device)
+    ...(value.target && !macs.some((d) => d.id === value.target?.device)
       ? [
           {
-            value: computer.target.device,
-            label: `${devices.find((d) => d.id === computer.target?.device)?.label ?? computer.target.device} (not letting Stem control it)`
+            value: value.target.device,
+            label: `${devices.find((d) => d.id === value.target?.device)?.label ?? value.target.device} (${f.notLetting})`
           }
         ]
       : [])
@@ -208,38 +251,39 @@ export function ChatComputerRows({
         hint={
           <>
             Chats with no persona, on every device{' '}
-            <InfoTip label="About computer control in chats">
-              With this on, a chat that runs as no persona can see and drive a Mac when you ask it to do
-              something there. Personas are not affected: a persona controls a computer only if it is
-              pinned to one in Manage → Personas, even with this on. This is a setting of your Stem
-              server, so it applies to chats from every device — the Mac itself still needs its own
-              “Let Stem control this Mac” switch, and shows a banner while it is being driven. The
-              chat’s model has to accept images.
-            </InfoTip>
+            <InfoTip label={f.tipLabel}>{f.tip}</InfoTip>
           </>
         }
       >
         <button
-          className={`switch${computer.allow ? ' on' : ''}`}
+          className={`switch${value.allow ? ' on' : ''}`}
           role="switch"
-          aria-checked={computer.allow}
-          aria-label="Allow computer control in chats"
-          onClick={() => allow(!computer.allow)}
+          aria-checked={value.allow}
+          aria-label={f.allowLabel}
+          onClick={() => allow(!value.allow)}
         />
       </ValueRow>
-      {computer.allow && (
+      {value.allow && (
         <ValueRow
-          label="In chats, control"
-          hint={computer.target ? 'Every chat drives this Mac' : 'The model picks the Mac per request'}
+          label={f.targetLabel}
+          hint={value.target ? f.fixedHint : 'The model picks the Mac per request'}
         >
           <RowSelect
-            ariaLabel="Mac chats control"
-            value={computer.target?.device ?? CHOOSE}
+            ariaLabel={f.targetAria}
+            value={value.target?.device ?? CHOOSE}
             options={options}
-            onChange={(v) => save({ ...computer, target: v === CHOOSE ? null : { device: v } })}
+            onChange={(v) => save({ ...value, target: v === CHOOSE ? null : { device: v } })}
           />
         </ValueRow>
       )}
     </>
   );
+}
+
+export function ChatComputerRows(props: { devices: DeviceInfo[]; clientDeviceId: string | null }) {
+  return <ChatMacRows feature="computer" {...props} />;
+}
+
+export function ChatBrowserRows(props: { devices: DeviceInfo[]; clientDeviceId: string | null }) {
+  return <ChatMacRows feature="browser" {...props} />;
 }
