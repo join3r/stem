@@ -80,7 +80,8 @@ async function spoolDownloads(downloads: ExtensionDownload[], spoolDir: string):
       out.push({ ...d, path: to });
     } catch (e) {
       log(`could not spool a download: ${e instanceof Error ? e.message : String(e)}`);
-      // Left as it was: the desktop tries the original path and reports the failure.
+      // Left as it was: the desktop sends up only spool copies, so it reports
+      // this one as not copied rather than reading ~/Downloads itself.
       out.push(d);
     }
   }

@@ -9,6 +9,9 @@
 /** Another run counts as "in" a tab for this long after it last acted there. */
 export const SHARED_TAB_WINDOW_MS = 2 * 60_000;
 
+/** How long after a run's action in a tab a download there still counts as the run's. */
+export const DOWNLOAD_WINDOW_MS = 60_000;
+
 export class Runs {
   constructor(now = () => Date.now()) {
     this.now = now;
@@ -116,18 +119,20 @@ export class Runs {
 
   /**
    * The run a download starting in `tabId` belongs to: the live, unstopped run
-   * that acted in that tab most recently — or null. Only a tab a run is
-   * working in can give it a download; the user's own downloads, even ones
-   * made while a run is busy elsewhere, are never pinned on a run (they would
-   * be copied to the server).
+   * that acted in that tab most recently, and within the last minute — or
+   * null. Only a run's own recent action can give it a download; the user's
+   * own downloads are never pinned on a run (they would be copied to the
+   * server), including one the user starts later in a tab Stem worked in
+   * earlier — hence the window, not just "touched at some point".
    */
   ownerOfTab(tabId) {
+    const now = this.now();
     let best = null;
     let bestAt = -Infinity;
     for (const run of this.map.values()) {
       if (run.stopped) continue;
       const at = run.touched.get(tabId);
-      if (at !== undefined && at > bestAt) {
+      if (at !== undefined && now - at <= DOWNLOAD_WINDOW_MS && at > bestAt) {
         best = run;
         bestAt = at;
       }

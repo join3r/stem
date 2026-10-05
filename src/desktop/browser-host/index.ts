@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, rm } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { chmod, mkdir, realpath, rm } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { log } from '../../server/log';
 import {
   encodeFrame,
@@ -330,13 +331,17 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
   async function localAction(request: DeviceBrowserRequest): Promise<ExtensionAction> {
     const action = request.action;
     if (action.kind !== 'upload') return action;
-    const dir = join(paths.uploadsDir, request.requestId);
+    // A folder name of our own, never one built from what came over the wire.
+    const dir = join(paths.uploadsDir, randomBytes(8).toString('hex'));
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const dirs = uploadDirs.get(request.threadId) ?? new Set<string>();
     dirs.add(dir);
     uploadDirs.set(request.threadId, dirs);
     const local: string[] = [];
-    for (const f of action.files) local.push(await deps.downloadOutbox(f.id, dir, f.name));
+    for (const f of action.files) {
+      if (typeof f.id !== 'string' || !/^[0-9a-f]{32}$/.test(f.id)) throw new Error('an upload named a file the server never queued');
+      local.push(await deps.downloadOutbox(f.id, dir, f.name));
+    }
     return { kind: 'upload', ref: action.ref, paths: local, ...(action.tab !== undefined ? { tab: action.tab } : {}) };
   }
 
@@ -347,15 +352,25 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     if (!downloads?.length) return rest;
     const receipts: BrowserDownloadReceipt[] = [];
     const notes: string[] = [];
+    const spool = await realpath(paths.spoolDir).catch(() => null);
     for (const d of downloads) {
+      // Only the native host's own copies, one folder deep in the spool: a
+      // path anywhere else — the original in ~/Downloads when the copy failed,
+      // or anything a peer on the socket made up — is never sent to the server.
+      const real = spool ? await realpath(d.path).catch(() => null) : null;
+      const folder = real ? dirname(real) : null;
+      if (!spool || !real || !folder || dirname(folder) !== spool) {
+        notes.push(`Download “${d.name}” finished on the Mac but could not be copied for Stem; ask the user for the file.`);
+        continue;
+      }
       try {
-        const handle = await deps.uploadFile(d.path);
+        const handle = await deps.uploadFile(real);
         receipts.push({ handle, name: d.name, size: d.size, ...(d.mime ? { mime: d.mime } : {}) });
       } catch (e) {
         notes.push(`Download “${d.name}” finished on the Mac but could not be sent to Stem: ${e instanceof Error ? e.message : String(e)}`);
       }
       // The spool copy has done its job either way.
-      if (d.path.startsWith(paths.spoolDir)) void rm(join(d.path, '..'), { recursive: true, force: true });
+      void rm(folder, { recursive: true, force: true });
     }
     const text = [rest.text, ...notes].filter(Boolean).join('\n');
     return { ...rest, ...(text ? { text } : {}), ...(receipts.length ? { downloads: receipts } : {}) };

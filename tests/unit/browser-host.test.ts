@@ -185,31 +185,45 @@ describe('createBrowserHost', () => {
     expect(result('r1')?.error).toContain('did not connect');
   });
 
-  it('fetches an upload’s files to this Mac first, and streams finished downloads up', async () => {
+  it('fetches an upload’s files to this Mac first, and streams up only the spool’s download copies', async () => {
     await writeBrowserHostEnabled(true);
     const peer = await connectPeer(socketPath, arc());
     peers.push(peer);
     host.onRequest(
-      request('r1', { kind: 'upload', ref: 'e4', files: [{ id: 'abc', name: 'cv.pdf', size: 3 }] })
+      request('r1', { kind: 'upload', ref: 'e4', files: [{ id: 'a'.repeat(32), name: 'cv.pdf', size: 3 }] })
     );
     const sent = (await peer.next('request')) as Extract<ToExtension, { type: 'request' }>;
     expect(sent.action.kind).toBe('upload');
     const paths = (sent.action as { paths: string[] }).paths;
     expect(paths).toHaveLength(1);
-    expect(paths[0]).toMatch(/uploads\/r1\/cv\.pdf$/);
+    expect(paths[0]).toMatch(/uploads\/[0-9a-f]{16}\/cv\.pdf$/);
 
+    // The native host's spool copy is sent up; a path anywhere else never is.
+    const spooled = join(root, 'browser', 'spool', 'abcd');
+    mkdirSync(spooled, { recursive: true });
+    writeFileSync(join(spooled, 'report.pdf'), 'REPORT');
+    const outside = join(root, 'secret.txt');
+    writeFileSync(outside, 'SECRET');
     peer.send({
       type: 'result',
       id: 'r1',
-      result: { ok: true, text: 'Attached cv.pdf', downloads: [{ path: '/tmp/x/report.pdf', name: 'report.pdf', size: 9 }] }
+      result: {
+        ok: true,
+        text: 'Attached cv.pdf',
+        downloads: [
+          { path: join(spooled, 'report.pdf'), name: 'report.pdf', size: 9 },
+          { path: outside, name: 'secret.txt', size: 6 },
+          { path: join(spooled, '..', '..', 'secret.txt'), name: 'sneaky.txt', size: 6 }
+        ]
+      }
     });
     await until(() => !!result('r1'));
-    expect(uploads).toEqual(['/tmp/x/report.pdf']);
-    expect(result('r1')).toEqual({
-      ok: true,
-      text: 'Attached cv.pdf',
-      downloads: [{ handle: 'stem-upload:1', name: 'report.pdf', size: 9 }]
-    });
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toMatch(/spool\/abcd\/report\.pdf$/);
+    const res = result('r1') as { ok: boolean; text: string; downloads: unknown[] };
+    expect(res.downloads).toEqual([{ handle: 'stem-upload:1', name: 'report.pdf', size: 9 }]);
+    expect(res.text).toContain('“secret.txt” finished on the Mac but could not be copied');
+    expect(res.text).toContain('“sneaky.txt”');
   });
 
   it('forwards Stop to the server and the end of a run to the extension', async () => {

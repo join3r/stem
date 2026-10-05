@@ -2,7 +2,7 @@
 // tab, who opened and who touched which tab, the shared-tab warning window,
 // and downloads pinned on the run working in their tab, reported exactly once.
 import { describe, expect, it } from 'vitest';
-import { Runs, SHARED_TAB_WINDOW_MS } from '../../src/browser-extension/runs.js';
+import { DOWNLOAD_WINDOW_MS, Runs, SHARED_TAB_WINDOW_MS } from '../../src/browser-extension/runs.js';
 
 function clock(start = 1_000_000) {
   let t = start;
@@ -79,6 +79,10 @@ describe('Runs', () => {
     runs.get('b')!.stopped = true;
     expect(runs.ownerOfTab(10)).toBe('a');
     expect(runs.ownerOfTab(20)).toBeNull();
+    // A minute after the run's last action there, a download in that tab is
+    // the user's own again.
+    c.advance(DOWNLOAD_WINDOW_MS + 1);
+    expect(runs.ownerOfTab(10)).toBeNull();
   });
 
   it('reports a finished download once, with only the protocol fields', () => {
