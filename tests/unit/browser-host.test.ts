@@ -58,11 +58,16 @@ describe('createBrowserHost', () => {
   let uploads: string[];
   let token: string;
   let socketPath: string;
+  let extSource: string;
   const peers: Peer[] = [];
 
   beforeEach(async () => {
     // A short root: unix socket paths are capped near 104 bytes.
     root = mkdtempSync(join(tmpdir(), 'sbh-'));
+    extSource = join(root, 'ext-src');
+    mkdirSync(extSource);
+    writeFileSync(join(extSource, 'manifest.json'), '{"manifest_version":3}');
+    mkdirSync(join(root, 'home', 'Library', 'Application Support', 'Google', 'Chrome'), { recursive: true });
     process.env.STEM_BROWSER_HOST_FILE = join(root, 'browser-host.json');
     const paths = browserInstallPaths(root);
     const config = await ensureHostConfig(paths);
@@ -86,7 +91,8 @@ describe('createBrowserHost', () => {
         writeFileSync(path, `bytes of ${id}`);
         return path;
       },
-      installSource: () => ({ extensionSource: root, hostScript: '/dev/null', nodeCommand: '/bin/false' }),
+      installSource: () => ({ extensionSource: extSource, hostScript: '/dev/null', nodeCommand: '/bin/false' }),
+      home: join(root, 'home'),
       launch: async (app) => void launched.push(app),
       openWith: async () => undefined,
       paths,
@@ -246,5 +252,47 @@ describe('createBrowserHost', () => {
     peer.socket.destroy();
     await until(() => !!result('r1'));
     expect(result('r1')?.error).toContain('may or may not have happened');
+  });
+
+  it('reloads each browser once when the extension files change, never on every hello', async () => {
+    const peer = await connectPeer(socketPath, arc());
+    peer.send({ type: 'hello', protocol: 1, extensionId: 'x', extensionVersion: '0.6.0', userAgent: 'UA' });
+    await until(() => invoked.some((c) => JSON.stringify(c.args).includes('"connected":true')));
+    writeFileSync(join(extSource, 'background.js'), '// v2');
+    await host.setUp();
+    expect(await peer.next('reload')).toEqual({ type: 'reload' });
+
+    // The reloaded extension comes back and says hello: no second reload.
+    peer.socket.destroy();
+    await peer.closed;
+    const again = await connectPeer(socketPath, arc());
+    peers.push(again);
+    again.send({ type: 'hello', protocol: 1, extensionId: 'x', extensionVersion: '0.6.0', userAgent: 'UA' });
+    await until(() => invoked.filter((c) => JSON.stringify(c.args).includes('"connected":true')).length >= 2);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(again.received.filter((m) => m.type === 'reload')).toEqual([]);
+  });
+
+  it('owes one reload to a known browser that was closed when the files changed', async () => {
+    const first = await connectPeer(socketPath, arc());
+    await until(() => invoked.some((c) => JSON.stringify(c.args).includes('"connected":true')));
+    first.socket.destroy();
+    await first.closed;
+    await until(() => invoked.some((c) => JSON.stringify(c.args).includes('"connected":false')));
+    writeFileSync(join(extSource, 'background.js'), '// v3');
+    await host.setUp();
+
+    const hello = { type: 'hello', protocol: 1, extensionId: 'x', extensionVersion: '0.6.0', userAgent: 'UA' };
+    const back = await connectPeer(socketPath, arc());
+    back.send(hello);
+    expect(await back.next('reload')).toEqual({ type: 'reload' });
+    back.socket.destroy();
+    await back.closed;
+    const reloaded = await connectPeer(socketPath, arc());
+    peers.push(reloaded);
+    reloaded.send(hello);
+    await until(() => invoked.some((c) => c.channel === 'browserHost:announce' && JSON.stringify(c.args).includes('"version":"0.6.0"')));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(reloaded.received.filter((m) => m.type === 'reload')).toEqual([]);
   });
 });

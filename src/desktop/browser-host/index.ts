@@ -67,6 +67,8 @@ export interface BrowserHostDeps {
   openWith?(appPath: string | null, target: string): Promise<void>;
   paths?: BrowserInstallPaths;
   platform?: NodeJS.Platform;
+  /** The home whose browsers Set up registers. Tests point it at a temp folder. */
+  home?: string;
   /** Tests shorten the launch wait. */
   launchWaitMs?: number;
 }
@@ -136,8 +138,12 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
   const uploadDirs = new Map<string, Set<string>>();
   let server: Server | null = null;
   let config: BrowserHostConfig | null = null;
-  /** The extension files changed since a browser connected: tell it to reload on its next hello. */
-  let reloadPending = false;
+  /**
+   * Browsers that may still run extension code older than the files on disk:
+   * each gets one reload on its next hello, then leaves the set — the reloaded
+   * extension says hello again, and a second reload would loop forever.
+   */
+  const reloadOwed = new Set<string>();
 
   const send = (conn: Conn, message: ToExtension): boolean => {
     const frame = encodeFrame(message);
@@ -175,7 +181,10 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     if (message.type === 'hello') {
       conn.version = typeof message.extensionVersion === 'string' ? message.extensionVersion : undefined;
       log('browser-host', 'the extension said hello', { browser: conn.appName, version: conn.version });
-      if (reloadPending) send(conn, { type: 'reload' });
+      if (reloadOwed.delete(conn.appPath)) {
+        send(conn, { type: 'reload' });
+        return;
+      }
       void announce();
       return;
     }
@@ -419,12 +428,17 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     return remoteResult(result);
   }
 
+  /** Reload every connected browser now, and owe one to each known browser that is not. */
+  async function oweReload(): Promise<void> {
+    for (const b of (await readBrowserHostSettings()).known) if (!conns.has(b.id)) reloadOwed.add(b.id);
+    for (const c of conns.values()) send(c, { type: 'reload' });
+  }
+
   async function refreshInstall(): Promise<void> {
     try {
-      const refreshed = await refreshBrowserControl(deps.installSource(), paths);
+      const refreshed = await refreshBrowserControl(deps.installSource(), paths, deps.home);
       if (refreshed?.extensionChanged) {
-        reloadPending = true;
-        for (const c of conns.values()) send(c, { type: 'reload' });
+        await oweReload();
       }
     } catch (e) {
       log('browser-host', 'could not refresh the installed extension', { error: String(e) });
@@ -490,11 +504,10 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     async setUp() {
       if (!supported) return state();
       await listen().catch((e) => log('browser-host', 'could not listen for the extension', { error: String(e) }));
-      const result = await installBrowserControl(deps.installSource(), paths);
+      const result = await installBrowserControl(deps.installSource(), paths, deps.home);
       log('browser-host', 'set up browser control', { registered: result.registered });
       if (result.extensionChanged) {
-        reloadPending = true;
-        for (const c of conns.values()) send(c, { type: 'reload' });
+        await oweReload();
       }
       return state();
     },
