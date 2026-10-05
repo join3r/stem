@@ -923,11 +923,13 @@ async function listTabs(run) {
   let hidden = 0;
   let n = 0;
   let count = 0;
+  const urls = [];
   for (const w of windows) {
     if (w.incognito) continue;
     n++;
     const tabLines = [];
     for (const t of w.tabs || []) {
+      if (t.url || t.pendingUrl) urls.push(t.url || t.pendingUrl);
       if (restrictedReason(t.url || t.pendingUrl)) {
         hidden++;
         continue;
@@ -949,7 +951,7 @@ async function listTabs(run) {
     `${count} open tab${count === 1 ? '' : 's'}. "active" is the tab showing in its window — the user may be looking at it; the rest are in the background. ` +
     'Pass an id as `tab` to work in it.';
   const tail = hidden ? `\n(${hidden} browser page${hidden === 1 ? '' : 's'} and local files not listed: Stem doesn't work in them.)` : '';
-  return { ok: true, text: capText(`${head}\n${lines.join('\n')}${tail}`) };
+  return { ok: true, text: capText(`${head}\n${lines.join('\n')}${tail}`), urls };
 }
 
 async function openTab(run, a) {

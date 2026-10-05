@@ -31,6 +31,7 @@ import {
   type BrowserInstallPaths,
   type InstallSource
 } from './install';
+import { arcSidebarText, readArcSidebar, type ArcSidebarTab } from './arc-tabs';
 import { readBrowserHostSettings, updateBrowserHostSettings, writeBrowserHostEnabled } from './store';
 
 // The client half of the `browser` tool: THIS Mac, handing the browser actions
@@ -69,6 +70,8 @@ export interface BrowserHostDeps {
   platform?: NodeJS.Platform;
   /** The home whose browsers Set up registers. Tests point it at a temp folder. */
   home?: string;
+  /** Arc's sidebar tabs (arc-tabs.ts). Tests fake it. */
+  readArcSidebar?(): Promise<{ tabs: ArcSidebarTab[] } | { error: string }>;
   /** Tests shorten the launch wait. */
   launchWaitMs?: number;
 }
@@ -357,7 +360,9 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
   /** Stream finished downloads up; a failure is a line in the text, not a failed action. */
   async function remoteResult(result: ExtensionResult): Promise<DeviceBrowserResult> {
     if (!result.ok) return result;
-    const { downloads, ...rest } = result;
+    // `urls` is for execute (Arc's sidebar), never the server.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { downloads, urls, ...rest } = result;
     if (!downloads?.length) return rest;
     const receipts: BrowserDownloadReceipt[] = [];
     const notes: string[] = [];
@@ -425,6 +430,11 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
         resolve({ ok: false, error: 'The action is too large to hand to the browser (over 1 MB); shorten it.' });
       }
     });
+    if (action.kind === 'tabs' && result.ok && /\/Arc\.app$/.test(conn.appPath)) {
+      const sidebar = await (deps.readArcSidebar ?? readArcSidebar)();
+      const extra = 'error' in sidebar ? sidebar.error : arcSidebarText(sidebar.tabs, result.urls ?? []);
+      if (extra) result.text = [result.text, extra].filter(Boolean).join('\n\n');
+    }
     return remoteResult(result);
   }
 

@@ -56,6 +56,17 @@ pi `browser` tool ──ctx.ui.input(stem-browser-bridge)──▶ PiRuntime.han
 - The native host keeps retrying the socket while Stem is down. The open native port
   keeps the extension's service worker alive, so it sees Stem come back.
 
+## Arc's unloaded tabs
+
+Arc gives extensions only the tabs it has loaded since it started. A sidebar tab
+nobody has clicked since then is not a Chromium tab at all, so `chrome.tabs` misses it
+(found 2026-10-06: 2 of 101 tabs listed). For Arc, the desktop completes the `tabs`
+answer from Arc's AppleScript dictionary (`browser-host/arc-tabs.ts`, about 0.2 s): the
+extension reports the URLs it saw, and the rest are listed by Space without ids. To work
+in one, the model opens its URL in a new background tab. Stem never selects a sidebar
+tab, because that would switch the user's view. The first read asks for macOS Automation
+permission (Stem → Arc).
+
 ## Security notes
 
 - The token in `<state>/browser/config.json` (0600) proves only that the native host was

@@ -46,6 +46,8 @@ export type ExtensionResult =
       screenshot?: { jpegBase64: string; width: number; height: number };
       tab?: number;
       downloads?: ExtensionDownload[];
+      /** `tabs` only: every loaded tab's URL, so the desktop can add Arc's unloaded sidebar tabs. Never forwarded. */
+      urls?: string[];
     }
   | { ok: false; error: string; stopped?: true };
 

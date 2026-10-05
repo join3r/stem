@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBrowserHost, type BrowserHost } from '../../src/desktop/browser-host';
+import { parseArcTabs, type ArcSidebarTab } from '../../src/desktop/browser-host/arc-tabs';
 import { browserInstallPaths, ensureHostConfig } from '../../src/desktop/browser-host/install';
 import { writeBrowserHostEnabled } from '../../src/desktop/browser-host/store';
 import { encodeFrame, FrameReader, type ToExtension } from '../../src/shared/browser-native';
@@ -54,6 +55,7 @@ describe('createBrowserHost', () => {
   let root: string;
   let host: BrowserHost;
   let invoked: Array<{ channel: string; args: unknown[] }>;
+  let sidebar: { tabs: ArcSidebarTab[] } | { error: string };
   let launched: string[];
   let uploads: string[];
   let token: string;
@@ -74,6 +76,7 @@ describe('createBrowserHost', () => {
     token = config.token;
     socketPath = config.socketPath;
     invoked = [];
+    sidebar = { tabs: [] };
     launched = [];
     uploads = [];
     host = createBrowserHost({
@@ -94,6 +97,7 @@ describe('createBrowserHost', () => {
       installSource: () => ({ extensionSource: extSource, hostScript: '/dev/null', nodeCommand: '/bin/false' }),
       home: join(root, 'home'),
       launch: async (app) => void launched.push(app),
+      readArcSidebar: async () => sidebar,
       openWith: async () => undefined,
       paths,
       platform: 'darwin',
@@ -294,5 +298,51 @@ describe('createBrowserHost', () => {
     await until(() => invoked.some((c) => c.channel === 'browserHost:announce' && JSON.stringify(c.args).includes('"version":"0.6.0"')));
     await new Promise((r) => setTimeout(r, 50));
     expect(reloaded.received.filter((m) => m.type === 'reload')).toEqual([]);
+  });
+
+  it('adds the Arc sidebar tabs the extension cannot see to the tab list, and only for Arc', async () => {
+    await writeBrowserHostEnabled(true);
+    const peer = await connectPeer(socketPath, arc());
+    peers.push(peer);
+    peer.send({ type: 'hello', protocol: 1, extensionId: 'x', extensionVersion: '0.6.0', userAgent: 'UA' });
+    await until(() => invoked.some((c) => JSON.stringify(c.args).includes('"connected":true')));
+    sidebar = {
+      tabs: [
+        { space: 'Work', location: 'pinned', title: 'Grafana', url: 'https://grafana.example/' },
+        { space: 'Personal', location: 'unpinned', title: 'Thumb', url: 'https://thumb.example/play/1' },
+        { space: 'Personal', location: 'unpinned', title: 'Extensions', url: 'arc://extensions/' }
+      ]
+    };
+    host.onRequest(request('r1', { kind: 'tabs' }));
+    await peer.next('request');
+    peer.send({
+      type: 'result',
+      id: 'r1',
+      result: { ok: true, text: '1 open tab.\n- 5 · Thumb', urls: ['https://thumb.example/play/1', 'arc://extensions/'] }
+    });
+    await until(() => !!result('r1'));
+    const r = result('r1')!;
+    expect(r).not.toHaveProperty('urls');
+    expect(r.text).toContain('1 open tab.');
+    expect(r.text).toContain('Arc also has 1 sidebar tab');
+    expect(r.text).toContain('Space “Work”:\n- Grafana — https://grafana.example/ (pinned)');
+    expect(r.text).not.toContain('Personal');
+
+    sidebar = { error: 'macOS did not let Stem read Arc’s sidebar.' };
+    host.onRequest(request('r2', { kind: 'tabs' }));
+    await until(() => peer.received.filter((m) => m.type === 'request').length >= 2);
+    peer.send({ type: 'result', id: 'r2', result: { ok: true, text: '0 open tabs.', urls: [] } });
+    await until(() => !!result('r2'));
+    expect(result('r2')!.text).toBe('0 open tabs.\n\nmacOS did not let Stem read Arc’s sidebar.');
+  });
+
+  it('parses the AppleScript output once per tab, however many windows list the Spaces', () => {
+    const rec = (...f: string[]) => f.join('\u001f');
+    const out = [rec('Work', 'pinned', 'A', 'https://a/'), rec('Work', 'pinned', 'A', 'https://a/'), rec('Home', 'topApp', 'B', 'https://b/')].join('\u001e') + '\n';
+    expect(parseArcTabs(out)).toEqual([
+      { space: 'Work', location: 'pinned', title: 'A', url: 'https://a/' },
+      { space: 'Home', location: 'topApp', title: 'B', url: 'https://b/' }
+    ]);
+    expect(parseArcTabs('\n')).toEqual([]);
   });
 });
