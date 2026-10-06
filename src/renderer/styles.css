@@ -4154,3 +4154,117 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
   width: auto;
   padding-bottom: var(--sp-2);
 }
+
+/* ---- Skill recorder: the Record chip, its start sheet, and the draft card ---- */
+.record-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.record-chip.active .record-dot { animation: record-pulse 1.2s infinite; }
+@keyframes record-pulse { 50% { opacity: 0.35; } }
+@keyframes record-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .record-chip.active .record-dot,
+  .record-card .spin { animation: none; }
+}
+.record-sheet { width: min(480px, calc(100vw - 48px)); }
+.record-grants {
+  list-style: none;
+  margin: var(--sp-5) 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-3);
+}
+.record-grants li { display: flex; align-items: center; gap: var(--sp-4); font-size: var(--fs-13); }
+.record-grants li.ok > svg { color: var(--accent); }
+.record-grants li.missing > svg { color: var(--danger); }
+.record-grants li.optional > svg { color: var(--muted); }
+.record-grant-name { font-weight: 600; }
+.record-fine { font-size: var(--fs-12); }
+.record-error,
+.record-message {
+  font-size: var(--fs-13);
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+.record-card {
+  margin: var(--sp-6) 0;
+  padding: var(--sp-7) var(--sp-8);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  display: grid;
+  gap: var(--sp-5);
+  min-width: 0;
+}
+.record-card.closed {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-6);
+  font-size: var(--fs-12);
+  background: transparent;
+}
+.record-card-head { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; font-size: var(--fs-14); }
+.record-card-head .muted { font-size: var(--fs-12); }
+.record-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-12);
+  color: var(--accent);
+}
+.record-working { display: flex; align-items: center; gap: var(--sp-3); color: var(--muted); font-size: var(--fs-13); margin: 0; }
+.record-card .spin { animation: record-spin 0.9s linear infinite; }
+.record-title { display: grid; gap: var(--sp-2); min-width: 0; }
+.record-title code { font-size: var(--fs-13); overflow-wrap: anywhere; }
+.record-title span { color: var(--muted); font-size: var(--fs-13); }
+.record-label {
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: var(--sp-2);
+}
+.record-vars { display: grid; gap: var(--sp-2); }
+.record-var { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); font-size: var(--fs-13); }
+.record-var-name { font-weight: 600; }
+.record-var-from { color: var(--accent); min-width: 0; overflow-wrap: anywhere; }
+.record-body summary { cursor: pointer; font-size: var(--fs-13); color: var(--muted); }
+.record-body pre {
+  font-family: var(--font-mono);
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-5);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  font-size: var(--fs-12);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow: auto;
+}
+.record-edit { display: grid; gap: var(--sp-3); }
+.record-edit input,
+.record-edit textarea,
+.record-question input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-3) var(--sp-4);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--content);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-13);
+}
+.record-edit textarea { font-family: var(--font-mono); font-size: var(--fs-12); resize: vertical; }
+.record-questions { display: grid; gap: var(--sp-3); justify-items: start; }
+.record-question { display: grid; gap: var(--sp-2); width: 100%; font-size: var(--fs-13); }
+.record-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); }
+.record-actions .push { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.record-hint { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-12); }

@@ -3,10 +3,10 @@
 // parts only, so they are tested without React; Composer.tsx owns the keys.
 //
 // The commands themselves are still matched where they always were (note mode
-// in noteMode.ts, `/learn` and `/pin` at submit in Composer.tsx) — this list
+// in noteMode.ts, `/learn`, `/pin` and `/record` at submit in Composer.tsx) — this list
 // only offers them, so a command typed by hand behaves exactly as before.
 
-export type SlashCommandName = 'pin' | 'note' | 'learn';
+export type SlashCommandName = 'pin' | 'note' | 'learn' | 'record';
 
 export interface SlashCommand {
   name: SlashCommandName;
@@ -18,7 +18,8 @@ export interface SlashCommand {
 const COMMANDS: readonly SlashCommand[] = [
   { name: 'pin', args: '<text>', description: 'Pin a note to this chat' },
   { name: 'note', args: '<text>', description: 'Save a note to memory' },
-  { name: 'learn', args: '[focus]', description: 'Save a skill from this chat' }
+  { name: 'learn', args: '[focus]', description: 'Save a skill from this chat' },
+  { name: 'record', args: '', description: 'Show Stem a task on your Mac; it writes the skill' }
 ];
 
 /**

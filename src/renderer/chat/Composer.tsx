@@ -23,6 +23,8 @@ import { slashMatches, type SlashCommand, type SlashCommandName } from './slashC
 import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, noteBodyValid, useNoteMode } from '../noteMode';
 import { clearDraft, readDraft, writeDraft } from './draft-store';
 import { dismissLearnNotice, readLearn, startLearn, subscribeLearn } from './learn-store';
+import { consumePrefill, consumeSheet, dismissRecorderError, readRecorder, subscribeRecorder } from './recorder-store';
+import { RecordSheet } from './RecordSheet';
 
 const MAX_COMPOSER_HEIGHT = 180;
 
@@ -66,6 +68,9 @@ export function detectPinCommand(text: string): { note: string } | null {
   if (text.startsWith('/pin ')) return { note: text.slice('/pin '.length).trim() };
   return null;
 }
+
+/** The skill recorder runs only in the Mac app (the helper is a macOS binary). */
+const CAN_RECORD = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform) && typeof window !== 'undefined' && !!window.stem?.startRecording;
 
 /** How long "Pinned to this chat" stays up under the composer. */
 const PIN_NOTICE_MS = 2000;
@@ -234,6 +239,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const names = new Set<SlashCommandName>(['note']);
     if (onPinNote) names.add('pin');
     if (threadId) names.add('learn');
+    if (threadId && CAN_RECORD) names.add('record');
     return names;
   }, [onPinNote, threadId]);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -246,6 +252,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (cmd.name === 'note') {
       enterNoteMode();
       setDraft('');
+    } else if (cmd.name === 'record') {
+      setDraft('');
+      setRecordSheet({ draftId: null });
     } else {
       setDraft(`/${cmd.name} `);
     }
@@ -271,6 +280,37 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const t = window.setTimeout(() => dismissLearnNotice(threadId, learnNotice), LEARN_NOTICE_MS);
     return () => window.clearTimeout(t);
   }, [threadId, learnNotice]);
+
+  // The skill recorder (recorder-store.ts): the sheet this composer shows, the
+  // recording's state for this chat, and "Try it" text a draft card hands over.
+  const recorder = useSyncExternalStore(subscribeRecorder, readRecorder);
+  const [recordSheet, setRecordSheet] = useState<{ draftId: string | null } | null>(null);
+  const recordingHere = recorder.state.threadId === threadId && recorder.state.phase !== 'idle';
+  useEffect(() => {
+    const req = recorder.sheet;
+    if (!req || !threadId || !CAN_RECORD) return;
+    if (req.threadId && req.threadId !== threadId) return;
+    consumeSheet(req.nonce);
+    if (recorder.state.phase === 'idle') setRecordSheet({ draftId: req.draftId });
+  }, [recorder.sheet, recorder.state.phase, threadId]);
+  useEffect(() => {
+    const p = recorder.prefill;
+    if (!p || p.threadId !== threadId) return;
+    consumePrefill(p.nonce);
+    setDraft(p.text);
+    window.setTimeout(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(p.text.length, p.text.length);
+    }, 0);
+  }, [recorder.prefill, threadId]);
+  const recordError = recorder.state.threadId === threadId ? recorder.state.error : null;
+  useEffect(() => {
+    if (!recordError) return;
+    const t = window.setTimeout(dismissRecorderError, LEARN_NOTICE_MS);
+    return () => window.clearTimeout(t);
+  }, [recordError]);
 
   function submit() {
     if (offline) return;
@@ -300,6 +340,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       return;
     }
     if ((!text && attachments.length === 0) || running) return;
+    if (text === '/record' && threadId && CAN_RECORD) {
+      setDraft('');
+      if (recorder.state.phase === 'idle') setRecordSheet({ draftId: null });
+      return;
+    }
     const learn = detectLearnCommand(text);
     if (learn && threadId) {
       // A second `/learn` while one is still outstanding is dropped, but the draft
@@ -493,6 +538,25 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             <NotebookPen size={13} /> Note
           </button>
         </div>
+        {/* Recording is the person's own work, not a turn: like Note it is not
+            disabled while a turn runs. While recording for this chat it stops. */}
+        {threadId && CAN_RECORD && (
+          <div className="seg-ctl compact" role="group" aria-label="Record a skill">
+            <button
+              type="button"
+              className={recordingHere ? 'active record-chip' : 'record-chip'}
+              disabled={recorder.state.phase === 'authoring' || (recorder.state.phase !== 'idle' && !recordingHere)}
+              onClick={() => (recordingHere ? void window.stem.stopRecording() : setRecordSheet({ draftId: null }))}
+              title={
+                recordingHere
+                  ? 'Stop recording and write the skill (⌃⌥R)'
+                  : 'Show Stem a task on your Mac — it writes the skill (/record, ⌃⌥R)'
+              }
+            >
+              <span className="record-dot" aria-hidden="true" /> {recordingHere ? 'Stop' : 'Record'}
+            </button>
+          </div>
+        )}
         {showContextMeter && <ContextMeter messages={messages} model={model} />}
       </div>
       <div
@@ -521,7 +585,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 onMouseEnter={() => setSlashIndex(i)}
               >
                 <span className="slash-icon" aria-hidden="true">
-                  {cmd.name === 'pin' ? <Pin size={13} /> : cmd.name === 'note' ? <NotebookPen size={13} /> : <Wand2 size={13} />}
+                  {cmd.name === 'pin' ? <Pin size={13} /> : cmd.name === 'note' ? <NotebookPen size={13} /> : cmd.name === 'record' ? <span className="record-dot" /> : <Wand2 size={13} />}
                 </span>
                 <span className="slash-name">/{cmd.name}</span>
                 <span className="slash-args">{cmd.args}</span>
@@ -571,6 +635,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               {/* Deliberately not "Saving…": on ask mode this sits here while the
                   approval card waits, and nothing is saved until it's answered. */}
               {learnNotice?.text ?? 'Learning from this chat…'}
+            </span>
+          </div>
+        )}
+        {(recordingHere || recordError) && (
+          <div className="composer-attachments">
+            <span className={`note-flash${recordError ? '' : ' ok'}`} role="status" aria-live="polite">
+              {recordError ??
+                (recorder.state.phase === 'authoring'
+                  ? 'Writing the skill from your recording…'
+                  : recorder.state.phase === 'paused'
+                    ? 'Recording paused'
+                    : `Recording · ${recorder.state.steps} step${recorder.state.steps === 1 ? '' : 's'}${recorder.state.lastStep ? ` · ${recorder.state.lastStep}` : ''}`)}
             </span>
           </div>
         )}
@@ -726,6 +802,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           )}
         </div>
       </div>
+      {recordSheet && threadId && (
+        <RecordSheet threadId={threadId} draftId={recordSheet.draftId} onClose={() => setRecordSheet(null)} />
+      )}
     </div>
   );
 });

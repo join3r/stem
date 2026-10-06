@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode
 } from 'react';
 import {
@@ -38,6 +39,8 @@ import { formatSystemVersion } from '../../shared/sys-version';
 import { ActivityRows, SourcesList } from './ActivityRows';
 import { GeneratedImages } from './GeneratedImage';
 import { Composer, type ComposerHandle } from './Composer';
+import { RecordingDraftCard } from './RecordingDraftCard';
+import { loadDrafts, readDrafts, subscribeRecorder } from './recorder-store';
 import { ApprovalCard } from '../manage/ApprovalCard';
 import type { PendingApproval } from '../manage/approvalQueue';
 import { MdxView } from './MdxView';
@@ -425,6 +428,12 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   pinboard = false
 }: ChatViewProps, ref) {
   const board = useChatPins(pinboard ? threadId : null);
+  // Draft skills this chat's recordings became (recorder-store.ts): loaded on
+  // open, kept current by pushes, shown after the conversation.
+  const recordingDrafts = useSyncExternalStore(subscribeRecorder, () => readDrafts(threadId));
+  useEffect(() => {
+    if (threadId) void loadDrafts(threadId);
+  }, [threadId]);
   // Which user message is being edited inline (the working text lives in the box).
   const [editingId, setEditingId] = useState<string | null>(null);
   // Transient per-message UI: which bubble just got copied (check icon), and which
@@ -906,6 +915,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             </Fragment>
           );
         })}
+        {recordingDrafts.map((d) => (
+          <RecordingDraftCard key={d.id} draft={d} />
+        ))}
         {showActivity && !streamingMsg && (
           <div className="message message-assistant activity-row">
             <div className="msg-avatar stem">{AVATAR.assistant.icon}</div>
