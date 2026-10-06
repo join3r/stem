@@ -3,7 +3,7 @@ import type { ChatBackend } from '../backend/types';
 import { resolveRoleEffort } from '../../shared/modelRoles';
 import { log } from '../log';
 import { hostShellFromPlatform } from './host-shell';
-import { buildJudgePrompt, parseJudgeVerdict, resolveJudgeModel } from './policy';
+import { buildJudgePrompt, buildWebReadJudgePrompt, parseJudgeVerdict, resolveJudgeModel } from './policy';
 
 // The LLM safety judge, shared by run_command (ExecService) and coding-agent
 // permission asks (HarnessService). It is a heuristic, not a security boundary —
@@ -38,6 +38,7 @@ export function judgeFailureReason(detail: string): string | undefined {
 export type JudgeResult = { verdict: 'safe' | 'unsafe' | 'unsure' | 'failed'; reason?: string };
 
 export type JudgeFn = SafetyJudge['judge'];
+export type JudgeWebReadFn = SafetyJudge['judgeWebRead'];
 
 export class SafetyJudge {
   private readonly deps: { runtime: () => ChatBackend };
@@ -46,6 +47,7 @@ export class SafetyJudge {
   constructor(deps: { runtime: () => ChatBackend }) {
     this.deps = deps;
     this.judge = this.judge.bind(this);
+    this.judgeWebRead = this.judgeWebRead.bind(this);
   }
 
   private async listModelsCached(): Promise<ModelSummary[]> {
@@ -74,6 +76,33 @@ export class SafetyJudge {
     // that will actually run it, on the machine it will actually run on.
     shellLabel?: string
   ): Promise<JudgeResult> {
+    return this.ask(
+      buildJudgePrompt(command, cwd, userIntent, shell, shellLabel),
+      settings,
+      defaults,
+      currentModel ?? null
+    );
+  }
+
+  /**
+   * A coding agent's built-in web read (WebFetch / WebSearch), described by its
+   * ask title. Same model, effort and fail-to-card behavior as a command.
+   */
+  async judgeWebRead(
+    read: string,
+    settings: Pick<ExecSettings, 'judgeModel' | 'judgeEffort'>,
+    defaults: DefaultsSettings,
+    userIntent?: string
+  ): Promise<JudgeResult> {
+    return this.ask(buildWebReadJudgePrompt(read, userIntent), settings, defaults, null);
+  }
+
+  private async ask(
+    prompt: string,
+    settings: Pick<ExecSettings, 'judgeModel' | 'judgeEffort'>,
+    defaults: DefaultsSettings,
+    currentModel: string | null
+  ): Promise<JudgeResult> {
     try {
       const runtime = this.deps.runtime();
       const models = await this.listModelsCached();
@@ -81,8 +110,8 @@ export class SafetyJudge {
       // resolveJudgeModel only answers null when it was handed no models at all,
       // and complete() then uses its own default, which is the best available
       // answer anyway.
-      const model = resolveJudgeModel(settings, defaults, models, currentModel ?? null);
-      const reply = await runtime.complete(buildJudgePrompt(command, cwd, userIntent, shell, shellLabel), {
+      const model = resolveJudgeModel(settings, defaults, models, currentModel);
+      const reply = await runtime.complete(prompt, {
         model,
         // The judge sits between you and every command you run, so it feels the
         // effort setting more than any other role does — its own if it has been

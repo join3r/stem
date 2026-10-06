@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   buildJudgePrompt,
+  buildWebReadJudgePrompt,
   classify,
   deviceShellLabel,
   drivesGui,
@@ -516,6 +517,19 @@ describe('buildJudgePrompt', () => {
   it('truncates an oversized request', () => {
     const prompt = buildJudgePrompt('ls', '/tmp/work', 'x'.repeat(5000));
     expect(prompt.length).toBeLessThan(2500);
+  });
+});
+
+describe('buildWebReadJudgePrompt', () => {
+  it('embeds the read and the brief, demands the same one-word verdict, and names no shell', () => {
+    const prompt = buildWebReadJudgePrompt('Fetch https://gateway.envoyproxy.io/docs/', 'add X-Real-IP to the routes');
+    expect(prompt).toContain('Fetch https://gateway.envoyproxy.io/docs/');
+    expect(prompt).toContain('add X-Real-IP to the routes');
+    expect(prompt).toMatch(/safe, unsafe, or unsure/);
+    // What leaves in the URL or query is the risk, not a command's side effects.
+    expect(prompt).toMatch(/secrets/);
+    expect(prompt).not.toMatch(/shell command|Working directory/);
+    expect(buildWebReadJudgePrompt('"envoy formatter"')).toContain('not available');
   });
 });
 

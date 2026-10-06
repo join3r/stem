@@ -530,6 +530,60 @@ describe('approval tiers', () => {
     expect(approvals).toHaveLength(0);
   });
 
+  /** A host whose turn raises one web-read ask (WebFetch / WebSearch → kind 'fetch'). */
+  function fetchAskingHost(title: string, onDecision: (d: unknown) => void): ScriptedHost {
+    return scriptedHost({
+      turn: async (_input, sink) => {
+        onDecision(await sink.onPermission({ permissionId: 'perm-1', title, toolName: 'fetch', options: OPTIONS }));
+        return { ok: true, stopReason: 'end_turn', text: 'done' };
+      }
+    });
+  }
+
+  it('assisted mode judges a web read against the brief and allows it when safe', async () => {
+    let decision: unknown;
+    const judge = vi.fn();
+    const judgeWebRead = vi.fn<NonNullable<HarnessServiceDeps['judgeWebRead']>>(async () => ({ verdict: 'safe' }));
+    const host = fetchAskingHost('Fetch https://gateway.envoyproxy.io/docs/', (d) => (decision = d));
+    const { service, approvals } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'assisted' }),
+      judge,
+      judgeWebRead
+    });
+    await service.handleHarnessRequest(REQ);
+    expect(decision).toEqual({ optionId: 'allow' });
+    expect(approvals).toHaveLength(0);
+    expect(judgeWebRead.mock.calls[0][0]).toBe('Fetch https://gateway.envoyproxy.io/docs/');
+    expect(judgeWebRead.mock.calls[0][3]).toBe('add a --version flag');
+    // Not dressed up as a shell command for the command judge.
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it('a web read the judge does not clear cards with its verdict', async () => {
+    const judgeWebRead = vi.fn(async () => ({ verdict: 'unsafe' as const, reason: 'the query carries a token' }));
+    const host = fetchAskingHost('"ghp_secret leak"', () => undefined);
+    const { service, approvals } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'assisted' }),
+      judgeWebRead
+    });
+    const pending = service.handleHarnessRequest(REQ);
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0]).toMatchObject({ judgeVerdict: 'unsafe', judgeReason: 'the query carries a token' });
+    service.resolveApproval(approvals[0].id, 'reject');
+    await pending;
+  });
+
+  it('manual mode cards a web read without judging it', async () => {
+    const judgeWebRead = vi.fn();
+    const host = fetchAskingHost('Fetch https://example.com', () => undefined);
+    const { service, approvals } = makeService(host, { judgeWebRead });
+    const pending = service.handleHarnessRequest(REQ);
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(judgeWebRead).not.toHaveBeenCalled();
+    service.resolveApproval(approvals[0].id, 'allow');
+    await pending;
+  });
+
   it('an allowlisted command clears tier 1 without calling the judge', async () => {
     let decision: unknown;
     const judge = vi.fn();
