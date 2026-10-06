@@ -234,7 +234,7 @@ final class Recorder {
     let role = AX.string(hit, kAXRoleAttribute as String) ?? "AXUnknown"
     var extra: [String: Any] = ["role": Recorder.roleName(role), "x": Int(point.x), "y": Int(point.y)]
     if !Recorder.isSecretApp(ctx.bundleId) {
-      if let label = Recorder.describe(hit) { extra["label"] = label }
+      if let label = Recorder.describe(hit), !Recorder.looksLikeCard(label) { extra["label"] = label }
       if let within = Recorder.container(of: hit) { extra["within"] = within }
     }
     if right { extra["button"] = "right" }
@@ -348,7 +348,7 @@ final class Recorder {
       return
     }
     var extra: [String: Any] = ["field": e.field, "role": e.role, "value": Recorder.clip(now, 4000)]
-    if !e.before.isEmpty { extra["before"] = Recorder.clip(e.before, 400) }
+    if !e.before.isEmpty, !Recorder.looksLikeCard(e.before) { extra["before"] = Recorder.clip(e.before, 400) }
     emitStep("type", e.app, extra)
   }
 
@@ -447,11 +447,16 @@ final class Recorder {
 
   private func context(pid: pid_t, from element: AXUIElement) -> Context {
     let running = NSRunningApplication(processIdentifier: pid)
+    let bundleId = running?.bundleIdentifier ?? ""
+    // A password manager's window title names the secret being looked at.
+    if Recorder.isSecretApp(bundleId) {
+      return Context(pid: pid, app: running?.localizedName ?? "pid \(pid)", bundleId: bundleId, window: "", url: nil)
+    }
     let window = Recorder.ancestor(of: element, role: "AXWindow") ?? element
     return Context(
       pid: pid,
       app: running?.localizedName ?? "pid \(pid)",
-      bundleId: running?.bundleIdentifier ?? "",
+      bundleId: bundleId,
       window: Recorder.clip(AX.string(window, kAXTitleAttribute as String) ?? "", 160),
       url: Recorder.pageURL(near: element)
     )
