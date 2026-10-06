@@ -1226,6 +1226,17 @@ export const MCP_REQUEST_FRAME = 'mcp-request';
 export const MCP_ASSIGNMENTS_FRAME = 'mcp-assignments';
 
 /**
+ * The addressed control frame that tells the device a client-connected folder
+ * lives on that the folder's registry entry changed (its mode, or it was
+ * disconnected). Empty for the MCP frame's reason: `mirror:hello` is the answer.
+ *
+ * Without it, the device's mirrors.json — which its exec host reads to refuse
+ * commands in read-only folders — catches up only at the next reconnect or the
+ * 15-minute reconcile, so a folder just switched to Writable keeps refusing.
+ */
+export const MIRROR_FOLDERS_FRAME = 'mirror-folders';
+
+/**
  * The transport half of an entry in mcp.json, as the machine that will actually
  * run the server needs it. Credentials are IN it — decrypted env values, header
  * values — because the spec is what the client connects with; it travels to

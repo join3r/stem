@@ -378,7 +378,10 @@ export async function getPrivateRoots(): Promise<string[]> {
  *     pi's cwd: every connected folder (mirrors included) plus the exec scratch
  *     root, whose paths command output hands the model;
  *   - `write` — everything write/edit may reach beyond the cwd: server-local
- *     read-write folders plus the exec scratch root.
+ *     read-write folders plus the exec scratch root;
+ *   - `mirrors` — the subset of `roots` that are client folders' mirrors, so a
+ *     refusal can say "this is a copy, act on the device" instead of "ask the
+ *     user to make it writable", which can never help for a mirror.
  *
  * Anything not in the lists (and not under pi's cwd) is refused at the tool
  * boundary — the confinement that keeps prompt injection from turning the
@@ -396,6 +399,7 @@ async function publishProtectedRoots(store: ConnectedFoldersStore): Promise<void
   const roots = await Promise.all(
     store.folders.filter((f) => f.mode === 'read' || f.origin).map((f) => canonical(f.path))
   );
+  const mirrors = await Promise.all(store.folders.filter((f) => f.origin).map((f) => canonical(f.path)));
   const scratch = await canonical(execWorkspaceDir());
   const read = [scratch, ...(await Promise.all(store.folders.map((f) => canonical(f.path))))];
   const write = [
@@ -410,7 +414,7 @@ async function publishProtectedRoots(store: ConnectedFoldersStore): Promise<void
   // so a torn write here would freeze protection on a stale set.
   const path = protectedRootsPath();
   const tmp = `${path}.${randomUUID()}.tmp`;
-  await writeFile(tmp, JSON.stringify({ roots, read, write }, null, 2), 'utf8');
+  await writeFile(tmp, JSON.stringify({ roots, read, write, mirrors }, null, 2), 'utf8');
   await rename(tmp, path);
 }
 

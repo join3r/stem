@@ -70,6 +70,11 @@ Maintainer notes:
   table is still being written.
 - **Chat previews no longer show chart data.** A reply that opened with a chart or table showed
   up in the chat list as a line of raw data; it now shows the chart's title.
+- **Stem reads PDFs in your folders.** Asked to look at a PDF in a connected folder, Stem used to
+  get unreadable raw data and asked you to upload the file instead. It now reads the document's
+  text, read-only folders included. Scanned PDFs without a text layer still can't be read.
+- **Switching a folder to Writable takes effect right away.** For a folder on another computer,
+  Stem kept refusing to work in it for up to 15 minutes after you flipped the switch.
 
 ## 0.5.6 — 2026-10-02
 

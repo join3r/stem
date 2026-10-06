@@ -18,11 +18,14 @@ import { enrichConnectedFolders } from '../connected-folders/enrich';
 import { applyMirror, coerceManifestEntries, diffMirror, readMirrorSkipped, recordMirrorSkipped } from '../mirror';
 import { mirrorSyncApplied, mirrorSyncEnded, mirrorSyncPlanned } from '../mirror/sync-activity';
 import type { CallerContext } from './guard';
+import { MIRROR_FOLDERS_FRAME } from '../../shared/types';
 import type { ConnectedFolder, MirrorApplyInput, MirrorFolderInfo, MirrorReportInput } from '../../shared/types';
 import { browseServerFolders } from '../workspace/browse';
 import { getFolderIndexStatuses, seedFolderLearnMarks, syncFolderIndexes } from '../folder-index';
 import { clearScratch, listScratchUsage, UNFILED_KEY } from '../exec/scratch';
 import { recallStore } from '../recall/store';
+import { log } from '../log';
+import { pushToDevice } from '../startup/transport';
 import { skillsRunOf, updateSkillsSettings } from '../workspace/settings';
 import { resetSkills, skillsResetStatus } from '../skills/reset';
 import { removeSkill } from '../skills/store';
@@ -41,6 +44,19 @@ import type {
   TaskRunsAsPatch,
   TaskSchedulePatch
 } from '../../shared/types';
+
+/**
+ * Tell the device a client-connected folder lives on that its registry entry
+ * changed; the device re-reads it via `mirror:hello`. A server-local folder
+ * (no origin) and a device that is offline are both no-ops — the device
+ * reconciles on reconnect anyway.
+ */
+function tellOriginDevice(folder: ConnectedFolder | undefined): void {
+  const deviceId = folder?.origin?.deviceId;
+  if (!deviceId) return;
+  const streams = pushToDevice(deviceId, MIRROR_FOLDERS_FRAME, {});
+  log('mirror', 'told a device its connected folders changed', { deviceId, folderId: folder.id, streams });
+}
 
 /**
  * Skills, the Files place, connected folders, scheduled tasks, and the phone
@@ -155,6 +171,11 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   });
   registerServer('cfolders:update', async (_e, id: string, patch: ConnectedFolderPatch) => {
     const folders = await updateConnectedFolder(id, patch);
+    // A client folder's mode is enforced on its own device too (its exec host
+    // refuses commands in a read-only mirror), so that device hears about it now.
+    if (patch.mode === 'read' || patch.mode === 'readwrite') {
+      tellOriginDevice(folders.find((f) => f.id === id));
+    }
     // Index toggled: reconcile now (off → the DB file is deleted) and, when
     // turned on, kick a scan so the index fills without waiting for the timer.
     if (typeof patch.index === 'boolean') {
@@ -172,7 +193,9 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     return enrichConnectedFolders(folders);
   });
   registerServer('cfolders:remove', async (_e, id: string) => {
+    const removed = (await listConnectedFolders()).find((f) => f.id === id);
     const folders = await removeConnectedFolder(id);
+    tellOriginDevice(removed); // its device stops watching and uploading now
     mirrorSyncEnded(id); // Disconnecting a client folder mid-sync closes its activity row.
     void syncFolderIndexes(); // Drops the disconnected folder's index DB.
     return enrichConnectedFolders(folders);

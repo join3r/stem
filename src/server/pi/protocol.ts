@@ -106,6 +106,13 @@ export const BROWSER_BRIDGE_TITLE = 'stem-browser-bridge';
  */
 export const SKILL_BRIDGE_TITLE = 'stem-skill-bridge';
 
+/**
+ * `read` on a PDF (`input`): `{ op: 'pdf_text', path }` rides in `placeholder`,
+ * sent by the bridge's tool_result hook after pi's own read returned the raw
+ * bytes. PiRuntime answers with the extracted text layer (see pdf-read.ts).
+ */
+export const FILE_BRIDGE_TITLE = 'stem-file-bridge';
+
 // ---- gate files (basenames under the pi home, mtime-polled by the bridge) ----
 
 /**

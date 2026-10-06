@@ -12,6 +12,7 @@ import {
   HARNESS_REQUEST_FRAME,
   MCP_ASSIGNMENTS_FRAME,
   MCP_REQUEST_FRAME,
+  MIRROR_FOLDERS_FRAME,
   type AuthUiEvent,
   type BackendEventEnvelope,
   type DeviceBrowserRequest,
@@ -350,6 +351,8 @@ export interface ProxyDeps {
   computerHost: DeviceComputerHostBinding;
   /** Hands the browser actions addressed to this device to the extension. Optional so older test fakes stand. */
   browserHost?: DeviceBrowserHostBinding;
+  /** A folder this device mirrors changed mode or was disconnected elsewhere: re-read the registry. */
+  mirrorFoldersChanged?(): void;
   /** Quick Chat settings were persisted: apply the parts that are not settings. */
   applyQuickChatSettings(patch: Partial<QuickChatSettings>, next: QuickChatSettings): void;
 }
@@ -693,6 +696,13 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     // because the host goes and asks.
     if (name === MCP_ASSIGNMENTS_FRAME) {
       deps.mcpHost.onAssignmentsChanged();
+      return;
+    }
+    // A folder this machine mirrors was switched read-only ↔ writable (or
+    // disconnected) somewhere — this window, a phone, another desktop. Same
+    // shape as the assignments frame: nothing to parse, the host asks.
+    if (name === MIRROR_FOLDERS_FRAME) {
+      deps.mirrorFoldersChanged?.();
       return;
     }
     // A command for THIS machine. Addressed and off the ring exactly as an MCP

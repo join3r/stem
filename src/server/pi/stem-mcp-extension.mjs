@@ -1016,7 +1016,7 @@ function makeNativeSearchGate(nsPath) {
  */
 export function makeFsRootsGate(prPath) {
   const strings = (v) => (Array.isArray(v) ? v.filter((r) => typeof r === 'string') : []);
-  let cache = { mtime: -1, roots: [], read: [], write: [] };
+  let cache = { mtime: -1, roots: [], read: [], write: [], mirrors: [] };
   return () => {
     try {
       const mtime = statSync(prPath).mtimeMs;
@@ -1026,7 +1026,8 @@ export function makeFsRootsGate(prPath) {
           mtime,
           roots: strings(data && data.roots),
           read: strings(data && data.read),
-          write: strings(data && data.write)
+          write: strings(data && data.write),
+          mirrors: strings(data && data.mirrors)
         };
       }
     } catch {
@@ -1035,6 +1036,12 @@ export function makeFsRootsGate(prPath) {
     return cache;
   };
 }
+
+/** write/edit aimed at a client folder's mirror: making the folder writable never makes the copy writable. */
+export const MIRROR_WRITE_REFUSAL =
+  "This is Stem's server copy (mirror) of a folder that lives on one of the user's computers; the mirror " +
+  "is never editable, whatever the folder's mode. If the folder is writable, change it on that computer: " +
+  "run_command with `device` against the folder's path there (the connected-folders list names both).";
 
 /** Back-compat view of {@link makeFsRootsGate}: just the read-only roots array. */
 export function makeProtectedRootsGate(prPath) {
@@ -1972,7 +1979,10 @@ export default async function stemMcpBridge(pi) {
       if (!kind) return undefined;
       const p = event.input && typeof event.input.path === 'string' ? event.input.path : null;
       if (!p) return undefined;
-      const { roots, read, write } = fsRoots();
+      const { roots, read, write, mirrors } = fsRoots();
+      if (kind === 'write' && mirrors.some((root) => isInside(p, root))) {
+        return { block: true, reason: MIRROR_WRITE_REFUSAL };
+      }
       if (kind === 'write' && roots.some((root) => isInside(p, root))) {
         return { block: true, reason: 'This folder is connected to Stem read-only — editing it is not allowed. Ask the user to switch it to read & write in the Folders tab.' };
       }
@@ -1989,6 +1999,31 @@ export default async function stemMcpBridge(pi) {
         };
       }
       return undefined;
+    });
+    // `read` decodes every non-image file as UTF-8, so a PDF reaches the model
+    // as raw object syntax — useless, and the gate above blocks the shell
+    // fallbacks (pdftotext, a python one-liner) in read-only folders and every
+    // mirror. Swap the bytes for the text layer main extracts. pi's own read ran
+    // first, so the gate has passed the path; a read that failed only because
+    // the offset is past the raw file's line count is retried here, since the
+    // offset was meant for the text.
+    pi.on('tool_result', async (event, ctx) => {
+      if (!event || event.toolName !== 'read') return undefined;
+      const input = event.input || {};
+      const p = typeof input.path === 'string' ? input.path : null;
+      if (!p) return undefined;
+      const first = Array.isArray(event.content) ? event.content.find((c) => c && c.type === 'text') : undefined;
+      const text = first && typeof first.text === 'string' ? first.text : '';
+      const isPdf = /\.pdf$/i.test(p.trim()) || (!event.isError && text.startsWith('%PDF-'));
+      if (!isPdf) return undefined;
+      if (event.isError && !/beyond end of file/i.test(text)) return undefined;
+      const res = await fileBridge(ctx, { op: 'pdf_text', path: canonicalPolicyPath(p) });
+      if (!res) return undefined; // no main to ask (a bare pi run): leave pi's answer
+      if (!res.ok) return { content: [{ type: 'text', text: res.error || 'Stem could not read this PDF.' }], isError: true };
+      const offset = typeof input.offset === 'number' ? input.offset : undefined;
+      const limit = typeof input.limit === 'number' ? input.limit : undefined;
+      const page = pagePdfText(res.text, offset, limit, res.truncated === true);
+      return { content: [{ type: 'text', text: page.text }], isError: page.isError, details: {} };
     });
     // Generated images stay in the conversation the way ChatGPT keeps them, but
     // only the newest few keep their pixels in what the model is sent — each is
@@ -2707,6 +2742,64 @@ function registerMailTools(pi) {
       return taskOk(res.text || 'No notes.');
     }
   });
+}
+
+// ---- PDF text for `read` (see the tool_result hook) ----
+
+const FILE_BRIDGE_TITLE = 'stem-file-bridge';
+const PDF_PAGE_MAX_BYTES = 50 * 1024;
+const PDF_PAGE_MAX_LINES = 2000;
+
+/** Ask main for a PDF's text layer; null when there is no main to ask. */
+async function fileBridge(ctx, payload) {
+  if (!ctx || !ctx.ui || typeof ctx.ui.input !== 'function') return null;
+  const raw = await ctx.ui.input(FILE_BRIDGE_TITLE, JSON.stringify(payload));
+  if (typeof raw !== 'string') return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { ok: false, error: 'Malformed response from Stem.' };
+  }
+}
+
+/**
+ * One page of a PDF's extracted text, cut the way `read` cuts a text file:
+ * 1-based line `offset`, optional line `limit`, then at most 2000 lines / 50 KB,
+ * with a note saying where to continue. `truncated` = main already capped the
+ * document itself.
+ */
+export function pagePdfText(text, offset, limit, truncated = false) {
+  const head = '[Text layer of this PDF, extracted by Stem — layout and images are not included.]';
+  if (!text.trim()) {
+    return {
+      text: 'This PDF has no text layer (most likely a scan), and Stem cannot OCR it. Ask the user for the details you need.',
+      isError: false
+    };
+  }
+  const lines = text.split('\n');
+  const start = offset ? Math.max(0, Math.floor(offset) - 1) : 0;
+  if (start >= lines.length) {
+    return { text: `Offset ${offset} is beyond the end of this PDF's text (${lines.length} lines).`, isError: true };
+  }
+  const stop = limit !== undefined ? Math.min(start + Math.max(1, Math.floor(limit)), lines.length) : lines.length;
+  const out = [];
+  let bytes = 0;
+  let end = start;
+  while (end < stop && out.length < PDF_PAGE_MAX_LINES) {
+    const line = lines[end];
+    const size = Buffer.byteLength(line, 'utf8') + 1;
+    if (out.length && bytes + size > PDF_PAGE_MAX_BYTES) break;
+    out.push(size > PDF_PAGE_MAX_BYTES ? line.slice(0, PDF_PAGE_MAX_BYTES) : line);
+    bytes += size;
+    end++;
+  }
+  let body = `${head}\n${out.join('\n')}`;
+  if (end < lines.length) {
+    body += `\n\n[Showing lines ${start + 1}-${end} of ${lines.length}. Use offset=${end + 1} to continue.]`;
+  } else if (truncated) {
+    body += '\n\n[The PDF continues past what Stem extracts (2 MB of text).]';
+  }
+  return { text: body, isError: false };
 }
 
 // ---- Command execution: run shell commands via the main-process executor ----

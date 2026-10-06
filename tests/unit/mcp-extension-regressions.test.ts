@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,7 +21,9 @@ import stemMcpBridge, {
   withServiceTier,
   mcpServerAllowed,
   visibleMcpClients,
-  MCP_SERVER_HIDDEN_REFUSAL
+  MCP_SERVER_HIDDEN_REFUSAL,
+  MIRROR_WRITE_REFUSAL,
+  pagePdfText
 } from '../../src/server/pi/stem-mcp-extension.mjs';
 import { mcpServerAuthIdentity, writeTurnContextGate } from '../../src/server/pi/mcp-config';
 
@@ -965,5 +967,84 @@ describe('service tier ("Fast") payload injection', () => {
     expect(withServiceTier({ ...codexBody, service_tier: 'flex' }, 'priority')).toBeUndefined();
     expect(withServiceTier(codexBody, null)).toBeUndefined();
     expect(withServiceTier(undefined, 'priority')).toBeUndefined();
+  });
+});
+
+describe('read on a PDF returns its text layer', () => {
+  type ResultHandler = (event: unknown, ctx: unknown) => Promise<{ content?: Array<{ type: string; text?: string }>; isError?: boolean } | undefined>;
+
+  async function loadHooks(gate: Record<string, unknown>) {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'stem-pdf-read-')));
+    cleanup.push(root);
+    const configPath = join(root, 'mcp.json');
+    await writeFile(configPath, JSON.stringify({ servers: {} }));
+    await writeFile(join(root, 'protected-roots.json'), JSON.stringify(gate));
+    process.env.STEM_MCP_CONFIG = configPath;
+    const toolCall: Array<(event: unknown) => { block?: boolean; reason?: string } | undefined> = [];
+    const toolResult: ResultHandler[] = [];
+    await stemMcpBridge({
+      registerTool: (_tool: unknown) => {},
+      on: (name: string, handler: (...args: unknown[]) => unknown) => {
+        if (name === 'tool_call') toolCall.push(handler as (typeof toolCall)[number]);
+        if (name === 'tool_result') toolResult.push(handler as ResultHandler);
+      },
+      getActiveTools: () => [] as string[],
+      setActiveTools: (_tools: string[]) => {}
+    });
+    await mcpConnectionsSettledForTests();
+    return { root, toolCall, toolResult };
+  }
+
+  it('swaps the raw bytes for the text main extracts, and pages it like read pages a file', async () => {
+    const { root, toolResult } = await loadHooks({ roots: [], read: [], write: [] });
+    const asked: unknown[] = [];
+    const ctx = {
+      ui: {
+        input: async (title: string, payload: string) => {
+          asked.push({ title, payload: JSON.parse(payload) });
+          return JSON.stringify({ ok: true, text: 'FAKTÚRA 20260009\nOdberateľ Cloudfarms\nSpolu 162 h', truncated: false });
+        }
+      }
+    };
+    const path = join(root, 'Faktura_20260009.pdf');
+    let out: Awaited<ReturnType<ResultHandler>>;
+    for (const h of toolResult) {
+      out = await h({ toolName: 'read', input: { path }, content: [{ type: 'text', text: '%PDF-1.7\n10 0 obj' }], isError: false }, ctx);
+      if (out) break;
+    }
+    expect(asked).toEqual([{ title: 'stem-file-bridge', payload: { op: 'pdf_text', path } }]);
+    expect(out!.isError).toBe(false);
+    expect(out!.content![0]!.text).toContain('Odberateľ Cloudfarms');
+    expect(out!.content![0]!.text).not.toContain('%PDF');
+
+    // Other files, and a bare pi run with no main to ask, are left alone.
+    for (const h of toolResult) {
+      expect(await h({ toolName: 'read', input: { path: join(root, 'a.md') }, content: [{ type: 'text', text: 'hi' }], isError: false }, ctx)).toBeUndefined();
+      expect(await h({ toolName: 'read', input: { path }, content: [{ type: 'text', text: '%PDF-1.7' }], isError: false }, {})).toBeUndefined();
+    }
+  });
+
+  it('pages long text with a continuation note, and says so plainly for a scan', () => {
+    const text = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`).join('\n');
+    const first = pagePdfText(text, undefined, 2);
+    expect(first.text).toContain('line 1\nline 2');
+    expect(first.text).toContain('Use offset=3 to continue');
+    const rest = pagePdfText(text, 3, undefined);
+    expect(rest.text).toContain('line 5');
+    expect(rest.text).not.toContain('continue');
+    expect(pagePdfText(text, 9, undefined).isError).toBe(true);
+    expect(pagePdfText('  ', undefined, undefined).text).toContain('no text layer');
+  });
+
+  it("refuses write/edit in a client folder's mirror with the device advice, not 'make it writable'", async () => {
+    const { root, toolCall } = await loadHooks({ roots: [], read: [], write: [] });
+    const mirror = join(root, 'mirrors', 'f1');
+    await mkdir(mirror, { recursive: true });
+    await writeFile(
+      join(root, 'protected-roots.json'),
+      JSON.stringify({ roots: [mirror], read: [mirror], write: [], mirrors: [mirror] })
+    );
+    const verdict = toolCall.map((h) => h({ toolName: 'write', input: { path: join(mirror, 'new.pdf') } })).find((r) => r?.block);
+    expect(verdict?.reason).toBe(MIRROR_WRITE_REFUSAL);
   });
 });

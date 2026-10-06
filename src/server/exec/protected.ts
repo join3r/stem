@@ -141,6 +141,38 @@ export function readGrantedReadRoots(
 }
 
 /**
+ * The `mirrors` list of the same gate: the protected roots that are client
+ * folders' server-side mirrors. Only refines a refusal's wording, so a missing
+ * list (a gate from before it existed) is simply empty.
+ */
+export function readMirrorRoots(
+  path: string = protectedRootsPath(),
+  shell: HostShell = hostShellFromPlatform()
+): string[] {
+  const h = host(shell);
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return [];
+  }
+  const parsed = JSON.parse(raw) as { mirrors?: unknown };
+  if (!Array.isArray(parsed.mirrors)) return [];
+  return parsed.mirrors.filter((r): r is string => typeof r === 'string' && !!r).map((r) => canonicalish(r, h));
+}
+
+/** The refusal for a command aimed at a mirror: the generic read-only advice can never help there. */
+export function mirrorCommandRefusal(root: string): string {
+  return (
+    `The command touches "${root}", Stem's server copy (mirror) of a folder that lives on one of the ` +
+    "user's computers. Commands never run against the mirror, whatever the folder's mode. Read it with " +
+    "the built-in read/grep/find tools (read returns a PDF's text). To run a command against the folder " +
+    "itself, pass run_command's `device` with the folder's path on that computer — the connected-folders " +
+    'list names both; that computer allows it only while the folder is writable.'
+  );
+}
+
+/**
  * Where a tier-1 READ (cat/ls/grep/… auto-run without a card) may point: the
  * same folders the dedicated file tools are confined to — pi's cwd, the exec
  * scratch root and the granted read roots. A corrupt gate yields only the two
@@ -156,6 +188,8 @@ export function execReadRoots(
   try {
     return [...own, ...readGrantedReadRoots(gatePath, shell)];
   } catch {
+    // quiet: a corrupt gate narrows tier 1 to the app's own folders, and the
+    // protected-roots scan ahead of this refuses outright on the same file.
     return own;
   }
 }
@@ -334,10 +368,21 @@ export function scanProtected(
   try {
     roots = readProtectedRoots(rootsPath, shell);
   } catch {
+    // quiet: the refusal is the signal — the caller hands this reason to the assistant.
     return {
       blocked: true,
       reason: 'The read-only folder list could not be read, so the command was blocked to be safe.'
     };
   }
-  return scanCommandAgainstRoots(command, cwd, roots, shell);
+  const scan = scanCommandAgainstRoots(command, cwd, roots, shell);
+  if (scan.blocked && scan.root) {
+    let mirrors: string[] = [];
+    try {
+      mirrors = readMirrorRoots(rootsPath, shell);
+    } catch {
+      // quiet: wording only — the block itself already stands.
+    }
+    if (mirrors.includes(scan.root)) return { ...scan, reason: mirrorCommandRefusal(scan.root) };
+  }
+  return scan;
 }

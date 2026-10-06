@@ -49,6 +49,8 @@ export interface MirrorHost {
   start(): Promise<void>;
   /** The stream reconnected (or the panel asked): reconcile and rescan. */
   refresh(): Promise<void>;
+  /** The server says a mirrored folder's mode changed or it was dropped: reconcile only, no rescan. */
+  foldersChanged(): Promise<void>;
   /** Register a folder picked HERE: server registry + the local list + first sync. */
   addFolder(clientPath: string, label?: string): Promise<ConnectedFolder[]>;
   /** Per-folder sync phase for the Folders tab. */
@@ -275,6 +277,8 @@ export function createMirrorHost(deps: MirrorHostDeps): MirrorHost {
       await reconcile();
       for (const id of entries.keys()) scheduleSync(id, DEBOUNCE_MS);
     },
+
+    foldersChanged: reconcile,
 
     async addFolder(clientPath, label) {
       const folders = (await deps.invoke('cfolders:addClient', [clientPath, label ?? null])) as ConnectedFolder[];

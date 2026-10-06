@@ -29,6 +29,17 @@ vi.mock('../../src/desktop/file-transfer', async () => {
   };
 });
 
+// What the server pushes to devices: the real transport has no stream to push
+// on in-process, so the addressed frames are recorded instead.
+const pushed = vi.hoisted(() => [] as Array<{ deviceId: string; name: string }>);
+vi.mock('../../src/server/startup/transport', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/server/startup/transport')>()),
+  pushToDevice: (deviceId: string, name: string) => {
+    pushed.push({ deviceId, name });
+    return 1;
+  }
+}));
+
 import { createMirrorHost, type MirrorHost } from '../../src/desktop/mirror-host';
 import { readMirroredFolders } from '../../src/desktop/mirror-host/store';
 import { registerWorkspaceIpc } from '../../src/server/ipc/workspace';
@@ -37,6 +48,7 @@ import { forgetCachedDevices, mintDevice } from '../../src/server/transport/auth
 import { readStore, removeConnectedFolder } from '../../src/server/workspace/connected-folders';
 import { mirrorRoot } from '../../src/server/workspace/paths';
 import type { IpcDeps } from '../../src/server/ipc/deps';
+import { MIRROR_FOLDERS_FRAME } from '../../src/shared/types';
 
 const CLIENT_DIR = join(root, 'the-folder');
 
@@ -168,6 +180,35 @@ describe('the mirror host, end to end against the real server modules', () => {
     expect(readFileSync(join(mirrorRoot(id), 'new.md'), 'utf8')).toBe('fresh');
     expect((await readStore()).folders[0]!.rootMissing).toBeUndefined();
   }, 30_000);
+
+  it('a mode switch made elsewhere reaches this machine at once, not at the next reconcile', async () => {
+    writeFileSync(join(CLIENT_DIR, 'a.md'), 'alpha');
+    await host.addFolder(CLIENT_DIR);
+    const id = folderId();
+    await until(() => existsSync(join(mirrorRoot(id), 'a.md')), 'the first sync');
+    expect((await readMirroredFolders())[0]?.mode).toBe('read');
+    pushed.length = 0;
+
+    // The Folders tab (any client — this is the server's handler) flips it.
+    await dispatchLocal('cfolders:update', [id, { mode: 'readwrite' }], { deviceId: macId });
+    // The server tells the device the folder lives on…
+    expect(pushed).toEqual([{ deviceId: macId, name: MIRROR_FOLDERS_FRAME }]);
+    // …and the frame's handler brings this machine's list (which its exec host
+    // reads to refuse commands) in line.
+    await host.foldersChanged();
+    expect((await readMirroredFolders())[0]?.mode).toBe('readwrite');
+
+    // Label-only edits are not the device's business.
+    pushed.length = 0;
+    await dispatchLocal('cfolders:update', [id, { label: 'Renamed' }], { deviceId: macId });
+    expect(pushed).toEqual([]);
+
+    // Disconnecting tells the device too, so it stops watching and uploading.
+    await dispatchLocal('cfolders:remove', [id], { deviceId: macId });
+    expect(pushed).toEqual([{ deviceId: macId, name: MIRROR_FOLDERS_FRAME }]);
+    await host.foldersChanged();
+    expect(await readMirroredFolders()).toEqual([]);
+  }, 15_000);
 
   it('prunes the local entry when the folder was disconnected server-side', async () => {
     writeFileSync(join(CLIENT_DIR, 'a.md'), 'alpha');

@@ -74,6 +74,7 @@ import { buildFilesContext } from '../files/inject';
 import { buildConnectedFoldersContext } from '../connected-folders/inject';
 import { getPrivateRoots } from '../workspace/connected-folders';
 import { resolveAttachments, saveAttachmentsTo, type PiImageContent } from './attachments';
+import { readPdfText } from './pdf-read';
 import { captureUserMessage } from '../recall/capture';
 import type {
   ApprovalId,
@@ -159,6 +160,7 @@ import {
   ENV_SECRET_KEY,
   ENV_SKILLS_DIR,
   EXEC_BRIDGE_TITLE,
+  FILE_BRIDGE_TITLE,
   BROWSER_BRIDGE_TITLE,
   COMPUTER_BRIDGE_TITLE,
   HARNESS_BRIDGE_TITLE,
@@ -2999,6 +3001,29 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * know Stem's thread id) and answer with a JSON result string the tool returns.
    */
   /**
+   * Handle the bridge's PDF-text round-trip (sentinel FILE_BRIDGE_TITLE). The
+   * placeholder is `{ op: 'pdf_text', path }`; the answer is readPdfText's result.
+   */
+  private handleFileBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    const requestProcess = worker.proc;
+    const respond = (value: unknown): void => {
+      if (worker.proc !== requestProcess) return;
+      requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    };
+    void (async () => {
+      try {
+        const req = JSON.parse(payload ?? '{}') as { op?: unknown; path?: unknown };
+        if (req.op !== 'pdf_text' || typeof req.path !== 'string') {
+          return respond({ ok: false, error: 'Unknown file request.' });
+        }
+        respond(await readPdfText(req.path));
+      } catch (e) {
+        respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+  }
+
+  /**
    * Handle the manage_skill tool's ctx.ui.input round-trip (sentinel
    * SKILL_BRIDGE_TITLE). Everything the write needs — the validator, the mode, the
    * card — is main-process state the bridge extension cannot reach, so the whole
@@ -3524,6 +3549,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // there and this request is held open until it settles.
       if (ev.method === 'input' && ev.title === SKILL_BRIDGE_TITLE) {
         this.handleSkillBridgeRequest(worker, id, ev.placeholder as string | undefined);
+        return;
+      }
+      // `read` on a PDF: the bridge swaps pi's raw bytes for the text layer
+      // extracted here, where pdf.js lives.
+      if (ev.method === 'input' && ev.title === FILE_BRIDGE_TITLE) {
+        this.handleFileBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
       // No UI for other dialogs yet — dismiss them safely.

@@ -490,6 +490,7 @@ app.whenReady().then(async () => {
     harnessHost,
     computerHost,
     browserHost,
+    mirrorFoldersChanged: () => void mirrorHost?.foldersChanged(),
     sendToMain,
     sendToOverlay: (channel, payload) => quickChat.sendToOverlay(channel, payload),
     revealIfOwns: (threadId) => quickChat.revealIfOwns(threadId),

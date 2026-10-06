@@ -50,6 +50,18 @@ describe('scanProtected', () => {
     expect(scanProtected(`ls ${vault}-backup`, dir, rootsPath).blocked).toBe(false);
   });
 
+  it("names a client folder's mirror as a copy, not as a folder the user could make writable", () => {
+    const mirror = join(dir, 'mirrors', 'f1');
+    writeFileSync(rootsPath, JSON.stringify({ roots: [vault, mirror], mirrors: [mirror] }));
+    const res = scanProtected(`pdftotext "${mirror}/invoice.pdf" out.txt`, dir, rootsPath);
+    expect(res.blocked).toBe(true);
+    expect(res.reason).toContain('mirror');
+    expect(res.reason).toContain('`device`');
+    expect(res.reason).not.toContain('switch the folder to read & write');
+    // An ordinary read-only folder keeps its own advice.
+    expect(scanProtected(`cat ${vault}/a.md`, dir, rootsPath).reason).toContain('switch the folder to read & write');
+  });
+
   it('treats a missing gate file as no protected roots', () => {
     expect(scanProtected('ls', dir, join(dir, 'missing.json')).blocked).toBe(false);
   });
