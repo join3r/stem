@@ -31,6 +31,7 @@ interface FakeRuntimeScript {
 function fakeRuntime(script: FakeRuntimeScript = {}) {
   const calls = {
     ensures: [] as Array<{ sessionKey: string; agent: string; cwd?: string; model?: string }>,
+    envs: [] as Array<Record<string, string> | undefined>,
     modes: [] as string[],
     cancels: 0,
     closes: 0
@@ -46,6 +47,7 @@ function fakeRuntime(script: FakeRuntimeScript = {}) {
         cwd: input.cwd,
         model: input.sessionOptions?.model
       });
+      calls.envs.push(input.sessionOptions?.env);
       if (script.ensureError) throw new Error(script.ensureError);
       return {
         sessionKey: input.sessionKey,
@@ -132,6 +134,17 @@ describe('sessions', () => {
     await host.ensureSession({ agent: 'claude', cwd: '/tmp/p', model: 'claude-fable-5' });
     await host.ensureSession({ agent: 'claude', cwd: '/tmp/p' });
     expect(calls.ensures.map((e) => e.model)).toEqual(['claude-fable-5', undefined]);
+  });
+
+  it('launches agents with the login-shell PATH, not the GUI process one', async () => {
+    const { factory, calls } = fakeRuntime();
+    const loginPath = '/opt/homebrew/bin:/usr/bin:/bin';
+    const host = new LocalHarnessHost({ runtimeFactory: factory, loginPath: async () => loginPath });
+    await host.ensureSession({ agent: 'claude', cwd: '/tmp/p' });
+    await host.ensureSession({ agent: 'claude', cwd: '/tmp/p', model: 'claude-fable-5' });
+    const key = process.platform === 'win32' ? 'Path' : 'PATH';
+    expect(calls.envs).toEqual([{ [key]: loginPath }, { [key]: loginPath }]);
+    expect(calls.ensures[1]?.model).toBe('claude-fable-5');
   });
 
   it('reports an ensure failure as words, not a throw', async () => {

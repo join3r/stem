@@ -7,6 +7,7 @@ import type {
   AcpRuntimeHandle
 } from 'acpx/runtime';
 import { degrade } from '../degrade';
+import { resolveLoginPath } from '../exec/executor';
 import { log } from '../log';
 import { harnessSessionsDir } from '../workspace/paths';
 import type { HarnessModelListing } from '../../shared/types';
@@ -64,6 +65,8 @@ export interface LocalHarnessHostOptions {
   agentCommands?: Record<string, string>;
   /** Test seam: a scripted stand-in for the real acpx runtime. */
   runtimeFactory?: (config: HarnessRuntimeConfig) => Promise<AcpRuntime>;
+  /** Test seam: the login-shell PATH agents launch with (default: run_command's probe). */
+  loginPath?: () => Promise<string>;
 }
 
 export class LocalHarnessHost implements HarnessHost {
@@ -102,6 +105,22 @@ export class LocalHarnessHost implements HarnessHost {
     return this.runtimePromise;
   }
 
+  /**
+   * The environment every agent child gets on top of this process's own: the
+   * PATH a login shell here would have. A double-clicked macOS app runs with
+   * /usr/bin:/bin:/usr/sbin:/sbin, so the `npx` every default adapter command
+   * starts with (and the `node` its shebang asks for) is ENOENT — acpx reports
+   * it as "Failed to spawn agent command" and no code persona can start at all
+   * (2026-10-06, the installed 0.6.0 build). Same answer run_command and the
+   * device MCP host already use. It rides the session options because acpx
+   * spawns with its own copy of process.env and merges these over it; acpx
+   * also persists them with the session, and a fresh value wins on resume.
+   */
+  private async agentEnv(): Promise<Record<string, string> | undefined> {
+    const path = await (this.options.loginPath ?? resolveLoginPath)();
+    return path ? { [process.platform === 'win32' ? 'Path' : 'PATH']: path } : undefined;
+  }
+
   /** Route an acpx permission request to the sink of the turn that owns it. */
   private routePermission(
     req: AcpPermissionRequest
@@ -134,6 +153,7 @@ export class LocalHarnessHost implements HarnessHost {
       // key (acpx's FileSessionStore holds the conversation, warm or cold), and
       // a fresh conversation is simply a fresh key.
       const sessionId = spec.sessionId ?? `${spec.agent}-${randomUUID()}`;
+      const env = await this.agentEnv();
       const handle = await runtime.ensureSession({
         sessionKey: sessionId,
         agent: spec.agent,
@@ -145,7 +165,7 @@ export class LocalHarnessHost implements HarnessHost {
         // while the adapter still REPORTS that pin as current. An explicit
         // model here is forwarded to the agent and is the only spelling that
         // actually holds.
-        ...(spec.model ? { sessionOptions: { model: spec.model } } : {})
+        sessionOptions: { ...(spec.model ? { model: spec.model } : {}), ...(env ? { env } : {}) }
       });
       if (spec.agent === 'claude') {
         // Verified 2026-08-21 against claude-agent-acp@0.60: the adapter's
@@ -182,11 +202,13 @@ export class LocalHarnessHost implements HarnessHost {
     const probe = (async (): Promise<HarnessModelListing> => {
       const runtime = await this.runtime();
       if (!runtime.getStatus) return { ok: false, error: 'This acpx runtime cannot report the agent\'s models.' };
+      const env = await this.agentEnv();
       const handle = await runtime.ensureSession({
         sessionKey: `models-probe-${agent}`,
         agent,
         mode: 'persistent',
-        cwd: this.options.stateDir ?? harnessSessionsDir()
+        cwd: this.options.stateDir ?? harnessSessionsDir(),
+        ...(env ? { sessionOptions: { env } } : {})
       });
       const status = await runtime.getStatus({ handle });
       const models = status.models?.availableModelIds ?? [];

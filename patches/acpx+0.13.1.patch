@@ -1,0 +1,17 @@
+diff --git a/node_modules/acpx/dist/live-checkpoint-BSIrfgVo.js b/node_modules/acpx/dist/live-checkpoint-BSIrfgVo.js
+index d454fd7..a764434 100644
+--- a/node_modules/acpx/dist/live-checkpoint-BSIrfgVo.js
++++ b/node_modules/acpx/dist/live-checkpoint-BSIrfgVo.js
+@@ -1661,7 +1661,11 @@ const ZED_TAG_KEYS = /* @__PURE__ */ new Set([
+ 	"RedactedThinking",
+ 	"ToolUse"
+ ]);
+-const MAP_OBJECT_PATHS = /* @__PURE__ */ new Set(["request_token_usage", "messages.Agent.tool_results"]);
++const MAP_OBJECT_PATHS = /* @__PURE__ */ new Set([
++	"request_token_usage",
++	"messages.Agent.tool_results",
++	"acpx.session_options.env"
++]);
+ const OPAQUE_VALUE_PATHS = /* @__PURE__ */ new Set([
+ 	"agent_capabilities",
+ 	"messages.Agent.content.ToolUse.input",
