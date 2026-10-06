@@ -25,7 +25,7 @@ const darkQuery = () => window.matchMedia('(prefers-color-scheme: dark)');
 export function applyThemeState(state: ThemeState): void {
   const root = document.documentElement;
   for (const token of Object.keys(THEME_TOKENS)) root.style.removeProperty(`--${token}`);
-  const palette = resolvePalette(state.custom, darkQuery().matches);
+  const palette = resolvePalette(state.custom, darkQuery().matches, state.appearance);
   const mode = palette ? palette.appearance : state.selected;
   if (mode === 'light' || mode === 'dark') root.setAttribute('data-theme', mode);
   else root.removeAttribute('data-theme');

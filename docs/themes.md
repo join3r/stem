@@ -27,7 +27,9 @@ the theme's identity; the `name` field is only what the picker shows.
 ```
 
 - `light` and `dark` are each a map of color token → color. A file with both follows the OS
-  appearance the way System does; a file with one is that palette whatever the OS says. The
+  appearance the way System does, unless the user pins it with the **Light or dark** row that
+  Settings shows under such a theme (`appearance` in `client.json`: `system`, `light` or `dark`; one
+  choice for every paired theme). A file with one palette is that palette whatever the OS says. The
   original single-palette spelling, `"appearance": "dark"` plus one `"colors"` block, still works
   and means the same as a lone `dark` block.
 - Each palette is laid over the built-in palette of the same appearance, which also decides

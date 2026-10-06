@@ -196,10 +196,10 @@ async function readSelectedTheme(id: string): Promise<CustomTheme> {
 export async function currentThemeState(): Promise<ThemeState> {
   const { theme } = await readClientSettings();
   const id = customThemeId(theme.selected);
-  if (!id) return { selected: theme.selected, custom: null };
+  if (!id) return { selected: theme.selected, appearance: theme.appearance, custom: null };
   const custom = await readSelectedTheme(id);
   if (custom.problem) log('themes', 'the selected theme is unusable', { id, problem: custom.problem });
-  return { selected: theme.selected, custom };
+  return { selected: theme.selected, appearance: theme.appearance, custom };
 }
 
 /**
@@ -211,7 +211,7 @@ export async function currentThemeState(): Promise<ThemeState> {
  * backgroundColor reliably takes.
  */
 export function resolveWindowBackground(state: ThemeState, systemDark: boolean): string {
-  const palette = resolvePalette(state.custom, systemDark);
+  const palette = resolvePalette(state.custom, systemDark, state.appearance);
   if (palette) {
     const panel = palette.colors.panel ?? palette.colors.paper;
     if (panel && /^#[0-9a-fA-F]{3,8}$/.test(panel)) return panel;

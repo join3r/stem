@@ -9,6 +9,7 @@ import type {
   QuickChatSettings,
   ReleaseNotesSettings,
   ServerSettings,
+  ThemeAppearance,
   ThemeSettings,
   UpdatesSettings
 } from '../shared/types';
@@ -49,7 +50,7 @@ const DEFAULTS: ClientSettings = {
   // install — nothing changes on disk without the user acting on it.
   updates: { checkAutomatically: true },
   // Follow the OS appearance until the user picks otherwise (see desktop/themes.ts).
-  theme: { selected: 'system' }
+  theme: { selected: 'system', appearance: 'system' }
 };
 
 /** A stored theme choice, or the default for anything unrecognizable. */
@@ -59,6 +60,10 @@ function coerceThemeSelected(value: unknown): string {
   // walk out of the themes folder.
   if (typeof value === 'string' && /^custom:[^/\\]+$/.test(value) && !value.includes('..')) return value;
   return DEFAULTS.theme.selected;
+}
+
+function coerceThemeAppearance(value: unknown): ThemeAppearance {
+  return value === 'light' || value === 'dark' ? value : DEFAULTS.theme.appearance;
 }
 
 /** Same contract as the server's `coerce`: anything unreadable takes the default. */
@@ -89,7 +94,10 @@ function coerceClientSettings(raw: Partial<ClientSettings> | undefined): ClientS
       checkAutomatically:
         typeof up.checkAutomatically === 'boolean' ? up.checkAutomatically : d.updates.checkAutomatically
     },
-    theme: { selected: coerceThemeSelected((raw?.theme as Partial<ThemeSettings> | undefined)?.selected) }
+    theme: {
+      selected: coerceThemeSelected((raw?.theme as Partial<ThemeSettings> | undefined)?.selected),
+      appearance: coerceThemeAppearance((raw?.theme as Partial<ThemeSettings> | undefined)?.appearance)
+    }
   };
 }
 

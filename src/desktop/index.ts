@@ -187,7 +187,7 @@ const mainPushQueue = new RendererPushQueue();
  * chrome color from its first frame. Seeded before the first window exists and
  * kept current by the settings:updateTheme handler's themeChanged callback.
  */
-let themeState: ThemeState = { selected: 'system', custom: null };
+let themeState: ThemeState = { selected: 'system', appearance: 'system', custom: null };
 /** True once the persistent windows exist — see the second-instance handler. */
 let windowsReady = false;
 

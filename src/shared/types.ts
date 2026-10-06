@@ -3696,8 +3696,13 @@ export interface UpdatesSettings {
  * appearance — the default), `'light'` / `'dark'` (force a built-in palette), or
  * `'custom:<id>'` for a theme file in this machine's themes folder.
  */
+/** Which palette a theme carrying both paints: follow the OS, or always one of them. */
+export type ThemeAppearance = 'system' | 'light' | 'dark';
+
 export interface ThemeSettings {
   selected: string;
+  /** For a theme with both a light and a dark palette; one-palette themes and the built-in modes ignore it. */
+  appearance: ThemeAppearance;
 }
 
 /** What a theme token's value may be — each kind has its own validator in desktop/themes.ts. */
@@ -3816,6 +3821,8 @@ export interface CustomTheme {
  */
 export interface ThemeState {
   selected: string;
+  /** ThemeSettings.appearance — which palette a paired theme paints. */
+  appearance: ThemeAppearance;
   /** The resolved custom theme, or null when `selected` is a built-in mode or the file is gone. */
   custom: CustomTheme | null;
 }

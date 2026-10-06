@@ -5,6 +5,7 @@ import type {
   ModelSummary,
   ReleaseNotesSnapshot,
   TaskNotifyMode,
+  ThemeAppearance,
   UpdateStatus
 } from '../../../../shared/types';
 import { followsSystem } from '../../../../shared/theme';
@@ -46,13 +47,18 @@ export function AppSettings({ models }: { models: ModelSummary[] }) {
  */
 function AppearanceSection() {
   const [selected, setSelected] = useState('system');
+  const [appearance, setAppearance] = useState<ThemeAppearance>('system');
   const [themes, setThemes] = useState<CustomTheme[]>([]);
 
   useEffect(() => {
-    void window.stem.getSettings().then((s) => setSelected(s.theme.selected));
+    void window.stem.getSettings().then((s) => {
+      setSelected(s.theme.selected);
+      setAppearance(s.theme.appearance);
+    });
     void window.stem.listThemes().then(setThemes);
     return window.stem.onThemeChanged((state) => {
       setSelected(state.selected);
+      setAppearance(state.appearance);
       void window.stem.listThemes().then(setThemes);
     });
   }, []);
@@ -62,10 +68,20 @@ function AppearanceSection() {
     window.stem.updateThemeSettings({ selected: value }).then((s) => setSelected(s.theme.selected));
   }
 
+  function selectAppearance(value: ThemeAppearance) {
+    setAppearance(value);
+    window.stem.updateThemeSettings({ appearance: value }).then((s) => setAppearance(s.theme.appearance));
+  }
+
+  // Only a theme carrying both palettes has a choice to make; the built-in
+  // System/Light/Dark already are that choice.
+  const current = themes.find((t) => `custom:${t.id}` === selected);
+  const paired = Boolean(current && !current.problem && followsSystem(current));
+
   const describe = (t: CustomTheme): string => {
     if (t.problem) return t.problem;
     const where = t.source === 'bundled' ? 'Shipped with Stem' : `Your theme (${t.id}.json)`;
-    return followsSystem(t) ? `${where} — light and dark, follows the OS` : where;
+    return followsSystem(t) ? `${where} — light and dark` : where;
   };
   const options = [
     { value: 'system', label: 'System', title: 'Follow the OS appearance' },
@@ -102,6 +118,20 @@ function AppearanceSection() {
         >
           <RowSelect ariaLabel="Theme" value={selected} options={options} onChange={select} />
         </ValueRow>
+        {paired && (
+          <ValueRow label="Light or dark">
+            <RowSelect
+              ariaLabel="Light or dark"
+              value={appearance}
+              options={[
+                { value: 'system', label: 'Follow the OS', title: 'Switch with the OS appearance' },
+                { value: 'light', label: 'Always light', title: 'This theme’s light palette, whatever the OS says' },
+                { value: 'dark', label: 'Always dark', title: 'This theme’s dark palette, whatever the OS says' }
+              ]}
+              onChange={(v) => selectAppearance(v as ThemeAppearance)}
+            />
+          </ValueRow>
+        )}
         <ValueRow label={<span />}>
           <button
             className="link-btn"
