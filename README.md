@@ -6,7 +6,7 @@
 
 <p align="center">
   A desktop AI assistant that remembers you, reads your folders and runs jobs on a schedule.<br>
-  It runs on the ChatGPT, Claude or Grok subscription you already pay for, any API key, or a local model.
+  It runs on the ChatGPT or Grok subscription you already pay for, any API key, or a local model.
 </p>
 
 <p align="center">
@@ -134,10 +134,12 @@ A global shortcut opens Quick Chat over whatever app you're in. Ask, hit Enter, 
 
 | Provider | How you connect |
 | --- | --- |
-| ChatGPT, Claude, Grok | Sign in with your subscription |
-| OpenAI, Anthropic, OpenRouter, xAI | API key |
+| ChatGPT, Grok | Sign in with your subscription |
+| Anthropic, OpenAI, OpenRouter, xAI | API key |
 | Ollama, LM Studio | Local server, no key |
 | Anything OpenAI- or Anthropic-compatible | Custom endpoint |
+
+A Claude subscription doesn't cover Stem. Anthropic bills third-party apps from your extra usage, not your plan limits, so use an Anthropic API key for Claude models.
 
 Switch models per chat, mid-conversation. Web search works with every model and cites its sources; a ChatGPT or Grok sign-in covers it without a separate search key.
 
