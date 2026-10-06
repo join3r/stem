@@ -63,7 +63,7 @@ import { clampPinnedCwd } from '../harness/pin';
 import { hostShellAgentHint } from '../exec/host-shell';
 import { previewText } from '../chats/preview';
 import { autoTitle, nameThread, nameThreadIfDue as nameIfDue, type SubjectDeps } from '../chats/subject';
-import { getChatFormat, isChatPrivate, setChatFormat, setChatPrivate, setNaming } from '../workspace/chats';
+import { getChatFormat, isChatPrivate, markTurnTainted, setChatFormat, setChatPrivate, setNaming, taintedTurns } from '../workspace/chats';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
 import { buildRecallContext, type RecallTimings } from '../recall/inject';
 import { buildPinsContext } from '../pins/context';
@@ -1692,20 +1692,44 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   }
 
   /**
+   * Keep this turn out of memory because it touched a memorize:false folder, and
+   * record that durably. The flag on the turn dies with it; `/learn` reads the
+   * chat back from its session file much later, when the folder that tainted it
+   * may have been renamed, switched, or disconnected, so it cannot work the
+   * answer out again from the folder list. A private chat's turns need no
+   * record — the thread itself is marked — and set the flag directly.
+   */
+  private taintTurn(turn: TurnContext): void {
+    if (turn.memoryTainted) return;
+    turn.memoryTainted = true;
+    void markTurnTainted(turn.threadId, turn.turnId).catch((e) =>
+      degrade('pi.capture', 'could not record a turn that read a folder Stem may not memorise', e)
+    );
+  }
+
+  /**
    * `/learn`'s evidence: every turn of the thread's saved conversation, tool
    * arguments whole (skills/thread-evidence.ts). Null when the thread has no
    * session file yet.
    *
-   * Each turn carries the memory taint the live turn would have had: a read inside
-   * a memorize:false folder, a document Recall injected from one, or the flag the
-   * runtime set while it ran (for turns still in the ring). Reading the folder
-   * list fails closed — it throws rather than treating every folder as public.
+   * A turn is tainted when the runtime recorded it so while it ran (taintTurn,
+   * plus the ring for a write still in flight). For turns from before that
+   * record existed, the same signals are worked out again against today's
+   * folders — a read inside a memorize:false folder, a document Recall injected
+   * from one — which misses a folder disconnected or renamed since. Any read that
+   * fails throws: an unreadable record never counts as "nothing private".
    */
   async learnEvidence(threadId: string): Promise<LearnTurn[] | null> {
     const file = await this.resolveSessionFile(threadId);
     if (!file) return null;
-    const [text, roots, labels] = await Promise.all([readFile(file, 'utf8'), getPrivateRoots(), getPrivateFolderLabels()]);
-    const tainted = new Set(this.recentTurns.filter((t) => t.threadId === threadId && t.memoryTainted).map((t) => t.turnId));
+    const [text, roots, labels, recorded] = await Promise.all([
+      readFile(file, 'utf8'),
+      getPrivateRoots(),
+      getPrivateFolderLabels(),
+      taintedTurns(threadId)
+    ]);
+    const tainted = new Set(recorded);
+    for (const t of this.recentTurns) if (t.threadId === threadId && t.memoryTainted) tainted.add(t.turnId);
     return parseThreadEvidence(text, {
       cleanUser: (content) => this.contentToParts(content).text,
       turnIdOf: (content) => this.runtimeIdentity(content),
@@ -3635,7 +3659,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (ev.type === 'tool_execution_start') {
       const p = readToolPath(ev);
       if (p && !turn.memoryTainted && turn.privateRoots?.length && pathInsideAny(p, turn.privateRoots, this.options.workspaceRoot)) {
-        turn.memoryTainted = true;
+        this.taintTurn(turn);
       }
     }
     const { events, done } = normalizePiEvent(ev, turn);
@@ -4270,7 +4294,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // Documents from a memorize:false folder were injected: taint the turn the
       // same way reading such a folder does, so the reply stays out of Recall.
       if (flags.privateDocsInjected && turn?.threadId === threadId) {
-        turn.memoryTainted = true;
+        this.taintTurn(turn);
       }
       // Record what was injected so the Memory UI can show this chat's active facts.
       try {

@@ -54,6 +54,14 @@ interface ChatStore {
    * Each entry goes as soon as the chat gets its new verdict.
    */
   refile: Record<string, true>;
+  /**
+   * threadId -> turns that read a memorize:false folder or were handed its
+   * documents. The runtime's own flag lives only as long as the turn; this is
+   * what `/learn` reads when it goes back over the saved chat later, after the
+   * folder may have been renamed, switched, or disconnected. A private chat has
+   * no entries here — the `private` mark covers every turn of it.
+   */
+  tainted: Record<string, string[]>;
 }
 
 export type FilingMark = 'user' | 'auto' | 'none';
@@ -71,7 +79,7 @@ export interface NamingState {
 }
 
 function emptyStore(): ChatStore {
-  return { version: 1, folders: [], assignments: {}, subjects: {}, naming: {}, private: {}, plain: {}, filing: {}, refile: {} };
+  return { version: 1, folders: [], assignments: {}, subjects: {}, naming: {}, private: {}, plain: {}, filing: {}, refile: {}, tainted: {} };
 }
 
 /** Keep only string→string pairs; a hand-edited file can hold anything. */
@@ -106,8 +114,19 @@ async function loadStore(): Promise<ChatStore> {
     private: coercePrivate(parsed.private),
     plain: coercePrivate(parsed.plain),
     filing: coerceFiling(parsed.filing),
-    refile: coercePrivate(parsed.refile)
+    refile: coercePrivate(parsed.refile),
+    tainted: coerceTainted(parsed.tainted)
   };
+}
+
+/** Keep only lists of turn ids. */
+function coerceTainted(raw: unknown): Record<string, string[]> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, string[]> = {};
+  for (const [threadId, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (Array.isArray(value)) out[threadId] = value.filter((id): id is string => typeof id === 'string');
+  }
+  return out;
 }
 
 /** Keep only entries naming a known {@link FilingMark}. */
@@ -245,6 +264,34 @@ export function setChatPrivate(threadId: string): Promise<void> {
   return update((store) => {
     store.private[threadId] = true;
   });
+}
+
+/** Record that one turn of a chat read memorize:false content (see ChatStore.tainted). */
+export function markTurnTainted(threadId: string, turnId: string): Promise<void> {
+  return update((store) => {
+    const turns = store.tainted[threadId] ?? [];
+    if (!turns.includes(turnId)) store.tainted[threadId] = [...turns, turnId];
+  });
+}
+
+/**
+ * Carry a chat's privacy over to its fork: the private mark, and the turns
+ * recorded by {@link markTurnTainted}. A fork copies the conversation, turn ids
+ * and all, so without this the copy would be a way to unmark a private chat —
+ * which nothing else allows — and `/learn` in it would read turns the original
+ * keeps out.
+ */
+export function copyChatPrivacyToFork(from: string, to: string): Promise<void> {
+  return update((store) => {
+    if (store.private[from]) store.private[to] = true;
+    const turns = store.tainted[from];
+    if (turns?.length) store.tainted[to] = [...new Set([...(store.tainted[to] ?? []), ...turns])];
+  });
+}
+
+/** The turns of a chat recorded by {@link markTurnTainted}. */
+export async function taintedTurns(threadId: string): Promise<Set<string>> {
+  return new Set((await readStore()).tainted[threadId] ?? []);
 }
 
 /** The set of threads that run as plain Markdown. */
@@ -484,7 +531,7 @@ export function autoFileChat(threadId: string, folderId: string | null): Promise
   });
 }
 
-/** Drop a chat's assignment, subject, naming schedule, format and filing mark when the chat itself is deleted. */
+/** Drop a chat's assignment, subject, naming schedule, format, filing mark and privacy marks when the chat itself is deleted. */
 export function removeChat(threadId: string): Promise<void> {
   return update((store) => {
     delete store.assignments[threadId];
@@ -494,5 +541,6 @@ export function removeChat(threadId: string): Promise<void> {
     delete store.plain[threadId];
     delete store.filing[threadId];
     delete store.refile[threadId];
+    delete store.tainted[threadId];
   });
 }

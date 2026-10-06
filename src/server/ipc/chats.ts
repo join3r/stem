@@ -11,6 +11,7 @@ import {
   deleteFolder,
   getAssignments,
   getChatFormat,
+  copyChatPrivacyToFork,
   getPlainChats,
   getPrivateChats,
   getSubjects,
@@ -156,6 +157,13 @@ export function registerChatsIpc(deps: IpcDeps): void {
         )
       : null;
     const forked = await deps.runtime().forkThread(threadId, turnId);
+    // Privacy first, and fail closed: an unmarked fork of a private chat would
+    // capture its next turn. The fork has no file until its first append, so a
+    // fork refused here is simply never seen.
+    await copyChatPrivacyToFork(threadId, forked.threadId).catch((err) => {
+      degrade('chats', 'refused a fork whose privacy marks could not be copied', err);
+      throw new Error(`Could not fork this chat: ${err instanceof Error ? err.message : String(err)}`);
+    });
     // A fork carries on the conversation it copied, in the format it was in;
     // left unmarked, a Markdown chat's fork would quietly become MDX.
     if ((await getChatFormat(threadId)) === 'md') {

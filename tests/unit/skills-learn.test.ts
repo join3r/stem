@@ -23,7 +23,9 @@ import {
 import { SKILL_LEARN_INSTRUCTIONS, buildAuthorPrompt, renderEvidence } from '../../src/server/skills/author';
 import { initSkills, learnFromChat } from '../../src/server/startup/skills';
 import { addConnectedFolders, updateConnectedFolder } from '../../src/server/workspace/connected-folders';
-import { setChatPrivate } from '../../src/server/workspace/chats';
+import { copyChatPrivacyToFork, isChatPrivate, markTurnTainted, removeChat, setChatPrivate, taintedTurns } from '../../src/server/workspace/chats';
+import { createConversation, setConversationSession } from '../../src/server/workspace/mail';
+import { newTurnContext, type SettledTurnTrace } from '../../src/server/pi/normalize';
 import { logFlushed } from '../../src/server/log';
 import type { ChatBackend } from '../../src/server/backend';
 
@@ -132,6 +134,14 @@ describe('parseThreadEvidence', () => {
     expect(turns.map((t) => t.tainted)).toEqual([true, false]);
   });
 
+  it('counts a memory payload it cannot read as tainted', () => {
+    const torn = `<stem_memory_data version="3">\n{"folderDocuments":[{"folder":"Di\n</stem_memory_data>\n`;
+    const unmatched = `<stem_memory_data version="4" extra="x">\n{}\n</stem_memory_data>\n`;
+    const chat = [user(CONTEXT('a', torn)), user(CONTEXT('b', unmatched)), user(CONTEXT('c', memoryData('Notes')))].join('\n');
+    const turns = parseThreadEvidence(chat, opts({ privateFolderLabels: new Set(['Diary']) }));
+    expect(turns.map((t) => t.tainted)).toEqual([true, true, false]);
+  });
+
   it('taints a turn the runtime flagged while it ran', () => {
     const turns = parseThreadEvidence([user('a'), user('b')].join('\n'), opts({
       turnIdOf: (content) => (JSON.stringify(content).includes('"a"') ? 'turn-a' : 'turn-b'),
@@ -206,6 +216,55 @@ describe('PiRuntime.learnEvidence', () => {
     ]);
     expect(await runtime.learnEvidence('no-such-thread')).toBeNull();
   });
+
+  it('honours the taint recorded while a turn ran, after the folder that caused it is gone', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stem-learn-recorded-'));
+    cleanup.push(root);
+    const sessions = join(root, 'pi', 'sessions');
+    const workspace = join(root, 'workspace');
+    await Promise.all([mkdir(sessions, { recursive: true }), mkdir(workspace, { recursive: true })]);
+    const threadId = '01a110c9-0000-7000-8000-000000000002';
+    const turnId = '6eb69491-3826-47cd-9cbd-89fcd2757495';
+    const header = JSON.stringify({ type: 'session', version: 3, id: threadId, timestamp: '2026-10-06T10:37:11.058Z', cwd: workspace });
+    await writeFile(
+      join(sessions, `2026-10-06T10-37-11-058Z_${threadId}.jsonl`),
+      [header, user(`<!--stem:context-->\n<!--stem:turn id="${turnId}"-->\n\n---\n<!--/stem:context-->\n\nread the old diary`), call('c1', 'read', { path: '/gone/diary.md' }), reply('ok'), invoiceChat].join('\n')
+    );
+    const runtime = new PiRuntime({ piHome: join(root, 'pi'), sessionsDir: sessions, workspaceRoot: workspace, seedGlobalAuth: false });
+
+    // What the runtime does the moment a turn reads a memorize:false folder.
+    const live = newTurnContext(threadId, turnId);
+    (runtime as unknown as { taintTurn(t: typeof live): void }).taintTurn(live);
+    expect(live.memoryTainted).toBe(true);
+    await expect.poll(async () => (await taintedTurns(threadId)).has(turnId)).toBe(true);
+
+    const turns = await runtime.learnEvidence(threadId);
+    expect(turns?.map((t) => [t.turnId ?? null, t.tainted])).toEqual([
+      [turnId, true],
+      [null, false],
+      [null, false]
+    ]);
+  });
+});
+
+describe('chat privacy marks', () => {
+  it('a fork keeps the original’s private mark and recorded turns; deleting a chat drops its own', async () => {
+    await setChatPrivate('chat-orig');
+    await markTurnTainted('chat-orig', 'turn-1');
+    await markTurnTainted('chat-orig', 'turn-1');
+    await copyChatPrivacyToFork('chat-orig', 'chat-fork');
+    expect(await isChatPrivate('chat-fork')).toBe(true);
+    expect([...(await taintedTurns('chat-fork'))]).toEqual(['turn-1']);
+    await removeChat('chat-orig');
+    expect((await taintedTurns('chat-orig')).size).toBe(0);
+    expect((await taintedTurns('chat-fork')).has('turn-1')).toBe(true);
+  });
+
+  it('a fork of an ordinary chat stays ordinary', async () => {
+    await copyChatPrivacyToFork('chat-plain', 'chat-plain-fork');
+    expect(await isChatPrivate('chat-plain-fork')).toBe(false);
+    expect((await taintedTurns('chat-plain-fork')).size).toBe(0);
+  });
 });
 
 describe('learnFromChat', () => {
@@ -219,12 +278,14 @@ When the user asks for the monthly Cloudfarms invoice.
 The new PDF shows the hours and the total.`;
 
   let evidence: LearnTurn[] | null;
+  let ring: SettledTurnTrace | null;
   let prompts: string[];
   let answer: string;
   let approvals: unknown[];
 
   beforeEach(() => {
-    evidence = parseThreadEvidence(invoiceChat, opts());
+    evidence = parseThreadEvidence(invoiceChat, opts()).map((t, i) => ({ ...t, turnId: `turn-${i}` }));
+    ring = null;
     prompts = [];
     approvals = [];
     answer = JSON.stringify({ skill: { name: 'monthly-cloudfarms-invoice', description: 'Make the monthly Cloudfarms invoice when the user gives the hours.', body: BODY } });
@@ -236,7 +297,7 @@ The new PDF shows the hours and the total.`;
         return { approved: true };
       },
       learnEvidence: async () => evidence,
-      recentTurnTrace: () => null,
+      recentTurnTrace: () => ring,
       complete: async (prompt: string) => {
         prompts.push(prompt);
         return answer;
@@ -276,6 +337,31 @@ The new PDF shows the hours and the total.`;
     evidence = evidence.map((t) => ({ ...t, tainted: true }));
     prompts = [];
     expect(await learnFromChat('thread-all-private')).toMatchObject({ ok: false, message: expect.stringMatching(/not to memorise/) });
+    expect(prompts).toHaveLength(0);
+  });
+
+  it('takes a reported skill issue only from the newest clean turn', async () => {
+    const issue = 'the diary entry says the client is leaving';
+    const reported = (over: Partial<SettledTurnTrace>): SettledTurnTrace => ({
+      threadId: 'thread-ring', turnId: 'turn-1', endedAt: 0, userText: '', assistantText: '', trace: [],
+      skillsInjected: [], skillsGradedUsed: [], skillsReported: [{ slug: 'monthly-cloudfarms-invoice', reason: issue }],
+      memoryTainted: false, isScheduled: false, ...over
+    });
+    // The skill saved by the first test is there to be routed at.
+    ring = reported({ memoryTainted: true });
+    await learnFromChat('thread-ring');
+    ring = reported({ turnId: 'some-older-turn' });
+    await learnFromChat('thread-ring');
+    expect(prompts.some((p) => p.includes(issue))).toBe(false);
+    ring = reported({});
+    await learnFromChat('thread-ring');
+    expect(prompts[prompts.length - 1]).toContain(issue);
+  });
+
+  it('stays out of threads that belong to mail', async () => {
+    const conversation = await createConversation('Invoice', ['persona-a'], '', { private: true });
+    await setConversationSession(conversation.id, 'persona-a', 'thread-mail');
+    expect(await learnFromChat('thread-mail')).toMatchObject({ ok: false, message: expect.stringMatching(/not in mail/) });
     expect(prompts).toHaveLength(0);
   });
 

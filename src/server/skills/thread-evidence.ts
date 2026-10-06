@@ -90,25 +90,31 @@ function callPaths(args: unknown): string[] {
   return out;
 }
 
-const MEMORY_DATA_RE = /<stem_memory_data version="\d+">\n([\s\S]*?)\n<\/stem_memory_data>/;
+const MEMORY_DATA_OPEN = '<stem_memory_data';
+const MEMORY_DATA_RE = /<stem_memory_data version="\d+">\n([\s\S]*?)\n<\/stem_memory_data>/g;
 
 /**
  * Recall handed this turn a document from a memorize:false folder — the live
- * `privateDocsInjected` taint, recovered from the payload the user message still
- * carries. A payload that will not parse but lists documents counts as tainted:
- * guessing wrong the other way is the one that leaks.
+ * `privateDocsInjected` taint, worked out again from the payload the user
+ * message still carries (for turns from before the runtime recorded it). Every
+ * doubt counts as tainted, because guessing wrong the other way is the one that
+ * leaks: a payload that will not parse, or one this pattern cannot even find.
  */
 function injectedPrivateDocs(content: unknown, labels: ReadonlySet<string>): boolean {
   if (labels.size === 0) return false;
-  const block = textContent(content).match(MEMORY_DATA_RE)?.[1];
-  if (!block) return false;
-  try {
-    const docs = (JSON.parse(block) as { folderDocuments?: Array<{ folder?: unknown }> }).folderDocuments ?? [];
-    return docs.some((doc) => typeof doc.folder === 'string' && labels.has(doc.folder));
-  } catch {
-    // quiet: the answer is the signal — an unreadable payload taints the turn.
-    return block.includes('"folderDocuments"');
-  }
+  const text = textContent(content);
+  const opened = text.split(MEMORY_DATA_OPEN).length - 1;
+  const blocks = [...text.matchAll(MEMORY_DATA_RE)].map((m) => m[1]);
+  if (blocks.length < opened) return true;
+  return blocks.some((block) => {
+    try {
+      const docs = (JSON.parse(block) as { folderDocuments?: Array<{ folder?: unknown }> }).folderDocuments ?? [];
+      return docs.some((doc) => typeof doc.folder !== 'string' || labels.has(doc.folder));
+    } catch {
+      // quiet: the answer is the signal — an unreadable payload taints the turn.
+      return true;
+    }
+  });
 }
 
 /**

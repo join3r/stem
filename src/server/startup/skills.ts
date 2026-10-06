@@ -4,6 +4,7 @@ import { readSettings, skillsRunFor } from '../workspace/settings';
 import { log } from '../log';
 import { degrade } from '../degrade';
 import { isChatPrivate } from '../workspace/chats';
+import { mailSessionThreadIds } from '../workspace/mail';
 import { pickLearnTurns } from '../skills/thread-evidence';
 import type { PiRuntime } from '../pi/runtime';
 import type { SettledTurnTrace } from '../pi/normalize';
@@ -176,6 +177,16 @@ async function learnOutcome(threadId: string, focus?: string): Promise<LearnOutc
       reason: 'private'
     };
   }
+  // A thread behind a mail conversation or a scheduled run is not a chat, and
+  // its privacy is not on the chat store: a private mail conversation marks its
+  // deliveries, not their threads. /learn is a chat command, so it stays out.
+  const mailOwned = await mailSessionThreadIds().catch((error: unknown) => {
+    degrade('skills.learn', 'refused /learn because the mail store could not be read', error);
+    return null;
+  });
+  if (!mailOwned || mailOwned.has(threadId)) {
+    return { result: { ok: false, message: '/learn works in chats, not in mail or scheduled runs.' }, reason: 'mail' };
+  }
 
   const all = (await runtime.learnEvidence(threadId)) ?? [];
   const clean = all.filter((turn) => !turn.tainted);
@@ -192,10 +203,13 @@ async function learnOutcome(threadId: string, focus?: string): Promise<LearnOutc
   const latest = kept[kept.length - 1];
   const counts = { turns: kept.length, excluded: all.length - clean.length, dropped };
 
-  // Routing still comes off the ring when it has this thread: which skill the last
-  // turn followed, or reported as wrong. Without it the author reads the library
-  // and names its own target, as the end-of-turn pass does.
-  const recent = runtime.recentTurnTrace?.(threadId) ?? null;
+  // Routing still comes off the ring when it holds the newest turn shown here:
+  // which skill that turn followed, or reported as wrong. Only that turn — a
+  // reported issue is the model's own words, and from a turn left out above they
+  // would carry what it read into the prompt. Without it the author reads the
+  // library and names its own target, as the end-of-turn pass does.
+  const ring = runtime.recentTurnTrace?.(threadId) ?? null;
+  const recent = ring && !ring.memoryTainted && ring.turnId === latest.turnId ? ring : null;
   const turn: SettledTurnTrace = {
     threadId,
     turnId: latest.turnId ?? '',
