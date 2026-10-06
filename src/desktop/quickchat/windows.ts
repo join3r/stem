@@ -158,6 +158,17 @@ export function placeOverlay(win: BrowserWindow, reset: boolean): void {
   );
 }
 
+/**
+ * Shrink a visible overlay back to the compact bar where it stands (New thread,
+ * or a deleted thread, empties the panel). Keeps the top edge, so the bar stays
+ * where the panel's head was rather than jumping to the cursor's display.
+ */
+export function compactOverlay(win: BrowserWindow): void {
+  const outer = overlayOuterBounds({ x: 0, y: 0, width: QUICK_CHAT_WIDTH, height: QUICK_CHAT_HEIGHT });
+  const { x, y, width } = win.getBounds();
+  win.setBounds({ x, y, width, height: outer.height });
+}
+
 /** Park the pill in the bottom-left of the display under the cursor. */
 export function placeHud(win: BrowserWindow): void {
   const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());

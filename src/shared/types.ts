@@ -4862,6 +4862,8 @@ export interface StemApi {
   revealMain(): Promise<void>;
   /** Hide the overlay (Escape from within it). */
   hideQuickChat(): Promise<void>;
+  /** Shrink the visible overlay to the compact bar (its session just emptied). */
+  compactQuickChat(): Promise<void>;
   /** Overlay: fired each time the overlay is summoned; `reset` => fresh session. */
   onQuickChatFocus(listener: (focus: QuickChatFocus) => void): () => void;
   /** HUD: fired with the current one-line status while the overlay is hidden. */

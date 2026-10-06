@@ -207,6 +207,9 @@ export function QuickChat() {
       if (e.key === 'Escape' && !e.defaultPrevented) {
         e.preventDefault();
         window.stem.hideQuickChat();
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        void newThreadRef.current();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -401,6 +404,16 @@ export function QuickChat() {
     [threadId, modelId, effort, serviceTier, resetSession, pushSystem]
   );
 
+  // The panel emptied while on screen (New thread, deleted thread): shrink the
+  // window back to the compact bar. Only on the >0 → 0 edge — sending from the
+  // bar hides the overlay, so the opposite edge never happens on screen.
+  const hadMessagesRef = useRef(messages.length > 0);
+  useEffect(() => {
+    const has = messages.length > 0;
+    if (hadMessagesRef.current && !has) void window.stem.compactQuickChat();
+    hadMessagesRef.current = has;
+  }, [messages.length]);
+
   async function newThread() {
     if (resetting) return;
     setResetting(true);
@@ -423,6 +436,10 @@ export function QuickChat() {
       setResetting(false);
     }
   }
+
+  // ⌘N reaches newThread through a ref: the key listener is registered once.
+  const newThreadRef = useRef(newThread);
+  newThreadRef.current = newThread;
 
   async function openInStem() {
     if (!threadId) return;
@@ -499,7 +516,7 @@ export function QuickChat() {
           <div className="qc-head">
             <Sparkles className="qc-mark" size={18} />
             <span className="qc-spacer" />
-            <button className="qc-act" title="New thread" onClick={() => void newThread()} disabled={resetting}>
+            <button className="qc-act" title="New thread (⌘N)" onClick={() => void newThread()} disabled={resetting}>
               <SquarePen size={15} />
             </button>
             <button className="qc-act" title="Open in Stem" onClick={() => void openInStem()} disabled={!threadId}>

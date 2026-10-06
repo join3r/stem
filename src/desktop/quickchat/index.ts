@@ -19,6 +19,7 @@ import {
   createHudWindow,
   createOverlayWindow,
   placeHud,
+  compactOverlay,
   placeOverlay,
   setOverlayWorkspaceVisibility
 } from './windows';
@@ -335,6 +336,8 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
    */
   function showQuickChat(reset: boolean): void {
     const win = ensureOverlayWindow();
+    // Resuming puts the answer in front of the user: that's reading it.
+    if (!reset && !overlay.turnRunning) markOverlayThreadRead();
     hideHud();
     deps.beginSummon();
     placeOverlay(win, reset);
@@ -344,6 +347,18 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     // forward. The macOS ordering is subtle; see presentOverlayWindow.
     presentOverlayWindow(win);
     win.webContents.send('quickchat:focus', { reset });
+  }
+
+  /**
+   * Quick Chat answers are read in the overlay, never in the main window, so the
+   * overlay's thread has to be stamped read from here or its sidebar row stays
+   * bold. Two moments count: re-summoning onto a settled answer, and a turn
+   * settling while the overlay is on screen.
+   */
+  function markOverlayThreadRead(): void {
+    const threadId = overlay.threadId;
+    if (!threadId || overlay.handedOff) return;
+    void deps.invoke('inbox:setRead', [[threadId], true]).catch((error) => log('main', 'quick chat mark-read failed', { threadId, error: String(error) }));
   }
 
   /**
@@ -497,6 +512,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       }
       sendToOverlay('backend:event', event);
       driveHud(event);
+      if (event.method === 'turn/completed' && overlayWindow?.isVisible()) markOverlayThreadRead();
       return true;
     }
     if (!threadId) {
@@ -711,6 +727,12 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
 
       handleLocal('quickchat:hide', () => {
         dismissQuickChat();
+      });
+
+      // The panel emptied while on screen (New thread, deleted thread): drop back
+      // to the compact bar instead of leaving a tall empty card.
+      handleLocal('quickchat:compact', () => {
+        if (overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) compactOverlay(overlayWindow);
       });
     },
 

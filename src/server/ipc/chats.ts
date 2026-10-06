@@ -273,6 +273,10 @@ export function registerChatsIpc(deps: IpcDeps): void {
       ? new Map((await deps.runtime().listThreads()).map((t) => [t.threadId, t.updatedAt]))
       : undefined;
     await setRead(threadIds, read, updatedAt);
+    // Other windows and devices hold their own copy of the list: the Quick Chat
+    // overlay stamps its thread read while the main window's sidebar still shows
+    // it bold, and the phone does the same for chats read on the Mac.
+    deps.emit('chats:changed', undefined);
     return chatList();
   });
   registerServer('inbox:markAllRead', async () => {

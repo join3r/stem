@@ -52,6 +52,46 @@ test('summon → prompt → HUD → re-summon shows the answer', async ({ electr
   await expect.poll(async () => (await windowState(electronApp, 'quickchat')).visible).toBe(false);
 });
 
+test('reading a Quick Chat answer marks it read; ⌘N shrinks back to a fresh bar', async ({ electronApp, mainWindow }) => {
+  await expect.poll(async () => (await windowState(electronApp, 'quickchat')).exists).toBe(true);
+  const overlayHeight = () =>
+    electronApp.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('quickchat'))!;
+      return win.getBounds().height;
+    });
+
+  await mainWindow.evaluate(() => (window as any).stem.revealQuickChat());
+  await expect.poll(async () => (await windowState(electronApp, 'quickchat')).visible).toBe(true);
+  const compactHeight = await overlayHeight();
+  // FakeBackend mtimes are whole seconds; the Inbox baseline is stamped at launch.
+  // Let a second pass so the answer's mtime can land past it and read as unread.
+  await new Promise((r) => setTimeout(r, 1100));
+  const overlay = electronApp.windows().find((w) => w.url().includes('quickchat'))!;
+  const input = overlay.getByPlaceholder('Ask Stem anything…');
+  await input.fill('Read me');
+  await input.press('Enter');
+  const hud = electronApp.windows().find((w) => w.url().includes('hud'))!;
+  await expect(hud.getByText('Answer ready')).toBeVisible();
+
+  // Answered while nobody was looking: bold in the main window's list.
+  await mainWindow.getByRole('group', { name: 'Chat list mode' }).getByRole('button', { name: 'Chats' }).click();
+  const row = mainWindow.locator('.chat-row', { hasText: 'Read me' });
+  await expect(row).toHaveClass(/\bunread\b/);
+
+  // Re-summoned onto the answer: the overlay is where it was read, so the main
+  // window's row for it must not stay bold.
+  await mainWindow.evaluate(() => (window as any).stem.revealQuickChat());
+  await expect(overlay.getByText('Echo: Read me')).toBeVisible();
+  expect(await overlayHeight()).toBeGreaterThan(compactHeight);
+  await expect(row).not.toHaveClass(/\bunread\b/);
+
+  // ⌘N / Ctrl+N starts a fresh thread and the window drops back to the bar.
+  await overlay.keyboard.press('ControlOrMeta+n');
+  await expect(overlay.getByPlaceholder('Ask Stem anything…')).toBeVisible();
+  await expect.poll(overlayHeight).toBe(compactHeight);
+  expect((await windowState(electronApp, 'quickchat')).visible).toBe(true);
+});
+
 test('a cold `--quick-chat` launch opens the overlay, not the main window', async () => {
   // The command a Wayland user binds to a system shortcut. With Stem closed it has
   // to feel like the shortcut does when Stem is running: overlay up front, main
