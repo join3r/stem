@@ -51,7 +51,6 @@ export function initHarness(deps: {
     }
     deps.onProgress?.(update);
   };
-  const judge = new SafetyJudge({ runtime: () => deps.runtime });
   const service = new HarnessService({
     settings: async () => {
       const harness = (await readSettings()).harness;
@@ -81,8 +80,7 @@ export function initHarness(deps: {
     announcedHosts: async () =>
       Object.values(await harnessDeviceRouter().hosts()).map((e) => ({ deviceId: e.deviceId, enabled: e.enabled })),
     readSettings,
-    judge: judge.judge,
-    judgeWebRead: judge.judgeWebRead,
+    judge: new SafetyJudge({ runtime: () => deps.runtime }).judge,
     emitApprovalRequest: deps.emitApprovalRequest,
     emitApprovalResolved: deps.emitApprovalResolved,
     emitApprovalArmed: deps.emitApprovalArmed,

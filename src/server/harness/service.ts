@@ -13,7 +13,7 @@ import type { HarnessBridge, HarnessBridgeResult, HarnessRequest } from '../back
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { ensureThreadScratch } from '../exec/scratch';
-import type { JudgeFn, JudgeWebReadFn } from '../exec/judge';
+import type { JudgeFn } from '../exec/judge';
 import { hostShellFromPlatform } from '../exec/host-shell';
 import { classify, deviceShellLabel } from '../exec/policy';
 import { execReadRoots, scanCommandAgainstRoots, scanProtected } from '../exec/protected';
@@ -57,8 +57,6 @@ export interface HarnessServiceDeps {
   readSettings: () => Promise<ServerSettings>;
   /** The shared LLM safety judge (exec/judge.ts); a plain stub in tests. */
   judge: JudgeFn;
-  /** The same judge for the agent's built-in web reads; absent = those always card. */
-  judgeWebRead?: JudgeWebReadFn;
   localHost: () => HarnessHost;
   /** The device path: null when that machine never announced (or switched off). */
   deviceHost?: (deviceId: string, label: string) => Promise<HarnessHost | null>;
@@ -581,17 +579,8 @@ export class HarnessService implements HarnessBridge {
     }
 
     // Non-execute asks (fetches, MCP tools, …) and command-less execute asks:
-    // yolo means no cards anywhere.
+    // yolo means no cards anywhere; everything else stays a card as before.
     if (mode === 'yolo') return allowVia('yolo');
-    // Web reads (WebFetch / WebSearch both arrive as kind 'fetch', titled with
-    // the URL or query) go to the judge like a command does: it already clears
-    // `curl <url>`, and carding the identical WebFetch put six docs lookups in
-    // front of the user in one CFK-1723 run (2026-10-06). Everything else cards.
-    if (mode === 'assisted' && ask.toolName === 'fetch' && this.deps.judgeWebRead) {
-      const verdict = await this.deps.judgeWebRead(ask.title, all.exec, all.defaults, ctx.intent);
-      if (verdict.verdict === 'safe') return allowVia('judge');
-      return { annotations: { judgeVerdict: verdict.verdict, judgeReason: verdict.reason } };
-    }
     return {};
   }
 
