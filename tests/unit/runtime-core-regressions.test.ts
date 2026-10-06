@@ -352,6 +352,51 @@ describe('one-shot completion cap', () => {
   });
 });
 
+// A skill or MCP reload respawns the chat pool. The complete worker loads neither,
+// and killing it there cut whatever one-shot was mid-call: on 2026-10-06 a /learn
+// save restarted the startup curate pass from scratch.
+describe('reloads and the complete worker', () => {
+  async function stubbed() {
+    const { runtime } = await tempRuntime();
+    const dispose = vi.fn(async () => undefined);
+    const internal = runtime as unknown as {
+      completeWorker: { running: boolean; dispose: () => Promise<void> } | null;
+      shutdownWorkers: () => Promise<void>;
+      ensureWorkerStarted: () => Promise<void>;
+      ensureActive: () => Promise<void>;
+    };
+    internal.completeWorker = { running: true, dispose };
+    const shutdownWorkers = vi.fn(async () => undefined);
+    internal.shutdownWorkers = shutdownWorkers;
+    internal.ensureWorkerStarted = async () => undefined;
+    internal.ensureActive = async () => undefined;
+    return { runtime, internal, dispose, shutdownWorkers };
+  }
+
+  it('keeps the complete worker through a skill reload', async () => {
+    const { runtime, internal, dispose, shutdownWorkers } = await stubbed();
+    await runtime.requestSkillReload();
+    expect(shutdownWorkers).toHaveBeenCalledOnce();
+    expect(dispose).not.toHaveBeenCalled();
+    expect(internal.completeWorker).not.toBeNull();
+  });
+
+  it('keeps it through an MCP reload too', async () => {
+    const { runtime, internal, dispose, shutdownWorkers } = await stubbed();
+    await (runtime as unknown as { configMcpServerReload: () => Promise<void> }).configMcpServerReload();
+    expect(shutdownWorkers).toHaveBeenCalledOnce();
+    expect(dispose).not.toHaveBeenCalled();
+    expect(internal.completeWorker).not.toBeNull();
+  });
+
+  it('still replaces it on a full restart, which new credentials need', async () => {
+    const { runtime, internal, dispose } = await stubbed();
+    await runtime.restart();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(internal.completeWorker).toBeNull();
+  });
+});
+
 describe('runtime auth status', () => {
   it('does not treat an empty or malformed credential store as authenticated', async () => {
     const { runtime, piHome } = await tempRuntime();

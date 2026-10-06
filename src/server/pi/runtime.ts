@@ -1033,10 +1033,22 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // change) asked for a fresh spawn, so it always gets one immediately. The
     // whole pool goes — every worker reads config/auth once at spawn, so a
     // restart that left an old worker alive would leave old credentials
-    // answering some threads.
+    // answering some threads. The complete worker reads them at spawn too.
+    await this.disposeCompleteWorker();
+    await this.restartPool();
+  }
+
+  /**
+   * Respawn the chat pool and leave the complete worker running. Skills and MCP
+   * servers reach pi only through what a chat worker loads at spawn; the complete
+   * worker loads neither (--no-skills, no extensions), so disposing it on their
+   * reloads only killed whatever one-shot was mid-call. On 2026-10-06 a `/learn`
+   * save cut the startup curate pass 70 s in, and it retried from the start.
+   */
+  private async restartPool(): Promise<void> {
     this.spawnStrikes = 0;
     this.cooldownUntil = 0;
-    await this.shutdown();
+    await this.shutdownWorkers();
     await this.ensureWorkerStarted(this.primaryWorker());
   }
 
@@ -2679,7 +2691,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     const prevThread = primary?.activeThreadId ?? null;
     const prevModel = primary?.currentModel ?? null;
     const prevFormat = primary && !primary.personaId ? primary.format : this.warmFormat;
-    await this.shutdown();
+    // The pool only: the complete worker has no MCP to reload (restartPool).
+    await this.shutdownWorkers();
     const worker = await this.acquireWorker(null, null, prevFormat);
     await this.runLeased(worker, async (w) => {
       await this.ensureWorkerStarted(w);
@@ -4018,7 +4031,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       this.pendingSkillReload = true;
       return;
     }
-    await this.restart();
+    await this.restartPool();
   }
 
   /**
