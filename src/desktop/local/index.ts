@@ -19,6 +19,7 @@ import type { ExecHost, ExecHostLocalState } from '../exec-host';
 import type { DesktopHarnessHost } from '../harness-host';
 import type { ComputerHost, ComputerHostLocalState } from '../computer-host';
 import type { BrowserHost } from '../browser-host';
+import type { Recorder } from '../recorder';
 import type { BrowserHostLocalState } from '../../shared/types';
 import type { HarnessHostLocalState } from '../../shared/types';
 import type { MirrorFolderLocalState, MirrorHost } from '../mirror-host';
@@ -96,6 +97,8 @@ export interface LocalIpcDeps {
   computerHost: ComputerHost;
   /** Whether this Mac lets its server drive its browser (see desktop/browser-host/). */
   browserHost: BrowserHost;
+  /** The skill recorder: the person's own clicks and typing on this Mac (see desktop/recorder/). */
+  recorder: Recorder;
   /**
    * The folders THIS machine mirrors to its server (see desktop/mirror-host/).
    * Null when the server runs on this computer — a folder here is connected
@@ -254,6 +257,14 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     'computerHost:setEnabled',
     (_e, enabled: boolean): Promise<ComputerHostLocalState> => deps.computerHost.setEnabled(enabled)
   );
+  // The skill recorder: client-owned because what it records is this Mac's
+  // screen; the server only ever sees the finished example (skills:record).
+  handleLocal('recorder:state', () => deps.recorder.state());
+  handleLocal('recorder:access', () => deps.recorder.access());
+  handleLocal('recorder:start', (_e, threadId: string, draftId?: string | null) => deps.recorder.start(threadId, draftId ?? null));
+  handleLocal('recorder:stop', () => deps.recorder.stop());
+  handleLocal('recorder:pause', () => deps.recorder.togglePause());
+  handleLocal('recorder:cancel', () => deps.recorder.cancel());
   handleLocal('computerHost:requestAccess', (): Promise<ComputerHostLocalState> => deps.computerHost.requestAccess());
 
   // Whether THIS Mac lets Stem drive its browser, and which one. Client-owned

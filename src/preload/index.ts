@@ -70,7 +70,9 @@ import type {
   ThemeSettings,
   ThemeState,
   UpdateStatus,
-  UpdatesSettings
+  UpdatesSettings,
+  RecorderState,
+  RecordingDraft
 } from '../shared/types';
 import { parseTimeLocaleArgs } from '../shared/time-locale';
 
@@ -203,6 +205,33 @@ const api: StemApi = {
   computerHostState: () => ipcRenderer.invoke('computerHost:localState'),
   setComputerHostEnabled: (enabled: boolean) => ipcRenderer.invoke('computerHost:setEnabled', enabled),
   requestComputerAccess: () => ipcRenderer.invoke('computerHost:requestAccess'),
+  recorderState: () => ipcRenderer.invoke('recorder:state'),
+  recorderAccess: () => ipcRenderer.invoke('recorder:access'),
+  startRecording: (threadId: string, draftId?: string | null) => ipcRenderer.invoke('recorder:start', threadId, draftId ?? null),
+  stopRecording: () => ipcRenderer.invoke('recorder:stop'),
+  pauseRecording: () => ipcRenderer.invoke('recorder:pause'),
+  cancelRecording: () => ipcRenderer.invoke('recorder:cancel'),
+  onRecorderState: (listener: (state: RecorderState) => void) => {
+    const handler = (_e: unknown, state: RecorderState) => listener(state);
+    ipcRenderer.on('recorder:state', handler);
+    return () => ipcRenderer.removeListener('recorder:state', handler);
+  },
+  onRecorderOpenSheet: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on('recorder:openSheet', handler);
+    return () => ipcRenderer.removeListener('recorder:openSheet', handler);
+  },
+  recordingDrafts: (threadId: string) => ipcRenderer.invoke('skills:recordDrafts', threadId),
+  saveRecordingDraft: (draftId: string, edited?: { name: string; description: string; body: string } | null) =>
+    ipcRenderer.invoke('skills:recordSave', draftId, edited ?? null),
+  discardRecordingDraft: (draftId: string) => ipcRenderer.invoke('skills:recordDiscard', draftId),
+  answerRecordingDraft: (draftId: string, answers: { question: string; answer: string }[]) =>
+    ipcRenderer.invoke('skills:recordAnswer', draftId, answers),
+  onRecordingDraft: (listener: (draft: RecordingDraft) => void) => {
+    const handler = (_e: unknown, draft: RecordingDraft) => listener(draft);
+    ipcRenderer.on('skills:recordDraft', handler);
+    return () => ipcRenderer.removeListener('skills:recordDraft', handler);
+  },
   browserHostState: () => ipcRenderer.invoke('browserHost:localState'),
   setBrowserHostEnabled: (enabled: boolean) => ipcRenderer.invoke('browserHost:setEnabled', enabled),
   chooseBrowser: (id: string) => ipcRenderer.invoke('browserHost:choose', id),

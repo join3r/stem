@@ -24,6 +24,7 @@ import {
   type ExecApprovalRequest,
   type HarnessApprovalRequest,
   type MailComposeInput,
+  type RecordingExample,
   type QuickChatSettings,
   type StartTurnInput,
   type StartTurnResult,
@@ -480,6 +481,19 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         const list = attachments as TurnAttachment[] | undefined;
         if (!list?.length) return;
         return [text, await attachmentsForServer(list)];
+      }
+    },
+    // A recording's pictures (only those for values no text explains) are files
+    // in this Mac's recordings folder; a remote server gets handles instead.
+    'skills:record': {
+      before: async ([threadId, example, draftId]) => {
+        const ex = example as RecordingExample;
+        if (!ex?.unmatched?.some((u) => u.shots.length > 0)) return;
+        const creds = { url: base, token: deps.token };
+        const unmatched = await Promise.all(
+          ex.unmatched.map(async (u) => ({ ...u, shots: await Promise.all(u.shots.map((path) => uploadFile(creds, path))) }))
+        );
+        return [threadId, { ...ex, unmatched }, draftId];
       }
     },
     'mail:reply': {

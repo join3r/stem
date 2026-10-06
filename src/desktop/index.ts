@@ -25,6 +25,7 @@ import { createMcpHost, type McpHost } from './mcp-host';
 import { createExecHost, type ExecHost } from './exec-host';
 import { createDesktopHarnessHost, type DesktopHarnessHost } from './harness-host';
 import { createComputerHost, type ComputerHost } from './computer-host';
+import { createRecorder, type Recorder } from './recorder';
 import { createComputerBanner } from './computer-host/banner';
 import { createBrowserHost, type BrowserHost } from './browser-host';
 import { downloadFile, uploadFile } from './file-transfer';
@@ -356,6 +357,7 @@ let mcpHost: McpHost | null = null;
 let execHost: ExecHost | null = null;
 let harnessHost: DesktopHarnessHost | null = null;
 let computerHost: ComputerHost | null = null;
+let recorder: Recorder | null = null;
 let browserHost: BrowserHost | null = null;
 let mirrorHost: MirrorHost | null = null;
 
@@ -485,6 +487,20 @@ app.whenReady().then(async () => {
     banner: createComputerBanner()
   });
 
+  // The skill recorder: the person's own demonstration, written up as a skill
+  // by the server (skills:record). Needs no switch — it records only after
+  // Record is pressed, and shows the pill the whole time.
+  recorder = createRecorder({
+    invoke: (channel, args) => proxy!.invoke(channel, args),
+    send: (state) => sendToMain('recorder:state', state),
+    openSheet: () => sendToMain('recorder:openSheet', undefined),
+    hideMain: () => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+    },
+    revealMain: () => revealMainWindow()
+  });
+  recorder.registerShortcut();
+
   // The browser actions the server addresses to THIS Mac (the `browser` tool),
   // handed to the Stem extension through its native-messaging host. Off until
   // the switch in Settings is flipped on this computer.
@@ -581,6 +597,7 @@ app.whenReady().then(async () => {
     harnessHost,
     computerHost,
     browserHost,
+    recorder,
     mirrorHost,
     themeChanged
   });
@@ -698,6 +715,8 @@ app.on('before-quit', (event) => {
   computerHost?.close();
   // And the browser host's socket: the extension's native host retries until Stem is back.
   browserHost?.close();
+  // And a recording in progress: its helper is a child too, and its raw folder goes.
+  recorder?.close();
   // Nothing to drain when the server is somebody else's process.
   if (!server) return;
   event.preventDefault();

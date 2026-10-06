@@ -1572,6 +1572,118 @@ export interface ComputerHostLocalState {
   access: ComputerAccess | null;
 }
 
+// ---- Skill recorder: the person shows Stem a task, Stem writes the skill ----
+//
+// The Mac records what the person does by NAME (the AX role + label of what
+// they clicked, the field they typed into, the page URL) plus the text they
+// had in front of them. The desktop links each typed or pasted value to where
+// it was seen (see desktop/recorder/matcher.ts); only the steps and those
+// short source snippets go to the server, which writes a SKILL.md draft from
+// them. Raw window text and pictures stay on the Mac, except the few pictures
+// sent for a value no text explains.
+
+export type RecordedStepKind = 'click' | 'type' | 'key' | 'copy' | 'cut' | 'paste' | 'switch' | 'note';
+
+export interface RecordedStep {
+  kind: RecordedStepKind;
+  /** Milliseconds since the recording started. */
+  t: number;
+  app: string;
+  bundleId?: string;
+  window: string;
+  /** The web page the step happened on (browsers' AXURL). */
+  url?: string;
+  /** click: what was clicked ("button", "row", "link"…) and what it said. */
+  role?: string;
+  label?: string;
+  /** click: the titled region around it (`group "Delivery"`). */
+  within?: string;
+  button?: 'right';
+  count?: number;
+  /** type/paste: the field and the value ("[password]" for secure fields). */
+  field?: string;
+  value?: string;
+  before?: string;
+  secure?: boolean;
+  /** copy/cut/paste/note: the text. */
+  text?: string;
+  /** key: e.g. "return", "cmd+s". */
+  combo?: string;
+}
+
+/** Where a value the person typed or pasted came from. */
+export interface RecordingLink {
+  /** Index into the example's steps. */
+  step: number;
+  value: string;
+  /** `copy`: copied there and pasted here; `seen`: the text showed it. */
+  via: 'copy' | 'seen';
+  /** How it matched: as is, or after reading both as a date / number. */
+  form: 'exact' | 'date' | 'number';
+  source: { app: string; window: string; url?: string; t: number; snippet: string };
+}
+
+/** One recording, ready for the author. */
+export interface RecordingExample {
+  id: string;
+  recordedAt: string;
+  durationMs: number;
+  steps: RecordedStep[];
+  links: RecordingLink[];
+  /** Values no text explains; pictures of what was on screen just before (Mac paths / upload handles). */
+  unmatched: { step: number; value: string; shots: string[] }[];
+}
+
+export type RecordingDraftStatus = 'drafting' | 'ready' | 'saved' | 'discarded' | 'failed';
+
+export interface RecordingVariable {
+  /** What changes each run ("Delivery date"). */
+  name: string;
+  /** Where the skill finds it ("the delivery date in the supplier's email"). */
+  from: string;
+}
+
+/** The card a recording becomes in its chat: the draft skill, open until saved or discarded. */
+export interface RecordingDraft {
+  id: string;
+  threadId: string;
+  createdAt: string;
+  updatedAt: string;
+  status: RecordingDraftStatus;
+  /** Every example recorded for this draft (pictures dropped once authored). */
+  examples: RecordingExample[];
+  skill: { name: string; description: string; body: string } | null;
+  variables: RecordingVariable[];
+  questions: string[];
+  /** Answers the person gave to earlier questions, fed to the next rewrite. */
+  answers: { question: string; answer: string }[];
+  /** Why there is no draft, or what went wrong. */
+  message?: string;
+  /** Set once saved. */
+  savedSlug?: string;
+  /** A saved skill that looks like the same procedure (dedup); Save then updates it. */
+  duplicateOf?: string;
+}
+
+export interface RecordingSaveResult {
+  ok: boolean;
+  message: string;
+  draft?: RecordingDraft;
+}
+
+/** The Mac recorder, as the chat sees it. */
+export interface RecorderState {
+  phase: 'idle' | 'recording' | 'paused' | 'authoring';
+  /** The chat the recording belongs to. */
+  threadId: string | null;
+  /** Re-recording for an existing draft ("Record another example"). */
+  draftId: string | null;
+  startedAt: number | null;
+  steps: number;
+  lastStep: string | null;
+  error: string | null;
+}
+
 // ---- Browser control on the user's own Mac (the `browser` tool) ----
 //
 // The computer-control rails again — addressed control frames out, ordinary
@@ -4508,6 +4620,27 @@ export interface StemApi {
   setComputerHostEnabled(enabled: boolean): Promise<ComputerHostLocalState>;
   /** Ask macOS for the grants the helper is missing; answers with the current state. */
   requestComputerAccess(): Promise<ComputerHostLocalState>;
+  /** The skill recorder on this Mac (client-owned; see desktop/recorder/). */
+  recorderState(): Promise<RecorderState>;
+  /** The three grants the recorder needs, read fresh (null off macOS). */
+  recorderAccess(): Promise<ComputerAccess | null>;
+  /** Start recording for a chat; `draftId` adds another example to that draft. Rejects with the reason. */
+  startRecording(threadId: string, draftId?: string | null): Promise<RecorderState>;
+  stopRecording(): Promise<RecorderState>;
+  pauseRecording(): Promise<RecorderState>;
+  cancelRecording(): Promise<RecorderState>;
+  onRecorderState(listener: (state: RecorderState) => void): () => void;
+  /** ⌃⌥R with nothing recording: open the Record sheet in the current chat. */
+  onRecorderOpenSheet(listener: () => void): () => void;
+  /** The recording drafts of a chat, oldest first. */
+  recordingDrafts(threadId: string): Promise<RecordingDraft[]>;
+  /** Save a draft as a skill, optionally as edited on the card. */
+  saveRecordingDraft(draftId: string, edited?: { name: string; description: string; body: string } | null): Promise<RecordingSaveResult>;
+  discardRecordingDraft(draftId: string): Promise<RecordingDraft | null>;
+  /** Answer the draft's questions; the draft is rewritten with them. */
+  answerRecordingDraft(draftId: string, answers: { question: string; answer: string }[]): Promise<RecordingDraft | null>;
+  /** A draft changed (written, rewritten, saved, discarded). */
+  onRecordingDraft(listener: (draft: RecordingDraft) => void): () => void;
   /** Whether THIS Mac lets its server drive its browser (client-owned). */
   browserHostState(): Promise<BrowserHostLocalState>;
   /** Flip the local browser-control consent switch (client-owned). */

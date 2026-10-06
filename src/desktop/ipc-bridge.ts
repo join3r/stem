@@ -67,6 +67,10 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   // Folders this machine mirrors: the native picker's absolute paths.
   // ('mirror:localState' takes no arguments, so it is absent.)
   'mirror:addLocal': [a.stringArray],
+  // The skill recorder on this Mac ('recorder:state' / ':access' / ':stop' /
+  // ':pause' / ':cancel' take no arguments): the chat it records for, and the
+  // draft a second example is added to.
+  'recorder:start': [a.string, a.optional(a.nullish(a.string))],
   'quickchat:run': [a.object],
   'quickchat:handoff': [a.object]
 };
