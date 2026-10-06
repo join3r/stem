@@ -35,6 +35,7 @@ Realistic setup. No real personal or company data.
 
 Not a feature you see in Stem — notes for building it and for running it somewhere else.
 
+- [Building from source](development.md) — Node 24, `npm run dev`, the npm scripts.
 - [Windows development](windows-dev.md) — portable Node, no admin rights, `npm run dev`. Experimental.
 - [Running on a server](running-on-a-server.md) — Docker and Caddy on your own domain, with
   the Mac as a client. The move itself, backups, upgrades, and what to do when it will not start.

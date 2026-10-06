@@ -15,12 +15,10 @@ Maya creates tasks by asking in a chat:
 Every run starts fresh, in a thread of its own, and anything it has for Maya
 arrives as mail in the Inbox.
 
-<!-- TODO(screenshot): Recapture with the two canonical Maya demo tasks. -->
-
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../screenshots/tasks-dark.png">
-    <img alt="Stem Scheduled tasks showing recurring work and its next run" src="../screenshots/tasks-light.png" width="320">
+    <source media="(prefers-color-scheme: dark)" srcset="../screenshots/panel-tasks-dark.png">
+    <img alt="Stem Scheduled tasks showing recurring work and its next run" src="../screenshots/panel-tasks-light.png" width="320">
   </picture>
 </p>
 

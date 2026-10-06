@@ -7,11 +7,9 @@ there:
 
 > Review this launch plan. List the three riskiest assumptions.
 
-<!-- TODO(screenshot): Recapture with the canonical Maya demo profile. -->
-
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../screenshots/sidebar-spaces-dark.png">
-  <img alt="Stem chats organized into nested folders" src="../screenshots/sidebar-spaces-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="../screenshots/hero-dark.png">
+  <img alt="Stem chats organized into nested folders, with a chart answer open" src="../screenshots/hero-light.png">
 </picture>
 
 ## Ask

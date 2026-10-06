@@ -18,7 +18,12 @@ copied into Stem.
 
 Open the right sidebar → **Connected folders**, choose **+**, then select a folder.
 
-<!-- TODO(screenshot): Connected folders tab with the five demo folders and one expanded settings card. -->
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../screenshots/panel-folders-dark.png">
+    <img alt="The Connected folders tab with the five demo folders" src="../screenshots/panel-folders-light.png" width="320">
+  </picture>
+</p>
 
 A new connected folder starts **read-only**, with **Memorize on** and **Index off**.
 

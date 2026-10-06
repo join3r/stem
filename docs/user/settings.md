@@ -6,12 +6,10 @@ Maya uses ChatGPT for everyday consulting, adds a local Ollama model for sensiti
 drafts, keeps command approval on **Assisted**, and gives Quick Chat short-answer
 instructions.
 
-<!-- TODO(screenshot): Recapture with the canonical Maya demo profile. -->
-
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../screenshots/settings-providers-dark.png">
-    <img alt="Stem Settings with the model picker and AI providers" src="../screenshots/settings-providers-light.png" width="320">
+    <source media="(prefers-color-scheme: dark)" srcset="../screenshots/panel-models-dark.png">
+    <img alt="Stem Settings, Models: AI providers and model roles" src="../screenshots/panel-models-light.png" width="320">
   </picture>
 </p>
 

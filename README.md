@@ -1,160 +1,171 @@
-# Stem
+<p align="center">
+  <img src="build/icon.png" width="88" alt="">
+</p>
 
-**A personal AI assistant for your Mac — ask from anywhere, get rich interactive answers, and let it remember, organize, and automate for you.**
+<h1 align="center">Stem</h1>
 
-Stem is an Electron desktop app (React + TypeScript) powered by [pi](https://pi.dev) under the hood. Bring your own model — sign in with Claude or ChatGPT, paste an API key, or point it at a local server.
+<p align="center">
+  A desktop AI assistant that remembers you, reads your folders and runs jobs on a schedule.<br>
+  It runs on the ChatGPT, Claude or Grok subscription you already pay for, any API key, or a local model.
+</p>
+
+<p align="center">
+  <a href="https://github.com/join3r/stem/releases/latest"><b>Download</b></a>
+  · macOS (Apple Silicon) · Linux (AppImage, deb) ·
+  <a href="docs/README.md">User guide</a>
+</p>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/hero-mdx-dark.png">
-  <img alt="Stem rendering a rich MDX answer with steps, a data table, and a chart" src="docs/screenshots/hero-mdx-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/hero-dark.png">
+  <img alt="Stem answering from an invoices folder with a stacked bar chart and a client comparison, chats filed into folders on the right" src="docs/screenshots/hero-light.png">
 </picture>
 
-## Ask and keep working
+## Answers you can scan
 
-Summon **Quick Chat** from any app with a global shortcut, ask, and dismiss it — you don't wait for the AI. A small status pill tracks progress in the corner of your screen and tells you (with an optional chime) the moment the answer is ready. Hit the shortcut again to read it, or hand the thread off to the main window.
+Replies render as MDX. You get charts, stat tiles, sortable tables, side-by-side comparisons, diagrams, step lists, quizzes and forms when the question calls for one, and a plain paragraph when it doesn't. Any chat can switch to Markdown.
+
+<table>
+  <tr>
+    <td width="33%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/answer-diagram-dark.png">
+        <img alt="A deployment diagram drawn from an Argo CD repo" src="docs/screenshots/answer-diagram-light.png">
+      </picture>
+    </td>
+    <td width="33%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/answer-compare-dark.png">
+        <img alt="Stripe Checkout and Payment Element compared side by side, one marked recommended" src="docs/screenshots/answer-compare-light.png">
+      </picture>
+    </td>
+    <td width="33%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/answer-picture-dark.png">
+        <img alt="A risograph-style running poster generated in the chat" src="docs/screenshots/answer-picture-light.png">
+      </picture>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">Diagrams</td>
+    <td align="center">Comparisons</td>
+    <td align="center">Pictures, on your ChatGPT plan</td>
+  </tr>
+</table>
+
+## Memory you can audit
+
+Stem pulls durable facts out of your chats and folders. Each message gets only the facts that matter for it, ranked on your machine by bundled models (a Qwen3 embedder and Stem's own GTE reranker). Every fact shows where it came from and whether the last answer used it. Pin, confirm or forget any of them, settle contradictions, or switch memory off.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/memory-dark.png">
+  <img alt="A dinner suggestion that respects a vegetarian partner and a peanut allergy, next to the stored facts marked as injected" src="docs/screenshots/memory-light.png">
+</picture>
+
+## Your folders, read in place
+
+Connect an Obsidian vault, a repo or a folder of invoices. Stem reads the files where they live and indexes them locally. Folders are read-only until you allow writes, and you decide per folder whether anything in it may reach memory.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/folders-dark.png">
+  <img alt="An answer built from client meeting notes, with five connected folders listed on the right" src="docs/screenshots/folders-light.png">
+</picture>
+
+## Personas and mail
+
+A persona is a saved setup: instructions, model, tools, MCP servers, memory, a coding agent or a computer it may drive. You mail it like a colleague and the reply lands in the Inbox. The Orchestrator splits a big job across helper personas it creates and sends you one answer. Scheduled tasks report here too, and only when they found something.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/mail-dark.png">
+  <img alt="The Bookkeeper persona's reply listing an overdue invoice and a reminder draft, with the Inbox on the right" src="docs/screenshots/mail-light.png">
+</picture>
+
+## Quick Chat
+
+A global shortcut opens Quick Chat over whatever app you're in. Ask, hit Enter, and it gets out of the way. A pill in the corner tells you when the answer is ready.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/quick-chat-dark.png">
-    <img alt="The Quick Chat overlay answering a question" src="docs/screenshots/quick-chat-light.png" width="596">
+    <img alt="The Quick Chat overlay with a pace table" src="docs/screenshots/quick-chat-light.png" width="596">
   </picture>
-</p>
-<p align="center">
+  <br>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/status-hud-dark.png">
-    <img alt="The status pill announcing the answer is ready" src="docs/screenshots/status-hud-light.png" width="216">
+    <img alt="The pill announcing the answer is ready" src="docs/screenshots/status-hud-light.png" width="209">
   </picture>
 </p>
 
-Quick Chat keeps its own thread, model, and settings — separate from whatever you're doing in the main window. The same pill can also follow long-running main-window turns across Spaces and displays, so you always know when Stem finishes.
+## Also in the box
 
-## Rich, interactive answers
+- **Coding agents.** A persona hands work to Claude Code or any other ACP agent, on the server or on one of your computers. The agent's permission requests arrive as cards in the chat.
+- **Computer control.** A persona pinned to your Mac can work in its apps, including windows on another Space or behind other windows. macOS 14 or newer.
+- **Browser control.** The Stem extension for Arc, Chrome, Dia and Brave lets Stem use your own signed-in browser in background tabs.
+- **Scheduled tasks.** Ask for "every weekday at 8, check…" and you get a cron job. Each run starts in a fresh thread.
+- **Shell commands.** A judge model checks each command against what you asked for. Only the flagged ones wait for you.
+- **MCP servers and skills.** Add MCP servers by command or URL, OAuth included. Stem writes skills from work that went well and rewrites the ones that failed.
+- **Pinboard.** Pin a message, a highlighted phrase or your own note to the top of a chat. Stem keeps the board in context for the rest of that chat.
+- **Private chats.** A private chat doesn't read your memory and teaches it nothing.
+- **Themes.** Light, dark, bundled themes, or a JSON file of your own that can also set fonts and spacing.
 
-Responses render as **MDX**, not walls of text: callouts, step-by-step guides, collapsibles, tabs, data tables, charts — even quizzes and forms whose answers feed straight back into the conversation. Prefer plain text? Toggle between MDX and Markdown per turn.
+<table>
+  <tr>
+    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/panel-models-dark.png"><img alt="Settings, Models: providers and model roles" src="docs/screenshots/panel-models-light.png"></picture></td>
+    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/panel-features-dark.png"><img alt="Settings, Features: mail, image generation, commands, coding agents, computer control" src="docs/screenshots/panel-features-light.png"></picture></td>
+    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/panel-personas-dark.png"><img alt="The Personas list" src="docs/screenshots/panel-personas-light.png"></picture></td>
+  </tr>
+  <tr>
+    <td align="center">Models</td>
+    <td align="center">Features</td>
+    <td align="center">Personas</td>
+  </tr>
+  <tr>
+    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/panel-tasks-dark.png"><img alt="Scheduled tasks with cron expressions and next runs" src="docs/screenshots/panel-tasks-light.png"></picture></td>
+    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/panel-mcp-dark.png"><img alt="MCP servers, stdio and HTTP" src="docs/screenshots/panel-mcp-light.png"></picture></td>
+    <td width="33%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/panel-skills-dark.png"><img alt="Skills Stem wrote for itself" src="docs/screenshots/panel-skills-light.png"></picture></td>
+  </tr>
+  <tr>
+    <td align="center">Scheduled tasks</td>
+    <td align="center">MCP servers</td>
+    <td align="center">Skills</td>
+  </tr>
+</table>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/mdx-showcase-dark.png">
-  <img alt="An interactive quiz rendered inside a Stem answer" src="docs/screenshots/mdx-showcase-light.png">
-</picture>
+## Models
 
-While Stem works you see live **tool activity** — web searches, file reads, terminal commands — and web-searched answers come with a **cited sources** list. A context meter shows how full the model's context window is and what the session has cost.
-
-## Memory that compounds
-
-**Stem Recall** is a two-level memory. Every conversation is captured into a searchable episodic store, and the important parts are distilled into durable facts about you — with evidence, confidence, sensitivity, validity, and conflict history. You stay in control: preview which facts get injected, pin or confirm them, resolve contradictions, forget any of them permanently, cap the storage, or switch memory off entirely.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/memory-facts-dark.png">
-    <img alt="The Memory tab showing distilled facts Stem has learned" src="docs/screenshots/memory-facts-light.png" width="320">
-  </picture>
-</p>
-
-Each turn receives only positively relevant active facts, plus up to five facts you explicitly pin; sensitive facts use a stricter relevance gate, expired or unconfirmed assistant claims stay out, and while two facts conflict only one side goes — marked conflicting, so the model treats it as uncertain instead of forgetting both. Relevance ranking runs on **bundled local models** (Qwen3 Embedding 0.6B and the Qwen3 reranker by default, with Multilingual-E5 and EmbeddingGemma as smaller options — downloaded once, run on-device) — or an OpenAI-compatible endpoint, or plain keyword matching. Nothing leaves your machine by default and embedding never blocks a reply.
-
-## Organized like you think
-
-Chats live in **Spaces** — nestable folders with drag-and-drop — alongside a date-grouped list of recent conversations and **full-text search across every chat**. Each message carries actions: retry, edit-and-rerun, branch into a new chat, copy.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/sidebar-spaces-dark.png">
-  <img alt="The sidebar with Spaces, recent chats, and search" src="docs/screenshots/sidebar-spaces-light.png">
-</picture>
-
-## Automate it
-
-Ask Stem to check something every morning and it becomes a **scheduled task**: a prompt re-run on a cron or one-time schedule, autonomously, each run in a fresh thread of its own. Tasks that miss their slot (laptop asleep) catch up on launch, and a task that finds something you should see sends you mail.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/tasks-dark.png">
-    <img alt="The Tasks tab with scheduled recurring tasks" src="docs/screenshots/tasks-light.png" width="320">
-  </picture>
-</p>
-
-## Extend it
-
-- **MCP servers** — connect Model Context Protocol servers by command or URL (with sign-in where the service supports it) to give Stem new tools. Running Stem on a server? Pin the ones that only mean anything on your own computer to that computer, and use them from anywhere.
-- **Skills** — self-improving, app-scoped procedures Stem writes and refines for itself; a curator keeps them tidy.
-- **Connected folders** — let Stem read folders like an Obsidian vault *in place*, read-only by default, with per-folder write and memorize toggles.
-- **Custom instructions** — standing directives for how Stem should behave, with a separate layer just for Quick Chat. Stem can even propose edits to its own instructions — applied only with your approval.
-
-## Bring your own model
-
-First launch walks you through a short onboarding with in-app sign-in. Switch models any time from a searchable picker — per window, mid-conversation.
-
-| Provider | Connection |
+| Provider | How you connect |
 | --- | --- |
-| Claude (Anthropic) | Sign in with your account (OAuth) or API key |
-| ChatGPT (OpenAI) | Sign in with your account (OAuth) or API key |
-| OpenRouter | API key |
-| Ollama | Local server, no key |
-| LM Studio | Local server, no key |
+| ChatGPT, Claude, Grok | Sign in with your subscription |
+| OpenAI, Anthropic, OpenRouter, xAI | API key |
+| Ollama, LM Studio | Local server, no key |
+| Anything OpenAI- or Anthropic-compatible | Custom endpoint |
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-providers-dark.png">
-    <img alt="Settings with the model picker and AI providers" src="docs/screenshots/settings-providers-light.png" width="320">
-  </picture>
-</p>
+Switch models per chat, mid-conversation. Web search works with every model and cites its sources; a ChatGPT or Grok sign-in covers it without a separate search key.
 
-Native **web search** uses your provider's built-in search — no separate search API key.
+## Run it on a server
 
-## Getting started
+By default Stem runs on your computer. Move it to a VPS with Docker and Caddy, or to a box on your Tailscale network, and every Mac, Linux machine and the iPhone app (beta) becomes a client of that one Stem. They share chats, memory and tasks, and scheduled runs fire while the laptop is closed. An MCP server or folder that only makes sense on your laptop stays pinned to it.
 
-Runs on **macOS and Linux** (release installers). **Windows** can run from source
-for development — see [Windows development](docs/windows-dev.md) (portable Node,
-no admin; experimental).
+[Running on a server](docs/running-on-a-server.md) · [Running on a LAN or Tailscale](docs/running-on-tailscale.md)
 
-Development needs **Node.js 24 or newer** (`node:sqlite`, which backs the
-recall store, is only flag-free from 24). There's an `.nvmrc`, so `nvm use` picks the right one
-on macOS/Linux; on Windows use a [portable Node zip](docs/windows-dev.md) if you lack admin rights.
+## Install
 
-```bash
-npm install
-npm run dev      # launch the app in development
-```
+Grab the latest build from [Releases](https://github.com/join3r/stem/releases/latest):
 
-`npm install` also downloads the Electron binary (~120MB). Electron 42 dropped its own install
-script and now fetches the binary lazily on first `require('electron')`, which electron-vite never
-does — so a `postinstall` here handles it. It warns rather than fails if the download doesn't go
-through, so `npm run dev` preflights for the binary (and for the Node version) and prints the one
-command to re-run; you can also check on its own with `npm run preflight`.
+- **macOS.** `.dmg` for Apple Silicon, signed and notarized.
+- **Linux.** `.AppImage` for any distro, or `.deb` for Debian and Ubuntu (also puts `stem` on your PATH). Both for x64 and arm64.
 
-npm 11 may warn that `N packages have install scripts not yet covered by allowScripts`. Nothing in
-Stem needs them — every native dependency ships prebuilt binaries through its platform package — so
-you can leave them unapproved.
+First launch walks you through signing in to a provider.
 
-First run opens the onboarding wizard — pick a provider and sign in, and you're chatting. Use `--fresh` (or `--profile=<name>`) to try Stem with a separate profile without touching your main one.
+<details>
+<summary>Linux notes</summary>
 
-### Installing a release
+- **Quick Chat on Wayland.** Electron's global shortcuts don't fire in default GNOME and KDE sessions. Bind a system shortcut to `stem --quick-chat` (deb) or `/path/to/Stem.AppImage --quick-chat`; a second launch hands the toggle to the running app. On X11 the in-app shortcut works.
+- **Tray.** The tray icon offers Summon Quick Chat, Open Stem and Quit. Stock GNOME hides tray icons without the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/); running `stem` again reopens the main window.
+- **Closing the window** leaves Stem running in the background. Quit from the tray.
+- **Secrets** are encrypted with the system keyring (`libsecret` or kwallet). Without one, Stem falls back to files readable only by your user (mode 0600).
 
-Grab an artifact from [GitHub Releases](https://github.com/join3r/stem/releases):
+</details>
 
-- **Linux** — `.AppImage` (make it executable and run it, any distro) or `.deb` (Ubuntu/Debian/Mint; also puts `stem` on your PATH).
-- **macOS** — `.dmg`. Builds are currently unsigned: right-click → Open the first time, or run `xattr -dr com.apple.quarantine /Applications/Stem.app`.
+## Build from source
 
-### Linux notes
-
-- **Summoning Quick Chat on Wayland** (default GNOME/KDE sessions): Electron's global shortcuts don't fire there. Instead, bind a system keyboard shortcut to `stem --quick-chat` (deb) or `/path/to/Stem.AppImage --quick-chat` — a second launch hands the toggle to the running app. On X11 the in-app global shortcut works as on macOS.
-- A tray icon offers Summon Quick Chat / Open Stem / Quit. Stock GNOME hides tray icons without the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/) — running `stem` again reopens the main window if you have no tray.
-- Closing the main window leaves Stem running in the background (like the macOS dock behavior); quit from the tray.
-- Secrets are encrypted via the system keyring (`libsecret`/kwallet). Without one, Stem falls back to plaintext files readable only by your user (mode 0600).
-
-## Scripts
-
-| Command | Description |
-| --- | --- |
-| `npm run dev` | Run the app in development (electron-vite) |
-| `npm run build` | Type-check and build |
-| `npm run typecheck` | Type-check only |
-| `npm run lint` | Lint with ESLint |
-| `npm test` | Run unit tests (Vitest) |
-| `npm run test:e2e` | Run end-to-end tests (Playwright) |
-| `npm run dist` | Package installers for the current OS (electron-builder) |
-| `npm run eval:retrieval` | Run the real local-embedding Recall retrieval gate |
-| `npm run eval:memory` | Run the real extraction gate against a configured OpenAI-compatible model |
-
-## Tech stack
-
-Electron, React 19, TypeScript, Vite (electron-vite), Vitest, Playwright, and unified/remark for MDX. Screenshots in this README are captured by `scripts/capture-readme-shots.mts`.
+Node.js 24 or newer, then `npm install && npm run dev`. Scripts, Windows and the rest are in [docs/development.md](docs/development.md).

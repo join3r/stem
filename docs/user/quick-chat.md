@@ -6,8 +6,6 @@ Maya is editing a client proposal in another app. She presses her Stem shortcut,
 asks “Turn this paragraph into three concrete outcomes,” and presses Enter. The
 window disappears so she can keep working.
 
-<!-- TODO(screenshot): Recapture with the canonical Maya demo profile. -->
-
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="../screenshots/quick-chat-dark.png">
