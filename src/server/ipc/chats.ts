@@ -1,3 +1,4 @@
+import { removeThreadDrafts } from '../skills/record-drafts';
 import { degrade } from '../degrade';
 import { registerServer } from './guard';
 import type { IpcDeps } from './deps';
@@ -218,6 +219,8 @@ export function registerChatsIpc(deps: IpcDeps): void {
     await Promise.all([
       deps.runtime().deleteThread(threadId),
       removeChat(threadId),
+      // A recording's draft cards are the chat's too.
+      removeThreadDrafts(threadId),
       // The board goes with its chat. Synchronous and local; wrapped so a
       // failure surfaces like the rest rather than skipping the others.
       Promise.resolve().then(() => dropThreadPins(threadId)),

@@ -144,6 +144,14 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'skills:resolveApproval': [a.id, a.boolean, a.nullish(a.object)],
   'skills:reset': [a.boolean, a.oneOf(['off', 'ask', 'auto'])],
   'skills:learn': [a.string, a.nullish(a.string)],
+  // The skill recorder: a recording from the Mac (one example, see
+  // skills/record.ts cleanExample for its shape), the chat's draft cards, and
+  // what the card can do with one.
+  'skills:record': [a.string, a.object, a.optional(a.nullish(a.string))],
+  'skills:recordDrafts': [a.string],
+  'skills:recordSave': [a.string, a.optional(a.nullish(a.object))],
+  'skills:recordDiscard': [a.string],
+  'skills:recordAnswer': [a.string, a.objectArray],
   'memory:setEnabled': [a.boolean],
   'memory:addNote': [a.string, a.optional(a.nullish(a.objectArray))],
   'memory:forget': [a.number],

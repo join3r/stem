@@ -41,6 +41,7 @@ import type { HarnessService } from './harness/service';
 import { registerHarnessIpc } from './harness/ipc';
 import { closeHarnessDeviceRouter, harnessDeviceRouter } from './harness/device-host';
 import { initSkills } from './startup/skills';
+import { setRecordingDraftPush } from './startup/record-skills';
 import {
   closeTransport,
   pushToClients,
@@ -977,6 +978,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   // Off/Ask/Auto policy all live here. The approval card rides the backend event
   // stream (unlike exec's, which is server-owned end to end), so there is nothing
   // to emit here — see the skills/approval* cases in the event router.
+  setRecordingDraftPush((draft) => emit('skills:recordDraft', draft));
   initSkills({
     runtime,
     busyWithin,

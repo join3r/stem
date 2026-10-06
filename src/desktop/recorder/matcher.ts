@@ -246,7 +246,7 @@ export function parseDate(value: string, year: number): string | null {
 
 /** "1 250,50" / "1,250.50" / "1250.5" → 1250.5; null when the value is not one number. */
 export function parseNumber(value: string): number | null {
-  const v = value.trim().replace(/[\s  ']/g, '');
+  const v = value.trim().replace(/[\s\u00a0\u202f']/g, '');
   if (!/^[-+]?\d[\d.,]*$/.test(v)) return null;
   const readings = readNumber(v);
   return readings.length > 0 ? readings[0] : null;
@@ -254,7 +254,7 @@ export function parseNumber(value: string): number | null {
 
 /** Both readings of a number whose separators could go either way. */
 function readNumber(raw: string): number[] {
-  const v = raw.replace(/[\s  ']/g, '');
+  const v = raw.replace(/[\s\u00a0\u202f']/g, '');
   const out = new Set<number>();
   const lastDot = v.lastIndexOf('.');
   const lastComma = v.lastIndexOf(',');
@@ -277,7 +277,7 @@ function readNumber(raw: string): number[] {
 
 function numberTokens(text: string): { index: number; length: number; values: number[] }[] {
   const out: { index: number; length: number; values: number[] }[] = [];
-  const re = /(?<![\p{L}\d])\d[\d  '.,]*(?:\s\d{3})*(?:[.,]\d+)?(?![\p{L}\d])/gu;
+  const re = /(?<![\p{L}\d])\d[\d\u00a0\u202f'.,]*(?:\s\d{3})*(?:[.,]\d+)?(?![\p{L}\d])/gu;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     const raw = m[0].replace(/[.,]$/, '');

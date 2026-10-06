@@ -30,6 +30,7 @@ import { skillsRunOf, updateSkillsSettings } from '../workspace/settings';
 import { resetSkills, skillsResetStatus } from '../skills/reset';
 import { removeSkill } from '../skills/store';
 import { learnFromChat } from '../startup/skills';
+import { answerRecordingDraft, discardRecordingDraft, recordSkill, recordingDrafts, saveRecordingDraft } from '../startup/record-skills';
 import { curateSkills } from '../skills/curate';
 import { applyAutomaticTransitions } from '../skills/lifecycle';
 import type { LlmClient } from '../recall/llm';
@@ -95,6 +96,15 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     }
   );
   registerServer('skills:learn', (_e, threadId: string, focus?: string) => learnFromChat(threadId, focus));
+  // The skill recorder (startup/record-skills.ts): the Mac sends a recording,
+  // the chat shows the draft it became, Save writes it like `/learn` does.
+  registerServer('skills:record', (e, threadId: string, example: unknown, draftId?: string | null) =>
+    recordSkill(e, threadId, example, draftId ?? null)
+  );
+  registerServer('skills:recordDrafts', (_e, threadId: string) => recordingDrafts(threadId));
+  registerServer('skills:recordSave', (_e, draftId: string, edited?: unknown) => saveRecordingDraft(draftId, edited ?? null));
+  registerServer('skills:recordDiscard', (_e, draftId: string) => discardRecordingDraft(draftId));
+  registerServer('skills:recordAnswer', (_e, draftId: string, answers: unknown) => answerRecordingDraft(draftId, answers));
   registerServer('skills:resetStatus', () => skillsResetStatus());
   registerServer('skills:reset', async (_e, exportFirst: boolean, mode: SkillsMode) => {
     const result = resetSkills({ export: exportFirst });

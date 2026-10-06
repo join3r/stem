@@ -29,9 +29,9 @@ import { pruneUsage } from './usage';
 const SKILL_FILE = 'SKILL.md';
 
 /** Where a skill came from. Shown in the Manage panel and injected as a label. */
-export type SkillOrigin = 'user-requested' | 'assistant' | 'learn' | 'turn' | 'unknown';
+export type SkillOrigin = 'user-requested' | 'assistant' | 'learn' | 'recorded' | 'turn' | 'unknown';
 
-const SKILL_ORIGINS: readonly string[] = ['user-requested', 'assistant', 'learn', 'turn', 'unknown'];
+const SKILL_ORIGINS: readonly string[] = ['user-requested', 'assistant', 'learn', 'recorded', 'turn', 'unknown'];
 
 export interface SkillRecord {
   slug: string;

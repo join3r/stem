@@ -388,10 +388,11 @@ export async function selectSkills(
  */
 function originLabel(origin: string | undefined): string {
   // `user-requested` covers both the user asking outright and a card they read and
-  // accepted; `learn` is the user pointing at something and saying capture this.
+  // accepted; `learn` is the user pointing at something and saying capture this;
+  // `recorded` is the user showing the procedure and saving the card it became.
   // Everything else — including an absent label on a file from before origins
   // existed — gets the cautious wording rather than the flattering one.
-  return origin === 'user-requested' || origin === 'learn'
+  return origin === 'user-requested' || origin === 'learn' || origin === 'recorded'
     ? 'saved at the user’s request'
     : 'auto-saved, never reviewed';
 }

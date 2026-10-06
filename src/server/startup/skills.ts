@@ -112,6 +112,11 @@ function scheduleEndOfTurnPass(
 let learnBridge: SkillBridge | null = null;
 let learnRuntime: (Partial<PiRuntime> & ChatBackend) | null = null;
 
+/** The bridge and runtime `/learn` writes through, for the recorder's drafts (startup/record-skills.ts). */
+export function userSkillWriter(): { bridge: SkillBridge | null; runtime: (Partial<PiRuntime> & ChatBackend) | null } {
+  return { bridge: learnBridge, runtime: learnRuntime };
+}
+
 export type LearnResult =
   | { ok: true; slug: string; saved: boolean; message: string }
   | { ok: false; message: string };
