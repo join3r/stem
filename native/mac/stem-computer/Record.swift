@@ -40,6 +40,29 @@ final class Recorder {
   private var pasteboardCount = NSPasteboard.general.changeCount
   private var shotsDenied = false
 
+  /// Password managers mark what they copy as concealed (nspasteboard.org); such text is never written down.
+  private static let concealedTypes = [
+    NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"),
+    NSPasteboard.PasteboardType("org.nspasteboard.TransientType"),
+    NSPasteboard.PasteboardType("com.agilebits.onepassword")
+  ]
+
+  /// Apps whose windows are secrets by nature: their text and pictures are never kept.
+  private static let secretApps: Set<String> = [
+    "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop", "com.apple.keychainaccess",
+    "com.apple.Passwords", "com.dashlane.dashlanephonefinal", "com.lastpass.lastpassmacdesktop", "org.keepassxc.keepassxc",
+    "com.keepersecurity.passwordmanager", "com.nordsec.nordpass", "in.sinew.Enpass-Desktop"
+  ]
+
+  static func isSecretApp(_ bundleId: String) -> Bool {
+    secretApps.contains(bundleId) || bundleId.lowercased().contains("password")
+  }
+
+  private static func pasteboardIsConcealed(_ pb: NSPasteboard) -> Bool {
+    guard let types = pb.types else { return false }
+    return types.contains { concealedTypes.contains($0) }
+  }
+
   struct Context {
     let pid: pid_t
     let app: String
@@ -187,8 +210,10 @@ final class Recorder {
     let ctx = context(pid: pid, from: hit)
     let role = AX.string(hit, kAXRoleAttribute as String) ?? "AXUnknown"
     var extra: [String: Any] = ["role": Recorder.roleName(role), "x": Int(point.x), "y": Int(point.y)]
-    if let label = Recorder.describe(hit) { extra["label"] = label }
-    if let within = Recorder.container(of: hit) { extra["within"] = within }
+    if !Recorder.isSecretApp(ctx.bundleId) {
+      if let label = Recorder.describe(hit) { extra["label"] = label }
+      if let within = Recorder.container(of: hit) { extra["within"] = within }
+    }
     if right { extra["button"] = "right" }
     if count > 1 { extra["count"] = count }
     if role == "AXSecureTextField" { extra["secure"] = true }
@@ -223,9 +248,12 @@ final class Recorder {
       }
       if cmd && !ctrl && key == "v" {
         trackFocusedField()
-        let pasted = NSPasteboard.general.string(forType: .string) ?? ""
-        var extra: [String: Any] = ["text": Recorder.clip(pasted, 2000)]
-        if let editing { extra["field"] = editing.field; if editing.secure { extra["text"] = "[password]" } }
+        let pb = NSPasteboard.general
+        let pasted = pb.string(forType: .string) ?? ""
+        let hidden = Recorder.pasteboardIsConcealed(pb) || Recorder.isSecretApp(ctx.bundleId)
+        var extra: [String: Any] = ["text": hidden ? "[password]" : Recorder.clip(pasted, 2000)]
+        if hidden { extra["secure"] = true }
+        if let editing { extra["field"] = editing.field; if editing.secure { extra["text"] = "[password]"; extra["secure"] = true } }
         emitStep("paste", ctx, extra)
         return
       }
@@ -249,6 +277,15 @@ final class Recorder {
     guard pb.changeCount != pasteboardCount else { return }
     pasteboardCount = pb.changeCount
     guard let text = pb.string(forType: .string), !text.isEmpty else { return }
+    // A password manager's copy, or a copy out of a password field: say that it happened, not what.
+    let focusedSecure = AX.attribute(systemWide, kAXFocusedUIElementAttribute as String).map { el -> Bool in
+      let e = el as! AXUIElement
+      return AX.string(e, kAXRoleAttribute as String) == "AXSecureTextField" || AX.string(e, kAXSubroleAttribute as String) == "AXSecureTextField"
+    } ?? false
+    if Recorder.pasteboardIsConcealed(pb) || Recorder.isSecretApp(ctx.bundleId) || focusedSecure {
+      emitStep(cut ? "cut" : "copy", ctx, ["text": "[password]", "secure": true])
+      return
+    }
     emitStep(cut ? "cut" : "copy", ctx, ["text": Recorder.clip(text, 2000)])
   }
 
@@ -265,9 +302,10 @@ final class Recorder {
     var pid: pid_t = 0
     AXUIElementGetPid(el, &pid)
     if pid == stemPid || pid == getpid() { return }
-    let secure = role == "AXSecureTextField" || subrole == "AXSecureTextField"
+    let ctx = context(pid: pid, from: el)
+    let secure = role == "AXSecureTextField" || subrole == "AXSecureTextField" || Recorder.isSecretApp(ctx.bundleId)
     let before = secure ? "" : (AX.string(el, kAXValueAttribute as String) ?? "")
-    editing = (el, Recorder.fieldName(el) ?? Recorder.roleName(role), Recorder.roleName(role), secure, before, context(pid: pid, from: el))
+    editing = (el, Recorder.fieldName(el) ?? Recorder.roleName(role), Recorder.roleName(role), secure, before, ctx)
   }
 
   /// The field being followed is done: if its value changed, that is a step.
@@ -327,6 +365,7 @@ final class Recorder {
     AXUIElementSetMessagingTimeout(appEl, 1.0)
     guard let window = AX.attribute(appEl, kAXFocusedWindowAttribute as String).map({ $0 as! AXUIElement }) else { return }
     let ctx = context(pid: pid, from: window)
+    if Recorder.isSecretApp(ctx.bundleId) { return }
     let text = Recorder.visibleText(window)
     if !text.isEmpty {
       let key = "\(pid)|\(ctx.window)"
