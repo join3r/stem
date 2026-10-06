@@ -55,6 +55,7 @@ func number(_ v: Any?) -> Double? {
 let capture = Capture()
 let input = Input(capture: capture)
 let watch = Watch()
+let recorder = Recorder()
 /// The accessibility side of the selected window; nil in screen mode.
 var ax: AX?
 
@@ -242,9 +243,19 @@ while let line = readLine(strippingNewline: true) {
         watch.stop()
       }
       emit(["id": id, "ok": true])
+    case "record-start":
+      try recorder.begin(shotsDir: obj["shotsDir"] as? String)
+      emit(["id": id, "ok": true])
+    case "record-pause":
+      recorder.setPaused(obj["paused"] as? Bool ?? true)
+      emit(["id": id, "ok": true])
+    case "record-stop":
+      recorder.end()
+      emit(["id": id, "ok": true])
     case "stop":
       ax?.release()
       watch.stop()
+      recorder.end()
       emit(["id": id, "ok": true])
       exit(0)
     default:
@@ -256,3 +267,4 @@ while let line = readLine(strippingNewline: true) {
 }
 ax?.release()
 watch.stop()
+recorder.end()
