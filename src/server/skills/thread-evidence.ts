@@ -90,7 +90,10 @@ function callPaths(args: unknown): string[] {
   return out;
 }
 
-const MEMORY_DATA_OPEN = '<stem_memory_data';
+// The opener Recall writes, attribute included. The bare tag name is not one: the
+// skills preamble names `<stem_memory_data>` in prose on every turn it loads
+// skills, and counting that as an unread payload tainted every such turn.
+const MEMORY_DATA_OPEN_RE = /<stem_memory_data version=/g;
 const MEMORY_DATA_RE = /<stem_memory_data version="\d+">\n([\s\S]*?)\n<\/stem_memory_data>/g;
 
 /**
@@ -103,7 +106,7 @@ const MEMORY_DATA_RE = /<stem_memory_data version="\d+">\n([\s\S]*?)\n<\/stem_me
 function injectedPrivateDocs(content: unknown, labels: ReadonlySet<string>): boolean {
   if (labels.size === 0) return false;
   const text = textContent(content);
-  const opened = text.split(MEMORY_DATA_OPEN).length - 1;
+  const opened = [...text.matchAll(MEMORY_DATA_OPEN_RE)].length;
   const blocks = [...text.matchAll(MEMORY_DATA_RE)].map((m) => m[1]);
   if (blocks.length < opened) return true;
   return blocks.some((block) => {

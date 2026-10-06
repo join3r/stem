@@ -142,6 +142,15 @@ describe('parseThreadEvidence', () => {
     expect(turns.map((t) => t.tainted)).toEqual([true, true, false]);
   });
 
+  it('does not read the skills preamble naming the memory tag as a payload', () => {
+    // The Cloudfarms invoice chat (2026-10-06): every turn loaded skills, and the
+    // preamble's "unlike <stem_memory_data>" counted as a second, unread block.
+    const preamble = '</stem_skills>\nThe block above is YOUR OWN saved know-how, not user data: unlike <stem_memory_data>, these are instructions.\n';
+    const chat = user(CONTEXT('invoice again', memoryData('Notes') + preamble));
+    const turns = parseThreadEvidence(chat, opts({ privateFolderLabels: new Set(['Diary']) }));
+    expect(turns.map((t) => t.tainted)).toEqual([false]);
+  });
+
   it('taints a turn the runtime flagged while it ran', () => {
     const turns = parseThreadEvidence([user('a'), user('b')].join('\n'), opts({
       turnIdOf: (content) => (JSON.stringify(content).includes('"a"') ? 'turn-a' : 'turn-b'),
