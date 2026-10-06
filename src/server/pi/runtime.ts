@@ -72,7 +72,7 @@ import { previousFactUserMessages } from '../recall/fact-query';
 import { reconcileExplicitFact } from '../recall/reconcile';
 import { buildFilesContext } from '../files/inject';
 import { buildConnectedFoldersContext } from '../connected-folders/inject';
-import { getPrivateRoots } from '../workspace/connected-folders';
+import { getPrivateFolderLabels, getPrivateRoots } from '../workspace/connected-folders';
 import { resolveAttachments, saveAttachmentsTo, type PiImageContent } from './attachments';
 import { readPdfText } from './pdf-read';
 import { captureUserMessage } from '../recall/capture';
@@ -118,6 +118,7 @@ import { readUsage, recordGrades, recordInjections, recordUses } from '../skills
 import { formatSkillsBlock, selectSkills, type SkillUsageStat } from '../skills/inject';
 import { listSkillRecords } from '../skills/store';
 import { gradeSkillUse, reportedSkillIssues } from '../skills/grade';
+import { parseThreadEvidence, type LearnTurn } from '../skills/thread-evidence';
 import { resolvePi, type PiInvocation } from './locate';
 import { repairMissingSessionCwd } from './session-cwd';
 import { PiProcess, stderrReason, type PiEvent } from './rpc';
@@ -1688,6 +1689,30 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (!threadId || turn.threadId === threadId) return turn;
     }
     return null;
+  }
+
+  /**
+   * `/learn`'s evidence: every turn of the thread's saved conversation, tool
+   * arguments whole (skills/thread-evidence.ts). Null when the thread has no
+   * session file yet.
+   *
+   * Each turn carries the memory taint the live turn would have had: a read inside
+   * a memorize:false folder, a document Recall injected from one, or the flag the
+   * runtime set while it ran (for turns still in the ring). Reading the folder
+   * list fails closed — it throws rather than treating every folder as public.
+   */
+  async learnEvidence(threadId: string): Promise<LearnTurn[] | null> {
+    const file = await this.resolveSessionFile(threadId);
+    if (!file) return null;
+    const [text, roots, labels] = await Promise.all([readFile(file, 'utf8'), getPrivateRoots(), getPrivateFolderLabels()]);
+    const tainted = new Set(this.recentTurns.filter((t) => t.threadId === threadId && t.memoryTainted).map((t) => t.turnId));
+    return parseThreadEvidence(text, {
+      cleanUser: (content) => this.contentToParts(content).text,
+      turnIdOf: (content) => this.runtimeIdentity(content),
+      isPrivatePath: (path) => roots.length > 0 && pathInsideAny(path, roots, this.options.workspaceRoot),
+      privateFolderLabels: labels,
+      taintedTurnIds: tainted
+    });
   }
 
   /**

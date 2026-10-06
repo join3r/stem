@@ -369,6 +369,15 @@ export async function getPrivateRoots(): Promise<string[]> {
 }
 
 /**
+ * Labels of the memorize:false folders. Recall names an injected document by its
+ * folder's label, so this is how `/learn` recognises one in a saved chat.
+ */
+export async function getPrivateFolderLabels(): Promise<Set<string>> {
+  const { folders } = await readStore();
+  return new Set(folders.filter((f) => !f.memorize).map((f) => f.label));
+}
+
+/**
  * Write the filesystem-policy gate the bridge extension reads
  * (protected-roots.json). Three lists:
  *

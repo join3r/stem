@@ -57,7 +57,7 @@ export const TIPS: Tip[] = [
   },
   {
     id: 'learn',
-    text: 'After a reply you liked, send /learn to save how it was done as a reusable skill.',
+    text: 'When a chat does something you will need again, send /learn to save how it was done as a reusable skill.',
     // Quick Chat wires neither /learn nor the shortcut provider.
     when: (c) => c.bound
   },

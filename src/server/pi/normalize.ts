@@ -309,8 +309,10 @@ function redactSecrets(value: unknown, depth = 0): unknown {
  * Serialize a call's arguments for the trace, or return undefined to keep them
  * out. Encrypted-secret envelopes are dropped wholesale rather than truncated —
  * a partial ciphertext is no safer than a whole one, and no skill needs it.
+ * `/learn` reads saved chats through the same redaction, with a longer cap
+ * (skills/thread-evidence.ts).
  */
-function traceArgs(args: Record<string, unknown> | undefined): string | undefined {
+export function traceArgs(args: Record<string, unknown> | undefined, max = TRACE_ARGS_MAX_CHARS): string | undefined {
   if (!args) return undefined;
   let json: string;
   try {
@@ -323,7 +325,7 @@ function traceArgs(args: Record<string, unknown> | undefined): string | undefine
   }
   if (!json || json === '{}') return undefined;
   if (json.includes(SECRET_ENVELOPE_KEY)) return undefined;
-  return truncate(json, TRACE_ARGS_MAX_CHARS);
+  return truncate(json, max);
 }
 
 /** The breakdown object PiRuntime.reportTurnTiming builds and emits as `turn/timing`. */

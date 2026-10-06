@@ -29,7 +29,7 @@ import { pushToDevice } from '../startup/transport';
 import { skillsRunOf, updateSkillsSettings } from '../workspace/settings';
 import { resetSkills, skillsResetStatus } from '../skills/reset';
 import { removeSkill } from '../skills/store';
-import { learnFromLastTurn } from '../startup/skills';
+import { learnFromChat } from '../startup/skills';
 import { curateSkills } from '../skills/curate';
 import { applyAutomaticTransitions } from '../skills/lifecycle';
 import type { LlmClient } from '../recall/llm';
@@ -94,7 +94,7 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
       deps.runtime().resolveSkillApproval(id, accept, skill);
     }
   );
-  registerServer('skills:learn', (_e, threadId: string, focus?: string) => learnFromLastTurn(threadId, focus));
+  registerServer('skills:learn', (_e, threadId: string, focus?: string) => learnFromChat(threadId, focus));
   registerServer('skills:resetStatus', () => skillsResetStatus());
   registerServer('skills:reset', async (_e, exportFirst: boolean, mode: SkillsMode) => {
     const result = resetSkills({ export: exportFirst });

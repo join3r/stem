@@ -2,6 +2,9 @@ import { SkillBridge } from '../skills/bridge';
 import { authorForTurn, firstExistingSkill, routeReported, settleSkills } from '../skills/settle';
 import { readSettings, skillsRunFor } from '../workspace/settings';
 import { log } from '../log';
+import { degrade } from '../degrade';
+import { isChatPrivate } from '../workspace/chats';
+import { pickLearnTurns } from '../skills/thread-evidence';
 import type { PiRuntime } from '../pi/runtime';
 import type { SettledTurnTrace } from '../pi/normalize';
 import type { ChatBackend } from '../backend';
@@ -113,27 +116,99 @@ export type LearnResult =
   | { ok: false; message: string };
 
 /**
- * `/learn [focus]` — save a skill from the turn that just finished on this thread.
+ * `/learn [focus]` — save a skill from this chat.
  *
  * Unlike the end-of-turn pass this is the user asking, so it bypasses the gate
  * entirely: a two-tool turn they thought worth keeping is worth keeping, whatever
  * the tool count says. It still goes through the bridge, so `ask` mode still shows
  * the card — the user asked to save *something*, not to skip reading it.
  *
- * It fails plainly when the turn has aged out of the runtime's short ring, rather
- * than authoring from thread text alone. A procedure invented from a summary is
- * exactly what the old distiller produced.
+ * The evidence is the whole saved conversation, every argument whole
+ * (skills/thread-evidence.ts), not the runtime's ring of the last turn: the
+ * procedure is usually spread over several turns, and the ring lost it on the
+ * 2026-10-06 invoice chat. It is still what was actually run rather than a
+ * summary of it — a procedure invented from a summary is exactly what the old
+ * distiller produced. Turns a memorize:false folder touched are left out, and a
+ * private chat is refused outright.
+ *
+ * Every outcome is logged. The user sees the message for a few seconds beside
+ * the composer; without a line here, "it learned nothing" has no trace at all.
  */
-export async function learnFromLastTurn(threadId: string, focus?: string): Promise<LearnResult> {
+export async function learnFromChat(threadId: string, focus?: string): Promise<LearnResult> {
+  const started = Date.now();
+  // quiet: the log line below is the signal; the user gets a plain failure.
+  const { result, ...detail } = await learnOutcome(threadId, focus).catch((error: unknown) => ({
+    result: { ok: false, message: 'Could not write a skill from this chat.' } as LearnResult,
+    reason: 'error',
+    detail: error instanceof Error ? error.message : String(error)
+  }));
+  log('skills', '/learn', { threadId, ok: result.ok, ...detail, ms: Date.now() - started });
+  return result;
+}
+
+interface LearnOutcome {
+  result: LearnResult;
+  /** Why it ended where it did, for the log line. */
+  reason: string;
+  detail?: string;
+  turns?: number;
+  /** Turns left out: tainted by a private folder, or past the evidence budget. */
+  excluded?: number;
+  dropped?: number;
+  skill?: string;
+  patched?: boolean;
+}
+
+async function learnOutcome(threadId: string, focus?: string): Promise<LearnOutcome> {
   const bridge = learnBridge;
   const runtime = learnRuntime;
-  if (!bridge || !runtime?.recentTurnTrace) return { ok: false, message: 'Saving skills is unavailable right now.' };
-
-  const turn = runtime.recentTurnTrace(threadId);
-  if (!turn) return { ok: false, message: 'That turn is no longer in memory. Try again right after a reply.' };
-  if (turn.memoryTainted) {
-    return { ok: false, message: 'That turn read a folder you asked Stem not to memorise, so nothing was saved from it.' };
+  if (!bridge || !runtime?.learnEvidence) {
+    return { result: { ok: false, message: 'Saving skills is unavailable right now.' }, reason: 'unavailable' };
   }
+  // A store that will not read counts as private, as it does for the turn itself.
+  const isPrivate = await isChatPrivate(threadId).catch((error: unknown) => {
+    degrade('skills.learn', 'refused /learn because the chat store could not be read', error);
+    return true;
+  });
+  if (isPrivate) {
+    return {
+      result: { ok: false, message: 'This is a private chat, so Stem saves nothing from it — skills included.' },
+      reason: 'private'
+    };
+  }
+
+  const all = (await runtime.learnEvidence(threadId)) ?? [];
+  const clean = all.filter((turn) => !turn.tainted);
+  if (clean.length === 0) {
+    return all.length > 0
+      ? {
+          result: { ok: false, message: 'This chat read a folder you asked Stem not to memorise, so nothing was saved from it.' },
+          reason: 'tainted',
+          turns: all.length
+        }
+      : { result: { ok: false, message: 'There is nothing in this chat to learn from yet.' }, reason: 'empty' };
+  }
+  const { kept, dropped } = pickLearnTurns(clean);
+  const latest = kept[kept.length - 1];
+  const counts = { turns: kept.length, excluded: all.length - clean.length, dropped };
+
+  // Routing still comes off the ring when it has this thread: which skill the last
+  // turn followed, or reported as wrong. Without it the author reads the library
+  // and names its own target, as the end-of-turn pass does.
+  const recent = runtime.recentTurnTrace?.(threadId) ?? null;
+  const turn: SettledTurnTrace = {
+    threadId,
+    turnId: latest.turnId ?? '',
+    endedAt: Date.now(),
+    userText: latest.userText,
+    assistantText: latest.assistantText,
+    trace: latest.trace,
+    skillsInjected: recent?.skillsInjected ?? [],
+    skillsGradedUsed: recent?.skillsGradedUsed ?? [],
+    skillsReported: recent?.skillsReported ?? [],
+    memoryTainted: false,
+    isScheduled: false
+  };
 
   const settings = await readSettings();
   const llm: LlmClient = {
@@ -141,22 +216,32 @@ export async function learnFromLastTurn(threadId: string, focus?: string): Promi
   };
   // Same resolution as the end-of-turn pass, through the same helper: patch what
   // the turn was graded as following, and otherwise let the author read the
-  // library and name its own target (settle.ts owns both halves — `/learn` reading
-  // the routing field its own way is how the dead field survived here longest).
+  // library and name its own target (settle.ts owns both halves).
   const reported = routeReported(turn);
   const existing = reported?.existing ?? firstExistingSkill(turn.skillsGradedUsed);
-  const author = await authorForTurn(turn, llm, { existing, issue: reported?.issue, focus });
+  const author = await authorForTurn(turn, llm, {
+    existing,
+    issue: reported?.issue,
+    focus,
+    earlier: kept.slice(0, -1),
+    requested: true
+  });
   if (!author.ok) {
     return {
-      ok: false,
-      message:
-        author.reason === 'declined'
-          ? `Nothing reusable in that turn — ${author.detail}.`
-          : // A target that could not be honoured is the one non-failure here: the
-            // author decided this belonged in a skill that has since gone.
-            author.reason === 'target'
-            ? `Nothing new to save — that procedure ${author.detail}.`
-            : 'Could not write a skill from that turn.'
+      result: {
+        ok: false,
+        message:
+          author.reason === 'declined'
+            ? `Nothing reusable in this chat — ${author.detail}.`
+            : // A target that could not be honoured is the one non-failure here: the
+              // author decided this belonged in a skill that has since gone.
+              author.reason === 'target'
+              ? `Nothing new to save — that procedure ${author.detail}.`
+              : 'Could not write a skill from this chat.'
+      },
+      reason: author.reason,
+      detail: author.detail,
+      ...counts
     };
   }
 
@@ -175,7 +260,14 @@ export async function learnFromLastTurn(threadId: string, focus?: string): Promi
     },
     { isScheduled: false }
   );
-  return { ok: result.ok, slug: author.draft.name, saved: result.ok, message: result.text } as LearnResult;
+  return {
+    result: { ok: result.ok, slug: author.draft.name, saved: result.ok, message: result.text } as LearnResult,
+    reason: result.ok ? 'saved' : 'refused',
+    ...(result.ok ? {} : { detail: result.text }),
+    skill: author.draft.name,
+    patched: author.patched,
+    ...counts
+  };
 }
 
 /**

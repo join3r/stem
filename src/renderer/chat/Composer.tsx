@@ -44,8 +44,8 @@ function fileToAttachment(file: File): Promise<TurnAttachment> {
   });
 }
 
-// `/learn [focus]` saves a skill from the turn that just finished instead of
-// sending the draft to the model. Matched at submit rather than while typing —
+// `/learn [focus]` saves a skill from this chat instead of sending the draft to
+// the model. Matched at submit rather than while typing —
 // unlike `/note` this is a one-shot action, not a mode the composer sits in.
 //
 // Two commands are intercepted, `/learn` and `/pin`, each a literal match. The
@@ -275,7 +275,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     setLearning(true);
     let result: SkillLearnResult;
     try {
-      result = await window.stem.learnFromLastTurn(thread, focus || undefined);
+      result = await window.stem.learnFromChat(thread, focus || undefined);
     } catch {
       result = { ok: false, message: 'Couldn’t save a skill — try restarting Stem.' };
     } finally {
@@ -582,7 +582,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               {learnNotice?.ok && <Check size={13} />}
               {/* Deliberately not "Saving…": on ask mode this sits here while the
                   approval card waits, and nothing is saved until it's answered. */}
-              {learnNotice?.text ?? 'Learning from the last reply…'}
+              {learnNotice?.text ?? 'Learning from this chat…'}
             </span>
           </div>
         )}

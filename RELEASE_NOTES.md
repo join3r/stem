@@ -75,6 +75,10 @@ Maintainer notes:
   text, read-only folders included. Scanned PDFs without a text layer still can't be read.
 - **Switching a folder to Writable takes effect right away.** For a folder on another computer,
   Stem kept refusing to work in it for up to 15 minutes after you flipped the switch.
+- **`/learn` learns from the whole chat.** It used to look only at the last reply, and only at
+  the first few hundred characters of each command. Work done a reply or two earlier, or by a long
+  script, was lost, so `/learn` often saved nothing. It now reads the whole conversation, with
+  your corrections along the way, and still skips anything from folders Stem may not memorise.
 
 ## 0.5.6 — 2026-10-02
 

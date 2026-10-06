@@ -115,7 +115,7 @@ const api: StemApi = {
   setSkillEnabled: (slug: string, enabled: boolean) => ipcRenderer.invoke('skills:setEnabled', slug, enabled),
   removeSkill: (slug: string) => ipcRenderer.invoke('skills:remove', slug),
   curateSkills: () => ipcRenderer.invoke('skills:curate'),
-  learnFromLastTurn: (threadId: string, focus?: string) => ipcRenderer.invoke('skills:learn', threadId, focus),
+  learnFromChat: (threadId: string, focus?: string) => ipcRenderer.invoke('skills:learn', threadId, focus),
   skillsResetStatus: () => ipcRenderer.invoke('skills:resetStatus'),
   resetSkills: (exportFirst: boolean, mode: SkillsMode) => ipcRenderer.invoke('skills:reset', exportFirst, mode),
   onSkillsChanged: (listener: () => void) => {

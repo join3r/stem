@@ -18,7 +18,7 @@ export interface SlashCommand {
 const COMMANDS: readonly SlashCommand[] = [
   { name: 'pin', args: '<text>', description: 'Pin a note to this chat' },
   { name: 'note', args: '<text>', description: 'Save a note to memory' },
-  { name: 'learn', args: '[focus]', description: 'Save a skill from the last reply' }
+  { name: 'learn', args: '[focus]', description: 'Save a skill from this chat' }
 ];
 
 /**

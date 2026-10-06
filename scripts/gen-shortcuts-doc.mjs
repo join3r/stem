@@ -34,8 +34,9 @@ const TRICKS = `## Tricks
 - Start a message with \`//\` to file a note straight into Memory. No chat turn, no
   answer, no quota — just the note. Memory must be on. Paste or attach a picture and it
   is saved with the note; the picture alone is a valid note.
-- Send \`/learn\` after a reply that worked to save the approach as a skill. Add a
-  focus—\`/learn the invoice reconciliation steps\`—to steer what it keeps.
+- Send \`/learn\` in a chat that got something done to save the approach as a skill.
+  It reads the whole chat, so corrections you made along the way end up in the
+  steps. Add a focus—\`/learn the invoice reconciliation steps\`—to steer what it keeps.
 - Drop a file on **This chat** to use it for one message. Drop it on **Files** to copy
   it into Stem and reuse it across chats.
 - **Enter** sends. **Shift+Enter** starts a new line.`;

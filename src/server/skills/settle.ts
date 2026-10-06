@@ -1,7 +1,7 @@
 import type { SettledTurnTrace } from '../pi/normalize';
 import type { LlmClient } from '../recall/llm';
 import type { SkillsMode } from '../../shared/types';
-import { authorSkill, type AuthorCandidate, type AuthorOutcome } from './author';
+import { authorSkill, type AuthorCandidate, type AuthorOutcome, type AuthorTurn } from './author';
 import { listSkillRecords, readSkillRecord } from './store';
 import { whereSkillsRun } from '../workspace/bootstrap';
 
@@ -158,13 +158,23 @@ function libraryForAuthor(injectedSlugs: string[]): {
 export async function authorForTurn(
   turn: SettledTurnTrace,
   llm: LlmClient,
-  opts: { existing?: { name: string; description: string; body: string }; issue?: string; focus?: string } = {}
+  opts: {
+    existing?: { name: string; description: string; body: string };
+    issue?: string;
+    focus?: string;
+    /** `/learn`: the conversation's earlier turns, oldest first. */
+    earlier?: AuthorTurn[];
+    /** `/learn`: the user asked, so the author decides what to save, not whether. */
+    requested?: boolean;
+  } = {}
 ): Promise<AuthorOutcome> {
   const evidence = {
     trace: turn.trace,
     userText: turn.userText,
     assistantText: turn.assistantText,
     focus: opts.focus,
+    earlier: opts.earlier,
+    requested: opts.requested,
     issue: opts.issue,
     machine: whereSkillsRun()
   };

@@ -31,6 +31,13 @@ export interface AuthorCandidate {
   body: string;
 }
 
+/** One earlier turn of the conversation, reduced the same way as the latest. */
+export interface AuthorTurn {
+  userText: string;
+  assistantText: string;
+  trace: TraceEntry[];
+}
+
 /** What the author is shown: the turn, reduced to evidence. */
 export interface AuthorInput {
   /** Tool calls in order, with arguments and (truncated) results. */
@@ -56,6 +63,14 @@ export interface AuthorInput {
   libraryIndex?: { slug: string; description: string }[];
   /** Free-text steer from `/learn <focus>` — what the user wants captured. */
   focus?: string;
+  /**
+   * `/learn` only: the conversation's turns before the one in `trace`, oldest
+   * first. A procedure the user wants kept is often spread over several turns —
+   * the attempt, their correction, the fix.
+   */
+  earlier?: AuthorTurn[];
+  /** The user asked for this skill (`/learn`): what to save, not whether. */
+  requested?: boolean;
   /**
    * Patch path only: what the assistant reported as wrong with `existing` in
    * its reply this turn (the `Skill issue [...]:` line the skills block asks
@@ -159,7 +174,35 @@ export const SKILL_TARGET_PATCH_INSTRUCTIONS = `You named the skill below as whe
 
 Return the FULL skill under the SAME name, with this turn folded in: the step that was missing, the argument that turned out to matter, the dead end worth a warning. Keep what is already there unless the evidence shows it wrong, and do not restructure it to make room. Return null if, now that you can read it, the skill already covers what happened — that is an honest answer and it costs nothing.`;
 
+/**
+ * Extra framing for `/learn`, which is the user asking rather than Stem guessing.
+ * The instructions above are tuned for the end-of-turn pass, where declining is
+ * right most of the time; here the user has already made that call, and the
+ * evidence is the whole conversation rather than one turn. It is also where the
+ * "only this person's particulars" rule has to give: a task the user repeats every
+ * month with the same client is exactly the skill they mean, and the 2026-10-06
+ * invoice chat was declined for depending on "this PDF".
+ */
+export const SKILL_LEARN_INSTRUCTIONS = `The user asked for this one. They sent /learn in this conversation, so they have already decided it holds something worth keeping: the question is what the skill is, not whether to save one. Decline only when there truly is no procedure in it, such as a conversation that only talked, and say what was missing.
+
+The evidence below is the whole conversation, oldest turn first, not a single turn. A procedure is often spread across several turns: a first attempt, a correction from the user, a fix. Write the version that ended up working, with every correction the user made folded into the steps rather than told as history.
+
+A task the user repeats with their own particulars (the same client, the same folder, the same template, a monthly date) is exactly what they mean, whatever the rules above say about one person's particulars. Keep what stays the same from run to run, and write the parts that change (a date, a count, the next number in a sequence) as things the steps work out or ask for.`;
+
 const MAX_ATTEMPTS = 2;
+
+/** One turn of the conversation: what the user said, what was run, what came back. */
+function renderTurn(turn: AuthorTurn): string {
+  const parts: string[] = [];
+  if (turn.userText.trim()) parts.push(`The user's message:\n${turn.userText.trim()}`);
+  parts.push(
+    turn.trace.length > 0
+      ? `What the assistant did, in order:\n${turn.trace.map(renderTraceEntry).join('\n')}`
+      : 'What the assistant did, in order:\n(no tool calls)'
+  );
+  if (turn.assistantText.trim()) parts.push(`What the assistant replied:\n${turn.assistantText.trim()}`);
+  return parts.join('\n\n');
+}
 
 /** One tool call as a line of evidence. Long results are already truncated upstream. */
 function renderTraceEntry(entry: TraceEntry, index: number): string {
@@ -177,13 +220,11 @@ export function renderEvidence(input: AuthorInput): string {
   // Ahead of the evidence, because it colours how every line of it reads — but
   // behind the /learn focus, which is the user talking and still leads.
   if (input.machine?.trim()) parts.push(`Where this turn ran:\n${input.machine.trim()}`);
-  if (input.userText.trim()) parts.push(`The user's message:\n${input.userText.trim()}`);
-  parts.push(
-    input.trace.length > 0
-      ? `What the assistant did, in order:\n${input.trace.map(renderTraceEntry).join('\n')}`
-      : 'What the assistant did, in order:\n(no tool calls)'
-  );
-  if (input.assistantText.trim()) parts.push(`What the assistant replied:\n${input.assistantText.trim()}`);
+  if (input.earlier?.length) {
+    input.earlier.forEach((turn, i) => parts.push(`--- Turn ${i + 1} ---`, renderTurn(turn)));
+    parts.push('--- Latest turn ---');
+  }
+  parts.push(renderTurn(input));
   if (input.existing) {
     const heading = input.chosenTarget ? 'The skill you named' : 'The skill this turn used';
     parts.push(
@@ -213,6 +254,7 @@ export function renderEvidence(input: AuthorInput): string {
 
 export function buildAuthorPrompt(input: AuthorInput): string {
   const parts = [SKILL_AUTHORING_INSTRUCTIONS];
+  if (input.requested) parts.push(SKILL_LEARN_INSTRUCTIONS);
   if (input.existing) parts.push(input.chosenTarget ? SKILL_TARGET_PATCH_INSTRUCTIONS : SKILL_PATCH_INSTRUCTIONS);
   // Only when there is actually a library to read: an empty list under "read what
   // is already there" invites a target the author cannot have seen.

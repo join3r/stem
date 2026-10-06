@@ -4231,7 +4231,7 @@ export interface StemApi {
    * thread. Bypasses the automatic gate (the user asked), but still respects the
    * mode: on `ask` the approval card appears as usual.
    */
-  learnFromLastTurn(threadId: string, focus?: string): Promise<SkillLearnResult>;
+  learnFromChat(threadId: string, focus?: string): Promise<SkillLearnResult>;
   /**
    * Whether the one-time skills migration still needs asking about, and how many
    * skills it would affect. `needed: false` on a fresh install — the question only
