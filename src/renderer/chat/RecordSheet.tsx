@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, Circle, X } from 'lucide-react';
 import type { ComputerAccess } from '../../shared/types';
 
@@ -36,10 +37,17 @@ export function RecordSheet({
       .catch(() => undefined)
       .finally(() => alive && setChecking(false));
     startRef.current?.focus();
+    // On the window, not the backdrop: with Start disabled nothing in the
+    // sheet holds focus, so a key handler on it never hears Escape.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
     return () => {
       alive = false;
+      window.removeEventListener('keydown', onKey);
     };
-  }, []);
+  }, [onClose]);
 
   const missing = access ? GRANTS.filter((g) => g.required && !access[g.key]) : [];
   const ready = !!access && missing.length === 0;
@@ -67,15 +75,14 @@ export function RecordSheet({
     }
   }
 
-  return (
+  // Portalled to <body>: the composer is a containing block for fixed
+  // children, so a backdrop rendered in place covers only the composer column.
+  return createPortal(
     <div
       className="mcp-approval-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Record a skill"
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onClose();
-      }}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -105,6 +112,7 @@ export function RecordSheet({
           Passwords and password managers are never recorded. Nothing leaves this Mac until you press Stop, and then only
           the steps and the lines each value was found in. Pause any time; ⌃⌥R stops.
         </p>
+        {!checking && !access && <p className="record-error">Could not read this Mac’s permissions. Check System Settings → Privacy &amp; Security.</p>}
         {error && <p className="record-error">{error}</p>}
         <div className="mcp-approval-actions">
           {!checking && access && GRANTS.some((g) => !access[g.key]) && (
@@ -120,6 +128,7 @@ export function RecordSheet({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
