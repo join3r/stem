@@ -5,14 +5,14 @@ import {
   useImperativeHandle,
   useMemo,
   useRef,
-  useState
+  useState,
+  useSyncExternalStore
 } from 'react';
 import { Square, ArrowUp, Paperclip, File, X, Check, NotebookPen, Globe, Zap, Pin, Wand2 } from 'lucide-react';
 import type {
   ChatMessage,
   EscapeAction,
   ModelSummary,
-  SkillLearnResult,
   TurnAttachment
 } from '../../shared/types';
 import { ContextMeter } from './ContextMeter';
@@ -22,12 +22,13 @@ import { EffortModelControl } from '../ui/EffortModelControl';
 import { slashMatches, type SlashCommand, type SlashCommandName } from './slashCommands';
 import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, noteBodyValid, useNoteMode } from '../noteMode';
 import { clearDraft, readDraft, writeDraft } from './draft-store';
+import { dismissLearnNotice, readLearn, startLearn, subscribeLearn } from './learn-store';
 
 const MAX_COMPOSER_HEIGHT = 180;
 
-// How long a `/learn` outcome stays up. Much longer than the note flash: main
-// writes these as full sentences explaining what was (or wasn't) saved, not as a
-// two-word confirmation that can be read at a glance.
+// How long a `/learn` outcome stays up once its chat is on screen. Much longer
+// than the note flash: main writes these as full sentences explaining what was
+// (or wasn't) saved, not as a two-word confirmation that can be read at a glance.
 const LEARN_NOTICE_MS = 8000;
 
 // Read a File's bytes into a base64 TurnAttachment (for clipboard/dropped data
@@ -260,30 +261,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const t = window.setTimeout(() => setPinNotice(null), PIN_NOTICE_MS);
     return () => window.clearTimeout(t);
   }, [pinNotice]);
-  const [learning, setLearning] = useState(false);
-  const [learnNotice, setLearnNotice] = useState<{ ok: boolean; text: string } | null>(null);
-  const learnTimer = useRef<number | null>(null);
-  useEffect(() => () => {
-    if (learnTimer.current != null) window.clearTimeout(learnTimer.current);
-  }, []);
-
-  // Main phrases every outcome for the user — including the refusals — so its
-  // message is shown as written rather than re-explained here.
-  const runLearn = useCallback(async (thread: string, focus: string) => {
-    if (learnTimer.current != null) window.clearTimeout(learnTimer.current);
-    setLearnNotice(null);
-    setLearning(true);
-    let result: SkillLearnResult;
-    try {
-      result = await window.stem.learnFromChat(thread, focus || undefined);
-    } catch {
-      result = { ok: false, message: 'Couldn’t save a skill — try restarting Stem.' };
-    } finally {
-      setLearning(false);
-    }
-    setLearnNotice({ ok: result.ok, text: result.message });
-    learnTimer.current = window.setTimeout(() => setLearnNotice(null), LEARN_NOTICE_MS);
-  }, []);
+  // Kept outside the component (learn-store.ts): a chat switch remounts the
+  // Composer, and a `/learn` outlives that by a minute or more.
+  const { learning, notice: learnNotice } = useSyncExternalStore(subscribeLearn, () => readLearn(threadId));
+  // The outcome's clock starts when its chat is on screen, so one that arrived
+  // while the user was in another chat is still there when they come back.
+  useEffect(() => {
+    if (!threadId || !learnNotice) return;
+    const t = window.setTimeout(() => dismissLearnNotice(threadId, learnNotice), LEARN_NOTICE_MS);
+    return () => window.clearTimeout(t);
+  }, [threadId, learnNotice]);
 
   function submit() {
     if (offline) return;
@@ -317,7 +304,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (learn && threadId) {
       // A second `/learn` while one is still outstanding is dropped, but the draft
       // still clears — the alternative is sending the literal text to the model.
-      if (!learning) void runLearn(threadId, learn.focus);
+      const focus = learn.focus;
+      void startLearn(threadId, () => window.stem.learnFromChat(threadId, focus || undefined));
       setArmed(false);
       setDraft('');
       return;
