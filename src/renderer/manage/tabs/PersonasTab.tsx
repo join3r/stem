@@ -787,12 +787,9 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                         <span>
                           Let Claude Code approve its own actions (Auto){' '}
                           <InfoTip label="About Auto">
-                            Claude Code’s own safety classifier decides every step instead of
-                            asking you, so routine work (reading docs, git, kubectl get) never waits
-                            on an approval card. Stem then sees none of its decisions: no cards, no
-                            protection for folders connected read-only, no approval log. Anything the
-                            classifier lets through runs, including deletes outside its folder and
-                            commands against live clusters. Models without Auto keep the cards.
+                            Claude Code’s own classifier judges each step instead of Stem, so
+                            routine work never waits on an approval card. Stem is no longer the
+                            judge for this persona.
                           </InfoTip>
                         </span>
                       </label>
