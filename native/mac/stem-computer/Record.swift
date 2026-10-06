@@ -58,6 +58,29 @@ final class Recorder {
     secretApps.contains(bundleId) || bundleId.lowercased().contains("password")
   }
 
+  /// Fields whose name says they hold a secret even though they are not password fields.
+  private static let sensitiveName = try! NSRegularExpression(
+    pattern: "pass(word|wort|code|phrase)|\\bpass\\b|heslo|\\bpin\\b|\\botp\\b|2fa|one[- ]?time|verification code|security code|overovac|\\bcvv\\b|\\bcvc\\b|card ?number|číslo karty|\\biban\\b|secret|api[ _-]?key|access[ _-]?key|\\btoken\\b|private key|seed phrase|recovery",
+    options: [.caseInsensitive])
+
+  static func isSensitiveName(_ name: String?) -> Bool {
+    guard let name, !name.isEmpty else { return false }
+    return sensitiveName.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil
+  }
+
+  /// A payment card number (13–19 digits passing Luhn), however spaced.
+  static func looksLikeCard(_ value: String) -> Bool {
+    let digits = value.filter { $0.isNumber }
+    guard (13...19).contains(digits.count), value.allSatisfy({ $0.isNumber || $0 == " " || $0 == "-" }) else { return false }
+    var sum = 0
+    for (i, ch) in digits.reversed().enumerated() {
+      var d = Int(String(ch)) ?? 0
+      if i % 2 == 1 { d *= 2; if d > 9 { d -= 9 } }
+      sum += d
+    }
+    return sum % 10 == 0
+  }
+
   private static func pasteboardIsConcealed(_ pb: NSPasteboard) -> Bool {
     guard let types = pb.types else { return false }
     return types.contains { concealedTypes.contains($0) }
@@ -250,7 +273,7 @@ final class Recorder {
         trackFocusedField()
         let pb = NSPasteboard.general
         let pasted = pb.string(forType: .string) ?? ""
-        let hidden = Recorder.pasteboardIsConcealed(pb) || Recorder.isSecretApp(ctx.bundleId)
+        let hidden = Recorder.pasteboardIsConcealed(pb) || Recorder.isSecretApp(ctx.bundleId) || Recorder.looksLikeCard(pasted)
         var extra: [String: Any] = ["text": hidden ? "[password]" : Recorder.clip(pasted, 2000)]
         if hidden { extra["secure"] = true }
         if let editing { extra["field"] = editing.field; if editing.secure { extra["text"] = "[password]"; extra["secure"] = true } }
@@ -282,7 +305,7 @@ final class Recorder {
       let e = el as! AXUIElement
       return AX.string(e, kAXRoleAttribute as String) == "AXSecureTextField" || AX.string(e, kAXSubroleAttribute as String) == "AXSecureTextField"
     } ?? false
-    if Recorder.pasteboardIsConcealed(pb) || Recorder.isSecretApp(ctx.bundleId) || focusedSecure {
+    if Recorder.pasteboardIsConcealed(pb) || Recorder.isSecretApp(ctx.bundleId) || focusedSecure || Recorder.looksLikeCard(text) {
       emitStep(cut ? "cut" : "copy", ctx, ["text": "[password]", "secure": true])
       return
     }
@@ -303,9 +326,10 @@ final class Recorder {
     AXUIElementGetPid(el, &pid)
     if pid == stemPid || pid == getpid() { return }
     let ctx = context(pid: pid, from: el)
-    let secure = role == "AXSecureTextField" || subrole == "AXSecureTextField" || Recorder.isSecretApp(ctx.bundleId)
+    let name = Recorder.fieldName(el)
+    let secure = role == "AXSecureTextField" || subrole == "AXSecureTextField" || Recorder.isSecretApp(ctx.bundleId) || Recorder.isSensitiveName(name)
     let before = secure ? "" : (AX.string(el, kAXValueAttribute as String) ?? "")
-    editing = (el, Recorder.fieldName(el) ?? Recorder.roleName(role), Recorder.roleName(role), secure, before, ctx)
+    editing = (el, name ?? Recorder.roleName(role), Recorder.roleName(role), secure, before, ctx)
   }
 
   /// The field being followed is done: if its value changed, that is a step.
@@ -319,6 +343,10 @@ final class Recorder {
     }
     let now = AX.string(e.element, kAXValueAttribute as String) ?? ""
     guard now != e.before, !now.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    if Recorder.looksLikeCard(now) {
+      emitStep("type", e.app, ["field": e.field, "role": e.role, "value": "[password]", "secure": true])
+      return
+    }
     var extra: [String: Any] = ["field": e.field, "role": e.role, "value": Recorder.clip(now, 4000)]
     if !e.before.isEmpty { extra["before"] = Recorder.clip(e.before, 400) }
     emitStep("type", e.app, extra)
@@ -546,14 +574,16 @@ final class Recorder {
       if let frame = AX.frame(el), let bounds, frame.width > 0, frame.height > 0, !frame.intersects(bounds) { return }
       var piece: String?
       switch role {
-      case "AXStaticText", "AXTextArea", "AXTextField", "AXComboBox", "AXCell":
+      case "AXTextArea", "AXTextField", "AXComboBox":
+        piece = isSensitiveName(fieldName(el)) ? nil : AX.string(el, kAXValueAttribute as String)
+      case "AXStaticText", "AXCell":
         piece = AX.string(el, kAXValueAttribute as String)
       case "AXHeading", "AXLink", "AXButton", "AXMenuButton", "AXPopUpButton", "AXCheckBox", "AXRadioButton", "AXTab":
         piece = AX.string(el, kAXTitleAttribute as String) ?? AX.string(el, kAXDescriptionAttribute as String)
       default:
         break
       }
-      if let piece = piece?.trimmingCharacters(in: .whitespacesAndNewlines), !piece.isEmpty {
+      if let piece = piece?.trimmingCharacters(in: .whitespacesAndNewlines), !piece.isEmpty, !looksLikeCard(piece) {
         // A text area's value holds its children's words too; skip the children then.
         parts.append(piece)
         size += piece.count + 1
