@@ -36,8 +36,13 @@ the theme's identity; the `name` field is only what the picker shows.
   `color-scheme` so native controls (scrollbars, selects) match. A palette may set any of the color
   tokens from the `:root` block of `renderer/styles.css` — `paper`, `content`, `panel`, `ink`,
   `muted`, `line`, `hair`, `accent`, `accent-ink`, `surface`, `field`, `sel`, `inline-bg`, `info`,
-  `warn`, `success`, `danger`, `code-bg`, `code-ink`, `drop-chat`, `drop-files`. Values are plain
-  CSS colors (hex, `rgb()`, `hsl()`, `oklch()`, …).
+  `warn`, `success`, `danger`, `code-bg`, `code-ink`, `drop-chat`, `drop-files`, plus:
+  - `danger-ink`, `warn-ink` — text on a filled danger / warn control (a red Delete button);
+  - `series-1` … `series-8`, `series-other` — chart colors, in order, and the folded "Other" slice;
+  - `syn-keyword`, `syn-string`, `syn-comment`, `syn-number`, `syn-function`, `syn-type` — syntax
+    colors in code blocks, drawn on `code-bg` (a fence must name its language to be colored).
+
+  Values are plain CSS colors (hex, `rgb()`, `hsl()`, `oklch()`, …).
 - `style` is optional and appearance-independent — the look beyond color, applied with either
   palette:
   - fonts: `font-ui` (the interface), `font-mono` (code, paths, schedules) — a font-family list;
@@ -60,6 +65,17 @@ the theme's identity; the `name` field is only what the picker shows.
 A theme meant for the repo should set every token in each palette it carries, so it renders fully
 instead of inheriting half its look from the built-in defaults; the unit tests check the shipped
 ones for that.
+
+## Window style
+
+Two choices beside the theme in Settings → App → Appearance, per machine like the theme itself
+(`chatLayout` and `translucent` in `client.json`), and independent of which theme is picked:
+
+- **Chat layout** — *Rows* (both sides as avatar rows, the default) or *Bubbles* (your messages in a
+  tinted bubble on the right; Stem's replies stay rows).
+- **Translucent sidebar** (macOS) — the main window gets sidebar vibrancy behind a clear
+  background, and the toolbar and inspector are drawn see-through over it. The conversation stays
+  opaque.
 
 ## How it works
 

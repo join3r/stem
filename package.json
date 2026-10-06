@@ -70,6 +70,7 @@
     "electron-vite": "^4.0.0",
     "eslint": "^9.36.0",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "lowlight": "^3.3.0",
     "lucide-react": "^0.468.0",
     "mermaid": "^11.17.2",
     "patch-package": "^8.0.1",

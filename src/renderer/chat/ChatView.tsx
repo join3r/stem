@@ -629,7 +629,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
         <div className="message-body">
           <div className="message-who">
-            {a.label}
+            <span className="message-who-name">{a.label}</span>
             {pinsOn && m.role !== 'system' && messagePinOf(m) && (
               <span className="message-pinned" title="Pinned to this chat" aria-label="Pinned to this chat">
                 <Pin size={11} />

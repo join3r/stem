@@ -196,10 +196,10 @@ async function readSelectedTheme(id: string): Promise<CustomTheme> {
 export async function currentThemeState(): Promise<ThemeState> {
   const { theme } = await readClientSettings();
   const id = customThemeId(theme.selected);
-  if (!id) return { selected: theme.selected, appearance: theme.appearance, custom: null };
+  if (!id) return { ...theme, custom: null };
   const custom = await readSelectedTheme(id);
   if (custom.problem) log('themes', 'the selected theme is unusable', { id, problem: custom.problem });
-  return { selected: theme.selected, appearance: theme.appearance, custom };
+  return { ...theme, custom };
 }
 
 /**

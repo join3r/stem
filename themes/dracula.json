@@ -21,6 +21,23 @@
     "code-bg": "#21222c",
     "code-ink": "#f8f8f2",
     "drop-chat": "#bd93f9",
-    "drop-files": "#8be9fd"
+    "drop-files": "#8be9fd",
+    "danger-ink": "#21222c",
+    "warn-ink": "#21222c",
+    "series-1": "#bd93f9",
+    "series-2": "#ffb86c",
+    "series-3": "#50fa7b",
+    "series-4": "#f1fa8c",
+    "series-5": "#ff79c6",
+    "series-6": "#8be9fd",
+    "series-7": "#ff5555",
+    "series-8": "#6272a4",
+    "series-other": "#44475a",
+    "syn-keyword": "#ff79c6",
+    "syn-string": "#f1fa8c",
+    "syn-comment": "#6272a4",
+    "syn-number": "#bd93f9",
+    "syn-function": "#50fa7b",
+    "syn-type": "#8be9fd"
   }
 }

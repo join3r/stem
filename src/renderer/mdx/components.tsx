@@ -7,6 +7,7 @@ import { Stats } from './Stats';
 import { Compare } from './Compare';
 import { Diagram } from './Diagram';
 import { Replies, Reply } from './Replies';
+import { highlightCode } from './highlight';
 export { Chart };
 
 // The fixed, vetted component library. The MDX renderer will ONLY instantiate
@@ -70,6 +71,7 @@ export function Collapsible({ title, children }: { title?: string; children?: Re
 
 export function CodeBlock({ lang, value }: { lang?: string; value: string }) {
   const [copied, setCopied] = useState(false);
+  const colored = useMemo(() => highlightCode(lang, value), [lang, value]);
 
   const copy = () => {
     void navigator.clipboard.writeText(value).then(() => {
@@ -89,7 +91,7 @@ export function CodeBlock({ lang, value }: { lang?: string; value: string }) {
         {copied ? 'Copied' : 'Copy'}
       </button>
       <pre className="code-block" data-lang={lang ?? ''}>
-        <code>{value}</code>
+        <code>{colored ?? value}</code>
       </pre>
     </div>
   );

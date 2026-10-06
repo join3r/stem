@@ -187,7 +187,13 @@ const mainPushQueue = new RendererPushQueue();
  * chrome color from its first frame. Seeded before the first window exists and
  * kept current by the settings:updateTheme handler's themeChanged callback.
  */
-let themeState: ThemeState = { selected: 'system', appearance: 'system', custom: null };
+let themeState: ThemeState = {
+  selected: 'system',
+  appearance: 'system',
+  chatLayout: 'rows',
+  translucent: false,
+  custom: null
+};
 /** True once the persistent windows exist — see the second-instance handler. */
 let windowsReady = false;
 
@@ -203,6 +209,19 @@ let summoningOverlay = false;
  * push destination hang off it — but the user only sees the overlay they asked
  * for. The tray's "Open Stem", a plain `stem`, or activation reveals it.
  */
+const CLEAR = '#00000000';
+
+/**
+ * The translucent window style (Settings → Appearance) is a native property of
+ * the main window: sidebar vibrancy behind a clear background, which the
+ * renderer's see-through chrome then shows. macOS only; elsewhere a no-op.
+ */
+function applyWindowStyle(win: BrowserWindow | null, state: ThemeState): void {
+  if (!isMac || !win || win.isDestroyed()) return;
+  win.setVibrancy(state.translucent ? 'sidebar' : null);
+  win.setBackgroundColor(state.translucent ? CLEAR : resolveWindowBackground(state, nativeTheme.shouldUseDarkColors));
+}
+
 function createWindow(hidden = false): void {
   mainPushQueue.reset();
   mainWindow = new BrowserWindow({
@@ -219,6 +238,7 @@ function createWindow(hidden = false): void {
     // own chrome color when one is chosen, the system appearance otherwise
     // (the renderer adapts via prefers-color-scheme / renderer/theme.ts).
     backgroundColor: resolveWindowBackground(themeState, nativeTheme.shouldUseDarkColors),
+    ...(isMac && themeState.translucent ? { vibrancy: 'sidebar' as const, backgroundColor: CLEAR } : {}),
     webPreferences: {
       preload: PRELOAD_SCRIPT,
       contextIsolation: true,
@@ -543,6 +563,7 @@ app.whenReady().then(async () => {
   // overlay and HUD are off the main push queue (created up front, only ever
   // hidden), so they are sent to directly.
   const themeChanged = (state: ThemeState): void => {
+    if (state.translucent !== themeState.translucent) applyWindowStyle(mainWindow, state);
     themeState = state;
     sendToMain('client:themeChanged', state);
     quickChat.sendToOverlay('client:themeChanged', state);

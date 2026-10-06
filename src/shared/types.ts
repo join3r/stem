@@ -3699,10 +3699,16 @@ export interface UpdatesSettings {
 /** Which palette a theme carrying both paints: follow the OS, or always one of them. */
 export type ThemeAppearance = 'system' | 'light' | 'dark';
 
+/** How the conversation draws messages: avatar rows for both sides, or the user's messages as bubbles on the right. */
+export type ChatLayout = 'rows' | 'bubbles';
+
 export interface ThemeSettings {
   selected: string;
   /** For a theme with both a light and a dark palette; one-palette themes and the built-in modes ignore it. */
   appearance: ThemeAppearance;
+  chatLayout: ChatLayout;
+  /** macOS: the toolbar and inspector let the desktop show through (window vibrancy). Ignored elsewhere. */
+  translucent: boolean;
 }
 
 /** What a theme token's value may be — each kind has its own validator in desktop/themes.ts. */
@@ -3742,6 +3748,26 @@ export const THEME_TOKENS = {
   'code-ink': 'color',
   'drop-chat': 'color',
   'drop-files': 'color',
+  // Text and icons on a filled danger / warn control (a red Delete button).
+  'danger-ink': 'color',
+  'warn-ink': 'color',
+  // Chart series, in order, plus the folded "Other" slice.
+  'series-1': 'color',
+  'series-2': 'color',
+  'series-3': 'color',
+  'series-4': 'color',
+  'series-5': 'color',
+  'series-6': 'color',
+  'series-7': 'color',
+  'series-8': 'color',
+  'series-other': 'color',
+  // Syntax colors in code blocks, drawn on --code-bg.
+  'syn-keyword': 'color',
+  'syn-string': 'color',
+  'syn-comment': 'color',
+  'syn-number': 'color',
+  'syn-function': 'color',
+  'syn-type': 'color',
   // Everything else — appearance-independent, in a theme's `style` block.
   'font-ui': 'font',
   'font-mono': 'font',
@@ -3823,6 +3849,8 @@ export interface ThemeState {
   selected: string;
   /** ThemeSettings.appearance — which palette a paired theme paints. */
   appearance: ThemeAppearance;
+  chatLayout: ChatLayout;
+  translucent: boolean;
   /** The resolved custom theme, or null when `selected` is a built-in mode or the file is gone. */
   custom: CustomTheme | null;
 }

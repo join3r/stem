@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type {
+  ChatLayout,
   CustomTheme,
   EscapeAction,
   ModelSummary,
@@ -48,17 +49,23 @@ export function AppSettings({ models }: { models: ModelSummary[] }) {
 function AppearanceSection() {
   const [selected, setSelected] = useState('system');
   const [appearance, setAppearance] = useState<ThemeAppearance>('system');
+  const [chatLayout, setChatLayout] = useState<ChatLayout>('rows');
+  const [translucent, setTranslucent] = useState(false);
   const [themes, setThemes] = useState<CustomTheme[]>([]);
 
   useEffect(() => {
     void window.stem.getSettings().then((s) => {
       setSelected(s.theme.selected);
       setAppearance(s.theme.appearance);
+      setChatLayout(s.theme.chatLayout);
+      setTranslucent(s.theme.translucent);
     });
     void window.stem.listThemes().then(setThemes);
     return window.stem.onThemeChanged((state) => {
       setSelected(state.selected);
       setAppearance(state.appearance);
+      setChatLayout(state.chatLayout);
+      setTranslucent(state.translucent);
       void window.stem.listThemes().then(setThemes);
     });
   }, []);
@@ -71,6 +78,17 @@ function AppearanceSection() {
   function selectAppearance(value: ThemeAppearance) {
     setAppearance(value);
     window.stem.updateThemeSettings({ appearance: value }).then((s) => setAppearance(s.theme.appearance));
+  }
+
+  function selectChatLayout(value: ChatLayout) {
+    setChatLayout(value);
+    window.stem.updateThemeSettings({ chatLayout: value }).then((s) => setChatLayout(s.theme.chatLayout));
+  }
+
+  function toggleTranslucent() {
+    const next = !translucent;
+    setTranslucent(next);
+    window.stem.updateThemeSettings({ translucent: next }).then((s) => setTranslucent(s.theme.translucent));
   }
 
   // Only a theme carrying both palettes has a choice to make; the built-in
@@ -129,6 +147,28 @@ function AppearanceSection() {
                 { value: 'dark', label: 'Always dark', title: 'This theme’s dark palette, whatever the OS says' }
               ]}
               onChange={(v) => selectAppearance(v as ThemeAppearance)}
+            />
+          </ValueRow>
+        )}
+        <ValueRow label="Chat layout" hint="Bubbles put your messages on the right">
+          <RowSelect
+            ariaLabel="Chat layout"
+            value={chatLayout}
+            options={[
+              { value: 'rows', label: 'Rows', title: 'Both sides as rows with an avatar' },
+              { value: 'bubbles', label: 'Bubbles', title: 'Your messages in bubbles on the right' }
+            ]}
+            onChange={(v) => selectChatLayout(v as ChatLayout)}
+          />
+        </ValueRow>
+        {window.stem.platform === 'darwin' && (
+          <ValueRow label="Translucent sidebar" hint="The toolbar and this panel let the desktop show through">
+            <button
+              className={`switch${translucent ? ' on' : ''}`}
+              role="switch"
+              aria-checked={translucent}
+              aria-label="Translucent sidebar"
+              onClick={toggleTranslucent}
             />
           </ValueRow>
         )}

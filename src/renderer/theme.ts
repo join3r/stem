@@ -8,6 +8,8 @@ import { THEME_TOKENS, type ThemeState } from '../shared/types';
 //      query follows the OS, exactly as before themes existed ('system').
 //   2. `data-theme="light" | "dark"` on <html> — the forced built-in palettes
 //      (styles.css carries attribute-guarded copies of both token blocks).
+//   (alongside: `data-chat-layout` and `data-translucent`, the two window-style
+//   choices, which the stylesheet reads the same way.)
 //   3. inline custom properties on <html> — a custom theme's colors (and its
 //      `style` tokens: fonts, scales, radii, shadows), laid over the built-in
 //      palette of the same appearance. Inline because the
@@ -29,6 +31,9 @@ export function applyThemeState(state: ThemeState): void {
   const mode = palette ? palette.appearance : state.selected;
   if (mode === 'light' || mode === 'dark') root.setAttribute('data-theme', mode);
   else root.removeAttribute('data-theme');
+  // Layout choices ride attributes too; styles.css scopes them to the main window.
+  root.setAttribute('data-chat-layout', state.chatLayout);
+  root.toggleAttribute('data-translucent', state.translucent);
   if (palette) {
     for (const [token, value] of Object.entries(palette.colors)) {
       root.style.setProperty(`--${token}`, value);

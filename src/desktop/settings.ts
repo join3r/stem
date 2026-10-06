@@ -9,7 +9,6 @@ import type {
   QuickChatSettings,
   ReleaseNotesSettings,
   ServerSettings,
-  ThemeAppearance,
   ThemeSettings,
   UpdatesSettings
 } from '../shared/types';
@@ -50,7 +49,7 @@ const DEFAULTS: ClientSettings = {
   // install — nothing changes on disk without the user acting on it.
   updates: { checkAutomatically: true },
   // Follow the OS appearance until the user picks otherwise (see desktop/themes.ts).
-  theme: { selected: 'system', appearance: 'system' }
+  theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', translucent: false }
 };
 
 /** A stored theme choice, or the default for anything unrecognizable. */
@@ -62,8 +61,14 @@ function coerceThemeSelected(value: unknown): string {
   return DEFAULTS.theme.selected;
 }
 
-function coerceThemeAppearance(value: unknown): ThemeAppearance {
-  return value === 'light' || value === 'dark' ? value : DEFAULTS.theme.appearance;
+function coerceTheme(raw: Partial<ThemeSettings> | undefined): ThemeSettings {
+  const d = DEFAULTS.theme;
+  return {
+    selected: coerceThemeSelected(raw?.selected),
+    appearance: raw?.appearance === 'light' || raw?.appearance === 'dark' ? raw.appearance : d.appearance,
+    chatLayout: raw?.chatLayout === 'bubbles' ? 'bubbles' : d.chatLayout,
+    translucent: typeof raw?.translucent === 'boolean' ? raw.translucent : d.translucent
+  };
 }
 
 /** Same contract as the server's `coerce`: anything unreadable takes the default. */
@@ -94,10 +99,7 @@ function coerceClientSettings(raw: Partial<ClientSettings> | undefined): ClientS
       checkAutomatically:
         typeof up.checkAutomatically === 'boolean' ? up.checkAutomatically : d.updates.checkAutomatically
     },
-    theme: {
-      selected: coerceThemeSelected((raw?.theme as Partial<ThemeSettings> | undefined)?.selected),
-      appearance: coerceThemeAppearance((raw?.theme as Partial<ThemeSettings> | undefined)?.appearance)
-    }
+    theme: coerceTheme(raw?.theme as Partial<ThemeSettings> | undefined)
   };
 }
 
