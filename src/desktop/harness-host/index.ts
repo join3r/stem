@@ -202,6 +202,7 @@ export function createDesktopHarnessHost(deps: HarnessHostDeps): DesktopHarnessH
         sessionId: request.sessionId,
         prompt: request.prompt,
         ...(request.model ? { model: request.model } : {}),
+        ...(request.autoMode === true ? { autoMode: true as const } : {}),
         maxTurnMs: request.maxTurnMs ?? DEVICE_MAX_TURN_MS
       },
       {
@@ -293,7 +294,8 @@ export function createDesktopHarnessHost(deps: HarnessHostDeps): DesktopHarnessH
             agent: request.agent,
             cwd: request.cwd,
             ...(request.sessionId ? { sessionId: request.sessionId } : {}),
-            ...(request.model ? { model: request.model } : {})
+            ...(request.model ? { model: request.model } : {}),
+            ...(request.autoMode === true ? { autoMode: true as const } : {})
           });
           deliverResult(
             request.requestId,

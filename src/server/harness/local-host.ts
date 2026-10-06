@@ -177,13 +177,28 @@ export class LocalHarnessHost implements HarnessHost {
         // edits run, risky commands raise a card). Fail closed: a claude
         // session that cannot be switched must not run in auto behind the
         // cards' back.
+        //
+        // The exception is a persona the user opted into Auto in its editor
+        // (PersonaHarnessPin.autoMode): Claude Code's classifier then answers
+        // its own asks and Stem sees none of them. Re-applied on every ensure,
+        // so the switch holds on resumed sessions in both directions. A model
+        // without Auto (Haiku) refuses the mode; that falls back to the cards.
         if (!runtime.setMode) {
           // quiet: best-effort cleanup of a session we are refusing anyway —
           // the refusal on the next line is the signal.
           await runtime.close({ handle, reason: 'setMode unavailable' }).catch(() => undefined);
           return { ok: false, error: 'This acpx runtime cannot set the claude permission mode.' };
         }
-        await runtime.setMode({ handle, mode: 'acceptEdits' });
+        let mode: 'auto' | 'acceptEdits' = spec.autoMode ? 'auto' : 'acceptEdits';
+        if (mode === 'auto') {
+          try {
+            await runtime.setMode({ handle, mode });
+          } catch (e) {
+            degrade('harness', 'ran the claude session on approval cards: Auto mode was refused', e);
+            mode = 'acceptEdits';
+          }
+        }
+        if (mode === 'acceptEdits') await runtime.setMode({ handle, mode });
       }
       this.handles.set(sessionId, handle);
       return { ok: true, sessionId };
@@ -259,7 +274,8 @@ export class LocalHarnessHost implements HarnessHost {
           agent: input.agent,
           cwd: input.cwd,
           sessionId: input.sessionId,
-          ...(input.model ? { model: input.model } : {})
+          ...(input.model ? { model: input.model } : {}),
+          ...(input.autoMode ? { autoMode: input.autoMode } : {})
         });
         if (!ensured.ok) return { ok: false, error: ensured.error };
         handle = this.handles.get(input.sessionId)!;

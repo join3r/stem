@@ -107,7 +107,14 @@ function coerceHarness(raw: unknown): PersonaHarnessPin | undefined {
   const cwd = typeof r.cwd === 'string' ? r.cwd.trim() : '';
   const device = typeof r.device === 'string' ? r.device.trim() : '';
   const model = typeof r.model === 'string' ? r.model.trim().slice(0, 100) : '';
-  return { agent: r.agent.trim(), cwd, ...(device ? { device } : {}), ...(model ? { model } : {}) };
+  return {
+    agent: r.agent.trim(),
+    cwd,
+    ...(device ? { device } : {}),
+    ...(model ? { model } : {}),
+    // Strictly true: anything else (a string "true", 1) stays on the cards.
+    ...(r.autoMode === true ? { autoMode: true as const } : {})
+  };
 }
 
 /** A computer or browser pin: both are just the paired Mac's id. */

@@ -80,6 +80,14 @@ describe('ensure', () => {
     expect(router.settle('mac-1', requestId, { ok: true, sessionId: 'again' })).toBe(false);
   });
 
+  it("carries a persona's Auto opt-in to the device, and nothing without it", async () => {
+    const { router, pushed } = makeRouter();
+    void router.ensure('mac-1', 'Mac', { agent: 'claude', cwd: '/proj', autoMode: true });
+    void router.ensure('mac-1', 'Mac', { agent: 'claude', cwd: '/proj' });
+    expect(pushed[0].data).toMatchObject({ op: 'ensure', autoMode: true });
+    expect(pushed[1].data.autoMode).toBeUndefined();
+  });
+
   it('times out after 30s of silence', async () => {
     vi.useFakeTimers();
     const { router } = makeRouter();

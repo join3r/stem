@@ -279,6 +279,17 @@ describe('sessions', () => {
     expect(host.turns[0]).toMatchObject({ model: 'claude-haiku-4-5' });
   });
 
+  it("carries the persona's Auto opt-in on the ensure and the turn, and nothing without it", async () => {
+    const host = scriptedHost({});
+    const { service } = makeService(host);
+    await service.handleHarnessRequest({ ...REQ, autoMode: true });
+    expect(host.ensures[0].autoMode).toBe(true);
+    expect(host.turns[0].autoMode).toBe(true);
+    await service.handleHarnessRequest(REQ);
+    expect(host.ensures[1].autoMode).toBeUndefined();
+    expect(host.turns[1].autoMode).toBeUndefined();
+  });
+
   it('sends no model when the request carries none (the agent runs its own default)', async () => {
     const host = scriptedHost({});
     const { service } = makeService(host, {

@@ -267,6 +267,11 @@ describe('save', () => {
     expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '/src/stem', model: 'claude-haiku-4-5' });
     await savePersona(persona({ harness: { agent: 'claude', cwd: '/src/stem', model: '  ' } }));
     expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '/src/stem' });
+    // Auto survives only as a strict true; anything truthy-looking stays on the cards.
+    await savePersona(persona({ harness: { agent: 'claude', cwd: '/src/stem', autoMode: true } }));
+    expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '/src/stem', autoMode: true });
+    await savePersona(persona({ harness: { agent: 'claude', cwd: '/src/stem', autoMode: 'true' as never } }));
+    expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '/src/stem' });
   });
 });
 

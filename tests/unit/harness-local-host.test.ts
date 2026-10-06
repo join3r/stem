@@ -24,6 +24,8 @@ interface FakeRuntimeScript {
   result?: AcpRuntimeTurnResult;
   ensureError?: string;
   setModeError?: string;
+  /** Refuse only `auto`, like a model without Auto (Haiku). */
+  refuseAuto?: boolean;
   /** Hold the turn open until the test releases it. */
   hold?: boolean;
 }
@@ -59,6 +61,7 @@ function fakeRuntime(script: FakeRuntimeScript = {}) {
     async setMode(input) {
       calls.modes.push(input.mode);
       if (script.setModeError) throw new Error(script.setModeError);
+      if (script.refuseAuto && input.mode === 'auto') throw new Error('auto mode unavailable for this model');
     },
     startTurn(input) {
       const events = script.events ?? [];
@@ -126,6 +129,25 @@ describe('sessions', () => {
     const refused = await failing.ensureSession({ agent: 'claude', cwd: '/tmp/p' });
     expect(refused).toMatchObject({ ok: false });
     expect(!refused.ok && refused.error).toContain('no such mode');
+  });
+
+  it('puts a claude session in Auto only for an opted-in persona, every ensure', async () => {
+    const { factory, calls } = fakeRuntime();
+    const host = new LocalHarnessHost({ runtimeFactory: factory });
+    await host.ensureSession({ agent: 'claude', cwd: '/tmp/p', sessionId: 'claude-1', autoMode: true });
+    // Switched off in the editor: the resumed session goes back to the cards.
+    await host.ensureSession({ agent: 'claude', cwd: '/tmp/p', sessionId: 'claude-1' });
+    // Other agents have no Auto; the flag changes nothing for them.
+    await host.ensureSession({ agent: 'opencode', cwd: '/tmp/p', autoMode: true });
+    expect(calls.modes).toEqual(['auto', 'acceptEdits']);
+  });
+
+  it('falls back to acceptEdits when the model refuses Auto', async () => {
+    const { factory, calls } = fakeRuntime({ refuseAuto: true });
+    const host = new LocalHarnessHost({ runtimeFactory: factory });
+    const ensured = await host.ensureSession({ agent: 'claude', cwd: '/tmp/p', autoMode: true });
+    expect(ensured.ok).toBe(true);
+    expect(calls.modes).toEqual(['auto', 'acceptEdits']);
   });
 
   it('forwards a model pin as acpx sessionOptions, and omits it when unset', async () => {

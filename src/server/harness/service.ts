@@ -234,12 +234,15 @@ export class HarnessService implements HarnessBridge {
     // from claude sessions), so the pin travels explicitly. No persona pin =
     // whatever the agent defaults to on that host.
     const model = req.model?.trim() || undefined;
+    // The persona's opt-in to the agent's own Auto mode, re-applied on every
+    // ensure like the model, so flipping it takes effect on the next call.
+    const autoMode = req.autoMode === true ? (true as const) : undefined;
 
     // Session continuity: the mapping is a cache of the host's truth.
     const key = { threadId: req.threadId, host: hostKey, agent, cwd };
     if (req.freshSession) await forgetSession(key);
     const remembered = req.freshSession ? null : await lookupSession(key);
-    const spec = { agent, cwd, ...(model ? { model } : {}) };
+    const spec = { agent, cwd, ...(model ? { model } : {}), ...(autoMode ? { autoMode } : {}) };
     let ensured = await host.ensureSession({ ...spec, ...(remembered ? { sessionId: remembered } : {}) });
     if (!ensured.ok && remembered) {
       // The host lost or refused the remembered session; a fresh one beats an error.
@@ -305,6 +308,7 @@ export class HarnessService implements HarnessBridge {
           cwd,
           sessionId,
           ...(model ? { model } : {}),
+          ...(autoMode ? { autoMode } : {}),
           prompt: await this.promptWithFacts(prompt)
         },
         {

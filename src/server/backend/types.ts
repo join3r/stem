@@ -102,6 +102,11 @@ export interface HarnessRequest {
    * Absent = the agent's own default on the host.
    */
   model?: string;
+  /**
+   * The persona's Auto opt-in, injected the same way and never from the tool
+   * payload: an assistant cannot talk its agent out of Stem's approval cards.
+   */
+  autoMode?: true;
   freshSession?: boolean;
   /**
    * The tool call's own id in the turn strip, passed through so live progress

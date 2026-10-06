@@ -1729,6 +1729,8 @@ export type DeviceHarnessRequest =
       sessionId?: string;
       /** Model pin from the driving persona; absent = agent default. */
       model?: string;
+      /** The persona's Auto opt-in (PersonaHarnessPin.autoMode); absent = acceptEdits. */
+      autoMode?: true;
     }
   | {
       /** For a run the requestId IS the turnId — events and the cancel frame cite it. */
@@ -1740,6 +1742,8 @@ export type DeviceHarnessRequest =
       prompt: string;
       /** Model pin, re-sent so the device's restart re-ensure keeps it. */
       model?: string;
+      /** Auto opt-in, re-sent for the same reason. */
+      autoMode?: true;
       /** Enforced by the CLIENT (it owns the adapter); default ~2h there. */
       maxTurnMs?: number;
     }
@@ -2472,6 +2476,16 @@ export interface PersonaHarnessPin {
    * Claude Code config from Stem-run sessions.
    */
   model?: string;
+  /**
+   * Claude Code decides its own permission asks (its Auto mode: a model
+   * classifier approves or refuses each one). Through ACP, Auto never asks
+   * Stem anything — no approval card, no read-only folder guard, no exec
+   * dial, no auto-approval log (re-verified 2026-10-06: git, web reads,
+   * kubectl and an rm -rf outside the project all ran unasked). Absent = the
+   * default acceptEdits, where every non-edit ask reaches Stem's tiers. Set
+   * only from the persona editor; claude only — other agents ignore it.
+   */
+  autoMode?: true;
 }
 
 /**

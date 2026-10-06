@@ -50,6 +50,7 @@ function summaryLabel(
       : '';
     const agent = p.harness.model ? `${p.harness.agent} (${p.harness.model})` : p.harness.agent;
     parts.push(p.harness.cwd ? `${agent}${where} in ${p.harness.cwd}` : `${agent}${where}`);
+    if (p.harness.autoMode) parts.push('approves its own actions');
   }
   if (p.computer) {
     parts.push(`controls ${devices.find((d) => d.id === p.computer?.device)?.label ?? p.computer.device}`);
@@ -146,6 +147,7 @@ function sameEdit(a: Persona, b: Persona): boolean {
     (a.harness?.cwd ?? '') === (b.harness?.cwd ?? '') &&
     (a.harness?.device ?? '') === (b.harness?.device ?? '') &&
     (a.harness?.model ?? '') === (b.harness?.model ?? '') &&
+    (a.harness?.autoMode ?? false) === (b.harness?.autoMode ?? false) &&
     (a.computer?.device ?? '') === (b.computer?.device ?? '') &&
     (a.browser?.device ?? '') === (b.browser?.device ?? '') &&
     (a.canManagePersonas ?? false) === (b.canManagePersonas ?? false) &&
@@ -770,6 +772,31 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                         <FolderSearch size={14} />
                       </button>
                     </div>
+                    {p.harness?.agent.trim().toLowerCase() === 'claude' && (
+                      <label className="persona-cap">
+                        <input
+                          type="checkbox"
+                          checked={p.harness.autoMode === true}
+                          onChange={(e) => {
+                            const harness = { ...p.harness! };
+                            if (e.target.checked) harness.autoMode = true;
+                            else delete harness.autoMode;
+                            setDraft({ ...p, harness });
+                          }}
+                        />
+                        <span>
+                          Let Claude Code approve its own actions (Auto){' '}
+                          <InfoTip label="About Auto">
+                            Claude Code’s own safety classifier decides every step instead of
+                            asking you, so routine work (reading docs, git, kubectl get) never waits
+                            on an approval card. Stem then sees none of its decisions: no cards, no
+                            protection for folders connected read-only, no approval log. Anything the
+                            classifier lets through runs, including deletes outside its folder and
+                            commands against live clusters. Models without Auto keep the cards.
+                          </InfoTip>
+                        </span>
+                      </label>
+                    )}
                   </div>
                   {/* Computer control: the Mac whose screen this persona drives. The
                       pin is the capability — no pin, no `computer` tool — and only a Mac

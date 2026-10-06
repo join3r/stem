@@ -23,6 +23,11 @@ export interface HarnessSessionSpec {
    * the server's harness settings. Absent = whatever the agent defaults to.
    */
   model?: string;
+  /**
+   * The driving persona opted into the agent's own Auto permission mode
+   * (PersonaHarnessPin.autoMode). Claude only; absent = acceptEdits.
+   */
+  autoMode?: true;
 }
 
 export type HarnessEnsureResult = { ok: true; sessionId: string } | { ok: false; error: string };
@@ -70,6 +75,8 @@ export interface HarnessRunTurnInput {
   prompt: string;
   /** Model pin, carried so a restart's re-ensure keeps it (same as the spec's). */
   model?: string;
+  /** Auto opt-in, carried for the same reason. */
+  autoMode?: true;
   maxTurnMs?: number;
 }
 

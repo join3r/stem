@@ -347,6 +347,29 @@ describe('runtime side', () => {
     expect(refused.error).toContain('pinned');
   });
 
+  it("an opted-in persona's Auto rides every call; the payload cannot ask for it", async () => {
+    const seen: HarnessRequest[] = [];
+    const { internal, worker, sent } = runtimeWithBridge({
+      handleHarnessRequest: async (req) => {
+        seen.push(req);
+        return { ok: true, text: 'done' };
+      },
+      abortThread: () => {},
+      settleAll: () => {}
+    });
+    worker.currentTurn = newTurnContext('t', 'turn-1');
+    worker.currentTurn.codingGrant = { kind: 'pin', pin: { agent: 'claude', cwd: '/repo', autoMode: true } };
+    internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ prompt: 'go' }));
+    await settleSends(sent);
+    expect(seen[0]).toMatchObject({ agent: 'claude', autoMode: true });
+
+    sent.length = 0;
+    worker.currentTurn.codingGrant = { kind: 'pin', pin: { agent: 'claude', cwd: '/repo' } };
+    internal.handleHarnessBridgeRequest(worker, 'elicit-2', JSON.stringify({ prompt: 'go', autoMode: true }));
+    await settleSends(sent);
+    expect(seen[1].autoMode).toBeUndefined();
+  });
+
   it('clamps a code persona the same way in a live chat, and its model pin always rides', async () => {
     const seen: HarnessRequest[] = [];
     const { internal, worker, sent } = runtimeWithBridge({
@@ -376,6 +399,9 @@ describe('runtime side', () => {
     await settleSends(sent);
     expect(seen[1]).toMatchObject({ agent: 'claude', cwd: '/repo/packages/x', model: 'claude-haiku-4-5' });
     expect(seen[1].device).toBeUndefined();
+    // Auto comes only from the pin: neither call asked, and this pin has none.
+    expect(seen[0].autoMode).toBeUndefined();
+    expect(seen[1].autoMode).toBeUndefined();
 
     // A cwd outside the pin is refused in a chat too.
     sent.length = 0;
