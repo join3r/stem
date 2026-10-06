@@ -1,0 +1,52 @@
+{
+  "name": "Nord",
+  "style": {
+    "shadow-scale": "0.4"
+  },
+  "light": {
+    "paper": "#e5e9f0",
+    "content": "#eceff4",
+    "panel": "#d8dee9",
+    "ink": "#2e3440",
+    "muted": "#4c566a",
+    "line": "#d0d7e2",
+    "hair": "rgba(46, 52, 64, 0.1)",
+    "accent": "#5e81ac",
+    "accent-ink": "#eceff4",
+    "surface": "#f5f7fa",
+    "field": "#f5f7fa",
+    "sel": "rgba(94, 129, 172, 0.16)",
+    "inline-bg": "#e5e9f0",
+    "info": "#5e81ac",
+    "warn": "#a8752a",
+    "success": "#5f7f45",
+    "danger": "#bf616a",
+    "code-bg": "#2e3440",
+    "code-ink": "#d8dee9",
+    "drop-chat": "#5e81ac",
+    "drop-files": "#5e9c9b"
+  },
+  "dark": {
+    "paper": "#2e3440",
+    "content": "#333a47",
+    "panel": "#242933",
+    "ink": "#eceff4",
+    "muted": "#b4bccb",
+    "line": "#434c5e",
+    "hair": "rgba(236, 239, 244, 0.14)",
+    "accent": "#88c0d0",
+    "accent-ink": "#2e3440",
+    "surface": "#3b4252",
+    "field": "#3b4252",
+    "sel": "rgba(136, 192, 208, 0.22)",
+    "inline-bg": "#3b4252",
+    "info": "#81a1c1",
+    "warn": "#ebcb8b",
+    "success": "#a3be8c",
+    "danger": "#d57780",
+    "code-bg": "#242933",
+    "code-ink": "#d8dee9",
+    "drop-chat": "#88c0d0",
+    "drop-files": "#8fbcbb"
+  }
+}

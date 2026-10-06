@@ -1,0 +1,53 @@
+{
+  "name": "Rosé Pine",
+  "style": {
+    "radius-md": "10px",
+    "radius-lg": "14px"
+  },
+  "light": {
+    "paper": "#f4ede8",
+    "content": "#faf4ed",
+    "panel": "#f2e9e1",
+    "ink": "#575279",
+    "muted": "#6e6a86",
+    "line": "#dfdad9",
+    "hair": "rgba(87, 82, 121, 0.1)",
+    "accent": "#907aa9",
+    "accent-ink": "#faf4ed",
+    "surface": "#fffaf3",
+    "field": "#fffaf3",
+    "sel": "rgba(144, 122, 169, 0.16)",
+    "inline-bg": "#f2e9e1",
+    "info": "#56949f",
+    "warn": "#ea9d34",
+    "success": "#286983",
+    "danger": "#b4637a",
+    "code-bg": "#191724",
+    "code-ink": "#e0def4",
+    "drop-chat": "#907aa9",
+    "drop-files": "#56949f"
+  },
+  "dark": {
+    "paper": "#1f1d2e",
+    "content": "#232136",
+    "panel": "#191724",
+    "ink": "#e0def4",
+    "muted": "#908caa",
+    "line": "#403d52",
+    "hair": "rgba(224, 222, 244, 0.14)",
+    "accent": "#c4a7e7",
+    "accent-ink": "#191724",
+    "surface": "#26233a",
+    "field": "#26233a",
+    "sel": "rgba(196, 167, 231, 0.22)",
+    "inline-bg": "#26233a",
+    "info": "#9ccfd8",
+    "warn": "#f6c177",
+    "success": "#3e8fb0",
+    "danger": "#eb6f92",
+    "code-bg": "#191724",
+    "code-ink": "#e0def4",
+    "drop-chat": "#c4a7e7",
+    "drop-files": "#9ccfd8"
+  }
+}

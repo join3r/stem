@@ -1,0 +1,53 @@
+{
+  "name": "Catppuccin",
+  "style": {
+    "radius-md": "10px",
+    "radius-lg": "14px"
+  },
+  "light": {
+    "paper": "#e6e9ef",
+    "content": "#eff1f5",
+    "panel": "#dce0e8",
+    "ink": "#4c4f69",
+    "muted": "#5c5f77",
+    "line": "#ccd0da",
+    "hair": "rgba(76, 79, 105, 0.1)",
+    "accent": "#8839ef",
+    "accent-ink": "#ffffff",
+    "surface": "#f8f9fb",
+    "field": "#f8f9fb",
+    "sel": "rgba(136, 57, 239, 0.16)",
+    "inline-bg": "#e6e9ef",
+    "info": "#1e66f5",
+    "warn": "#df8e1d",
+    "success": "#40a02b",
+    "danger": "#d20f39",
+    "code-bg": "#1e1e2e",
+    "code-ink": "#cdd6f4",
+    "drop-chat": "#8839ef",
+    "drop-files": "#179299"
+  },
+  "dark": {
+    "paper": "#181825",
+    "content": "#1e1e2e",
+    "panel": "#11111b",
+    "ink": "#cdd6f4",
+    "muted": "#9399b2",
+    "line": "#45475a",
+    "hair": "rgba(205, 214, 244, 0.14)",
+    "accent": "#cba6f7",
+    "accent-ink": "#1e1e2e",
+    "surface": "#313244",
+    "field": "#313244",
+    "sel": "rgba(203, 166, 247, 0.22)",
+    "inline-bg": "#313244",
+    "info": "#89b4fa",
+    "warn": "#f9e2af",
+    "success": "#a6e3a1",
+    "danger": "#f38ba8",
+    "code-bg": "#11111b",
+    "code-ink": "#cdd6f4",
+    "drop-chat": "#cba6f7",
+    "drop-files": "#94e2d5"
+  }
+}
