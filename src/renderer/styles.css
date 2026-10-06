@@ -4140,5 +4140,17 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
   position: absolute;
   top: 100%;
   right: 0;
-  margin-top: var(--sp-2);
+  /* Padding, not margin: the gap stays part of the message, so moving the
+     pointer from the bubble down to the buttons never drops the hover. */
+  margin-top: 0;
+  padding-top: var(--sp-2);
+}
+/* The sent-at stamp sits just left of the bubble instead of in the far gutter
+   the avatar column uses (and under the avatar in narrow panes). */
+:root[data-chat-layout='bubbles'] .message-user > .message-stamp {
+  position: static;
+  align-self: flex-end;
+  align-items: flex-end;
+  width: auto;
+  padding-bottom: var(--sp-2);
 }
