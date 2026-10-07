@@ -49,7 +49,7 @@ const DEFAULTS: ClientSettings = {
   // install — nothing changes on disk without the user acting on it.
   updates: { checkAutomatically: true },
   // Follow the OS appearance until the user picks otherwise (see desktop/themes.ts).
-  theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', translucent: false }
+  theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false }
 };
 
 /** A stored theme choice, or the default for anything unrecognizable. */
@@ -67,6 +67,7 @@ function coerceTheme(raw: Partial<ThemeSettings> | undefined): ThemeSettings {
     selected: coerceThemeSelected(raw?.selected),
     appearance: raw?.appearance === 'light' || raw?.appearance === 'dark' ? raw.appearance : d.appearance,
     chatLayout: raw?.chatLayout === 'bubbles' ? 'bubbles' : d.chatLayout,
+    chatWidth: raw?.chatWidth === 'wide' || raw?.chatWidth === 'wider' || raw?.chatWidth === 'full' ? raw.chatWidth : d.chatWidth,
     translucent: typeof raw?.translucent === 'boolean' ? raw.translucent : d.translucent
   };
 }

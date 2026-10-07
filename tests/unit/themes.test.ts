@@ -225,7 +225,7 @@ describe('themes shipped with the app', () => {
 describe('the state a window paints from', () => {
   it('carries no custom theme for the built-in modes', async () => {
     await updateClientTheme({ selected: 'dark' });
-    expect(await currentThemeState()).toEqual({ selected: 'dark', appearance: 'system', chatLayout: 'rows', translucent: false, custom: null });
+    expect(await currentThemeState()).toEqual({ selected: 'dark', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false, custom: null });
   });
 
   it('resolves the selected custom theme, and says so when its file is gone', async () => {
@@ -241,19 +241,19 @@ describe('the state a window paints from', () => {
 });
 
 describe('the window chrome color', () => {
-  const none: ThemeState = { selected: 'system', appearance: 'system', chatLayout: 'rows', translucent: false, custom: null };
+  const none: ThemeState = { selected: 'system', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false, custom: null };
 
   it('follows the OS for system and the palette for forced modes', () => {
     expect(resolveWindowBackground(none, false)).toBe('#efece5');
     expect(resolveWindowBackground(none, true)).toBe('#1b1916');
-    expect(resolveWindowBackground({ selected: 'dark', appearance: 'system', chatLayout: 'rows', translucent: false, custom: null }, false)).toBe('#1b1916');
-    expect(resolveWindowBackground({ selected: 'light', appearance: 'system', chatLayout: 'rows', translucent: false, custom: null }, true)).toBe('#efece5');
+    expect(resolveWindowBackground({ selected: 'dark', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false, custom: null }, false)).toBe('#1b1916');
+    expect(resolveWindowBackground({ selected: 'light', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false, custom: null }, true)).toBe('#efece5');
   });
 
   it('takes a custom theme’s own chrome when it is plain hex, its palette when not', () => {
     const theme = (dark: Record<string, string>): ThemeState => ({
       selected: 'custom:t',
-      appearance: 'system', chatLayout: 'rows', translucent: false,
+      appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false,
       custom: { id: 't', name: 't', source: 'user', dark }
     });
     expect(resolveWindowBackground(theme({ panel: '#101820' }), false)).toBe('#101820');
@@ -262,7 +262,7 @@ describe('the window chrome color', () => {
     // A broken selection falls back to the OS, not to the broken file's appearance.
     const broken: ThemeState = {
       selected: 'custom:t',
-      appearance: 'system', chatLayout: 'rows', translucent: false,
+      appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false,
       custom: { id: 't', name: 't', source: 'user', dark: {}, problem: 'torn' }
     };
     expect(resolveWindowBackground(broken, false)).toBe('#efece5');
@@ -271,7 +271,7 @@ describe('the window chrome color', () => {
   it('follows the OS through a paired theme', () => {
     const pair: ThemeState = {
       selected: 'custom:p',
-      appearance: 'system', chatLayout: 'rows', translucent: false,
+      appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false,
       custom: { id: 'p', name: 'p', source: 'bundled', light: { panel: '#eeeeee' }, dark: { panel: '#111111' } }
     };
     expect(resolveWindowBackground(pair, false)).toBe('#eeeeee');
@@ -280,12 +280,12 @@ describe('the window chrome color', () => {
 
   it('keeps a paired theme on the palette the user pinned, whatever the OS says', () => {
     const custom = { id: 'p', name: 'p', source: 'bundled' as const, light: { panel: '#eeeeee' }, dark: { panel: '#111111' } };
-    const light: ThemeState = { selected: 'custom:p', appearance: 'light', chatLayout: 'rows', translucent: false, custom };
-    const dark: ThemeState = { selected: 'custom:p', appearance: 'dark', chatLayout: 'rows', translucent: false, custom };
+    const light: ThemeState = { selected: 'custom:p', appearance: 'light', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false, custom };
+    const dark: ThemeState = { selected: 'custom:p', appearance: 'dark', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false, custom };
     expect(resolveWindowBackground(light, true)).toBe('#eeeeee');
     expect(resolveWindowBackground(dark, false)).toBe('#111111');
     // A one-palette theme has nothing to pin: it stays itself.
-    const single: ThemeState = { selected: 'custom:t', appearance: 'light', chatLayout: 'rows', translucent: false, custom: { id: 't', name: 't', source: 'user', dark: { panel: '#101820' } } };
+    const single: ThemeState = { selected: 'custom:t', appearance: 'light', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false, custom: { id: 't', name: 't', source: 'user', dark: { panel: '#101820' } } };
     expect(resolveWindowBackground(single, false)).toBe('#101820');
   });
 });

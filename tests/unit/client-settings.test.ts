@@ -66,7 +66,7 @@ describe('carrying an existing install across the split', () => {
       // Not in PRE_SPLIT: the updates and theme blocks postdate the split, so
       // they always start from their defaults rather than migrating from anywhere.
       updates: { checkAutomatically: true },
-      theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', translucent: false }
+      theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false }
     });
     // And the whole document the renderer sees is unchanged by the move.
     const merged = mergeSettings(await readSettings(), await readClientSettings());
@@ -94,7 +94,7 @@ describe('carrying an existing install across the split', () => {
       quickChat: { shortcut: null, showOnAllDisplays: true, followAcrossSpaces: true },
       releaseNotes: { showOnUpdate: true, lastSeenVersion: null },
       updates: { checkAutomatically: true },
-      theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', translucent: false }
+      theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false }
     });
   });
 
@@ -112,7 +112,7 @@ describe('carrying an existing install across the split', () => {
       quickChat: { shortcut: null, showOnAllDisplays: true, followAcrossSpaces: true },
       releaseNotes: { showOnUpdate: true, lastSeenVersion: null },
       updates: { checkAutomatically: true },
-      theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', translucent: false }
+      theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false }
     });
   });
 });
@@ -186,25 +186,25 @@ describe('the theme choice', () => {
   it('round-trips built-in modes and custom ids, and a patch does not disturb the other blocks', async () => {
     await updateClientQuickChat({ shortcut: 'Alt+Space' });
     await updateClientTheme({ selected: 'dark' });
-    expect((await readClientSettings()).theme).toEqual({ selected: 'dark', appearance: 'system', chatLayout: 'rows', translucent: false });
+    expect((await readClientSettings()).theme).toEqual({ selected: 'dark', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false });
 
     await updateClientTheme({ selected: 'custom:nord' });
     const settings = await readClientSettings();
-    expect(settings.theme).toEqual({ selected: 'custom:nord', appearance: 'system', chatLayout: 'rows', translucent: false });
+    expect(settings.theme).toEqual({ selected: 'custom:nord', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false });
     expect(settings.quickChat.shortcut).toBe('Alt+Space');
   });
 
   it('refuses a custom id that could walk out of the themes folder', async () => {
     await updateClientTheme({ selected: 'custom:../../etc/passwd' });
-    expect((await readClientSettings()).theme).toEqual({ selected: 'system', appearance: 'system', chatLayout: 'rows', translucent: false });
+    expect((await readClientSettings()).theme).toEqual({ selected: 'system', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false });
     await updateClientTheme({ selected: 'custom:a/b' });
-    expect((await readClientSettings()).theme).toEqual({ selected: 'system', appearance: 'system', chatLayout: 'rows', translucent: false });
+    expect((await readClientSettings()).theme).toEqual({ selected: 'system', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false });
   });
 
   it('keeps the light/dark choice beside the theme, and refuses anything else', async () => {
     await updateClientTheme({ selected: 'custom:nord' });
     await updateClientTheme({ appearance: 'dark' });
-    expect((await readClientSettings()).theme).toEqual({ selected: 'custom:nord', appearance: 'dark', chatLayout: 'rows', translucent: false });
+    expect((await readClientSettings()).theme).toEqual({ selected: 'custom:nord', appearance: 'dark', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false });
     await updateClientTheme({ selected: 'custom:gruvbox' });
     expect((await readClientSettings()).theme.appearance).toBe('dark');
     await updateClientTheme({ appearance: 'dusk' as never });
@@ -215,13 +215,17 @@ describe('the theme choice', () => {
     await updateClientTheme({ chatLayout: 'bubbles', translucent: true });
     expect((await readClientSettings()).theme).toMatchObject({ chatLayout: 'bubbles', translucent: true });
     await updateClientTheme({ chatLayout: 'cards' as never, translucent: 'yes' as never });
-    expect((await readClientSettings()).theme).toMatchObject({ chatLayout: 'rows', translucent: false });
+    expect((await readClientSettings()).theme).toMatchObject({ chatLayout: 'rows', chatWidth: 'comfortable', translucent: false });
+    await updateClientTheme({ chatWidth: 'full' });
+    expect((await readClientSettings()).theme.chatWidth).toBe('full');
+    await updateClientTheme({ chatWidth: 'huge' as never });
+    expect((await readClientSettings()).theme.chatWidth).toBe('comfortable');
   });
 
   it('reaches the merged document the renderer sees', async () => {
     await updateClientTheme({ selected: 'light' });
     const merged = await withClientSettings(await readSettings());
-    expect(merged.theme).toEqual({ selected: 'light', appearance: 'system', chatLayout: 'rows', translucent: false });
+    expect(merged.theme).toEqual({ selected: 'light', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false });
   });
 });
 

@@ -46,6 +46,9 @@ Maintainer notes:
   no open debugging port.
 - **Computer control without a server.** "Let Stem control this Mac" now shows when Stem runs
   entirely on your Mac too, not only when its server is elsewhere.
+- **Wider chats on big screens.** Settings → App → Appearance → **Chat width** lets the
+  conversation use the room a large monitor has: *Comfortable* (as before), *Wide*, *Wider* or
+  *Full*. It's set per computer.
 - **Commands at a slash.** Type `/` at the start of a message to see what the box can do —
   `/pin`, `/note` and `/learn` — narrow it by typing, and pick one with Enter, Tab or a click.
 

@@ -3821,11 +3821,15 @@ export type ThemeAppearance = 'system' | 'light' | 'dark';
 /** How the conversation draws messages: avatar rows for both sides, or the user's messages as bubbles on the right. */
 export type ChatLayout = 'rows' | 'bubbles';
 
+/** How wide the conversation column may grow: the 780px reading measure, two wider caps, or the whole pane. */
+export type ChatWidth = 'comfortable' | 'wide' | 'wider' | 'full';
+
 export interface ThemeSettings {
   selected: string;
   /** For a theme with both a light and a dark palette; one-palette themes and the built-in modes ignore it. */
   appearance: ThemeAppearance;
   chatLayout: ChatLayout;
+  chatWidth: ChatWidth;
   /** macOS: the toolbar and inspector let the desktop show through (window vibrancy). Ignored elsewhere. */
   translucent: boolean;
 }
@@ -3969,6 +3973,7 @@ export interface ThemeState {
   /** ThemeSettings.appearance — which palette a paired theme paints. */
   appearance: ThemeAppearance;
   chatLayout: ChatLayout;
+  chatWidth: ChatWidth;
   translucent: boolean;
   /** The resolved custom theme, or null when `selected` is a built-in mode or the file is gone. */
   custom: CustomTheme | null;

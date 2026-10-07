@@ -4118,6 +4118,13 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
   background: color-mix(in srgb, var(--panel) 62%, transparent);
 }
 
+/* Chat width (Settings → App → Appearance): widens the reading measure the
+   transcript, composer, pinboard and approval card all centre on. Main window
+   only; Full lets the column take the whole pane (the .messages padding stays). */
+:root[data-chat-width='wide'] body:not(.qc-body):not(.hud-body) { --measure: 1000px; }
+:root[data-chat-width='wider'] body:not(.qc-body):not(.hud-body) { --measure: 1280px; }
+:root[data-chat-width='full'] body:not(.qc-body):not(.hud-body) { --measure: 100%; }
+
 /* Bubbles: the user's messages sit on the right in a tinted bubble, without the
    avatar or the "You" label; Stem's replies stay full-width rows. */
 :root[data-chat-layout='bubbles'] .message-user { justify-content: flex-end; }

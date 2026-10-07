@@ -68,11 +68,13 @@ ones for that.
 
 ## Window style
 
-Two choices beside the theme in Settings → App → Appearance, per machine like the theme itself
-(`chatLayout` and `translucent` in `client.json`), and independent of which theme is picked:
+Three choices beside the theme in Settings → App → Appearance, per machine like the theme itself
+(`chatLayout`, `chatWidth` and `translucent` in `client.json`), and independent of which theme is picked:
 
 - **Chat layout** — *Rows* (both sides as avatar rows, the default) or *Bubbles* (your messages in a
   tinted bubble on the right; Stem's replies stay rows).
+- **Chat width** — how wide the conversation and composer may grow: *Comfortable* (780px, the
+  default), *Wide* (1000px), *Wider* (1280px) or *Full* (the whole pane, for wide screens).
 - **Translucent sidebar** (macOS) — the main window gets sidebar vibrancy behind a clear
   background, and the toolbar and inspector are drawn see-through over it. The conversation stays
   opaque.

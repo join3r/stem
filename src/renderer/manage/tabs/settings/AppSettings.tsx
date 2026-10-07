@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type {
   ChatLayout,
+  ChatWidth,
   CustomTheme,
   EscapeAction,
   ModelSummary,
@@ -50,6 +51,7 @@ function AppearanceSection() {
   const [selected, setSelected] = useState('system');
   const [appearance, setAppearance] = useState<ThemeAppearance>('system');
   const [chatLayout, setChatLayout] = useState<ChatLayout>('rows');
+  const [chatWidth, setChatWidth] = useState<ChatWidth>('comfortable');
   const [translucent, setTranslucent] = useState(false);
   const [themes, setThemes] = useState<CustomTheme[]>([]);
 
@@ -58,6 +60,7 @@ function AppearanceSection() {
       setSelected(s.theme.selected);
       setAppearance(s.theme.appearance);
       setChatLayout(s.theme.chatLayout);
+      setChatWidth(s.theme.chatWidth);
       setTranslucent(s.theme.translucent);
     });
     void window.stem.listThemes().then(setThemes);
@@ -65,6 +68,7 @@ function AppearanceSection() {
       setSelected(state.selected);
       setAppearance(state.appearance);
       setChatLayout(state.chatLayout);
+      setChatWidth(state.chatWidth);
       setTranslucent(state.translucent);
       void window.stem.listThemes().then(setThemes);
     });
@@ -83,6 +87,11 @@ function AppearanceSection() {
   function selectChatLayout(value: ChatLayout) {
     setChatLayout(value);
     window.stem.updateThemeSettings({ chatLayout: value }).then((s) => setChatLayout(s.theme.chatLayout));
+  }
+
+  function selectChatWidth(value: ChatWidth) {
+    setChatWidth(value);
+    window.stem.updateThemeSettings({ chatWidth: value }).then((s) => setChatWidth(s.theme.chatWidth));
   }
 
   function toggleTranslucent() {
@@ -159,6 +168,19 @@ function AppearanceSection() {
               { value: 'bubbles', label: 'Bubbles', title: 'Your messages in bubbles on the right' }
             ]}
             onChange={(v) => selectChatLayout(v as ChatLayout)}
+          />
+        </ValueRow>
+        <ValueRow label="Chat width" hint="Wider uses the room on large screens">
+          <RowSelect
+            ariaLabel="Chat width"
+            value={chatWidth}
+            options={[
+              { value: 'comfortable', label: 'Comfortable', title: 'A book-like line length (780px)' },
+              { value: 'wide', label: 'Wide', title: 'Up to 1000px' },
+              { value: 'wider', label: 'Wider', title: 'Up to 1280px' },
+              { value: 'full', label: 'Full', title: 'The whole width of the chat pane' }
+            ]}
+            onChange={(v) => selectChatWidth(v as ChatWidth)}
           />
         </ValueRow>
         {window.stem.platform === 'darwin' && (

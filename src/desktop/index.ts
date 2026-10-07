@@ -192,6 +192,7 @@ let themeState: ThemeState = {
   selected: 'system',
   appearance: 'system',
   chatLayout: 'rows',
+  chatWidth: 'comfortable',
   translucent: false,
   custom: null
 };
