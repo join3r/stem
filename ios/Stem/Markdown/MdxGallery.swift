@@ -90,6 +90,13 @@ The cache keys on the **content hash**, so a renamed file still hits.
 
 SQLite wins because you have one writer.
 """##),
+        ("datatable-wrap", ##"""
+<DataTable caption="Témy šité na joinit">
+```json
+[{"Téma":"Agent má root. Kto má problém?","Čo rozobrať":"Sandboxy, oprávnenia, prompt injection a čo sa stane po meste, keď agent zmaže produkciu."},{"Téma":"Pamäť AI je databáza, nie kúzlo","Čo rozobrať":"Čo ukladať, ako riešiť zabúdanie a dôvodu, prečo embedding nie je pamäť."},{"Téma":"GPU čaká na pamäť","Čo rozobrať":"Bandwidth, KV cache a prečo lokálne modely brzdí pamäť."}]
+```
+</DataTable>
+"""##),
         ("datatable-diagram", ##"""
 <DataTable caption="Largest countries">
 ```json

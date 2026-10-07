@@ -23,10 +23,9 @@ struct MdxDataTable: View {
                         ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
                             GridRow {
                                 ForEach(table.columns, id: \.self) { c in
-                                    Text(row[c]?.text ?? "")
-                                        .monospacedDigit()
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .frame(maxWidth: 240, alignment: .leading)
+                                    CappedWidth(maxWidth: 240) {
+                                        Text(row[c]?.text ?? "").monospacedDigit()
+                                    }
                                 }
                             }
                             .font(.footnote)
@@ -40,6 +39,25 @@ struct MdxDataTable: View {
         } else {
             MdxNote(text: "Building table…", busy: true)
         }
+    }
+}
+
+// Inside the horizontal ScrollView the Grid measures cells with no width,
+// so a plain .frame(maxWidth:) reports a one-line height and the text then
+// wraps at the cap and spills over the next row. This takes the cell's
+// natural width up to `maxWidth` and measures its height at that width.
+private struct CappedWidth: Layout {
+    let maxWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let cell = subviews.first else { return .zero }
+        let width = min(cell.sizeThatFits(.unspecified).width, maxWidth)
+        let height = cell.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: Swift.min(bounds.width, maxWidth), height: nil))
     }
 }
 
