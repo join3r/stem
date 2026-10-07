@@ -119,7 +119,17 @@ async function author(draft: RecordingDraft, images: LlmImage[]): Promise<Record
   });
   const base = { ...draft, examples: withoutShots(draft.examples), updatedAt: new Date().toISOString() };
   if (outcome.ok) {
-    return store({ ...base, status: 'ready', skill: outcome.draft, variables: outcome.variables, questions: outcome.questions, message: undefined, duplicateOf: undefined });
+    return store({
+      ...base,
+      status: 'ready',
+      skill: outcome.draft,
+      variables: outcome.variables,
+      questions: outcome.questions,
+      finalSteps: outcome.finalSteps,
+      changes: outcome.changes.length ? outcome.changes : undefined,
+      message: undefined,
+      duplicateOf: undefined
+    });
   }
   const message =
     outcome.reason === 'declined'

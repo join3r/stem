@@ -1663,6 +1663,31 @@ export interface RecordingDraft {
   savedSlug?: string;
   /** A saved skill that looks like the same procedure (dedup); Save then updates it. */
   duplicateOf?: string;
+  /**
+   * The steps that change something outside the screen (save, send, archive,
+   * delete), named as recorded: a practice run's message asks the agent to
+   * stop before each one unless the person says otherwise.
+   */
+  finalSteps?: string[];
+  /** What the last practice-run rewrite changed, in plain words. */
+  changes?: string[];
+  /** A practice run in progress: the agent trying the draft in this chat. */
+  practice?: RecordingPractice;
+}
+
+/** A practice run of a draft: from its first turn until "Update the skill from this run". */
+export interface RecordingPractice {
+  /** The turn the practice message started; evidence is read from here on. */
+  startTurnId: string;
+  /** Turns settled since it started; the card offers the update once this is > 0. */
+  turns: number;
+  /** The person took over (mouse/keys on a computer run, Stop on a browser run). */
+  takeover?: {
+    kind: 'computer' | 'browser';
+    at: string;
+    why?: 'stuck' | 'unwanted' | 'other';
+    note?: string;
+  };
 }
 
 export interface RecordingSaveResult {

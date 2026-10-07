@@ -113,7 +113,15 @@ describe('parseRecordExtras', () => {
     const out = parseRecordExtras(JSON.stringify({ variables: [{ name: 'A', from: 'b' }, { name: 1 }], questions: ['1', '2', '3', '4', 5] }));
     expect(out.variables).toEqual([{ name: 'A', from: 'b' }]);
     expect(out.questions).toEqual(['1', '2', '3']);
-    expect(parseRecordExtras('nonsense')).toEqual({ variables: [], questions: [] });
+    expect(parseRecordExtras('nonsense')).toEqual({ variables: [], questions: [], finalSteps: [], changes: [] });
+  });
+
+  it('keeps up to five final steps and the changes a rewrite reports', () => {
+    const out = parseRecordExtras(
+      JSON.stringify({ finalSteps: ['Click "Uložiť" in agrisys (saves the date)', 'Press "y" in Fastmail (archives)', '', 3, 'c', 'd', 'e', 'f'], changes: ['The save button is "Uložiť"'] })
+    );
+    expect(out.finalSteps).toEqual(['Click "Uložiť" in agrisys (saves the date)', 'Press "y" in Fastmail (archives)', 'c', 'd', 'e']);
+    expect(out.changes).toEqual(['The save button is "Uložiť"']);
   });
 });
 

@@ -29,8 +29,10 @@ Your job:
 
 Ask a question only for something the evidence cannot settle and a wrong guess would get wrong every run, such as where a value with no source comes from. At most three, short, answerable in a sentence. Do not ask about anything the traced sources already answer.
 
+Also list the final steps: the ones that change something outside the screen and cannot simply be closed away — saving or submitting a form, sending a message, archiving, moving or deleting an item, paying. Name each the way the recording shows it and say what it does: 'Click "Uložiť" in agrisys (saves the delivery date)', 'Press "y" in Fastmail (archives the email)'. At most five, in the order they happen; none if nothing is changed. A practice run of this skill stops before each of them unless the user allows it.
+
 Reply with ONLY a JSON object, no prose and no markdown fences:
-{"skill": {"name": "...", "description": "...", "body": "..."}, "variables": [{"name": "<what changes>", "from": "<where the skill finds it>"}], "questions": ["..."]}
+{"skill": {"name": "...", "description": "...", "body": "..."}, "variables": [{"name": "<what changes>", "from": "<where the skill finds it>"}], "questions": ["..."], "finalSteps": ["..."]}
 or, only when the recording holds no task at all (nothing but window switching, say):
 {"skill": null, "reason": "<one short clause>"}`;
 
@@ -109,12 +111,24 @@ export function buildRecordPrompt(input: RecordAuthorInput): string {
   return parts.join('\n\n');
 }
 
+export interface RecordExtras {
+  variables: RecordingVariable[];
+  questions: string[];
+  finalSteps: string[];
+  /** Only from a practice-run rewrite: what it changed, in plain words. */
+  changes: string[];
+}
+
 export type RecordAuthorOutcome =
-  | { ok: true; draft: SkillDraft; variables: RecordingVariable[]; questions: string[] }
+  | ({ ok: true; draft: SkillDraft } & RecordExtras)
   | { ok: false; reason: 'declined' | 'invalid' | 'unparseable' | 'error'; detail: string };
 
-/** The variables and questions beside the skill in the reply; tolerant of junk. */
-export function parseRecordExtras(output: string): { variables: RecordingVariable[]; questions: string[] } {
+function strings(v: unknown, each: number, most: number): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim().slice(0, each)).slice(0, most) : [];
+}
+
+/** The variables, questions, final steps and changes beside the skill in the reply; tolerant of junk. */
+export function parseRecordExtras(output: string): RecordExtras {
   const text = String(output ?? '');
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -131,10 +145,12 @@ export function parseRecordExtras(output: string): { variables: RecordingVariabl
         .filter((v) => v.name && v.from)
         .slice(0, 12)
     : [];
-  const questions = Array.isArray(parsed.questions)
-    ? parsed.questions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0).map((q) => q.trim().slice(0, 300)).slice(0, 3)
-    : [];
-  return { variables, questions };
+  return {
+    variables,
+    questions: strings(parsed.questions, 300, 3),
+    finalSteps: strings(parsed.finalSteps, 200, 5),
+    changes: strings(parsed.changes, 240, 8)
+  };
 }
 
 const MAX_ATTEMPTS = 2;
