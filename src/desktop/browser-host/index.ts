@@ -25,8 +25,10 @@ import type {
 import {
   browserInstallPaths,
   ensureHostConfig,
+  extensionsPageUrl,
   installBrowserControl,
   refreshBrowserControl,
+  setupBrowsers,
   type BrowserHostConfig,
   type BrowserInstallPaths,
   type InstallSource
@@ -66,6 +68,8 @@ export interface BrowserHostDeps {
   launch?(appPath: string): Promise<void>;
   /** Open a URL or folder with an app (Set up's last step). Tests fake it. */
   openWith?(appPath: string | null, target: string): Promise<void>;
+  /** Put text on the clipboard (the extension folder, for Load unpacked's picker). */
+  copyText?(text: string): void;
   paths?: BrowserInstallPaths;
   platform?: NodeJS.Platform;
   /** The home whose browsers Set up registers. Tests point it at a temp folder. */
@@ -457,7 +461,14 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
 
   async function state(): Promise<BrowserHostLocalState> {
     const { browsers, chosen, enabled } = await browsersNow();
-    return { supported, enabled, browsers, chosen, extensionPath: existsSync(paths.extensionDir) ? paths.extensionDir : null };
+    return {
+      supported,
+      enabled,
+      browsers,
+      chosen,
+      extensionPath: existsSync(paths.extensionDir) ? paths.extensionDir : null,
+      setupBrowsers: supported ? setupBrowsers(deps.home) : []
+    };
   }
 
   return {
@@ -524,11 +535,20 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
 
     async openExtensionsPage(browserId) {
       const settings = await readBrowserHostSettings();
-      const app = browserId ?? settings.chosen ?? settings.known[0]?.id ?? null;
+      const app = browserId ?? settings.chosen ?? settings.known[0]?.id ?? setupBrowsers(deps.home)[0]?.app ?? null;
+      // The path goes on the clipboard first, while Stem still has focus: Load
+      // unpacked's picker takes it with ⌘⇧G, which beats hunting for a folder
+      // inside Application Support.
+      try {
+        deps.copyText?.(paths.extensionDir);
+      } catch (e) {
+        log('browser-host', 'could not copy the extension folder', { error: String(e) });
+      }
       // Browsers refuse chrome:// URLs from outside, so the reliable half is
-      // the folder: Finder shows it, ready for Load unpacked.
+      // the folder: Finder shows it, ready for Load unpacked. The browser still
+      // comes forward, so typing its extensions page is all that is left.
       await openWith(null, paths.extensionDir).catch(() => undefined);
-      if (app) await openWith(app, 'chrome://extensions').catch(() => undefined);
+      if (app) await openWith(app, extensionsPageUrl(app)).catch(() => undefined);
     },
 
     close() {

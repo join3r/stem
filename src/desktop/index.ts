@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   globalShortcut,
   ipcMain,
   nativeImage,
@@ -516,7 +517,8 @@ app.whenReady().then(async () => {
       extensionSource: BROWSER_EXTENSION_DIR,
       hostScript: BROWSER_NATIVE_HOST_SCRIPT,
       nodeCommand: process.execPath
-    })
+    }),
+    copyText: (text) => clipboard.writeText(text)
   });
 
   proxy = createServerProxy({

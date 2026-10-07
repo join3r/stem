@@ -14,13 +14,15 @@ On the Mac whose browser Stem should use:
 
 1. Open Settings → Features → **Browser control** and switch on **Let Stem control this
    Mac's browser**.
-2. Press **Set up…**. Stem puts the extension in a folder, shows that folder in Finder,
-   and tells the browsers on this Mac how to reach Stem.
-3. In your browser, open the extensions page (`chrome://extensions`, or
-   `arc://extensions` in Arc), turn on **Developer mode**, click **Load unpacked** and
-   choose the folder Stem showed.
+2. Press **Set up…**. Stem puts the extension in a folder, copies that folder's path,
+   brings your browser forward, and tells the browsers on this Mac how to reach Stem.
+   The steps below then appear in Settings, with Copy and Open buttons.
+3. In your browser, type the extensions page into the address bar (`chrome://extensions`,
+   or `arc://extensions` in Arc) and turn on **Developer mode**.
+4. Click **Load unpacked**. In the folder picker press ⌘⇧G, paste the path with ⌘V,
+   press Return, then **Select**.
 
-Settings then shows the browser as connected. You do this once per browser; when Stem
+Settings shows the browser as connected within a couple of seconds. You do this once per browser; when Stem
 updates, the extension updates itself. If the extension is installed in more than one
 browser, a **Use** row picks the one Stem drives. When that browser is closed and a run
 needs it, Stem starts it in the background.

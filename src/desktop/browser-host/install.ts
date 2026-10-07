@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { host } from '../../server/host';
 import { BROWSER_EXTENSION_ID, BROWSER_NATIVE_HOST } from '../../shared/browser-native';
+import type { SetupBrowser } from '../../shared/types';
 
 // Putting the Stem extension within reach of the user's browsers: the files to
 // Load unpacked, the native-messaging host the extension talks to, and the
@@ -83,6 +84,8 @@ export async function ensureHostConfig(paths = browserInstallPaths()): Promise<B
 /** Where a browser keeps its native-messaging manifests, by the folder that says it is installed. */
 interface BrowserDir {
   name: string;
+  /** The app's bundle name in /Applications, what `open -a` takes. */
+  app: string;
   /** Present when the browser has ever run for this user. */
   dataDir: string;
   hostsDir: string;
@@ -92,34 +95,40 @@ export function browserDirs(home = homedir()): BrowserDir[] {
   const support = join(home, 'Library', 'Application Support');
   const chrome = join(support, 'Google', 'Chrome');
   const dirs: BrowserDir[] = [
-    { name: 'Google Chrome', dataDir: chrome, hostsDir: join(chrome, 'NativeMessagingHosts') },
+    { name: 'Google Chrome', app: 'Google Chrome', dataDir: chrome, hostsDir: join(chrome, 'NativeMessagingHosts') },
     {
       name: 'Arc',
+      app: 'Arc',
       dataDir: join(support, 'Arc', 'User Data'),
       hostsDir: join(support, 'Arc', 'User Data', 'NativeMessagingHosts')
     },
     {
       name: 'Dia',
+      app: 'Dia',
       dataDir: join(support, 'Dia', 'User Data'),
       hostsDir: join(support, 'Dia', 'User Data', 'NativeMessagingHosts')
     },
     {
       name: 'Brave',
+      app: 'Brave Browser',
       dataDir: join(support, 'BraveSoftware', 'Brave-Browser'),
       hostsDir: join(support, 'BraveSoftware', 'Brave-Browser', 'NativeMessagingHosts')
     },
     {
       name: 'Chromium',
+      app: 'Chromium',
       dataDir: join(support, 'Chromium'),
       hostsDir: join(support, 'Chromium', 'NativeMessagingHosts')
     },
     {
       name: 'Microsoft Edge',
+      app: 'Microsoft Edge',
       dataDir: join(support, 'Microsoft Edge'),
       hostsDir: join(support, 'Microsoft Edge', 'NativeMessagingHosts')
     },
     {
       name: 'Google Chrome for Testing',
+      app: 'Google Chrome for Testing',
       dataDir: join(support, 'Google', 'Chrome for Testing'),
       hostsDir: join(support, 'Google', 'Chrome for Testing', 'NativeMessagingHosts')
     }
@@ -128,6 +137,23 @@ export function browserDirs(home = homedir()): BrowserDir[] {
   // present Chrome's folder gets the manifest too, installed or not.
   const arcPresent = existsSync(dirs[1]!.dataDir);
   return dirs.filter((d) => existsSync(d.dataDir) || (arcPresent && d.dataDir === chrome));
+}
+
+/** The address of a browser's extensions page; the chrome:// one redirects everywhere but Arc. */
+export function extensionsPageUrl(app: string): string {
+  return /(^|\/)Arc(\.app)?$/.test(app) ? 'arc://extensions' : 'chrome://extensions';
+}
+
+/**
+ * The browsers the user can Load unpacked into, for Set up's steps: used on
+ * this Mac (a data folder) and still installed (an app bundle). Not Chrome for
+ * Testing, which only the dev harness drives.
+ */
+export function setupBrowsers(home = homedir(), appDirs = ['/Applications', join(home, 'Applications')]): SetupBrowser[] {
+  return browserDirs(home)
+    .filter((d) => d.name !== 'Google Chrome for Testing' && existsSync(d.dataDir))
+    .filter((d) => appDirs.some((dir) => existsSync(join(dir, `${d.app}.app`))))
+    .map((d) => ({ name: d.name, app: d.app, extensionsUrl: extensionsPageUrl(d.app) }));
 }
 
 /** sh-quote: the paths go into a script, and "Application Support" has a space. */

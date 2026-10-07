@@ -9,9 +9,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   browserDirs,
   browserInstallPaths,
+  extensionsPageUrl,
   installBrowserControl,
   installedHere,
   refreshBrowserControl,
+  setupBrowsers,
   socketPathFor,
   wrapperScript
 } from '../../src/desktop/browser-host/install';
@@ -85,6 +87,27 @@ describe('pieces', () => {
     expect(script).toContain(
       `ELECTRON_RUN_AS_NODE=1 exec '/Applications/Stem.app/Contents/MacOS/Stem' '/x/it'\\''s here.js' '/a b/config.json' "$@"`
     );
+  });
+
+  it('offers Set up’s steps only for browsers used here and still installed', () => {
+    mkdirSync(support('Arc', 'User Data'), { recursive: true });
+    mkdirSync(support('BraveSoftware', 'Brave-Browser'), { recursive: true });
+    mkdirSync(support('Microsoft Edge'), { recursive: true });
+    const apps = join(home, 'Apps');
+    mkdirSync(join(apps, 'Arc.app'), { recursive: true });
+    mkdirSync(join(apps, 'Brave Browser.app'), { recursive: true });
+    // Chrome's folder gets Arc's manifest but Chrome was never used; Edge was
+    // used but is gone.
+    expect(setupBrowsers(home, [apps])).toEqual([
+      { name: 'Arc', app: 'Arc', extensionsUrl: 'arc://extensions' },
+      {
+        name: 'Brave',
+        app: 'Brave Browser',
+        extensionsUrl: 'chrome://extensions'
+      }
+    ]);
+    expect(extensionsPageUrl('/Applications/Arc.app')).toBe('arc://extensions');
+    expect(extensionsPageUrl('/Applications/Google Chrome.app')).toBe('chrome://extensions');
   });
 
   it('keeps socket paths under the unix limit', () => {

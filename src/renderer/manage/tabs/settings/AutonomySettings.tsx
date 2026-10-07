@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import type {
   BrowserHostLocalState,
+  SetupBrowser,
   ComputerHostLocalState,
   DeviceInfo,
   ExecHostShellInfo,
@@ -84,6 +85,20 @@ export function AutonomySections() {
   // extension, and where Set up put it. Null until asked.
   const [browserHost, setBrowserHost] = useState<BrowserHostLocalState | null>(null);
   const [browserBusy, setBrowserBusy] = useState(false);
+  // While Set up waits for Load unpacked, ask every two seconds whether the
+  // extension has called in, so the row turns green while the user is still in
+  // the browser rather than only when they come back to this window.
+  const browserWaiting = !!browserHost?.enabled && extensionWaiting(browserHost);
+  useEffect(() => {
+    if (!browserWaiting) return;
+    const t = setInterval(() => {
+      void window.stem
+        .browserHostState()
+        .then(setBrowserHost)
+        .catch(() => undefined);
+    }, 2000);
+    return () => clearInterval(t);
+  }, [browserWaiting]);
   // Labels for the per-device allowlist groups. Devices that were unpaired keep
   // their entries readable (and deletable) under the raw id.
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
@@ -750,10 +765,16 @@ export function AutonomySections() {
   );
 }
 
+/** Set up has put the extension in its folder, and no browser has loaded it yet. */
+function extensionWaiting(state: BrowserHostLocalState): boolean {
+  return !!state.extensionPath && state.browsers.length === 0;
+}
+
 /**
  * The extension's status as one row with one button: Set up before there is a
  * copy, Show folder while waiting for Load unpacked, Set up again once a
- * browser is connected. Status first, so the row reads at a glance.
+ * browser is connected. Status first, so the row reads at a glance. While it
+ * waits, the Load unpacked steps sit right under it.
  */
 function BrowserExtensionRow({
   state,
@@ -773,31 +794,116 @@ function BrowserExtensionRow({
         : state.extensionPath
           ? 'Waiting for Load unpacked'
           : 'Not set up yet';
-  const waiting = !!state.extensionPath && state.browsers.length === 0;
+  const waiting = extensionWaiting(state);
   return (
-    <ValueRow
-      label="Stem extension"
-      hint={
-        <>
-          <span className={`ext-status${connected.length > 0 ? ' ok' : ''}`}>{status}</span>{' '}
-          <InfoTip label="Installing the extension">
-            Set up puts the extension in a folder and tells Arc, Chrome, Dia and Brave how to reach Stem. Then,
-            in your browser, open its extensions page (chrome://extensions, or arc://extensions in Arc), turn on
-            Developer mode, click Load unpacked and choose the folder Stem shows. You do this once per browser;
-            Stem updates the extension itself afterwards.
-          </InfoTip>
-        </>
+    <>
+      <ValueRow
+        label="Stem extension"
+        hint={
+          <>
+            <span className={`ext-status${connected.length > 0 ? ' ok' : ''}`}>{status}</span>{' '}
+            <InfoTip label="Installing the extension">
+              Set up puts the extension in a folder and tells Arc, Chrome, Dia and Brave how to reach Stem. Then you
+              load that folder once in each browser, following the steps shown here. Stem updates the extension itself
+              afterwards.
+            </InfoTip>
+          </>
+        }
+      >
+        {waiting ? (
+          <button className="btn sm" onClick={() => void window.stem.openBrowserExtensionsPage()}>
+            Show folder
+          </button>
+        ) : (
+          <button className="btn sm" disabled={busy} onClick={onSetUp}>
+            {state.extensionPath ? 'Set up again' : 'Set up…'}
+          </button>
+        )}
+      </ValueRow>
+      {waiting && state.extensionPath && (
+        <LoadUnpackedSteps extensionPath={state.extensionPath} browsers={state.setupBrowsers ?? []} />
+      )}
+    </>
+  );
+}
+
+/** A small Copy button that says Copied for a moment. */
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="btn sm"
+      aria-label={label}
+      onClick={() =>
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1600);
+        })
       }
     >
-      {waiting ? (
-        <button className="btn sm" onClick={() => void window.stem.openBrowserExtensionsPage()}>
-          Show folder
-        </button>
-      ) : (
-        <button className="btn sm" disabled={busy} onClick={onSetUp}>
-          {state.extensionPath ? 'Set up again' : 'Set up…'}
-        </button>
-      )}
-    </ValueRow>
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  );
+}
+
+/**
+ * Load unpacked, spelled out: browsers will not open their extensions page
+ * when asked from outside, and the folder sits inside Application Support,
+ * which the picker hides — so the steps give the address to type and the path
+ * to paste with ⌘⇧G (Set up already put it on the clipboard).
+ */
+function LoadUnpackedSteps({ extensionPath, browsers }: { extensionPath: string; browsers: SetupBrowser[] }) {
+  // One address for every browser but Arc, so a line per address rather than
+  // per browser: the sidebar is too narrow for the latter.
+  const urls =
+    browsers.length > 0
+      ? [...new Set(browsers.map((b) => b.extensionsUrl))]
+      : ['chrome://extensions', 'arc://extensions'];
+  const addresses = urls.map((url) => ({
+    url,
+    names: urls.length > 1 && url.startsWith('arc:') ? 'in Arc' : null
+  }));
+  return (
+    <div className="set-vbody ext-steps">
+      <ol>
+        <li>
+          Open your browser’s extensions page: type its address into the address bar.
+          {addresses.map(({ url, names }) => (
+            <div key={url} className="ext-browser">
+              <code>{url}</code>
+              {names && <span className="muted">{names}</span>}
+              <CopyButton text={url} label={`Copy ${url}`} />
+            </div>
+          ))}
+          {browsers.length > 0 && (
+            <div className="ext-open">
+              {browsers.map((b) => (
+                <button
+                  key={b.app}
+                  className="btn sm"
+                  onClick={() => void window.stem.openBrowserExtensionsPage(b.app)}
+                >
+                  Open {b.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </li>
+        <li>
+          Turn on <strong>Developer mode</strong>, the switch at the top right of that page.
+        </li>
+        <li>
+          Click <strong>Load unpacked</strong>. In the folder picker press <kbd>⌘</kbd>
+          <kbd>⇧</kbd>
+          <kbd>G</kbd>, paste the path below with <kbd>⌘</kbd>
+          <kbd>V</kbd> (Set up already copied it), press Return, then <strong>Select</strong>.
+          <div className="ext-browser">
+            <code className="ext-path">{extensionPath}</code>
+            <CopyButton text={extensionPath} label="Copy the extension folder’s path" />
+          </div>
+        </li>
+      </ol>
+      <div className="muted">This turns green as soon as the extension connects. Do it once in each browser.</div>
+    </div>
   );
 }

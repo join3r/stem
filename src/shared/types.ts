@@ -1846,6 +1846,17 @@ export interface BrowserHostLocalState {
   chosen: string | null;
   /** Where Set up put the extension (for Load unpacked); null before Set up ran. */
   extensionPath: string | null;
+  /** The browsers on this Mac Set up's steps offer to open, the one Stem would open first leading. */
+  setupBrowsers: SetupBrowser[];
+}
+
+/** A browser on this Mac the extension can be loaded into. */
+export interface SetupBrowser {
+  name: string;
+  /** What `open -a` takes ("Brave Browser"). */
+  app: string;
+  /** Its extensions page, to type into the address bar. */
+  extensionsUrl: string;
 }
 
 // ---- Coding agents on the user's own devices (coding_agent's `device`) ----
