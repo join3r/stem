@@ -492,8 +492,13 @@ export function ChatList(props: ChatListProps) {
   /** One chat row in the tree. Read/unread is the only triage a chat has left. */
   const renderChat = (chat: ChatSummary, depth: number) => {
     const isEditing = editing?.kind === 'chat' && editing.id === chat.threadId;
-    const status = props.statuses[chat.threadId] ?? 'idle';
-    const unread = isUnread(chat, data.inbox, status === 'running');
+    const live = props.statuses[chat.threadId] ?? 'idle';
+    const unread = isUnread(chat, data.inbox, live === 'running');
+    // The solid "unread reply" dot is this window's own memory of a turn that
+    // settled while another chat was open. The Inbox is the shared record of
+    // whether it has been read, so once that says read — opened on the phone,
+    // or marked read here — the dot goes with the bolding.
+    const status = live === 'done' && !unread ? 'idle' : live;
     // A turn stopped on a permission card is the one state the user must go and
     // do something about, so it outranks the running pulse on the dot.
     const waiting = props.approvalThreadIds?.has(chat.threadId) ?? false;

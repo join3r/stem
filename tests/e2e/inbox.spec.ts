@@ -308,3 +308,24 @@ test('the Return-to-chat target survives a reload', async ({ mainWindow }) => {
   ).toContainText('Echo: durable target');
   await expect(returnRow(mainWindow)).toContainText('Currently viewing');
 });
+
+test('a reply read on another device drops the unread dot here too', async ({ mainWindow }) => {
+  // A reply settles in chat A while chat B is open: A's row gets the solid
+  // unread-reply dot and goes bold.
+  const box = mainWindow.getByPlaceholder('Ask Stem…');
+  await box.fill('[e2e:slow] read me elsewhere');
+  await box.press('Enter');
+  await tab(mainWindow, 'Chats').click();
+  const rowA = mainWindow.locator('.chat-row.selected');
+  await expect(rowA).toBeVisible();
+  const threadA = await rowA.getAttribute('data-thread-id');
+  await mainWindow.getByTitle('New conversation').click();
+  const row = mainWindow.locator(`.chat-row[data-thread-id="${threadA}"]`);
+  await expect(row.locator('.chat-status.done')).toBeVisible({ timeout: 15_000 });
+  await expect(row).toHaveClass(/unread/);
+
+  // The phone opens it: the read stamp reaches the server, not this window.
+  await mainWindow.evaluate((id) => window.stem.setInboxRead([id!], true).then(() => undefined), threadA);
+  await expect(row).not.toHaveClass(/unread/);
+  await expect(row.locator('.chat-status.done')).toHaveCount(0);
+});
