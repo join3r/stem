@@ -1481,3 +1481,51 @@ describe('durable mobile turn identity', () => {
     expect((await runtime.readThread('torn-session')).complete).toBe(false);
   });
 });
+
+describe('/compact', () => {
+  function stubbed(runtime: PiRuntime): void {
+    (runtime as unknown as { ensureWorkerStarted: () => Promise<void> }).ensureWorkerStarted = async () => undefined;
+  }
+
+  it('passes the focus to pi and reports its token counts', async () => {
+    const { runtime } = await tempRuntime();
+    stubbed(runtime);
+    const worker = workerOf(runtime);
+    const sent: Array<Record<string, unknown>> = [];
+    worker.activeThreadId = 'chat';
+    worker.proc = {
+      running: true,
+      request: async (command) => {
+        sent.push(command);
+        return { success: true, data: { tokensBefore: 142_000, estimatedTokensAfter: 31_000 } };
+      }
+    };
+
+    await expect(runtime.compactChat('chat', '  keep the invoice numbers ')).resolves.toEqual({
+      tokensBefore: 142_000,
+      tokensAfter: 31_000
+    });
+    expect(sent).toEqual([{ type: 'compact', customInstructions: 'keep the invoice numbers' }]);
+  });
+
+  it('is refused while the chat is replying, before pi can abort the reply', async () => {
+    const { runtime } = await tempRuntime();
+    const worker = workerOf(runtime);
+    const sent: unknown[] = [];
+    worker.proc = { running: true, request: async (command) => (sent.push(command), { success: true }) };
+    worker.currentTurn = newTurnContext('chat', 'turn');
+
+    await expect(runtime.compactChat('chat')).rejects.toThrow('Wait for the reply to finish');
+    expect(sent).toEqual([]);
+  });
+
+  it('surfaces pi’s refusal', async () => {
+    const { runtime } = await tempRuntime();
+    stubbed(runtime);
+    const worker = workerOf(runtime);
+    worker.activeThreadId = 'chat';
+    worker.proc = { running: true, request: async () => ({ success: false, error: 'Nothing to compact (session too small)' }) };
+
+    await expect(runtime.compactChat('chat')).rejects.toThrow('Nothing to compact');
+  });
+});

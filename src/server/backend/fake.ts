@@ -13,6 +13,7 @@ import type {
 import type {
   ChatMessage,
   ChatSummary,
+  CompactChatResult,
   GeneratedImageRef,
   McpAdminProposal,
   McpLoginResult,
@@ -374,6 +375,11 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
     if (!thread) return;
     const at = thread.messages.findIndex((m) => m.turnId === turnId);
     if (at !== -1) thread.messages = thread.messages.slice(0, at);
+  }
+
+  async compactChat(threadId: string): Promise<CompactChatResult> {
+    if (!this.threads.has(threadId)) throw new Error(`No such thread: ${threadId}`);
+    return { tokensBefore: null, tokensAfter: null };
   }
 
   async forkThread(threadId: string, turnId: string): Promise<{ threadId: string }> {

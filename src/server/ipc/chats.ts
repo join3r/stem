@@ -192,6 +192,9 @@ export function registerChatsIpc(deps: IpcDeps): void {
     );
     return forked;
   });
+  registerServer('chats:compact', (_e, threadId: string, instructions?: string | null) =>
+    deps.runtime().compactChat(threadId, instructions ?? undefined)
+  );
   registerServer('chats:rename', async (_e, threadId: string, name: string) => {
     const before = (await deps.runtime().listThreads()).find((t) => t.threadId === threadId);
     // The sidebar's rename field commits on blur, so opening Rename and clicking

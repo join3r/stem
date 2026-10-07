@@ -1,18 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { slashMatches, type SlashCommandName } from '../../src/renderer/chat/slashCommands';
 
-const all = new Set<SlashCommandName>(['pin', 'note', 'learn']);
+const all = new Set<SlashCommandName>(['pin', 'note', 'learn', 'compact']);
 const names = (draft: string, available = all) => slashMatches(draft, available)?.map((c) => c.name) ?? null;
 
 describe('slash menu', () => {
   it('lists every command on a bare slash', () => {
-    expect(names('/')).toEqual(['pin', 'note', 'learn']);
+    expect(names('/')).toEqual(['pin', 'note', 'learn', 'compact']);
   });
 
   it('narrows as the name is typed, ignoring case', () => {
     expect(names('/p')).toEqual(['pin']);
     expect(names('/N')).toEqual(['note']);
     expect(names('/learn')).toEqual(['learn']);
+    expect(names('/c')).toEqual(['compact']);
   });
 
   it('closes once the name is done, or nothing matches', () => {

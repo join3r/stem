@@ -23,6 +23,7 @@ import { slashMatches, type SlashCommand, type SlashCommandName } from './slashC
 import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, noteBodyValid, useNoteMode } from '../noteMode';
 import { clearDraft, readDraft, writeDraft } from './draft-store';
 import { dismissLearnNotice, readLearn, startLearn, subscribeLearn } from './learn-store';
+import { dismissCompactNotice, readCompact, startCompact, subscribeCompact } from './compact-store';
 import { consumePrefill, consumeSheet, dismissRecorderError, readRecorder, subscribeRecorder } from './recorder-store';
 import { RecordSheet } from './RecordSheet';
 
@@ -51,11 +52,20 @@ function fileToAttachment(file: File): Promise<TurnAttachment> {
 // the model. Matched at submit rather than while typing —
 // unlike `/note` this is a one-shot action, not a mode the composer sits in.
 //
-// Two commands are intercepted, `/learn` and `/pin`, each a literal match. The
-// `/` menu that offers them lists them in slashCommands.ts.
+// Three commands are intercepted, `/learn`, `/compact` and `/pin`, each a
+// literal match. The `/` menu that offers them lists them in slashCommands.ts.
 export function detectLearnCommand(text: string): { focus: string } | null {
   if (text === '/learn') return { focus: '' };
   if (text.startsWith('/learn ')) return { focus: text.slice('/learn '.length).trim() };
+  return null;
+}
+
+// `/compact [focus]` condenses the chat's history now — pi's summary of the
+// older turns replaces them, as its automatic condense does near the limit. The
+// focus, if any, tells the summary what to keep.
+export function detectCompactCommand(text: string): { instructions: string } | null {
+  if (text === '/compact') return { instructions: '' };
+  if (text.startsWith('/compact ')) return { instructions: text.slice('/compact '.length).trim() };
   return null;
 }
 
@@ -239,6 +249,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     const names = new Set<SlashCommandName>(['note']);
     if (onPinNote) names.add('pin');
     if (threadId) names.add('learn');
+    if (threadId) names.add('compact');
     if (threadId && CAN_RECORD) names.add('record');
     return names;
   }, [onPinNote, threadId]);
@@ -305,6 +316,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       el.setSelectionRange(p.text.length, p.text.length);
     }, 0);
   }, [recorder.prefill, threadId]);
+  // `/compact` lives outside the component for the same reason (compact-store.ts).
+  const { compacting, notice: compactNotice } = useSyncExternalStore(subscribeCompact, () => readCompact(threadId));
+  useEffect(() => {
+    if (!threadId || !compactNotice) return;
+    const t = window.setTimeout(() => dismissCompactNotice(threadId, compactNotice), LEARN_NOTICE_MS);
+    return () => window.clearTimeout(t);
+  }, [threadId, compactNotice]);
   const recordError = recorder.state.threadId === threadId ? recorder.state.error : null;
   useEffect(() => {
     if (!recordError) return;
@@ -351,6 +369,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
       // still clears — the alternative is sending the literal text to the model.
       const focus = learn.focus;
       void startLearn(threadId, () => window.stem.learnFromChat(threadId, focus || undefined));
+      setArmed(false);
+      setDraft('');
+      return;
+    }
+    const compact = detectCompactCommand(text);
+    if (compact && threadId) {
+      // Gated on `running` above: pi's compact aborts whatever the chat is
+      // doing, and the server refuses it mid-reply anyway.
+      const instructions = compact.instructions;
+      void startCompact(threadId, () => window.stem.compactChat(threadId, instructions || undefined));
       setArmed(false);
       setDraft('');
       return;
@@ -635,6 +663,14 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               {/* Deliberately not "Saving…": on ask mode this sits here while the
                   approval card waits, and nothing is saved until it's answered. */}
               {learnNotice?.text ?? 'Learning from this chat…'}
+            </span>
+          </div>
+        )}
+        {(compacting || compactNotice) && (
+          <div className="composer-attachments">
+            <span className={`note-flash${compactNotice?.ok ? ' ok' : ''}`} role="status" aria-live="polite">
+              {compactNotice?.ok && <Check size={13} />}
+              {compactNotice?.text ?? 'Condensing this chat…'}
             </span>
           </div>
         )}

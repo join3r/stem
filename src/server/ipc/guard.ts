@@ -173,6 +173,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'chats:image': [a.string, a.string],
   'chats:rollbackToTurn': [a.string, a.string],
   'chats:forkThread': [a.string, a.string],
+  'chats:compact': [a.string, a.nullish(a.string)],
   'chats:rename': [a.string, a.string],
   'chats:delete': [a.string],
   'chats:setFolder': [a.string, a.nullish(a.string)],

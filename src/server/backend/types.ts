@@ -7,6 +7,7 @@ import type {
   DeviceComputerResult,
   ChatMessage,
   ChatSummary,
+  CompactChatResult,
   GeneratedImageRef,
   McpAdminProposal,
   McpLoginResult,
@@ -377,6 +378,8 @@ export interface ChatBackend extends EventEmitter {
   deleteThread(threadId: string): Promise<void>;
   rollbackToTurn(threadId: string, turnId: string): Promise<void>;
   forkThread(threadId: string, turnId: string): Promise<{ threadId: string }>;
+  /** `/compact`: condense the chat's history now. Refused while it is replying. */
+  compactChat(threadId: string, instructions?: string): Promise<CompactChatResult>;
 
   // MCP
   mcpLogin(name: string): Promise<McpLoginResult>;

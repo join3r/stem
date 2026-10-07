@@ -20,6 +20,7 @@ import type {
   BackendEventEnvelope,
   ChatFormat,
   ChatMessage,
+  CompactChatResult,
   ChatSummary,
   GeneratedImageRef,
   InstructionsProposal,
@@ -290,6 +291,10 @@ interface PendingStartCancel {
 
 /** Bound on preStartCancels; entries are consumed by their start or aged out. */
 const PRE_START_CANCEL_CAP = 32;
+
+/** A condense is one long summarizing call over the whole history; the default
+ * request timeout would give up on a big chat that is still being summarized. */
+const COMPACT_TIMEOUT_MS = 10 * 60_000;
 
 /** Accept a client-minted turn id only in canonical UUID form; anything else is
  * replaced with a server-minted one (the turn still runs, it just cannot be
@@ -3652,7 +3657,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // settled the turn here), so these events arrive with no live TurnContext.
     // Stamp a settled "condensed" row onto the just-finished bubble so the condense
     // is visible; compaction_start is skipped (nothing to animate on a settled turn).
-    if (!worker.currentTurn && ev.type === 'compaction_end' && worker.lastSettledTurn) {
+    // Only while that turn's chat is still the loaded one: a `/compact` of
+    // another chat on this worker must not stamp a row onto this one.
+    if (
+      !worker.currentTurn &&
+      ev.type === 'compaction_end' &&
+      worker.lastSettledTurn &&
+      worker.lastSettledTurn.threadId === worker.activeThreadId
+    ) {
       const { threadId, turnId } = worker.lastSettledTurn;
       const failed = ev.aborted === true || typeof ev.errorMessage === 'string';
       this.emitEvent('item/completed', {
@@ -3830,8 +3842,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Interactive overflow self-heal: a turn that died because the context
     // outgrew the model's window leaves a thread where EVERY next send would
     // overflow again (pi's own compact-and-retry has been seen to fail
-    // silently, and Stem has no manual condense control). Condense in the
-    // background so the user's next message starts from a shrunken thread.
+    // silently, and nobody should have to know to type `/compact`). Condense in
+    // the background so the user's next message starts from a shrunken thread.
     // Queued behind the foreground gate, so a send the user fires first still
     // serializes correctly; the condense surfaces via the settled-turn
     // compaction activity row. Scheduled runs are excluded: each runs in a
@@ -4168,16 +4180,41 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   }
 
   /**
-   * Condense a thread's context via pi's manual compact — the interactive
-   * overflow self-heal (see settleTurn). Serialized behind the foreground gate
-   * like a turn.
+   * `/compact [instructions]`: condense the chat's history now instead of waiting
+   * for pi to hit its threshold. Refused while the chat has a reply streaming —
+   * pi's compact aborts whatever its session is running, so going ahead would
+   * silently kill that reply. A send fired while the condense runs queues behind
+   * it on the worker gate and starts from the shorter history.
    */
-  private async compactThread(threadId: string): Promise<void> {
+  async compactChat(threadId: string, instructions?: string): Promise<CompactChatResult> {
+    if (this.turnWorker(threadId)) throw new Error('Wait for the reply to finish, then compact.');
+    return this.compactThread(threadId, instructions?.trim() || undefined);
+  }
+
+  /**
+   * Condense a thread's context via pi's manual compact — `/compact`, and the
+   * interactive overflow self-heal (see settleTurn). Serialized behind the
+   * foreground gate like a turn.
+   */
+  private async compactThread(threadId: string, instructions?: string): Promise<CompactChatResult> {
     return this.withThreadWorker(threadId, async (w) => {
       await this.ensureWorkerStarted(w);
       await this.ensureActive(w, threadId);
-      const res = await w.proc!.request({ type: 'compact' });
+      // withThreadWorker always lands on a plain worker, so a persona chat can
+      // still be loaded on its persona worker. That copy never sees the entry
+      // appended here, and its next turn would carry on from the uncondensed
+      // leaf — make it reload the file instead.
+      for (const other of this.workers) if (other !== w && other.activeThreadId === threadId) other.activeThreadId = null;
+      const res = await w.proc!.request(
+        { type: 'compact', ...(instructions ? { customInstructions: instructions } : {}) },
+        COMPACT_TIMEOUT_MS
+      );
       if (!res.success) throw new Error(res.error ?? 'pi could not condense the chat.');
+      const data = res.data as { tokensBefore?: number; estimatedTokensAfter?: number } | undefined;
+      return {
+        tokensBefore: typeof data?.tokensBefore === 'number' ? data.tokensBefore : null,
+        tokensAfter: typeof data?.estimatedTokensAfter === 'number' ? data.estimatedTokensAfter : null
+      };
     });
   }
 

@@ -2090,6 +2090,13 @@ export interface SkillProposal {
 }
 
 /** Outcome of `/learn`. `message` is written to be shown to the user verbatim. */
+/** What `/compact` did. Either count is null when pi did not report it. */
+export interface CompactChatResult {
+  tokensBefore: number | null;
+  /** pi's estimate of the condensed context, before the next turn measures it. */
+  tokensAfter: number | null;
+}
+
 export type SkillLearnResult =
   | { ok: true; slug: string; saved: boolean; message: string }
   | { ok: false; message: string };
@@ -4719,6 +4726,7 @@ export interface StemApi {
   rollbackToTurn(threadId: string, turnId: string): Promise<void>;
   /** Branch the thread into a new chat, trimmed to end at the given turn. */
   forkThread(threadId: string, turnId: string): Promise<{ threadId: string }>;
+  compactChat(threadId: string, instructions?: string): Promise<CompactChatResult>;
   /** The chat's pinboard, in board order. Each mutator answers with the fresh list. */
   listPins(threadId: string): Promise<ChatPin[]>;
   addPin(threadId: string, input: ChatPinInput): Promise<ChatPin[]>;
