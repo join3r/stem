@@ -192,7 +192,8 @@ A task the user repeats with their own particulars (the same client, the same fo
 const MAX_ATTEMPTS = 2;
 
 /** One turn of the conversation: what the user said, what was run, what came back. */
-function renderTurn(turn: AuthorTurn): string {
+/** One turn as evidence: the user's message, the tool calls in order, the reply. */
+export function renderTurn(turn: AuthorTurn): string {
   const parts: string[] = [];
   if (turn.userText.trim()) parts.push(`The user's message:\n${turn.userText.trim()}`);
   parts.push(

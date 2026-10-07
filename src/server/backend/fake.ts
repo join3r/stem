@@ -269,6 +269,13 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
     this.settle(turn, 'aborted');
   }
 
+  interruptThread(threadId: string, reason?: string): boolean {
+    const turn = this.activeTurn;
+    if (!turn || turn.threadId !== threadId) return false;
+    void this.interruptTurn(turn.turnId, reason);
+    return true;
+  }
+
   async listModels(): Promise<ModelSummary[]> {
     return [MODEL];
   }

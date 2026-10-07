@@ -75,7 +75,8 @@ export interface BrowserDeviceRouter {
    * The user pressed Stop for this thread's run — `browserHost:event`. Fails
    * the thread's in-flight actions and refuses every later one this turn.
    */
-  stopped(deviceId: string, threadId: string): void;
+  /** False when the Stop came from a device the thread is not using (ignored). */
+  stopped(deviceId: string, threadId: string): boolean;
   /** Whether the user stopped this thread's run (cleared by endThread). */
   isStopped(threadId: string): boolean;
   /** The turn is over: fail anything in flight and tell every Mac the thread used. */
@@ -277,11 +278,12 @@ export function createBrowserDeviceRouter(deps: BrowserDeviceRouterDeps): Browse
       // Mac cannot end a run it never had.
       if (!runs.get(threadId)?.has(deviceId)) {
         log('browser-device', 'ignored a Stop from a device the thread is not using', { threadId, got: deviceId });
-        return;
+        return false;
       }
       stoppedThreads.add(threadId);
       failThread(threadId, { ok: false, error: USER_STOPPED_BROWSER, stopped: true });
       log('browser-device', 'the user stopped a browser run', { threadId, deviceId });
+      return true;
     },
 
     isStopped: (threadId) => stoppedThreads.has(threadId),

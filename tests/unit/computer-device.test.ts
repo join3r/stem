@@ -148,9 +148,9 @@ describe('createComputerDeviceRouter', () => {
   it('the person taking over fails the in-flight action, refuses the rest of the turn, and endThread clears it', async () => {
     const promise = router.send('t1', 'mac-1', { kind: 'type', text: 'hi' });
     // Another Mac cannot end a run it never had.
-    router.humanInput('mac-2', 't1');
+    expect(router.humanInput('mac-2', 't1')).toBe(false);
     expect(router.isAborted('t1')).toBe(false);
-    router.humanInput('mac-1', 't1');
+    expect(router.humanInput('mac-1', 't1')).toBe(true);
     expect(await promise).toEqual({
       ok: false,
       error: HUMAN_TOOK_OVER,

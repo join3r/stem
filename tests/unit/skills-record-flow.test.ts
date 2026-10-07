@@ -13,13 +13,19 @@ import { initSkills } from '../../src/server/startup/skills';
 import {
   answerRecordingDraft,
   discardRecordingDraft,
+  notePracticeTakeover,
   practiceSkillFor,
   practiceStarted,
+  practiceTakeover,
+  practiceTurnSettled,
   recordSkill,
   recordingDrafts,
   saveRecordingDraft,
-  setRecordingDraftPush
+  setPracticeStopper,
+  setRecordingDraftPush,
+  updateFromPractice
 } from '../../src/server/startup/record-skills';
+import type { LearnTurn } from '../../src/server/skills/thread-evidence';
 import { setChatPrivate } from '../../src/server/workspace/chats';
 import type { ChatBackend } from '../../src/server/backend';
 import { userDataRoot } from '../../src/server/workspace/paths';
@@ -51,10 +57,14 @@ describe('recording drafts', () => {
   let prompts: string[];
   let answer: Record<string, unknown>;
   let pushed: RecordingDraft[];
+  let evidence: LearnTurn[];
+  let stopped: string[];
 
   beforeEach(() => {
     prompts = [];
     pushed = [];
+    evidence = [];
+    stopped = [];
     answer = {
       skill: { name: 'set-agrisys-delivery-date', description: 'Copy a confirmed delivery date from a supplier email into its agrisys order.', body: BODY },
       variables: [{ name: 'Delivery date', from: 'the confirmed date in the supplier email' }],
@@ -67,10 +77,15 @@ describe('recording drafts', () => {
       complete: async (prompt: string) => {
         prompts.push(prompt);
         return JSON.stringify(answer);
-      }
+      },
+      learnEvidence: async () => evidence
     } as unknown as ChatBackend;
     initSkills({ runtime, onChanged: () => undefined, busyWithin: () => false });
     setRecordingDraftPush((d) => pushed.push(d));
+    setPracticeStopper((threadId) => {
+      stopped.push(threadId);
+      return true;
+    });
   });
 
   it('writes a draft, rewrites it with another example, and saves it', async () => {
@@ -124,6 +139,47 @@ describe('recording drafts', () => {
     expect((await recordingDrafts('thread-practice'))[0].practice).toEqual({ startTurnId: 'turn-1', turns: 0 });
     await discardRecordingDraft(draft.id);
     expect(await practiceSkillFor('thread-practice', draft.id)).toBeNull();
+  });
+
+  it('stops a practice turn dead on a takeover, counts its turns, and rewrites the draft from the run', async () => {
+    const draft = await recordSkill(undefined, 'thread-run', example('6.6.2027'));
+    // No practice going on: a takeover is an ordinary computer-control one.
+    expect(await practiceTakeover('thread-run', 'computer')).toBe(false);
+    expect(stopped).toEqual([]);
+
+    await practiceStarted(draft.id, 'turn-a');
+    await practiceTurnSettled('thread-run');
+    expect((await recordingDrafts('thread-run'))[0].practice?.turns).toBe(1);
+    expect(await practiceTakeover('thread-run', 'computer')).toBe(true);
+    expect(stopped).toEqual(['thread-run']);
+    const noted = await notePracticeTakeover(draft.id, 'unwanted', '  it archived the email  ');
+    expect(noted?.practice?.takeover).toMatchObject({ kind: 'computer', why: 'unwanted', note: 'it archived the email' });
+    expect((await notePracticeTakeover(draft.id, 'evil', 5))?.practice?.takeover).toMatchObject({ why: undefined, note: undefined });
+    await notePracticeTakeover(draft.id, 'unwanted', 'it archived the email');
+
+    const turn = (turnId: string, userText: string, tainted = false): LearnTurn => ({
+      turnId,
+      userText,
+      assistantText: `reply to ${userText}`,
+      trace: [{ id: 'c1', name: 'computer', args: '{"action":"click","label":"Uložiť"}', result: 'The user took over the computer', isError: true }],
+      tainted
+    });
+    evidence = [turn('turn-before', 'an earlier question'), turn('turn-a', 'Practice the skill on: PO-4411'), turn('turn-b', 'secret folder', true)];
+    answer = { ...answer, changes: ['Stop before archiving: the user archives by hand'] };
+    const updated = await updateFromPractice(draft.id);
+    const prompt = prompts.at(-1)!;
+    expect(prompt).toContain('--- Practice turn 1 of 1 ---');
+    expect(prompt).toContain('Practice the skill on: PO-4411');
+    expect(prompt).not.toContain('an earlier question');
+    expect(prompt).not.toContain('secret folder');
+    expect(prompt).toContain('took over the mouse and keyboard during the run');
+    expect(prompt).toContain('did something they did not want');
+    expect(prompt).toContain('"it archived the email"');
+    expect(updated).toMatchObject({ status: 'ready', changes: ['Stop before archiving: the user archives by hand'] });
+    expect(updated?.practice).toBeUndefined();
+    // The run is used up: a second press has nothing to read.
+    expect((await updateFromPractice(draft.id))?.practice).toBeUndefined();
+    expect(prompts.at(-1)).toBe(prompt);
   });
 
   it('refuses private chats and other threads’ drafts', async () => {

@@ -227,6 +227,9 @@ const api: StemApi = {
   discardRecordingDraft: (draftId: string) => ipcRenderer.invoke('skills:recordDiscard', draftId),
   answerRecordingDraft: (draftId: string, answers: { question: string; answer: string }[]) =>
     ipcRenderer.invoke('skills:recordAnswer', draftId, answers),
+  updateDraftFromPractice: (draftId: string) => ipcRenderer.invoke('skills:recordPractice', draftId),
+  notePracticeTakeover: (draftId: string, why: 'stuck' | 'unwanted' | 'other' | null, note: string | null) =>
+    ipcRenderer.invoke('skills:recordPracticeNote', draftId, why, note),
   onRecordingDraft: (listener: (draft: RecordingDraft) => void) => {
     const handler = (_e: unknown, draft: RecordingDraft) => listener(draft);
     ipcRenderer.on('skills:recordDraft', handler);

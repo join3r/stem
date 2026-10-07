@@ -10,6 +10,7 @@ import { computerDeviceRouter } from '../computer-device/router';
 import { harnessDeviceRouter } from '../harness/device-host';
 import { log } from '../log';
 import type { DeviceBrowserEvent, DeviceComputerEvent, DeviceInfo, DevicesSnapshot, PairingCodeInfo } from '../../shared/types';
+import { practiceTakeover } from '../startup/record-skills';
 
 /**
  * The device registry, as Settings → Server → Devices sees it: which clients can reach
@@ -156,7 +157,8 @@ export function registerDevicesIpc(): void {
     }
     const e = event as Partial<DeviceComputerEvent> | null;
     if (e && typeof e === 'object' && e.kind === 'human-input' && typeof e.threadId === 'string' && e.threadId) {
-      computerDeviceRouter().humanInput(caller.deviceId, e.threadId);
+      // A practice run of a recorded draft stops dead on a takeover, and the card asks why.
+      if (computerDeviceRouter().humanInput(caller.deviceId, e.threadId)) void practiceTakeover(e.threadId, 'computer');
     }
   });
   // The channels a Mac that hosts browser control speaks on — same rule again.
@@ -179,7 +181,7 @@ export function registerDevicesIpc(): void {
     }
     const e = event as Partial<DeviceBrowserEvent> | null;
     if (e && typeof e === 'object' && e.kind === 'stopped' && typeof e.threadId === 'string' && e.threadId) {
-      browserDeviceRouter().stopped(caller.deviceId, e.threadId);
+      if (browserDeviceRouter().stopped(caller.deviceId, e.threadId)) void practiceTakeover(e.threadId, 'browser');
     }
   });
 }

@@ -11,7 +11,8 @@ import { mailSessionThreadIds } from '../workspace/mail';
 import { readSettings, skillsRunFor } from '../workspace/settings';
 import { whereSkillsRun } from '../workspace/bootstrap';
 import { isUploadHandle, resolveUploadHandle, transportedRawPath } from '../files/staging';
-import { authorRecording, cleanEdited, cleanExample, withoutShots } from '../skills/record';
+import { authorRecording, cleanEdited, cleanExample, withoutShots, type RecordAuthorInput } from '../skills/record';
+import { pickLearnTurns } from '../skills/thread-evidence';
 import { getDraft, listDrafts, patchDraft, putDraft } from '../skills/record-drafts';
 import { validateSkill, formatViolations, type SkillDraft } from '../skills/contract';
 import { findDuplicateSkill } from '../skills/dedup';
@@ -99,13 +100,13 @@ async function llm(): Promise<LlmClient> {
 }
 
 /** Write (or rewrite) a draft from its examples; the card shows each state. */
-async function author(draft: RecordingDraft, images: LlmImage[]): Promise<RecordingDraft> {
+async function author(draft: RecordingDraft, images: LlmImage[], practice?: RecordAuthorInput['practice']): Promise<RecordingDraft> {
   const started = Date.now();
   await store({ ...draft, status: 'drafting', message: undefined });
   const previous = draft.skill;
   const outcome = await authorRecording(
     await llm(),
-    { examples: draft.examples, answers: draft.answers, previous, machine: whereSkillsRun() },
+    { examples: draft.examples, answers: draft.answers, previous, machine: whereSkillsRun(), ...(practice ? { practice } : {}) },
     images
     // quiet: a failed authoring is the card's message and the log line below.
   ).catch((error: unknown) => ({ ok: false as const, reason: 'error' as const, detail: error instanceof Error ? error.message : String(error) }));
@@ -115,6 +116,7 @@ async function author(draft: RecordingDraft, images: LlmImage[]): Promise<Record
     ...(outcome.ok ? { skill: outcome.draft.name, variables: outcome.variables.length, questions: outcome.questions.length } : { reason: outcome.reason, detail: outcome.detail }),
     examples: draft.examples.length,
     images: images.length,
+    ...(practice ? { practiceTurns: practice.turns.length, takeover: !!practice.takeover } : {}),
     ms: Date.now() - started
   });
   const base = { ...draft, examples: withoutShots(draft.examples), updatedAt: new Date().toISOString() };
@@ -126,7 +128,9 @@ async function author(draft: RecordingDraft, images: LlmImage[]): Promise<Record
       variables: outcome.variables,
       questions: outcome.questions,
       finalSteps: outcome.finalSteps,
-      changes: outcome.changes.length ? outcome.changes : undefined,
+      // A practice rewrite says what it changed; the run it read is used up.
+      changes: practice ? outcome.changes : undefined,
+      practice: practice ? undefined : base.practice,
       message: undefined,
       duplicateOf: undefined
     });
@@ -244,4 +248,92 @@ export async function practiceSkillFor(threadId: string | undefined, draftId: st
 export async function practiceStarted(draftId: string, turnId: string): Promise<void> {
   log('skills', 'practice run started', { draftId, turnId });
   await changed(await patchDraft(draftId, (d) => ({ ...d, practice: { startTurnId: turnId, turns: 0 }, changes: undefined })));
+}
+
+let stopThreadTurn: ((threadId: string, reason: string) => boolean) | null = null;
+
+/** How a practice turn is stopped dead on a takeover (the runtime's interruptThread). */
+export function setPracticeStopper(fn: ((threadId: string, reason: string) => boolean) | null): void {
+  stopThreadTurn = fn;
+}
+
+/** The draft whose practice run is going on in this chat, if any. */
+async function practicing(threadId: string): Promise<RecordingDraft | null> {
+  const drafts = await listDrafts(threadId);
+  return drafts.filter((d) => d.practice && d.status === 'ready').at(-1) ?? null;
+}
+
+/**
+ * The person took over while a practice run was going on — mouse or keys on a
+ * computer run, Stop on a browser run. That is the strongest signal the run
+ * has: it got stuck, or it did something they did not want. The turn stops
+ * at once (no closing reply), and the card asks which.
+ */
+export async function practiceTakeover(threadId: string, kind: 'computer' | 'browser'): Promise<boolean> {
+  const draft = await practicing(threadId).catch((error: unknown) => {
+    degrade('skills.record', 'a takeover could not be matched to a practice run', error);
+    return null;
+  });
+  if (!draft) return false;
+  const stopped = stopThreadTurn?.(threadId, kind === 'computer' ? 'the user took over during a practice run' : 'the user stopped a practice run') ?? false;
+  log('skills', 'practice run taken over', { threadId, draftId: draft.id, kind, stopped });
+  await changed(
+    await patchDraft(draft.id, (d) => (d.practice ? { ...d, practice: { ...d.practice, takeover: { kind, at: new Date().toISOString() } } } : d))
+  );
+  return true;
+}
+
+/** A turn settled in a chat with a practice run going on: the card can now offer the update. */
+export async function practiceTurnSettled(threadId: string): Promise<void> {
+  const draft = await practicing(threadId);
+  if (!draft) return;
+  await changed(await patchDraft(draft.id, (d) => (d.practice ? { ...d, practice: { ...d.practice, turns: d.practice.turns + 1 } } : d)));
+}
+
+const TAKEOVER_WHYS = new Set(['stuck', 'unwanted', 'other']);
+
+/** `skills:recordPracticeNote` — what went wrong when the person took over (both optional). */
+export async function notePracticeTakeover(draftId: string, why: unknown, note: unknown): Promise<RecordingDraft | null> {
+  return changed(
+    await patchDraft(draftId, (d) =>
+      d.practice?.takeover
+        ? {
+            ...d,
+            practice: {
+              ...d.practice,
+              takeover: {
+                ...d.practice.takeover,
+                why: typeof why === 'string' && TAKEOVER_WHYS.has(why) ? (why as 'stuck' | 'unwanted' | 'other') : undefined,
+                note: typeof note === 'string' && note.trim() ? note.trim().slice(0, 1000) : undefined
+              }
+            }
+          }
+        : d
+    )
+  );
+}
+
+/**
+ * `skills:recordPractice` — "Update the skill from this run": the chat from the
+ * practice message on (the agent's tool calls, its replies, the person's
+ * corrections, a takeover) is read the way `/learn` reads a chat, and the draft
+ * is rewritten from it beside its recordings.
+ */
+export async function updateFromPractice(draftId: string): Promise<RecordingDraft | null> {
+  const draft = await getDraft(draftId);
+  if (!draft || draft.status !== 'ready' || !draft.skill || !draft.practice) return draft;
+  const refused = await refusal(draft.threadId);
+  if (refused) throw new Error(refused);
+  const { runtime } = userSkillWriter();
+  if (!runtime?.learnEvidence) throw new Error('Reading the chat is unavailable right now.');
+  const all = (await runtime.learnEvidence(draft.threadId)) ?? [];
+  const from = all.findIndex((t) => t.turnId === draft.practice!.startTurnId);
+  if (from === -1) throw new Error('The practice run is not in this chat any more.');
+  const run = all.slice(from);
+  // Same rule as /learn: a turn that read a folder kept out of memory stays out of a skill.
+  const clean = run.filter((t) => !t.tainted);
+  if (clean.length === 0) throw new Error('This run read a folder you asked Stem not to memorise, so the skill was not changed from it.');
+  const { kept, dropped } = pickLearnTurns(clean);
+  log('skills', 'practice evidence', { threadId: draft.threadId, draftId, turns: kept.length, excluded: run.length - clean.length, dropped });
+  return author(draft, [], { turns: kept, ...(draft.practice.takeover ? { takeover: draft.practice.takeover } : {}) });
 }

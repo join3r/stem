@@ -4688,6 +4688,10 @@ export interface StemApi {
   discardRecordingDraft(draftId: string): Promise<RecordingDraft | null>;
   /** Answer the draft's questions; the draft is rewritten with them. */
   answerRecordingDraft(draftId: string, answers: { question: string; answer: string }[]): Promise<RecordingDraft | null>;
+  /** "Update the skill from this run": rewrite the draft from its practice run in the chat. */
+  updateDraftFromPractice(draftId: string): Promise<RecordingDraft | null>;
+  /** What went wrong when the person took over a practice run (both optional). */
+  notePracticeTakeover(draftId: string, why: 'stuck' | 'unwanted' | 'other' | null, note: string | null): Promise<RecordingDraft | null>;
   /** A draft changed (written, rewritten, saved, discarded). */
   onRecordingDraft(listener: (draft: RecordingDraft) => void): () => void;
   /** Whether THIS Mac lets its server drive its browser (client-owned). */

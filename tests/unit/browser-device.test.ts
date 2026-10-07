@@ -104,9 +104,9 @@ describe('createBrowserDeviceRouter', () => {
 
   it('Stop fails what is in flight and refuses the rest of the turn without a round-trip', async () => {
     const inflight = router.send('t1', 'mac-1', { kind: 'snapshot' });
-    router.stopped('mac-2', 't1'); // not a device this thread uses: ignored
+    expect(router.stopped('mac-2', 't1')).toBe(false); // not a device this thread uses: ignored
     expect(router.isStopped('t1')).toBe(false);
-    router.stopped('mac-1', 't1');
+    expect(router.stopped('mac-1', 't1')).toBe(true);
     expect(await inflight).toEqual({ ok: false, error: USER_STOPPED_BROWSER, stopped: true });
     const later = await router.send('t1', 'mac-1', { kind: 'tabs' });
     expect(later).toEqual({ ok: false, error: USER_STOPPED_BROWSER, stopped: true });

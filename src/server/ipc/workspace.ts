@@ -30,7 +30,15 @@ import { skillsRunOf, updateSkillsSettings } from '../workspace/settings';
 import { resetSkills, skillsResetStatus } from '../skills/reset';
 import { removeSkill } from '../skills/store';
 import { learnFromChat } from '../startup/skills';
-import { answerRecordingDraft, discardRecordingDraft, recordSkill, recordingDrafts, saveRecordingDraft } from '../startup/record-skills';
+import {
+  answerRecordingDraft,
+  discardRecordingDraft,
+  notePracticeTakeover,
+  recordSkill,
+  recordingDrafts,
+  saveRecordingDraft,
+  updateFromPractice
+} from '../startup/record-skills';
 import { curateSkills } from '../skills/curate';
 import { applyAutomaticTransitions } from '../skills/lifecycle';
 import type { LlmClient } from '../recall/llm';
@@ -105,6 +113,9 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   registerServer('skills:recordSave', (_e, draftId: string, edited?: unknown) => saveRecordingDraft(draftId, edited ?? null));
   registerServer('skills:recordDiscard', (_e, draftId: string) => discardRecordingDraft(draftId));
   registerServer('skills:recordAnswer', (_e, draftId: string, answers: unknown) => answerRecordingDraft(draftId, answers));
+  // A practice run of the draft (the agent trying it in the chat) feeds back into it.
+  registerServer('skills:recordPractice', (_e, draftId: string) => updateFromPractice(draftId));
+  registerServer('skills:recordPracticeNote', (_e, draftId: string, why: unknown, note: unknown) => notePracticeTakeover(draftId, why, note));
   registerServer('skills:resetStatus', () => skillsResetStatus());
   registerServer('skills:reset', async (_e, exportFirst: boolean, mode: SkillsMode) => {
     const result = resetSkills({ export: exportFirst });

@@ -1,7 +1,8 @@
 import type { LlmClient, LlmImage } from '../recall/llm';
-import type { RecordedStep, RecordingDraft, RecordingExample, RecordingLink, RecordingVariable } from '../../shared/types';
+import type { RecordedStep, RecordingDraft, RecordingExample, RecordingLink, RecordingPractice, RecordingVariable } from '../../shared/types';
 import { SKILL_CONTRACT_TEXT, formatViolations, validateSkill, type SkillDraft } from './contract';
-import { parseAuthorReply } from './author';
+import { parseAuthorReply, renderTurn } from './author';
+import type { LearnTurn } from './thread-evidence';
 
 // Writing a skill from a recording: the person did the task on their Mac while
 // Stem watched, and the evidence is THEIR clicks and typing, named by what
@@ -32,9 +33,17 @@ Ask a question only for something the evidence cannot settle and a wrong guess w
 Also list the final steps: the ones that change something outside the screen and cannot simply be closed away — saving or submitting a form, sending a message, archiving, moving or deleting an item, paying. Name each the way the recording shows it and say what it does: 'Click "Uložiť" in agrisys (saves the delivery date)', 'Press "y" in Fastmail (archives the email)'. At most five, in the order they happen; none if nothing is changed. A practice run of this skill stops before each of them unless the user allows it.
 
 Reply with ONLY a JSON object, no prose and no markdown fences:
-{"skill": {"name": "...", "description": "...", "body": "..."}, "variables": [{"name": "<what changes>", "from": "<where the skill finds it>"}], "questions": ["..."], "finalSteps": ["..."]}
+{"skill": {"name": "...", "description": "...", "body": "..."}, "variables": [{"name": "<what changes>", "from": "<where the skill finds it>"}], "questions": ["..."], "finalSteps": ["..."], "changes": ["... only after a practice run"]}
 or, only when the recording holds no task at all (nothing but window switching, say):
 {"skill": null, "reason": "<one short clause>"}`;
+
+export const SKILL_PRACTICE_INSTRUCTIONS = `Since the draft was written, the assistant has PRACTICED it: the user asked it to do the task by the draft, in their chat, with its tools. The practice run follows below — the user's messages, every tool call in order with what came back, and the assistant's replies. This is the most direct test the draft will get. Rewrite the draft from it:
+- A step that failed, or that the assistant had to work around (a control with another name, a page that needed waiting for, a field found somewhere else), is fixed to what actually worked.
+- A step the assistant needed and the draft lacked is added; a step that turned out unnecessary is dropped.
+- The user's corrections in the chat outrank everything else, the recordings included. If they took over the mouse or pressed Stop, the run went wrong right there: work out from the last steps before it what the draft must say differently, and use what they said about it.
+- A final step the user told the assistant not to take this time is still part of the task — keep it; that was about the practice, not the skill.
+- Keep what worked, keep the name, and update finalSteps.
+Also return "changes": a short list, in plain words, of what you changed and why (The save button is 'Uložiť', not 'Save'); an empty list if the run showed the draft was right.`;
 
 /** What one recording's step looks like to the author: one numbered line, plus its source. */
 function renderStep(step: RecordedStep, index: number, source: string | null, noSource: boolean): string {
@@ -91,6 +100,21 @@ export interface RecordAuthorInput {
   previous: SkillDraft | null;
   /** Where the skill will run (whereSkillsRun()). */
   machine?: string;
+  /** A practice run of the draft: its turns in the chat, and the takeover if there was one. */
+  practice?: { turns: LearnTurn[]; takeover?: RecordingPractice['takeover'] };
+}
+
+const TAKEOVER_WHY: Record<NonNullable<NonNullable<RecordingPractice['takeover']>['why']>, string> = {
+  stuck: 'the assistant got stuck',
+  unwanted: 'the assistant did something they did not want',
+  other: 'something else went wrong'
+};
+
+function renderTakeover(t: NonNullable<RecordingPractice['takeover']>): string {
+  const how = t.kind === 'computer' ? 'took over the mouse and keyboard' : "pressed Stop on the assistant's browser run";
+  const why = t.why ? ` They said ${TAKEOVER_WHY[t.why]}.` : '';
+  const note = t.note?.trim() ? ` In their words: ${JSON.stringify(t.note.trim())}` : '';
+  return `The user ${how} during the run, which stopped it there.${why}${note}`;
 }
 
 export function buildRecordPrompt(input: RecordAuthorInput): string {
@@ -102,6 +126,11 @@ export function buildRecordPrompt(input: RecordAuthorInput): string {
   });
   if (input.answers.length) {
     parts.push(`The user's answers to your earlier questions:\n${input.answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n\n')}`);
+  }
+  if (input.practice?.turns.length) {
+    parts.push(SKILL_PRACTICE_INSTRUCTIONS, '--- Practice run ---');
+    input.practice.turns.forEach((turn, i) => parts.push(`--- Practice turn ${i + 1} of ${input.practice!.turns.length} ---`, renderTurn(turn)));
+    if (input.practice.takeover) parts.push(renderTakeover(input.practice.takeover));
   }
   if (input.previous) {
     parts.push(

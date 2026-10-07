@@ -25,6 +25,9 @@ export function RecordingDraftCard({
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // A practice run the person took over: what went wrong (both optional).
+  const [why, setWhy] = useState<'stuck' | 'unwanted' | null>(null);
+  const [whyNote, setWhyNote] = useState('');
 
   // Try it needs the browser or this Mac; say so when chats have neither.
   // (A persona chat may still have them through its own pins.)
@@ -70,6 +73,15 @@ export function RecordingDraftCard({
       setNotice(res.ok ? null : res.message);
     });
   const discard = () => act(async () => noteDraft(await window.stem.discardRecordingDraft(draft.id)));
+  const updateFromPractice = () =>
+    act(async () => {
+      if (draft.practice?.takeover && (why || whyNote.trim())) {
+        noteDraft(await window.stem.notePracticeTakeover(draft.id, why ?? 'other', whyNote.trim() || null));
+      }
+      noteDraft(await window.stem.updateDraftFromPractice(draft.id));
+      setWhy(null);
+      setWhyNote('');
+    });
   const answer = () =>
     act(async () => {
       const given = draft.questions.map((question, i) => ({ question, answer: (answers[i] ?? '').trim() })).filter((a) => a.answer);
@@ -143,6 +155,47 @@ export function RecordingDraftCard({
             </>
           )}
         </>
+      )}
+
+      {draft.status === 'ready' && draft.changes && draft.changes.length > 0 && !editing && (
+        <div className="record-changes">
+          <div className="record-label">Changed after practice</div>
+          <ul>
+            {draft.changes.map((c, i) => (
+              <li key={i}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {draft.status === 'ready' && draft.practice && !editing && (
+        <div className="record-practice">
+          {draft.practice.takeover ? (
+            <>
+              <div className="record-label">
+                You {draft.practice.takeover.kind === 'computer' ? 'took over' : 'stopped the browser'} — what went wrong?
+              </div>
+              <div className="record-practice-why">
+                <button className={`push${why === 'stuck' ? ' active' : ''}`} onClick={() => setWhy(why === 'stuck' ? null : 'stuck')}>
+                  It got stuck
+                </button>
+                <button className={`push${why === 'unwanted' ? ' active' : ''}`} onClick={() => setWhy(why === 'unwanted' ? null : 'unwanted')}>
+                  It did something I didn’t want
+                </button>
+              </div>
+              <input value={whyNote} onChange={(e) => setWhyNote(e.target.value)} placeholder="Anything else? (optional)" maxLength={1000} />
+            </>
+          ) : draft.practice.turns === 0 ? (
+            <p className="muted record-hint">
+              <Loader2 size={12} className="spin" /> Practice run going on — correct it in the chat as it goes.
+            </p>
+          ) : null}
+          {(draft.practice.turns > 0 || draft.practice.takeover) && (
+            <button className="push default" disabled={busy} onClick={() => void updateFromPractice()}>
+              <FlaskConical size={13} /> Update the skill from this run
+            </button>
+          )}
+        </div>
       )}
 
       {open && draft.questions.length > 0 && !editing && (

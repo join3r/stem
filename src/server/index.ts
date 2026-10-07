@@ -1,4 +1,4 @@
-import { eventTurnId } from '../shared/settledTurns';
+import { eventTurnId, isSettledMethod } from '../shared/settledTurns';
 import { onMailWorkChanged, recordInnerWork } from './mail/work';
 import { join } from 'node:path';
 import dns from 'node:dns';
@@ -41,7 +41,7 @@ import type { HarnessService } from './harness/service';
 import { registerHarnessIpc } from './harness/ipc';
 import { closeHarnessDeviceRouter, harnessDeviceRouter } from './harness/device-host';
 import { initSkills } from './startup/skills';
-import { practiceSkillFor, practiceStarted, setRecordingDraftPush } from './startup/record-skills';
+import { practiceSkillFor, practiceStarted, practiceTurnSettled, setPracticeStopper, setRecordingDraftPush } from './startup/record-skills';
 import {
   closeTransport,
   pushToClients,
@@ -988,6 +988,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   // stream (unlike exec's, which is server-owned end to end), so there is nothing
   // to emit here — see the skills/approval* cases in the event router.
   setRecordingDraftPush((draft) => emit('skills:recordDraft', draft));
+  setPracticeStopper((threadId, reason) => runtime!.interruptThread(threadId, reason));
   initSkills({
     runtime,
     busyWithin,
@@ -1185,6 +1186,10 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     // lands so the new messages are searchable without a relaunch.
     if (threadId && event.method === 'turn/completed') {
       void reindexChatThread(runtime!, threadId);
+    }
+    // A practice run of a recorded draft: each settled turn lets its card offer the update.
+    if (threadId && isSettledMethod(event.method)) {
+      void practiceTurnSettled(threadId).catch((error: unknown) => degrade('skills.record', 'a practice turn settled without reaching its draft card', error));
     }
   });
 

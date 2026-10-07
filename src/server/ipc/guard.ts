@@ -152,6 +152,8 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'skills:recordSave': [a.string, a.optional(a.nullish(a.object))],
   'skills:recordDiscard': [a.string],
   'skills:recordAnswer': [a.string, a.objectArray],
+  'skills:recordPractice': [a.string],
+  'skills:recordPracticeNote': [a.string, a.nullish(a.oneOf(['stuck', 'unwanted', 'other'])), a.nullish(a.string)],
   'memory:setEnabled': [a.boolean],
   'memory:addNote': [a.string, a.optional(a.nullish(a.objectArray))],
   'memory:forget': [a.number],

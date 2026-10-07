@@ -69,7 +69,8 @@ export interface ComputerDeviceRouter {
    * in-flight action as aborted and marks the thread so every later action
    * this turn is refused without a round-trip.
    */
-  humanInput(deviceId: string, threadId: string): void;
+  /** False when the report came from a device not running that thread (ignored). */
+  humanInput(deviceId: string, threadId: string): boolean;
   /** Whether the person took over this thread's run (cleared by endThread). */
   isAborted(threadId: string): boolean;
   /**
@@ -272,7 +273,7 @@ export function createComputerDeviceRouter(deps: ComputerDeviceRouterDeps): Comp
           threadId,
           got: deviceId
         });
-        return;
+        return false;
       }
       aborted.set(threadId, deviceId);
       failThread(threadId, {
@@ -284,6 +285,7 @@ export function createComputerDeviceRouter(deps: ComputerDeviceRouterDeps): Comp
         threadId,
         deviceId
       });
+      return true;
     },
 
     isAborted: (threadId) => aborted.has(threadId),

@@ -1548,6 +1548,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
   }
 
+  /**
+   * Abort whatever turn this thread is streaming, without its id: a practice
+   * run the user took over stops dead (startup/record-skills.ts). False when
+   * nothing is streaming there.
+   */
+  interruptThread(threadId: string, reason?: string): boolean {
+    const live = this.workers.find((w) => w.proc && w.currentTurn?.threadId === threadId);
+    if (!live) return false;
+    log('pi.interrupt', 'thread interruption requested', { threadId, turnId: live.currentTurn!.turnId, reason: reason ?? 'unspecified' });
+    this.abortLiveTurn(live, live.currentTurn!, reason);
+    return true;
+  }
+
   /** Abort the streaming turn: pi's abort reaches the extension tool, but the
    * actual child process of any command it is running lives in main — stop both. */
   private abortLiveTurn(worker: PiWorker, turn: TurnContext, reason?: string): void {

@@ -322,6 +322,8 @@ export interface ChatBackend extends EventEmitter {
    * all — reports that instead of "cancelled by the user". Absent = the user.
    */
   interruptTurn(turnId: string, reason?: string): Promise<void>;
+  /** Stop whatever turn this thread is streaming (a practice run taken over); false when none is. */
+  interruptThread(threadId: string, reason?: string): boolean;
   listModels(): Promise<ModelSummary[]>;
 
   // recall seam (one-shot completion used by Stem Recall distillation).
