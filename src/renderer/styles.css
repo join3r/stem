@@ -4124,6 +4124,20 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 :root[data-chat-width='wide'] body:not(.qc-body):not(.hud-body) { --measure: 1000px; }
 :root[data-chat-width='wider'] body:not(.qc-body):not(.hud-body) { --measure: 1280px; }
 :root[data-chat-width='full'] body:not(.qc-body):not(.hud-body) { --measure: 100%; }
+/* The hover stamp's gutter shrinks with the measure: tuck it under the avatar
+   once the pane leaves under ~50px beside the column (measure + 40px, the same
+   rule as the 820px query for the default 780px), and always under Full. :where
+   keeps these below the bubbles layout's own user-message stamp. */
+@container messages (width < 1040px) {
+  :root[data-chat-width='wide'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp { right: auto; left: 0; top: 30px; width: 26px; align-items: center; font-size: var(--fs-10); }
+  :root[data-chat-width='wide'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp-tps { display: none; }
+}
+@container messages (width < 1320px) {
+  :root[data-chat-width='wider'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp { right: auto; left: 0; top: 30px; width: 26px; align-items: center; font-size: var(--fs-10); }
+  :root[data-chat-width='wider'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp-tps { display: none; }
+}
+:root[data-chat-width='full'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp { right: auto; left: 0; top: 30px; width: 26px; align-items: center; font-size: var(--fs-10); }
+:root[data-chat-width='full'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp-tps { display: none; }
 
 /* Bubbles: the user's messages sit on the right in a tinted bubble, without the
    avatar or the "You" label; Stem's replies stay full-width rows. */
