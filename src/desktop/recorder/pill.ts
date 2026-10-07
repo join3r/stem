@@ -150,6 +150,9 @@ export function createRecorderPill(handlers: RecorderPillHandlers): RecorderPill
       maximizable: false,
       fullscreenable: false,
       focusable: false,
+      // Never key, so every click is a first click: without this macOS swallows
+      // it and the buttons do nothing.
+      acceptFirstMouse: true,
       skipTaskbar: true,
       show: false,
       backgroundColor: '#00000000',

@@ -32,6 +32,8 @@ final class Recorder {
 
   // All below: touched on `queue` only.
   private var lastFocus: (pid: pid_t, window: String)?
+  private var loneKeys: [(ctx: Context, combo: String, t: Int)] = []
+  private var loneKeysFlush: DispatchWorkItem?
   private var editing: (element: AXUIElement, field: String, role: String, secure: Bool, before: String, app: Context)?
   private var lastSeenHash: [String: Int] = [:]
   private var lastShotAt = Date.distantPast
@@ -214,6 +216,11 @@ final class Recorder {
   // MARK: steps
 
   private func emitStep(_ kind: String, _ ctx: Context, _ extra: [String: Any]) {
+    // A shortcut still being held for its beat goes first, to keep the order.
+    if !loneKeys.isEmpty {
+      loneKeysFlush?.cancel()
+      flushLoneKeys()
+    }
     var step = ctx.fields
     step["kind"] = kind
     step["t"] = elapsedMs
@@ -293,6 +300,45 @@ final class Recorder {
     // Plain typing: remember which field it goes into; the value is read when
     // the person leaves the field, so autocorrect and pickers are included.
     if editing == nil { trackFocusedField() }
+    if editing != nil {
+      loneKeys.removeAll()
+      return
+    }
+    // No field has the keyboard: a plain key is a shortcut (Fastmail's "y"
+    // archives, Mail's Delete deletes). Held for a beat: a quick run of keys is
+    // typing into something not seen as a field, and typing is never written
+    // down key by key.
+    guard let ctx = focusedContext(), !Recorder.isSecretApp(ctx.bundleId), !focusIsEditable() else { return }
+    let printable = text.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) } && !text.isEmpty
+    let key = special.map { $0.lowercased() } ?? (printable ? text : "")
+    guard !key.isEmpty, key != " " else { return }
+    loneKeys.append((ctx, (flags.contains(.maskShift) && special != nil ? "shift+" : "") + key, elapsedMs))
+    loneKeysFlush?.cancel()
+    let flush = DispatchWorkItem { [weak self] in self?.flushLoneKeys() }
+    loneKeysFlush = flush
+    queue.asyncAfter(deadline: .now() + 0.7, execute: flush)
+  }
+
+  /// Up to this many plain keys in a row are shortcuts; more is typing.
+  private static let maxLoneKeys = 3
+
+  private func flushLoneKeys() {
+    let keys = loneKeys
+    loneKeys.removeAll()
+    guard active, keys.count <= Recorder.maxLoneKeys else { return }
+    for k in keys { emitStep("key", k.ctx, ["combo": k.combo, "t": k.t]) }
+  }
+
+  /// Whether the focused element takes text though it is not a field we follow
+  /// (a rich editor, a settable value): keys there are typing, not shortcuts.
+  private func focusIsEditable() -> Bool {
+    guard let el = AX.attribute(systemWide, kAXFocusedUIElementAttribute as String).map({ $0 as! AXUIElement }) else { return false }
+    let role = AX.string(el, kAXRoleAttribute as String) ?? ""
+    if Recorder.textRoles.contains(role) { return true }
+    var settable: DarwinBoolean = false
+    if AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue, role != "AXWebArea" { return true }
+    if let editable = AX.attribute(el, "AXEditable") as? Bool, editable { return true }
+    return false
   }
 
   private func copied(_ ctx: Context, cut: Bool) {

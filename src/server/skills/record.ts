@@ -55,7 +55,8 @@ function renderStep(step: RecordedStep, index: number, source: string | null, no
       what = `${step.kind === 'cut' ? 'cut' : 'copied'} ${JSON.stringify(step.text ?? '')}`;
       break;
     case 'key':
-      what = `pressed ${step.combo ?? 'a key'}`;
+      // A plain key outside any field is the app's own shortcut (Fastmail's "y" archives).
+      what = step.combo && /^.$/u.test(step.combo) ? `pressed "${step.combo}" (a one-key shortcut in this app)` : `pressed ${step.combo ?? 'a key'}`;
       break;
     case 'switch':
       what = 'switched to this window';

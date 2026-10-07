@@ -48,6 +48,20 @@ describe('renderExample', () => {
     expect(text).toMatch(/typed "K-7" into "Bay"\n {3}\(no source found on screen\)/);
   });
 
+  it('names a plain key as the app\'s one-key shortcut', () => {
+    const text = renderExample({
+      ...EXAMPLE,
+      steps: [
+        { kind: 'key', t: 0, app: 'Fastmail', window: 'Reklamácia', combo: 'y' },
+        { kind: 'key', t: 500, app: 'Fastmail', window: 'Reklamácia', combo: 'cmd+shift+a' }
+      ],
+      links: [],
+      unmatched: []
+    });
+    expect(text).toContain('pressed "y" (a one-key shortcut in this app)');
+    expect(text).toContain('pressed cmd+shift+a');
+  });
+
   it('frames every example and the earlier draft', () => {
     const prompt = buildRecordPrompt({
       examples: [EXAMPLE, EXAMPLE],
