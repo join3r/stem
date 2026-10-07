@@ -589,10 +589,21 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
    * them one request instead of four.
    */
   const revalidating = new Set<string>();
+  /**
+   * Channels asked to revalidate again while their fetch was on the wire. That
+   * fetch may have been answered before whatever prompted the second ask (a
+   * `chats:changed` push for a read stamp the phone just wrote), so dropping the
+   * ask would leave the window on the older answer — the chat read on the phone
+   * stays bold here. One more fetch after the current one covers every ask.
+   */
+  const revalidateAgain = new Set<string>();
 
   /** The background half of stale-while-revalidate: fetch, push if different. */
   function revalidate(channel: string, args: unknown[], hooks: WrappedChannel | undefined, served: unknown): void {
-    if (revalidating.has(channel)) return;
+    if (revalidating.has(channel)) {
+      revalidateAgain.add(channel);
+      return;
+    }
     revalidating.add(channel);
     void post(channel, args)
       .then(async (fresh) => {
@@ -604,7 +615,14 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         deps.sendToMain('cache:fresh', { channel, result: await applyAfter(hooks, args, fresh) });
       })
       .catch(() => undefined) // post() already flipped the connection state
-      .finally(() => revalidating.delete(channel));
+      .finally(() => {
+        revalidating.delete(channel);
+        if (!revalidateAgain.delete(channel) || !reachable) return;
+        // Compared against the copy the window now holds: the answer just
+        // recorded (and pushed, if it was news).
+        const current = cache.peek(channel, args);
+        if (current !== undefined) revalidate(channel, args, hooks, current);
+      });
   }
 
   async function invoke(channel: string, args: unknown[]): Promise<unknown> {

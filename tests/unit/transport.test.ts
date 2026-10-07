@@ -367,6 +367,8 @@ describe('stale-while-revalidate', () => {
   const pushes: { channel: string; payload: unknown }[] = [];
   /** The server-side truth, mutable so the cache can be caught being stale. */
   let chatsAnswer: ChatListResult;
+  /** Holds every chats:list answer until released; open unless a test closes it. */
+  let hold: Promise<void> = Promise.resolve();
 
   const chats = (...threadIds: string[]): ChatListResult => ({
     chats: threadIds.map((threadId) => ({
@@ -381,7 +383,13 @@ describe('stale-while-revalidate', () => {
   });
 
   beforeAll(async () => {
-    registerServer('chats:list', () => chatsAnswer);
+    registerServer('chats:list', async () => {
+      // Snapshot before waiting: a held request answers with the world as it
+      // was when the server read it, like a real listThreads that ran first.
+      const answer = chatsAnswer;
+      await hold;
+      return answer;
+    });
     swr = createServerProxy({
       ...(await clientCredentials(serverUrl, { external: false })),
       // Remote is what turns the cache on; an embedded server cannot be slow
@@ -439,6 +447,30 @@ describe('stale-while-revalidate', () => {
     // Give the revalidation time to land; an identical answer is not news.
     await new Promise((r) => setTimeout(r, 150));
     expect(pushes.filter((p) => p.channel === 'cache:fresh')).toEqual([]);
+  });
+
+  it('fetches once more when asked again while a revalidation is on the wire', async () => {
+    // The phone stamps a chat read and the server pushes chats:changed while the
+    // desktop's previous revalidation is still out. That fetch was answered
+    // before the stamp; without a second one the row stays bold here.
+    pushes.length = 0;
+    let release!: () => void;
+    hold = new Promise((r) => (release = r));
+    chatsAnswer = chats('t-1', 't-2', 't-3');
+    await swr.invoke('chats:list', []); // revalidation #1 reads t-3 and waits
+    await new Promise((r) => setTimeout(r, 50));
+    chatsAnswer = chats('t-1', 't-2', 't-3', 't-4'); // the change lands server-side
+    await swr.invoke('chats:list', []); // asked again while #1 is held
+    hold = Promise.resolve();
+    release();
+    await until(
+      () =>
+        pushes.some(
+          (p) => p.channel === 'cache:fresh' && (p.payload as { result: ChatListResult }).result.chats.length === 4
+        ),
+      'the follow-up revalidation push'
+    );
+    expect(await swr.invoke('chats:list', [])).toEqual(chats('t-1', 't-2', 't-3', 't-4'));
   });
 });
 
