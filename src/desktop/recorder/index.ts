@@ -314,6 +314,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     close() {
       const s = session;
       if (s) {
+        // Logged: a quit mid-recording otherwise leaves no trace of why it stopped.
+        log('recorder', 'Stem quit during a recording; it was thrown away', { threadId: s.threadId, steps: s.steps.length });
         clearInterval(s.tick);
         clearTimeout(s.cutoff);
         s.helper.kill();

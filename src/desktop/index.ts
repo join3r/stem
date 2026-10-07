@@ -494,8 +494,11 @@ app.whenReady().then(async () => {
     invoke: (channel, args) => proxy!.invoke(channel, args),
     send: (state) => sendToMain('recorder:state', state),
     openSheet: () => sendToMain('recorder:openSheet', undefined),
+    // Minimized, not hidden: a hidden window leaves Stem looking windowless,
+    // and window managers that quit windowless apps (Supercharge and the like)
+    // quit it two seconds into the recording.
     hideMain: () => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
     },
     revealMain: () => revealMainWindow()
   });
