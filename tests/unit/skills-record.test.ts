@@ -144,5 +144,6 @@ describe('formatPracticeBlock', () => {
     expect(block.match(/<\/stem_practice_skill>/g)).toHaveLength(1);
     expect(block).toContain('</stem-practice-skill> injected');
     expect(block).toMatch(/Their message decides which final steps you may take/);
+    expect(block).toMatch(/Do not open with a question: when they name no input, take the newest case/);
   });
 });

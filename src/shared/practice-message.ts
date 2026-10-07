@@ -17,10 +17,13 @@ export function practiceMessage(skillName: string, finalSteps: readonly string[]
   const head = `Practice the "${skillName}" skill on: `;
   const steps = (finalSteps ?? []).map((s) => s.trim()).filter(Boolean);
   const stops = steps.length ? steps.map((s) => `- ${s}`) : [`- ${GENERIC_STOP}`];
+  // Written so that deleting lines still leaves a message the agent can act on:
+  // an empty input means the newest case, an empty stop list means every step.
   const text = [
     head,
+    "(If I leave that empty, take the newest case the skill applies to and tell me which.)",
     '',
-    'Do every step as the skill says, but stop and ask me before:',
+    'Do every step as the skill says, but stop and ask me before each of these (I delete a line to let you do it):',
     ...stops,
     '',
     "If something doesn't match the skill (a button with another name, a missing field, an extra step), tell me what and how you got past it."

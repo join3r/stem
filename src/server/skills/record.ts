@@ -238,8 +238,8 @@ export function formatPracticeBlock(skill: SkillDraft): string {
   return (
     `<stem_practice_skill version="1">\n### ${fencePractice(skill.name)} (draft, recorded by the user, not saved yet)\n${fencePractice(skill.description)}\n\n${fencePractice(skill.body).trim()}\n</stem_practice_skill>\n` +
     'This turn is a PRACTICE RUN of the draft skill above: the user recorded the task and wants to see you do it before saving the skill. ' +
-    'Follow its steps with your tools on the input the user names. ' +
-    "Their message decides which final steps you may take: when it says to stop before one (saving, sending, archiving, deleting), stop right there, say what you would do, and ask — never take that step on your own. " +
+    'Start working at once with your tools, on the input the user names. Do not open with a question: when they name no input, take the newest case the skill applies to (the latest matching email, say) and tell them which one you took. ' +
+    "Their message decides which final steps you may take: when it says to stop before one (saving, sending, archiving, deleting), stop right there, say what you would do, and ask — never take that step on your own. When it lists no step to stop before, every step is allowed. " +
     'Wherever the draft is wrong or incomplete — a control with another name, a missing step, a value found somewhere else — do the right thing and say plainly what differed; that report is what improves the skill. ' +
     'If the user takes over the mouse or presses Stop, stop at once.'
   );

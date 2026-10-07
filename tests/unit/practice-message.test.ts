@@ -5,8 +5,9 @@ describe('practiceMessage', () => {
   it('lists the draft’s final steps and puts the caret after "on: "', () => {
     const { text, caret } = practiceMessage('set-agrisys-delivery-date', ['Click "Uložiť" in agrisys (saves the date)', ' Press "y" in Fastmail (archives the email) ', '']);
     expect(text.slice(0, caret)).toBe('Practice the "set-agrisys-delivery-date" skill on: ');
-    expect(text).toContain('stop and ask me before:\n- Click "Uložiť" in agrisys (saves the date)\n- Press "y" in Fastmail (archives the email)\n\n');
+    expect(text).toContain('(I delete a line to let you do it):\n- Click "Uložiť" in agrisys (saves the date)\n- Press "y" in Fastmail (archives the email)\n\n');
     expect(text).toMatch(/tell me what and how you got past it\.$/);
+    expect(text).toContain('If I leave that empty, take the newest case');
   });
 
   it('falls back to a general line when the draft names no final steps', () => {
