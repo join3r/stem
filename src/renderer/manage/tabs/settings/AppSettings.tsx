@@ -17,8 +17,9 @@ import { RowSelect, ValueRow } from './rows';
 import { ConversationSections } from './ChatSettings';
 
 /**
- * Settings → App: using Stem day to day — the conversation (subjects, standing
- * instructions, Quick Chat), how it looks, what the keyboard does,
+ * Settings → App: using Stem day to day — how it looks (first, as settings
+ * screens conventionally open), the conversation (subjects, standing
+ * instructions, Quick Chat), what the keyboard does,
  * how loudly it may interrupt, and which build this is. What the assistant may
  * DO on your machines (mail among personas, commands, coding agents, computer
  * control) lives under Features: one policy governs every conversation at once.
@@ -29,8 +30,8 @@ import { ConversationSections } from './ChatSettings';
 export function AppSettings({ models }: { models: ModelSummary[] }) {
   return (
     <div>
-      <ConversationSections models={models} />
       <AppearanceSection />
+      <ConversationSections models={models} />
       <KeyboardSection />
       <NotificationsSection />
       <AboutSection />
