@@ -188,6 +188,15 @@ export interface TurnContext {
   browserRefusal?: string;
   /** The raw user message that started this turn — intent context for the exec safety judge. */
   userText?: string;
+  /**
+   * What the exec safety judge reads as the request when it differs from
+   * userText: on a mail delivery, the user's own mail ahead of the brief that
+   * carried it — a brief is one persona's paraphrase and drops what the user
+   * asked for in their own words.
+   */
+  judgeIntent?: string;
+  /** Commands run_command already ran this turn, oldest first (the judge's view of progress). */
+  recentCommands?: string[];
   phase: 'pending' | 'thinking' | 'tool' | 'answer';
   lastEventAt?: number; // epoch ms of the last normalized event, for interval attribution
   timing?: TurnTimingBreakdown; // stashed by reportTurnTiming so recordTurnEntry can persist it

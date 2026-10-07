@@ -72,7 +72,9 @@ export class SafetyJudge {
     shell: HostShell | NodeJS.Platform = hostShellFromPlatform(),
     // Set for a device-targeted command: the judge must reason about the shell
     // that will actually run it, on the machine it will actually run on.
-    shellLabel?: string
+    shellLabel?: string,
+    // The turn's earlier commands, so a step is judged as a step of the task.
+    recentCommands?: readonly string[]
   ): Promise<JudgeResult> {
     try {
       const runtime = this.deps.runtime();
@@ -82,7 +84,7 @@ export class SafetyJudge {
       // and complete() then uses its own default, which is the best available
       // answer anyway.
       const model = resolveJudgeModel(settings, defaults, models, currentModel ?? null);
-      const reply = await runtime.complete(buildJudgePrompt(command, cwd, userIntent, shell, shellLabel), {
+      const reply = await runtime.complete(buildJudgePrompt(command, cwd, userIntent, shell, shellLabel, recentCommands), {
         model,
         // The judge sits between you and every command you run, so it feels the
         // effort setting more than any other role does — its own if it has been

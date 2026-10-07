@@ -66,6 +66,12 @@ export interface ExecRequest {
    */
   userText?: string;
   /**
+   * Commands this turn already ran, oldest first. The judge reads them to tell
+   * where in the task this command falls: "open the app" is the last step of
+   * "quit, reinstall and start it", not a failure to do the first two.
+   */
+  recentCommands?: string[];
+  /**
    * The live chat's `provider/model` id when known. It is what the safety judge
    * runs on when neither it nor the shared background model is pinned — a
    * provider this chat is demonstrably signed in to.

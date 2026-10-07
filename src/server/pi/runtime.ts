@@ -60,6 +60,7 @@ import { resolveBrowserGrant, resolveCodingGrant, resolveComputerGrant } from '.
 import { browserChoicesText, codingChoicesText, computerChoicesText } from '../harness/chat-hosts';
 import { resolveHostShell } from '../exec/git-bash';
 import { ensureThreadScratch } from '../exec/scratch';
+import { JUDGE_RECENT_MAX } from '../exec/policy';
 import { clampPinnedCwd } from '../harness/pin';
 import { hostShellAgentHint } from '../exec/host-shell';
 import { previewText } from '../chats/preview';
@@ -1295,6 +1296,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const imageGen = await this.imageGenGrant(chatFeatures.images, !!turn.personaHarness);
       // The exec safety judge classifies commands relative to this request.
       turn.userText = input.input;
+      const userMail = input.mail?.source?.body.trim();
+      if (userMail) {
+        turn.judgeIntent = `The user's mail:\n${userMail}\n\nThe brief ${input.mail!.from} passed on with it:\n${input.input}`;
+      }
       // Folders connected memorize:false: if the assistant reads inside one this turn,
       // we suppress capturing its reply into Recall (see onPiEvent / isCaptureSuppressed).
       turn.privateRoots = await getPrivateRoots().catch((e) => {
@@ -2823,9 +2828,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           computerAnyDevice: turn?.computerGrant?.kind === 'chat' && turn.computerGrant.device === null,
           threadId: turn?.threadId ?? null,
           isScheduled: turn?.isScheduled === true,
-          userText: turn?.userText,
+          userText: turn?.judgeIntent ?? turn?.userText,
+          recentCommands: turn?.recentCommands,
           currentModel
         });
+        // Only commands that actually ran: a refused one is not progress, and
+        // listing it would tell the judge a step happened that never did.
+        if (turn && result.ok && req.command) {
+          turn.recentCommands = [...(turn.recentCommands ?? []), req.command].slice(-JUDGE_RECENT_MAX);
+        }
         respond(result);
       } catch (e) {
         respond({ ok: false, error: e instanceof Error ? e.message : String(e) });

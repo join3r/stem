@@ -7,6 +7,8 @@ import {
   classify,
   deviceShellLabel,
   drivesGui,
+  JUDGE_INTENT_MAX_CHARS,
+  JUDGE_RECENT_MAX,
   parseCommand,
   parseJudgeVerdict,
   resolveJudgeModel
@@ -513,9 +515,30 @@ describe('buildJudgePrompt', () => {
     expect(without).toContain('not available');
   });
 
-  it('truncates an oversized request', () => {
+  it('truncates an oversized request, keeping a whole mail-sized one', () => {
     const prompt = buildJudgePrompt('ls', '/tmp/work', 'x'.repeat(5000));
-    expect(prompt.length).toBeLessThan(2500);
+    expect(prompt).toContain('x'.repeat(JUDGE_INTENT_MAX_CHARS));
+    expect(prompt).not.toContain('x'.repeat(JUDGE_INTENT_MAX_CHARS + 1));
+  });
+
+  it('lists the earlier commands oldest first, only the last few, one line each', () => {
+    const earlier = ['ps -ax', 'kill -TERM 1 &&\n  ./scripts/install.sh', ...Array.from({ length: 6 }, (_, i) => `step${i}`)];
+    const prompt = buildJudgePrompt('open /Applications/App.app', '/tmp/work', 'reinstall and start it', 'zsh', undefined, earlier);
+    expect(prompt).toContain('already ran');
+    expect(prompt).not.toContain('ps -ax');
+    expect(prompt.indexOf('- step1')).toBeLessThan(prompt.indexOf('- step5'));
+    expect(prompt.match(/^- step\d$/gm)).toHaveLength(JUDGE_RECENT_MAX);
+    const first = buildJudgePrompt('ls', '/tmp/work', 'x', 'zsh', undefined, ['kill -TERM 1 &&\n  ./scripts/install.sh']);
+    expect(first).toContain('- kill -TERM 1 && ./scripts/install.sh');
+    expect(buildJudgePrompt('ls', '/tmp/work', 'x', 'zsh')).not.toContain('already ran');
+  });
+
+  it('frames the command as one step and the requested work as wanted', () => {
+    // Without this a small judge refused "open the app" for not also quitting
+    // and reinstalling it, and refused the install the user had just asked for.
+    const prompt = buildJudgePrompt('ls', '/tmp/work', 'x');
+    expect(prompt).toMatch(/one step of a longer task/);
+    expect(prompt).toMatch(/install, build or start script/);
   });
 });
 

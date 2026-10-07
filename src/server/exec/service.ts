@@ -178,7 +178,9 @@ export class ExecService implements ExecBridge {
           all.defaults,
           req.userText,
           req.currentModel,
-          host.shell
+          host.shell,
+          undefined,
+          req.recentCommands
         );
         if (verdict.verdict === 'safe') return this.run(command, cwd, req, host);
         judgeVerdict = verdict.verdict;
@@ -392,7 +394,8 @@ export class ExecService implements ExecBridge {
           req.userText,
           req.currentModel,
           host.platform,
-          deviceShellLabel(host.platform, label)
+          deviceShellLabel(host.platform, label),
+          req.recentCommands
         );
         if (verdict.verdict === 'safe') return dispatch();
         judgeVerdict = verdict.verdict;

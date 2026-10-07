@@ -138,6 +138,24 @@ describe('ExecService judge', () => {
     expect(approvals[0]?.judgeVerdict).toBe('unsure');
   });
 
+  it("hands the judge the turn's earlier commands", async () => {
+    let prompt = '';
+    completeImpl = async (p: string) => {
+      prompt = p;
+      return 'unsure';
+    };
+    await service.handleExecRequest({
+      command: PS,
+      cwd,
+      threadId: 't1',
+      isScheduled: false,
+      userText: 'quit the app, reinstall it and start it',
+      recentCommands: ['kill -TERM 4020 && ./scripts/install.sh']
+    });
+    expect(prompt).toContain('already ran');
+    expect(prompt).toContain('- kill -TERM 4020 && ./scripts/install.sh');
+  });
+
   it('prefers the safety check’s own effort over the shared background one', async () => {
     // The reason this role has a level of its own: it is the one background job
     // whose cost is paid in latency, in front of the user, on every command —
