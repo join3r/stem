@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { chmod, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -86,6 +87,8 @@ interface BrowserDir {
   name: string;
   /** The app's bundle name in /Applications, what `open -a` takes. */
   app: string;
+  /** Its bundle id, to spot the system's default browser. */
+  bundleId: string;
   /** Present when the browser has ever run for this user. */
   dataDir: string;
   hostsDir: string;
@@ -95,40 +98,46 @@ export function browserDirs(home = homedir()): BrowserDir[] {
   const support = join(home, 'Library', 'Application Support');
   const chrome = join(support, 'Google', 'Chrome');
   const dirs: BrowserDir[] = [
-    { name: 'Google Chrome', app: 'Google Chrome', dataDir: chrome, hostsDir: join(chrome, 'NativeMessagingHosts') },
+    { name: 'Google Chrome', app: 'Google Chrome', bundleId: 'com.google.Chrome', dataDir: chrome, hostsDir: join(chrome, 'NativeMessagingHosts') },
     {
       name: 'Arc',
       app: 'Arc',
+      bundleId: 'company.thebrowser.Browser',
       dataDir: join(support, 'Arc', 'User Data'),
       hostsDir: join(support, 'Arc', 'User Data', 'NativeMessagingHosts')
     },
     {
       name: 'Dia',
       app: 'Dia',
+      bundleId: 'company.thebrowser.dia',
       dataDir: join(support, 'Dia', 'User Data'),
       hostsDir: join(support, 'Dia', 'User Data', 'NativeMessagingHosts')
     },
     {
       name: 'Brave',
       app: 'Brave Browser',
+      bundleId: 'com.brave.Browser',
       dataDir: join(support, 'BraveSoftware', 'Brave-Browser'),
       hostsDir: join(support, 'BraveSoftware', 'Brave-Browser', 'NativeMessagingHosts')
     },
     {
       name: 'Chromium',
       app: 'Chromium',
+      bundleId: 'org.chromium.Chromium',
       dataDir: join(support, 'Chromium'),
       hostsDir: join(support, 'Chromium', 'NativeMessagingHosts')
     },
     {
       name: 'Microsoft Edge',
       app: 'Microsoft Edge',
+      bundleId: 'com.microsoft.edgemac',
       dataDir: join(support, 'Microsoft Edge'),
       hostsDir: join(support, 'Microsoft Edge', 'NativeMessagingHosts')
     },
     {
       name: 'Google Chrome for Testing',
       app: 'Google Chrome for Testing',
+      bundleId: 'com.google.chrome.for.testing',
       dataDir: join(support, 'Google', 'Chrome for Testing'),
       hostsDir: join(support, 'Google', 'Chrome for Testing', 'NativeMessagingHosts')
     }
@@ -139,20 +148,43 @@ export function browserDirs(home = homedir()): BrowserDir[] {
   return dirs.filter((d) => existsSync(d.dataDir) || (arcPresent && d.dataDir === chrome));
 }
 
-/** The address of a browser's extensions page; the chrome:// one redirects everywhere but Arc. */
+/** The address of a browser's extensions page, by app name or bundle path. */
 export function extensionsPageUrl(app: string): string {
-  return /(^|\/)Arc(\.app)?$/.test(app) ? 'arc://extensions' : 'chrome://extensions';
+  if (/(^|\/)Arc(\.app)?$/.test(app)) return 'arc://extensions';
+  if (/(^|\/)Microsoft Edge(\.app)?$/.test(app)) return 'edge://extensions';
+  return 'chrome://extensions';
+}
+
+/** The bundle id of the user's default web browser, or null when it cannot be read. */
+export function defaultBrowserBundleId(home = homedir()): string | null {
+  const plist = join(home, 'Library', 'Preferences', 'com.apple.LaunchServices', 'com.apple.launchservices.secure.plist');
+  if (!existsSync(plist)) return null;
+  try {
+    const out = execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8', timeout: 2000 });
+    const handlers = (JSON.parse(out) as { LSHandlers?: { LSHandlerURLScheme?: string; LSHandlerRoleAll?: string }[] })
+      .LSHandlers;
+    return handlers?.find((h) => h.LSHandlerURLScheme === 'https')?.LSHandlerRoleAll ?? null;
+  } catch {
+    // quiet: an unreadable plist only costs the default browser its place at the top.
+    return null;
+  }
 }
 
 /**
  * The browsers the user can Load unpacked into, for Set up's steps: used on
- * this Mac (a data folder) and still installed (an app bundle). Not Chrome for
- * Testing, which only the dev harness drives.
+ * this Mac (a data folder) and still installed (an app bundle), the default
+ * browser first. Not Chrome for Testing, which only the dev harness drives.
  */
-export function setupBrowsers(home = homedir(), appDirs = ['/Applications', join(home, 'Applications')]): SetupBrowser[] {
+export function setupBrowsers(
+  home = homedir(),
+  appDirs = ['/Applications', join(home, 'Applications')],
+  defaultBundleId = defaultBrowserBundleId(home)
+): SetupBrowser[] {
+  const isDefault = (d: BrowserDir) => d.bundleId.toLowerCase() === defaultBundleId?.toLowerCase();
   return browserDirs(home)
     .filter((d) => d.name !== 'Google Chrome for Testing' && existsSync(d.dataDir))
     .filter((d) => appDirs.some((dir) => existsSync(join(dir, `${d.app}.app`))))
+    .sort((a, b) => Number(isDefault(b)) - Number(isDefault(a)))
     .map((d) => ({ name: d.name, app: d.app, extensionsUrl: extensionsPageUrl(d.app) }));
 }
 

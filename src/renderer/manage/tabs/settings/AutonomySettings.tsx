@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, X } from 'lucide-react';
 import type {
   BrowserHostLocalState,
   SetupBrowser,
@@ -827,12 +827,13 @@ function BrowserExtensionRow({
   );
 }
 
-/** A small Copy button that says Copied for a moment. */
-function CopyButton({ text, label }: { text: string; label: string }) {
+/** A copy icon that turns into a check for a moment. */
+function CopyIcon({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
-      className="btn sm"
+      className="icon-action sm"
+      title={label}
       aria-label={label}
       onClick={() =>
         void navigator.clipboard.writeText(text).then(() => {
@@ -841,65 +842,65 @@ function CopyButton({ text, label }: { text: string; label: string }) {
         })
       }
     >
-      {copied ? 'Copied' : 'Copy'}
+      {copied ? <Check size={14} /> : <Copy size={14} />}
     </button>
   );
 }
 
 /**
- * Load unpacked, spelled out: browsers will not open their extensions page
- * when asked from outside, and the folder sits inside Application Support,
- * which the picker hides — so the steps give the address to type and the path
- * to paste with ⌘⇧G (Set up already put it on the clipboard).
+ * Load unpacked, spelled out for one browser: browsers will not open their
+ * extensions page when asked from outside, and the folder sits inside
+ * Application Support, which the picker hides — so the steps give the address
+ * to type and the path to paste with ⌘⇧G (Set up already put it on the
+ * clipboard). The picker starts on the default browser, the one Set up opened.
  */
 function LoadUnpackedSteps({ extensionPath, browsers }: { extensionPath: string; browsers: SetupBrowser[] }) {
-  // One address for every browser but Arc, so a line per address rather than
-  // per browser: the sidebar is too narrow for the latter.
-  const urls =
-    browsers.length > 0
-      ? [...new Set(browsers.map((b) => b.extensionsUrl))]
-      : ['chrome://extensions', 'arc://extensions'];
-  const addresses = urls.map((url) => ({
-    url,
-    names: urls.length > 1 && url.startsWith('arc:') ? 'in Arc' : null
-  }));
+  const [app, setApp] = useState<string | null>(null);
+  const browser = browsers.find((b) => b.app === app) ?? browsers[0] ?? null;
+  const url = browser?.extensionsUrl ?? 'chrome://extensions';
   return (
     <div className="set-vbody ext-steps">
+      {browsers.length > 1 && (
+        <div className="ext-line">
+          <span>Browser</span>
+          <RowSelect
+            ariaLabel="Browser to load the extension into"
+            value={browser!.app}
+            options={browsers.map((b) => ({ value: b.app, label: b.name }))}
+            onChange={setApp}
+          />
+        </div>
+      )}
       <ol>
         <li>
-          Open your browser’s extensions page: type its address into the address bar.
-          {addresses.map(({ url, names }) => (
-            <div key={url} className="ext-browser">
-              <code>{url}</code>
-              {names && <span className="muted">{names}</span>}
-              <CopyButton text={url} label={`Copy ${url}`} />
-            </div>
-          ))}
-          {browsers.length > 0 && (
-            <div className="ext-open">
-              {browsers.map((b) => (
-                <button
-                  key={b.app}
-                  className="btn sm"
-                  onClick={() => void window.stem.openBrowserExtensionsPage(b.app)}
-                >
-                  Open {b.name}
-                </button>
-              ))}
-            </div>
-          )}
+          Open {browser ? `${browser.name}’s` : 'your browser’s'} extensions page: type this into the address bar.
+          <div className="ext-line">
+            <code>{url}</code>
+            <CopyIcon text={url} label={`Copy ${url}`} />
+            {browser && (
+              <button
+                className="icon-action sm"
+                title={`Open ${browser.name}`}
+                aria-label={`Open ${browser.name}`}
+                onClick={() => void window.stem.openBrowserExtensionsPage(browser.app)}
+              >
+                <ExternalLink size={14} />
+              </button>
+            )}
+          </div>
         </li>
         <li>
-          Turn on <strong>Developer mode</strong>, the switch at the top right of that page.
+          Turn on <strong>Developer mode</strong>,{' '}
+          {browser?.app === 'Microsoft Edge' ? 'in the left sidebar' : 'the switch at the top right'} of that page.
         </li>
         <li>
           Click <strong>Load unpacked</strong>. In the folder picker press <kbd>⌘</kbd>
           <kbd>⇧</kbd>
           <kbd>G</kbd>, paste the path below with <kbd>⌘</kbd>
           <kbd>V</kbd> (Set up already copied it), press Return, then <strong>Select</strong>.
-          <div className="ext-browser">
+          <div className="ext-line">
             <code className="ext-path">{extensionPath}</code>
-            <CopyButton text={extensionPath} label="Copy the extension folder’s path" />
+            <CopyIcon text={extensionPath} label="Copy the folder’s path" />
           </div>
         </li>
       </ol>

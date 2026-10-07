@@ -3952,9 +3952,9 @@ button.set-vrow { border: none; background: none; font: inherit; color: inherit;
 .set-vrow .vlab .ext-status.ok::before { background: var(--success); }
 /* …and, while it waits for Load unpacked, the steps under it. */
 .ext-steps ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: var(--sp-3); }
-.ext-steps .ext-open { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
-.ext-steps .ext-browser { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); }
-.ext-steps .ext-browser .btn { margin-left: auto; }
+.ext-steps .ext-line { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+.ext-steps > .ext-line { margin-top: 0; justify-content: space-between; }
+.ext-steps .ext-line code { margin-right: auto; }
 .ext-steps code { font-size: var(--fs-11); user-select: all; }
 .ext-steps .ext-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ext-steps kbd { font: inherit; font-size: var(--fs-11); padding: 0 4px; border: 0.5px solid var(--line); border-radius: 4px; margin: 0 1px; }

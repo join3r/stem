@@ -98,16 +98,15 @@ describe('pieces', () => {
     mkdirSync(join(apps, 'Brave Browser.app'), { recursive: true });
     // Chrome's folder gets Arc's manifest but Chrome was never used; Edge was
     // used but is gone.
-    expect(setupBrowsers(home, [apps])).toEqual([
+    expect(setupBrowsers(home, [apps], null)).toEqual([
       { name: 'Arc', app: 'Arc', extensionsUrl: 'arc://extensions' },
-      {
-        name: 'Brave',
-        app: 'Brave Browser',
-        extensionsUrl: 'chrome://extensions'
-      }
+      { name: 'Brave', app: 'Brave Browser', extensionsUrl: 'chrome://extensions' }
     ]);
+    // The default browser leads; LaunchServices stores its id lowercased.
+    expect(setupBrowsers(home, [apps], 'com.brave.browser').map((b) => b.name)).toEqual(['Brave', 'Arc']);
     expect(extensionsPageUrl('/Applications/Arc.app')).toBe('arc://extensions');
     expect(extensionsPageUrl('/Applications/Google Chrome.app')).toBe('chrome://extensions');
+    expect(extensionsPageUrl('Microsoft Edge')).toBe('edge://extensions');
   });
 
   it('keeps socket paths under the unix limit', () => {
