@@ -13,7 +13,7 @@ import { whereSkillsRun } from '../workspace/bootstrap';
 import { isUploadHandle, resolveUploadHandle, transportedRawPath } from '../files/staging';
 import { authorRecording, cleanEdited, cleanExample, withoutShots } from '../skills/record';
 import { getDraft, listDrafts, patchDraft, putDraft } from '../skills/record-drafts';
-import { validateSkill, formatViolations } from '../skills/contract';
+import { validateSkill, formatViolations, type SkillDraft } from '../skills/contract';
 import { findDuplicateSkill } from '../skills/dedup';
 import { listSkillRecords, readSkillRecord } from '../skills/store';
 import type { LlmClient, LlmImage } from '../recall/llm';
@@ -221,4 +221,27 @@ export async function saveRecordingDraft(draftId: string, editedRaw: unknown): P
   }
   const saved = await changed(await patchDraft(draftId, (d) => ({ ...d, skill: { ...skill, name: target ?? skill.name }, status: 'saved', savedSlug: target ?? skill.name, message: undefined })));
   return { ok: true, message: result.text, draft: saved ?? undefined };
+}
+
+/**
+ * A practice turn's draft (`StartTurnInput.practiceDraftId`): only a finished
+ * draft of the same chat. Anything else is an ordinary turn, said in the log.
+ */
+export async function practiceSkillFor(threadId: string | undefined, draftId: string | undefined): Promise<SkillDraft | null> {
+  if (!threadId || !draftId) return null;
+  const draft = await getDraft(draftId).catch((error: unknown) => {
+    degrade('skills.record', 'sent a practice turn without its draft because the drafts could not be read', error);
+    return null;
+  });
+  if (!draft || draft.threadId !== threadId || draft.status !== 'ready' || !draft.skill) {
+    log('skills', 'practice turn without a usable draft', { threadId, draftId, status: draft?.status ?? 'gone' });
+    return null;
+  }
+  return draft.skill;
+}
+
+/** The practice turn started: evidence for "Update the skill from this run" is read from here on. */
+export async function practiceStarted(draftId: string, turnId: string): Promise<void> {
+  log('skills', 'practice run started', { draftId, turnId });
+  await changed(await patchDraft(draftId, (d) => ({ ...d, practice: { startTurnId: turnId, turns: 0 }, changes: undefined })));
 }

@@ -81,6 +81,7 @@ import { createHistoryRefresher, mergeRefreshedThread } from './session/history'
 import { deletePendingIfCurrent, rekeyPendingIfCurrent } from './pendingTurn';
 import { RequestGate } from './requestGate';
 import { dismissTaskAlert, enqueueTaskAlert } from './taskAlerts';
+import { practiceInput } from './chat/recorder-store';
 
 // Sentinel key for a brand-new chat that has no backend thread id yet. Its slice is
 // migrated to the real thread id once the first turn returns one.
@@ -818,7 +819,9 @@ export default function App() {
             serviceTier,
             // Only meaningful on the creating turn, like `private`.
             ...(sendKey === DRAFT ? { format: defaultFormat } : {}),
-            attachments: input.attachments.length ? input.attachments : undefined
+            attachments: input.attachments.length ? input.attachments : undefined,
+            // A draft card's "Practice run": this send starts it (recorder-store).
+            ...(sendKey !== DRAFT ? practiceInput(sendKey) : {})
           }),
         onStarted: (result, { pending, alreadySettled, userMsgId }) => {
           if (sendKey === DRAFT && result.threadId) {

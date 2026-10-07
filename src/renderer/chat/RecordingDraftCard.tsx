@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Check, Circle, Loader2, Pencil, Play, Plus, Trash2 } from 'lucide-react';
+import { Check, Circle, FlaskConical, Loader2, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import type { RecordingDraft } from '../../shared/types';
-import { noteDraft, prefillComposer, requestSheet } from './recorder-store';
+import { noteDraft, prefillComposer, requestSheet, startPractice } from './recorder-store';
+import { practiceMessage } from '../../shared/practice-message';
 
 // The card a recording becomes in its chat: the skill Stem wrote from it, what
 // it worked out changes each run ("Delivery date ← the date in the supplier's
@@ -179,6 +180,19 @@ export function RecordingDraftCard({
           {draft.skill && (
             <button className="push" disabled={busy} onClick={() => setEditing(!editing)}>
               <Pencil size={13} /> {editing ? 'Done editing' : 'Edit'}
+            </button>
+          )}
+          {draft.status === 'ready' && draft.skill && !editing && (
+            <button
+              className="push"
+              disabled={busy}
+              title="Let Stem try the task — the message names the steps it stops before; edit it first"
+              onClick={() => {
+                const { text, caret } = practiceMessage(draft.skill!.name, draft.finalSteps);
+                startPractice(draft.threadId, draft.id, draft.skill!.name, text, caret);
+              }}
+            >
+              <FlaskConical size={13} /> Practice run
             </button>
           )}
           <button className="push" disabled={busy} onClick={() => requestSheet(draft.threadId, draft.id)}>

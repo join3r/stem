@@ -16,11 +16,16 @@ interface Snapshot {
    * opens it and clears it.
    */
   sheet: { threadId: string | null; draftId: string | null; nonce: number } | null;
-  /** "Try it": text for one chat's composer, consumed once. */
-  prefill: { threadId: string; text: string; nonce: number } | null;
+  /** "Try it" / "Practice run": text for one chat's composer, consumed once. */
+  prefill: { threadId: string; text: string; caret?: number; nonce: number } | null;
+  /**
+   * A practice run waiting to be sent, per chat: the composer shows it as a
+   * chip, and the next send in that chat carries the draft id (takePractice).
+   */
+  practice: Record<string, { draftId: string; name: string }>;
 }
 
-let snapshot: Snapshot = { state: IDLE, sheet: null, prefill: null };
+let snapshot: Snapshot = { state: IDLE, sheet: null, prefill: null, practice: {} };
 const drafts = new Map<string, RecordingDraft[]>();
 const listeners = new Set<() => void>();
 let wired = false;
@@ -98,8 +103,29 @@ export function consumeSheet(nonce: number): void {
   if (snapshot.sheet?.nonce === nonce) set({ sheet: null });
 }
 
-export function prefillComposer(threadId: string, text: string): void {
-  set({ prefill: { threadId, text, nonce: Date.now() } });
+export function prefillComposer(threadId: string, text: string, caret?: number): void {
+  set({ prefill: { threadId, text, ...(caret !== undefined ? { caret } : {}), nonce: Date.now() } });
+}
+
+/** "Practice run": the message goes in the composer, and the next send in this chat practices the draft. */
+export function startPractice(threadId: string, draftId: string, name: string, text: string, caret: number): void {
+  set({ practice: { ...snapshot.practice, [threadId]: { draftId, name } } });
+  prefillComposer(threadId, text, caret);
+}
+
+/** The composer chip's ✕: the message goes as an ordinary one. */
+export function dropPractice(threadId: string): void {
+  if (!snapshot.practice[threadId]) return;
+  const rest = { ...snapshot.practice };
+  delete rest[threadId];
+  set({ practice: rest });
+}
+
+/** The draft the send in this chat practices, if any; cleared — only one turn starts a run. */
+export function takePractice(threadId: string): string | undefined {
+  const p = snapshot.practice[threadId];
+  if (p) dropPractice(threadId);
+  return p?.draftId;
 }
 
 export function consumePrefill(nonce: number): void {
@@ -109,4 +135,10 @@ export function consumePrefill(nonce: number): void {
 /** Clear the last error once it has been shown. */
 export function dismissRecorderError(): void {
   if (snapshot.state.error) set({ state: { ...snapshot.state, error: null } });
+}
+
+/** The startTurn field for a send in this chat (empty when it practices nothing). */
+export function practiceInput(threadId: string): { practiceDraftId?: string } {
+  const draftId = takePractice(threadId);
+  return draftId ? { practiceDraftId: draftId } : {};
 }

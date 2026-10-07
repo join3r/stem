@@ -198,6 +198,24 @@ export function cleanEdited(edited: unknown): SkillDraft | null {
 
 export type { RecordingDraft };
 
+const fencePractice = (text: string): string => text.replace(/<(\/?)stem_practice_skill/gi, '<$1stem-practice-skill');
+
+/**
+ * The block a practice turn carries: the unsaved draft, as the procedure to
+ * follow this turn. Which final steps the agent may take is the user's message
+ * to decide — the practice message lists them under "stop and ask me before".
+ */
+export function formatPracticeBlock(skill: SkillDraft): string {
+  return (
+    `<stem_practice_skill version="1">\n### ${fencePractice(skill.name)} (draft, recorded by the user, not saved yet)\n${fencePractice(skill.description)}\n\n${fencePractice(skill.body).trim()}\n</stem_practice_skill>\n` +
+    'This turn is a PRACTICE RUN of the draft skill above: the user recorded the task and wants to see you do it before saving the skill. ' +
+    'Follow its steps with your tools on the input the user names. ' +
+    "Their message decides which final steps you may take: when it says to stop before one (saving, sending, archiving, deleting), stop right there, say what you would do, and ask — never take that step on your own. " +
+    'Wherever the draft is wrong or incomplete — a control with another name, a missing step, a value found somewhere else — do the right thing and say plainly what differed; that report is what improves the skill. ' +
+    'If the user takes over the mouse or presses Stop, stop at once.'
+  );
+}
+
 const STEP_KINDS = new Set(['click', 'type', 'key', 'copy', 'cut', 'paste', 'switch', 'note']);
 const MAX_STEPS = 400;
 

@@ -24,7 +24,7 @@ import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, noteBodyValid, use
 import { clearDraft, readDraft, writeDraft } from './draft-store';
 import { dismissLearnNotice, readLearn, startLearn, subscribeLearn } from './learn-store';
 import { dismissCompactNotice, readCompact, startCompact, subscribeCompact } from './compact-store';
-import { consumePrefill, consumeSheet, dismissRecorderError, readRecorder, subscribeRecorder } from './recorder-store';
+import { consumePrefill, consumeSheet, dismissRecorderError, dropPractice, readRecorder, subscribeRecorder } from './recorder-store';
 import { RecordSheet } from './RecordSheet';
 
 const MAX_COMPOSER_HEIGHT = 180;
@@ -297,6 +297,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const recorder = useSyncExternalStore(subscribeRecorder, readRecorder);
   const [recordSheet, setRecordSheet] = useState<{ draftId: string | null } | null>(null);
   const recordingHere = recorder.state.threadId === threadId && recorder.state.phase !== 'idle';
+  const practicing = threadId ? recorder.practice[threadId] : undefined;
   useEffect(() => {
     const req = recorder.sheet;
     if (!req || !threadId || !CAN_RECORD) return;
@@ -309,11 +310,12 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (!p || p.threadId !== threadId) return;
     consumePrefill(p.nonce);
     setDraft(p.text);
+    const at = Math.min(p.caret ?? p.text.length, p.text.length);
     window.setTimeout(() => {
       const el = textareaRef.current;
       if (!el) return;
       el.focus();
-      el.setSelectionRange(p.text.length, p.text.length);
+      el.setSelectionRange(at, at);
     }, 0);
   }, [recorder.prefill, threadId]);
   // `/compact` lives outside the component for the same reason (compact-store.ts).
@@ -620,6 +622,22 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 <span className="slash-desc">{cmd.description}</span>
               </div>
             ))}
+          </div>
+        )}
+        {practicing && !noteMode && (
+          <div className="composer-attachments">
+            <span className="attachment-chip record-practice-chip" title="This message starts a practice run of the draft skill">
+              <span className="record-dot" aria-hidden="true" />
+              <span className="attachment-name">Practicing {practicing.name}</span>
+              <button
+                type="button"
+                className="attachment-remove"
+                title="Send as an ordinary message"
+                onClick={() => threadId && dropPractice(threadId)}
+              >
+                <X size={13} />
+              </button>
+            </span>
           </div>
         )}
         {noteMode && (

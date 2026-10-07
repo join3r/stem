@@ -41,7 +41,7 @@ import type { HarnessService } from './harness/service';
 import { registerHarnessIpc } from './harness/ipc';
 import { closeHarnessDeviceRouter, harnessDeviceRouter } from './harness/device-host';
 import { initSkills } from './startup/skills';
-import { setRecordingDraftPush } from './startup/record-skills';
+import { practiceSkillFor, practiceStarted, setRecordingDraftPush } from './startup/record-skills';
 import {
   closeTransport,
   pushToClients,
@@ -467,6 +467,9 @@ function registerIpc(): void {
     // notes: false — an interactive chat renders no persona preamble, so the
     // memory index would be fetched for nothing.
     const personaFields = persona ? await personaTurnFields(persona, { notes: false }) : null;
+    // A draft card's "Practice run": the client names a draft; only a ready
+    // draft of this same chat becomes the turn's practice block.
+    const practiceSkill = await practiceSkillFor(input.threadId, input.practiceDraftId);
     const started = await runtime!.startTurn({
       ...input,
       ...(personaFields?.model ? { model: personaFields.model } : {}),
@@ -483,8 +486,14 @@ function registerIpc(): void {
       // these — a client asks by id, resolved and gated above.
       persona: personaFields?.persona,
       mail: undefined,
+      practiceSkill: practiceSkill ?? undefined,
       originDeviceId: e?.deviceId
     });
+    if (practiceSkill && input.practiceDraftId && started.turnId) {
+      await practiceStarted(input.practiceDraftId, started.turnId).catch((error: unknown) =>
+        degrade('skills.record', 'a practice run started without its marker on the draft', error)
+      );
+    }
     // Start the turn's clock the moment there is a turn. Waiting for its first
     // event (which is where the fold otherwise learns of it) means a turn that
     // hangs without ever streaming anything has no start time at all, and its

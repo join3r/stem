@@ -117,6 +117,7 @@ import {
 import { piMcpConfigPath, skillsRoot } from '../workspace/paths';
 import { readUsage, recordGrades, recordInjections, recordUses } from '../skills/usage';
 import { formatSkillsBlock, selectSkills, type SkillUsageStat } from '../skills/inject';
+import { formatPracticeBlock } from '../skills/record';
 import { listSkillRecords } from '../skills/store';
 import { gradeSkillUse, reportedSkillIssues } from '../skills/grade';
 import { parseThreadEvidence, type LearnTurn } from '../skills/thread-evidence';
@@ -4416,6 +4417,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         error: error instanceof Error ? error.message : String(error)
       });
     }
+    // A practice run of a recorded draft (the draft card's "Practice run"):
+    // the draft is not in the library yet, so it is handed over here.
+    if (input.practiceSkill) blocks.push(formatPracticeBlock(input.practiceSkill));
 
     const files = await buildFilesContext();
     if (files) blocks.push(files);

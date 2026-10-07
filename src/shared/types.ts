@@ -502,6 +502,18 @@ export interface StartTurnInput {
    */
   personaId?: string;
   /**
+   * A recorded skill draft this turn practices (the draft card's "Practice
+   * run"). The server checks it is a ready draft of this same chat, then puts
+   * the draft's text before the model and starts the run's evidence here.
+   */
+  practiceDraftId?: string;
+  /**
+   * Server-internal: the draft `practiceDraftId` resolved to, put before the
+   * model as `<stem_practice_skill>`. Stripped by the `backend:startTurn`
+   * handler, which sets it only from a draft of the same chat.
+   */
+  practiceSkill?: { name: string; description: string; body: string };
+  /**
    * Server-internal: the persona this turn runs as (mail deliveries). Carries
    * the role prompt because that is spawn-time state — the pool matches the
    * turn to a worker spawned for this persona, replacing a child whose prompt

@@ -13,6 +13,8 @@ import { initSkills } from '../../src/server/startup/skills';
 import {
   answerRecordingDraft,
   discardRecordingDraft,
+  practiceSkillFor,
+  practiceStarted,
   recordSkill,
   recordingDrafts,
   saveRecordingDraft,
@@ -110,6 +112,18 @@ describe('recording drafts', () => {
     const draft = await recordSkill(undefined, 'thread-empty', example('x'));
     expect(draft).toMatchObject({ status: 'failed', message: expect.stringMatching(/only window switching/) });
     expect((await discardRecordingDraft(draft.id))?.status).toBe('discarded');
+  });
+
+  it('hands a practice turn only a ready draft of its own chat, and marks where the run began', async () => {
+    const draft = await recordSkill(undefined, 'thread-practice', example('5.5.2027'));
+    expect(await practiceSkillFor('thread-practice', draft.id)).toMatchObject({ name: 'set-agrisys-delivery-date' });
+    expect(await practiceSkillFor('thread-other', draft.id)).toBeNull();
+    expect(await practiceSkillFor('thread-practice', 'no-such-draft')).toBeNull();
+    expect(await practiceSkillFor('thread-practice', undefined)).toBeNull();
+    await practiceStarted(draft.id, 'turn-1');
+    expect((await recordingDrafts('thread-practice'))[0].practice).toEqual({ startTurnId: 'turn-1', turns: 0 });
+    await discardRecordingDraft(draft.id);
+    expect(await practiceSkillFor('thread-practice', draft.id)).toBeNull();
   });
 
   it('refuses private chats and other threads’ drafts', async () => {

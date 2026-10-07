@@ -4173,6 +4173,8 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 }
 .record-chip.active .record-dot { animation: record-pulse 1.2s infinite; }
 @keyframes record-pulse { 50% { opacity: 0.35; } }
+/* The composer chip while a message is set to start a practice run of a draft. */
+.record-practice-chip { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 @keyframes record-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .record-chip.active .record-dot,
