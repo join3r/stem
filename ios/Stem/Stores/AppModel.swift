@@ -105,6 +105,9 @@ final class Session {
     private(set) var models: [ModelSummary] = []
     private(set) var webSearch = false
     var prefs = ComposerPrefs.load()
+    /// The chat on screen, so a push about it can stay quiet: its reply or
+    /// approval card is already in front of the user.
+    @ObservationIgnored var visibleThreadId: String?
     @ObservationIgnored private var sub: UUID?
 
     init(creds: Credentials) {

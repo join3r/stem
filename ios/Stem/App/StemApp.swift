@@ -175,10 +175,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    // Foreground: the live stream already shows it; keep the banner for
-    // things that are not on screen (approvals, other chats).
+    // Foreground: a turn ending or an approval in the chat on screen is
+    // already visible there; keep the banner for everything else (other
+    // chats, mail, tasks).
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
+        let stem = notification.request.content.userInfo["stem"] as? [String: Any]
+        let thread = stem?["threadId"] as? String
+        let onScreen = await MainActor.run { thread != nil && thread == app?.session?.visibleThreadId }
+        return onScreen ? [] : [.banner, .sound]
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {

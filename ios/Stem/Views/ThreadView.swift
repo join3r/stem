@@ -67,8 +67,14 @@ struct ThreadView: View {
         }
         .toolbar(.hidden, for: .tabBar)
         .refreshable { await store.reload() }
-        .onAppear { store.open() }
-        .onDisappear { store.close() }
+        .onAppear {
+            store.open()
+            session.visibleThreadId = store.threadId
+        }
+        .onDisappear {
+            store.close()
+            if session.visibleThreadId == store.threadId { session.visibleThreadId = nil }
+        }
         // Anything that lands in the chat on screen is read: a title written
         // after the first reply, a reply from another device. A chat marked
         // unread on purpose stays unread.
@@ -76,6 +82,7 @@ struct ThreadView: View {
             if unread, let id = store.threadId { Task { await session.chats.setRead([id], true) } }
         }
         .onChange(of: store.threadId) { old, new in
+            session.visibleThreadId = new
             // The new-chat draft moves to the chat it became.
             if old == nil, let new {
                 DraftStore.clear(draftKey, Draft())
