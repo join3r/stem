@@ -28,13 +28,13 @@ struct MailListView: View {
                                 .tint(.blue)
                             }
                             .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) { Task { await session.mail.delete(c.id) } } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
                                 Button { Task { await session.mail.setArchived([c.id], folder != .archived) } } label: {
                                     Label(folder == .archived ? "Unarchive" : "Archive", systemImage: "archivebox")
                                 }
                                 .tint(.gray)
+                                Button(role: .destructive) { Task { await session.mail.delete(c.id) } } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
                             }
                     }
                 }

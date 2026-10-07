@@ -29,14 +29,14 @@ struct ChatListView: View {
                                 .tint(.blue)
                             }
                             .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) { Task { await session.chats.delete(chat.threadId) } } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
                                 let archived = session.chats.isArchived(chat)
                                 Button { Task { await session.chats.setArchived([chat.threadId], !archived) } } label: {
                                     Label(archived ? "Unarchive" : "Archive", systemImage: "archivebox")
                                 }
                                 .tint(.gray)
+                                Button(role: .destructive) { Task { await session.chats.delete(chat.threadId) } } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
                             }
                     }
                 }
