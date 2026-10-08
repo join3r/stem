@@ -1649,6 +1649,69 @@ describe('spawn_agent', () => {
     expect(fake2.starts.find((s) => s.persona?.id === 'coder~c1')?.persona?.harness).toEqual({ agent: 'claude', cwd: '/repo' });
   });
 
+  it('bounds an agent by the current rows: tightening the starter or pinning the role applies from its next mail', async () => {
+    await savePersona({ id: 'scout', name: 'Scout', prompt: 's' });
+    await savePersona({ id: 'lead', name: 'Lead', prompt: 'l', canSpawn: true });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.lead = [
+      {
+        mode: 'ok',
+        reply: 'staffing',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.spawnAgent({ role: 'scout', name: 's1', brief: 'look' }, ctx)).ok).toBe(true);
+        }
+      },
+      {
+        mode: 'ok',
+        reply: 'again',
+        bridge: async (bridge, ctx) => {
+          // The user tightens Lead between the two waves.
+          await savePersona({ id: 'lead', name: 'Lead', prompt: 'l', canSpawn: true, mcpServers: ['jira'] });
+          expect((await bridge.send({ to: ['scout~s1'], body: 'look again' }, ctx)).ok).toBe(true);
+        }
+      },
+      {
+        mode: 'ok',
+        reply: 'third',
+        bridge: async (bridge, ctx) => {
+          // …then pins Scout to a coding agent: an agent of it may no longer run here.
+          await savePersona({ id: 'scout', name: 'Scout', prompt: 's', harness: { agent: 'claude', cwd: '/' } });
+          expect((await bridge.send({ to: ['scout~s1'], body: 'one more' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'final' }
+    ];
+    await router.compose({ to: ['lead'], subject: 'live', body: 'go' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'final')).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+    });
+    const scoutStarts = fake.starts.filter((s) => s.persona?.id === 'scout~s1');
+    expect(scoutStarts).toHaveLength(2);
+    expect(scoutStarts[0].persona?.mcpServers).toBeUndefined();
+    expect(scoutStarts[1].persona?.mcpServers).toEqual(['jira']);
+    const notice = (await readMail()).items.find((i) => i.from === 'scout~s1' && i.body.includes('can no longer run'));
+    expect(notice).toBeTruthy();
+  });
+
+  it('two racing spawns cannot pass the agent limit or share a name', async () => {
+    const { conversation } = await (async () => {
+      const c = await createConversation('race', ['normal'], 'x');
+      return { conversation: c };
+    })();
+    const { addAgent } = await import('../../src/server/workspace/mail');
+    const agent = (name: string) => ({ id: `critic~${name}`, role: 'critic', name, spawnedBy: 'normal' });
+    const results = await Promise.allSettled([
+      addAgent(conversation.id, agent('a'), 1),
+      addAgent(conversation.id, agent('b'), 1),
+      addAgent(conversation.id, agent('a'), 5)
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect((await readMail()).conversations.find((c) => c.id === conversation.id)?.agents).toHaveLength(1);
+  });
+
   it('caps a conversation at six agents', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);

@@ -219,10 +219,7 @@ function coerceAgents(raw: unknown): MailAgent[] {
       role: a.role,
       name: a.name,
       spawnedBy: a.spawnedBy,
-      ...(a.blind === true ? { blind: true as const } : {}),
-      ...(Array.isArray(a.mcpServers)
-        ? { mcpServers: a.mcpServers.filter((n): n is string => typeof n === 'string') }
-        : {})
+      ...(a.blind === true ? { blind: true as const } : {})
     });
   }
   return agents;
@@ -529,15 +526,19 @@ export function addParticipant(conversationId: string, personaId: string): Promi
 }
 
 /**
- * Record an agent started in a conversation (spawn_agent). Refuses a second
- * agent under the same id — the caller checks first and says why; this is the
- * race backstop.
+ * Record an agent started in a conversation (spawn_agent). The name and the
+ * per-conversation limit are checked HERE, inside the serialized write: two
+ * spawns racing in parallel turns both pass a check made on an earlier read,
+ * and only this one sees the other's agent.
  */
-export function addAgent(conversationId: string, agent: MailAgent): Promise<MailListResult> {
+export function addAgent(conversationId: string, agent: MailAgent, max: number): Promise<MailListResult> {
   return update((store) => {
     const conversation = conversationOf(store, conversationId);
     const agents = conversation.agents ?? [];
-    if (agents.some((a) => a.id === agent.id)) throw new Error(`An agent named "${agent.name}" already exists here.`);
+    if (agents.some((a) => a.name === agent.name)) {
+      throw new Error(`An agent named ${agent.name} already exists in this conversation. Pick another name.`);
+    }
+    if (agents.length >= max) throw new Error(`This conversation already has ${max} agents, the most it may have.`);
     conversation.agents = [...agents, agent];
   });
 }

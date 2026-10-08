@@ -15,7 +15,7 @@ import * as activity from '../activity';
 import { degrade } from '../degrade';
 import { noteTurnStart } from '../live-turns';
 import { getPersona, listPersonas } from '../workspace/personas';
-import { agentId, agentName, agentPersona, agentSlug, isAgentId, isPinned, MAX_AGENTS, narrowMcpServers } from './agents';
+import { agentId, agentName, agentPersona, agentSlug, isAgentId, isPinned, MAX_AGENTS } from './agents';
 import {
   listPersonaNotes,
   personaOwnsMemory,
@@ -968,6 +968,8 @@ export class MailRouter {
     const name = agentSlug(req.name ?? '');
     if (!name) return { ok: false, error: 'Give the agent a short name (letters, digits, dashes), like reviewer-a.' };
     const id = agentId(role.id, name);
+    // Early, friendly refusals from this read; addAgent re-checks the name and
+    // the limit inside its write, where a racing spawn cannot slip past.
     const agents = conversation.agents ?? [];
     const taken = agents.find((a) => a.name === name);
     if (taken) {
@@ -991,19 +993,14 @@ export class MailRouter {
     // A recall-off caller (a blind reviewer that may spawn) only starts blind
     // agents: it must not reach the user's history through one.
     const blind = req.blind === true || caller.recall === false;
-    // Likewise its integrations: never wider than the starter's own.
-    const mcpServers = narrowMcpServers(role.mcpServers, caller.mcpServers);
     try {
-      await addAgent(conversation.id, {
-        id,
-        role: role.id,
-        name,
-        spawnedBy: ctx.personaId,
-        ...(blind ? { blind: true } : {}),
-        ...(mcpServers ? { mcpServers } : {})
-      });
+      await addAgent(
+        conversation.id,
+        { id, role: role.id, name, spawnedBy: ctx.personaId, ...(blind ? { blind: true } : {}) },
+        MAX_AGENTS
+      );
     } catch (error) {
-      // quiet: the tool result IS the error channel (a racing spawn took the name).
+      // quiet: the tool result IS the error channel (a racing spawn took the name or the last slot).
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
     const sent = await this.bridgeSend({ to: [id], body: brief }, ctx);
@@ -1086,13 +1083,21 @@ export class MailRouter {
   /**
    * A participant or agent of this conversation, as the persona row its turns
    * run with: a participant is its registry row; an agent is its role's row
-   * under the agent's id and name (agentPersona). Null when either is gone.
+   * under the agent's id and name, bounded by its starter (agentPersona) —
+   * both resolved fresh, so an editor change applies from the next mail.
+   * Null when the agent can no longer run: its role or starter is gone, or
+   * its role has since been pinned to the user's computer without being in
+   * this conversation (the same rule spawn_agent applies at start).
    */
-  private async resolveMember(conversation: MailConversation | undefined, id: string): Promise<Persona | null> {
+  private async resolveMember(conversation: MailConversation | undefined, id: string, depth = 0): Promise<Persona | null> {
     if (!isAgentId(id)) return getPersona(id);
     const agent = conversation?.agents?.find((a) => a.id === id);
-    const role = agent ? await getPersona(agent.role) : null;
-    return agent && role ? agentPersona(role, agent) : null;
+    // Agents nest two deep; anything deeper is a corrupt record, not a chain to follow.
+    if (!conversation || !agent || depth > 2) return null;
+    const role = await getPersona(agent.role);
+    if (!role || (isPinned(role) && !conversation.participants.includes(role.id))) return null;
+    const starter = await this.resolveMember(conversation, agent.spawnedBy, depth + 1);
+    return starter ? agentPersona(role, agent, starter) : null;
   }
 
   private async personaName(personaId: string): Promise<string> {
@@ -1277,7 +1282,8 @@ export class MailRouter {
           conversationId,
           personaId,
           isAgentId(personaId)
-            ? 'The persona this agent was started from no longer exists.'
+            ? 'This agent can no longer run: the persona it was started from, or whoever started it, was deleted — ' +
+              'or its persona now works on the user’s computer and is not in this conversation.'
             : 'The persona this mail was addressed to no longer exists.',
           'failed',
           epoch

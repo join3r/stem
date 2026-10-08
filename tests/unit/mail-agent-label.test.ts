@@ -28,16 +28,21 @@ describe('agent addresses', () => {
 
   it('runs an agent with its role but without memory, client access, or a second level of spawning', () => {
     const role: Persona = { ...personas[0], canSpawn: true, clients: true, builtin: true };
-    const top = agentPersona(role, { id: 'critic~a', role: 'critic', name: 'a', spawnedBy: 'normal' });
+    const top = agentPersona(role, { id: 'critic~a', role: 'critic', name: 'a', spawnedBy: 'normal' }, {});
     expect(top).toMatchObject({ id: 'critic~a', name: 'a', prompt: 'You are Critic.', memory: false, canSpawn: true });
     expect(top.clients).toBeUndefined();
     expect(top.builtin).toBeUndefined();
     expect(top.recall).toBeUndefined();
-    const nested = agentPersona(role, { id: 'critic~b', role: 'critic', name: 'b', spawnedBy: 'orchestrator~x', blind: true });
+    const nested = agentPersona(role, { id: 'critic~b', role: 'critic', name: 'b', spawnedBy: 'orchestrator~x', blind: true }, {});
     expect(nested.canSpawn).toBeUndefined();
     expect(nested.recall).toBe(false);
-    const narrowed = agentPersona({ ...role, mcpServers: ['a', 'b'] }, { id: 'critic~c', role: 'critic', name: 'c', spawnedBy: 'normal', mcpServers: ['a'] });
+    const narrowed = agentPersona(
+      { ...role, mcpServers: ['a', 'b'] },
+      { id: 'critic~c', role: 'critic', name: 'c', spawnedBy: 'normal' },
+      { mcpServers: ['a'], recall: false }
+    );
     expect(narrowed.mcpServers).toEqual(['a']);
+    expect(narrowed.recall).toBe(false);
   });
 
   it('never gives an agent wider integrations than its starter', () => {

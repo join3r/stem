@@ -69,20 +69,24 @@ export function narrowMcpServers(role?: string[], starter?: string[]): string[] 
 }
 
 /**
- * The persona row an agent's turns run with: its role's prompt, model, pins
- * and allowlist, under the agent's own id and name. Never keeps memory, never
- * opens to client chats, and starts agents of its own only one level down —
- * an agent started by an agent cannot (the depth limit every sub-agent system
- * has, for the same runaway reason). Blind agents run without recall (a
- * recall-off spawner only ever starts blind ones, see bridgeSpawn), and the
- * MCP allowlist is the one fixed at spawn.
+ * The persona row an agent's turns run with: its role's prompt, model and
+ * pins, under the agent's own id and name. Never keeps memory, never opens to
+ * client chats, and starts agents of its own only one level down — an agent
+ * started by an agent cannot (the depth limit every sub-agent system has, for
+ * the same runaway reason). Its reach is bounded by its starter's, from the
+ * CURRENT rows on every delivery (the router resolves both fresh): the MCP
+ * allowlist is the role's narrowed by the starter's, and a recall-off starter
+ * or a blind start means no recall. Nothing is frozen at spawn, so tightening
+ * either persona in the editor applies from the agent's next mail.
  */
-export function agentPersona(role: Persona, agent: MailAgent): Persona {
+export function agentPersona(role: Persona, agent: MailAgent, starter: Pick<Persona, 'mcpServers' | 'recall'>): Persona {
   const persona: Persona = { ...role, id: agent.id, name: agent.name, memory: false };
   delete persona.builtin;
   delete persona.clients;
   if (!role.canSpawn || isAgentId(agent.spawnedBy)) delete persona.canSpawn;
-  if (agent.blind) persona.recall = false;
-  if (agent.mcpServers) persona.mcpServers = [...agent.mcpServers];
+  if (agent.blind || starter.recall === false) persona.recall = false;
+  const mcpServers = narrowMcpServers(role.mcpServers, starter.mcpServers);
+  if (mcpServers) persona.mcpServers = mcpServers;
+  else delete persona.mcpServers;
   return persona;
 }
