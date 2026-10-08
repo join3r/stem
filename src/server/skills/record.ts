@@ -45,7 +45,7 @@ export const SKILL_PRACTICE_INSTRUCTIONS = `Since the draft was written, the ass
 - A step the assistant needed and the draft lacked is added; a step that turned out unnecessary is dropped.
 - The user's corrections in the chat outrank everything else, the recordings included. If they took over the mouse or pressed Stop, the run went wrong right there: work out from the last steps before it what the draft must say differently, and use what they said about it.
 - A final step the user told the assistant not to take this time is still part of the task — keep it; that was about the practice, not the skill.
-- Where the assistant switched to an integration (an MCP server) and it worked, the step uses that integration from now on.
+- If the run used an integration (an MCP server) for any step, go back over EVERY step, not only the ones after the switch: whatever that integration covers (creating a project, importing media, editing a timeline) is written with it, including steps the run still did by screen. Screen steps stay only for what no integration can do.
 - Keep what worked, keep the name, and update finalSteps. How the practice itself was run (pausing for permission, reporting skill issues) is not part of the skill.
 Also return "changes": a short list, in plain words, of what you changed and why (The save button is 'Uložiť', not 'Save'); an empty list if the run showed the draft was right.`;
 
@@ -307,6 +307,7 @@ export function formatPracticeBlock(skill: SkillDraft): string {
     'This turn is a PRACTICE RUN of the draft skill above: the user recorded the task and wants to see you do it before saving the skill. ' +
     'Start working at once with your tools, on the input the user names. Do not open with a question: when they name no input, take the newest case the skill applies to (the latest matching email, say) and tell them which one you took. ' +
     "Their message decides which final steps you may take: when it says to stop before one (saving, sending, archiving, deleting), stop right there, say what you would do, and ask — never take that step on your own. When it lists no step to stop before, every step is allowed. " +
+    'Do what each step is for rather than the clicks it names: where an integration (an MCP server) listed for this turn can do a step, use it instead of the screen, from the first step on, and say which steps it did. ' +
     'Wherever the draft is wrong or incomplete — a control with another name, a missing step, a value found somewhere else — do the right thing and say plainly what differed; that report is what improves the skill. ' +
     'If the user takes over the mouse or presses Stop, stop at once.'
   );

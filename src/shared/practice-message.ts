@@ -23,10 +23,14 @@ export function practiceMessage(skillName: string, finalSteps: readonly string[]
     head,
     "(If I leave that empty, take the newest case the skill applies to and tell me which.)",
     '',
-    'Do every step as the skill says, but stop and ask me before each of these (I delete a line to let you do it):',
+    // What each step achieves, not how it was clicked: a skill written from a
+    // recording says "click", and taken literally that kept a practice run on
+    // the screen with an MCP server for the same app connected.
+    'Do what each step of the skill is for. Where an integration (an MCP server) can do a step, use it instead of the screen, even if the skill says to click.',
+    'Stop and ask me before each of these (I delete a line to let you do it):',
     ...stops,
     '',
-    "If something doesn't match the skill (a button with another name, a missing field, an extra step), tell me what and how you got past it."
+    "If something doesn't match the skill (a button with another name, a missing field, an extra step, a step an integration did instead), tell me what and how you got past it."
   ].join('\n');
   return { text, caret: head.length };
 }
