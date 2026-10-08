@@ -2028,9 +2028,10 @@ export default async function stemMcpBridge(pi) {
     // Generated images stay in the conversation the way ChatGPT keeps them, but
     // only the newest few keep their pixels in what the model is sent — each is
     // megabytes on every request. The session file keeps them all (references).
+    // Screenshots from computer/browser control get the same treatment.
     pi.on('context', (event) => {
       const messages = event && event.messages;
-      const next = stubOldImages(messages, IMAGE_CONTEXT_KEEP);
+      const next = stubOldScreenshots(stubOldImages(messages, IMAGE_CONTEXT_KEEP));
       return next !== messages ? { messages: next } : undefined;
     });
     // Service tier ("Fast"): see withServiceTier for which requests accept it.
@@ -3116,6 +3117,45 @@ export function computerResultContent(res) {
   const content = [{ type: 'text', text: text || 'Done.' }];
   if (shot) content.push({ type: 'image', data: shot.jpegBase64, mimeType: 'image/jpeg' });
   return content;
+}
+
+// Screen and browser pictures the model keeps seeing. Every one stays in the
+// context otherwise, and a long run re-reads all of them on every step: the
+// Resolve run reached 130k tokens and ~5 s per step on context alone.
+const SCREENSHOT_TOOLS = new Set(['computer', 'browser']);
+const SCREENSHOT_KEEP = 4;
+// Older pictures are dropped in blocks of this many, so the prefix the
+// provider caches changes once per block rather than on every step.
+const SCREENSHOT_DROP_BLOCK = 16;
+
+/**
+ * The context the model is sent keeps the pixels of only the newest
+ * screenshots (between SCREENSHOT_KEEP and KEEP + DROP_BLOCK - 1 of them); older
+ * ones keep their text and lose the picture. The session file keeps every byte.
+ */
+export function stubOldScreenshots(messages, keep = SCREENSHOT_KEEP, block = SCREENSHOT_DROP_BLOCK) {
+  if (!Array.isArray(messages)) return messages;
+  const shots = [];
+  messages.forEach((m, i) => {
+    if (
+      m &&
+      m.role === 'toolResult' &&
+      SCREENSHOT_TOOLS.has(m.toolName) &&
+      Array.isArray(m.content) &&
+      m.content.some((p) => p && p.type === 'image')
+    ) {
+      shots.push(i);
+    }
+  });
+  const drop = Math.floor(Math.max(0, shots.length - keep) / block) * block;
+  if (drop === 0) return messages;
+  const dropIdx = new Set(shots.slice(0, drop));
+  return messages.map((m, i) => {
+    if (!dropIdx.has(i)) return m;
+    const content = m.content.filter((p) => !(p && p.type === 'image'));
+    content.push({ type: 'text', text: '[older screenshot, no longer shown]' });
+    return { ...m, content };
+  });
 }
 
 /** The most steps one `computer` call may chain in `actions`. */

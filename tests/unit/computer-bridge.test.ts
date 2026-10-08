@@ -19,7 +19,7 @@ const configDir = mkdtempSync(join(tmpdir(), 'stem-computer-bridge-'));
 writeFileSync(join(configDir, 'mcp.json'), JSON.stringify({ servers: {} }));
 process.env.STEM_MCP_CONFIG = join(configDir, 'mcp.json');
 
-const { default: stemMcpBridge, computerActionFrom } =
+const { default: stemMcpBridge, computerActionFrom, stubOldScreenshots } =
   await import('../../src/server/pi/stem-mcp-extension.mjs');
 
 interface RegisteredTool {
@@ -635,5 +635,44 @@ describe('runtime side', () => {
     await wait();
     expect(JSON.parse(sent[0]!.value).error).toContain('Name the Mac');
     expect(named).toEqual(['MacBook', 'Studio']);
+  });
+});
+
+describe('stubOldScreenshots', () => {
+  const shot = (n: number, tool = 'computer') => ({
+    role: 'toolResult',
+    toolName: tool,
+    content: [
+      { type: 'text', text: `step ${n}` },
+      { type: 'image', data: 'x', mimeType: 'image/jpeg' }
+    ]
+  });
+  const pictures = (ms: Array<{ content: Array<{ type: string }> }>) =>
+    ms.filter((m) => m.content.some((p) => p.type === 'image')).length;
+
+  it('keeps every picture until a whole block can go, then drops the oldest block', () => {
+    const few = Array.from({ length: 19 }, (_, i) => shot(i));
+    expect(stubOldScreenshots(few, 4, 16)).toBe(few);
+    const more = Array.from({ length: 20 }, (_, i) => shot(i));
+    const out = stubOldScreenshots(more, 4, 16) as typeof more;
+    expect(pictures(out)).toBe(4);
+    expect(out[0]!.content).toEqual([
+      { type: 'text', text: 'step 0' },
+      { type: 'text', text: '[older screenshot, no longer shown]' }
+    ]);
+    expect(out[19]).toBe(more[19]);
+    // The dropped prefix stays the same until the next block: cache-friendly.
+    const later = Array.from({ length: 35 }, (_, i) => shot(i));
+    expect(pictures(stubOldScreenshots(later, 4, 16) as typeof later)).toBe(19);
+  });
+
+  it('counts browser pictures and leaves other tools and user images alone', () => {
+    const user = { role: 'user', content: [{ type: 'image', data: 'u', mimeType: 'image/png' }] };
+    const other = { role: 'toolResult', toolName: 'read', content: [{ type: 'image', data: 'r', mimeType: 'image/png' }] };
+    const ms = [user, other, ...Array.from({ length: 20 }, (_, i) => shot(i, i % 2 ? 'browser' : 'computer'))];
+    const out = stubOldScreenshots(ms, 4, 16) as typeof ms;
+    expect(out[0]).toBe(user);
+    expect(out[1]).toBe(other);
+    expect(pictures(out)).toBe(6);
   });
 });
