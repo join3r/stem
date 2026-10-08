@@ -2,7 +2,7 @@
 // persona list alone, and the router derives ids and names the same way.
 import { describe, expect, it } from 'vitest';
 import { personaName } from '../../src/renderer/mail/useMail';
-import { agentId, agentName, agentPersona, agentSlug, isAgentId, narrowMcpServers } from '../../src/server/mail/agents';
+import { agentId, agentName, agentPersona, agentSlug, isAgentId, narrowMcpServers, spawnableRoles } from '../../src/server/mail/agents';
 import type { Persona } from '../../src/shared/types';
 
 const personas: Persona[] = [{ id: 'critic', name: 'Critic', prompt: 'You are Critic.' }];
@@ -51,5 +51,22 @@ describe('agent addresses', () => {
     expect(narrowMcpServers(undefined, ['b'])).toEqual(['b']);
     expect(narrowMcpServers(['a', 'b'], ['b', 'c'])).toEqual(['b']);
     expect(narrowMcpServers(['a'], [])).toEqual([]);
+  });
+});
+
+describe('spawnable roles', () => {
+  it('lists unpinned personas plus pinned ones in the conversation, marking coding roles', () => {
+    const list: Persona[] = [
+      { id: 'critic', name: 'Critic', prompt: '', recall: false, model: 'xai/grok-5' },
+      { id: 'coder', name: 'Coder', prompt: '', harness: { agent: 'claude', cwd: '/r' } },
+      { id: 'rev', name: 'Reviewer', prompt: '', harness: { agent: 'codex', cwd: '/r', reviewOnly: true } },
+      { id: 'mac', name: 'Mac', prompt: '', computer: { device: 'm1' } }
+    ];
+    expect(spawnableRoles(list, ['coder', 'rev'])).toEqual([
+      { id: 'critic', name: 'Critic', model: 'xai/grok-5', blind: true },
+      { id: 'coder', name: 'Coder', code: 'writes' },
+      { id: 'rev', name: 'Reviewer', code: 'reviews' }
+    ]);
+    expect(spawnableRoles(list, []).map((r) => r.id)).toEqual(['critic']);
   });
 });

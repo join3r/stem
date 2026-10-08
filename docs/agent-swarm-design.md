@@ -1,6 +1,6 @@
 # Agent swarm design
 
-Status: decided 2026-10-08. Phases 1–2 built; phases 3–4 not started. Replaces the persona-to-persona model
+Status: decided 2026-10-08. Phases 1–3 built; phase 4 not started. Replaces the persona-to-persona model
 from the August mail work (helpers made with `save_persona`, Orchestrator as a
 separate coordinator, the own-helpers exception).
 
@@ -72,7 +72,7 @@ pick roles on different models.
 | Verifier | Evidence: searches and checks factual claims | recall on, web tools |
 | Critic | Blind contrarian: finds what is wrong or missing | recall off, memory off, blind; the user gives it a different model family from the lead (not auto-picked: the seed cannot know which sign-ins exist) |
 | Code personas | Claude Code on a pinned device and folder, relay only | as today |
-| Code reviewer | Codex harness, read-only, same folder as the code persona | new template, user picks the folder |
+| Code reviewer | Codex (or Claude Code) harness pinned **Review only**, same folder as the code persona | the user makes it in the editor; no seed, since only the user knows the folder |
 
 Orchestrator is retired: its fan-out knowledge moves into the lead's recipes.
 Secretary keeps spawn rights: the junk it made came from permanent helper
@@ -120,6 +120,11 @@ briefs; blind agents get none. Project-scoped memory is a separate track.
    view shows agents, remove persona-management ops, v5 migration.
 2. Lead + recipes: role list and recipes in the spawning preamble, agent
    reports free against the exchange cap, Orchestrator retired.
-3. Code loop: Code reviewer template on the Codex harness, Code recipe.
+3. Code loop: `PersonaHarnessPin.reviewOnly` (Codex `read-only` mode,
+   Claude Code `default` mode; Stem answers every ask itself: built-in
+   read-only commands inside the folder run, everything else is refused, never
+   a card; a device must ack the flag or the run is refused), Code recipe when
+   both a writing and a reviewing role are startable, and no background facts
+   for a recall-off persona's coding agent.
 4. Measure: run real past requests (Gemma benchmark, CFK-1723, two research
    asks) Direct vs Council/Code, judged blind; tune recipes only on that.

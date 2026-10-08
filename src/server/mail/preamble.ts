@@ -104,7 +104,7 @@ export function mailPreamble(
     names?: Record<string, string>;
     canSpawn?: boolean;
     agents?: string[];
-    roles?: { id: string; name: string; model?: string; blind?: true }[];
+    roles?: { id: string; name: string; model?: string; blind?: true; code?: 'writes' | 'reviews' }[];
     agent?: { role: string; spawnedBy: string };
     source?: { itemId: string; body: string; attachmentNames?: string[] };
   },
@@ -148,7 +148,12 @@ export function mailPreamble(
     .map((r) => {
       const name = cleanName(r.name) || r.id;
       const model = cleanName(r.model);
-      const traits = [r.id !== name ? r.id : '', model || 'default model', r.blind ? 'no recall' : '']
+      const traits = [
+        r.id !== name ? r.id : '',
+        model || 'default model',
+        r.blind ? 'no recall' : '',
+        r.code === 'writes' ? 'writes code' : r.code === 'reviews' ? 'reviews code, never edits' : ''
+      ]
         .filter(Boolean)
         .join(', ');
       return `${name} (${traits})`;
@@ -168,6 +173,11 @@ export function mailPreamble(
       'Independent attempts: a hard problem with a checkable answer — two or three blind agents solve it ' +
       'separately, on different models where the roles allow; compare their reasoning and keep the ' +
       'best-argued answer, not the majority. ' +
+      (mail.roles?.some((r) => r.code === 'writes') && mail.roles.some((r) => r.code === 'reviews')
+        ? 'Code: a change to a codebase — the persona that writes code does the work; when it reports, start ' +
+          'a blind agent of the reviewing role to review the change cold (from git diff) and list concrete ' +
+          'problems only; send those findings back to the writer once; then answer with one report. '
+        : '') +
       'Never start agents for a chat-like ask, and never send an agent work you could finish in the same time.' +
       (roles ? ` Roles you can start: ${roles}.` : '') +
       (agents.length ? ` Your agents here: ${agents.map(label).join(', ')}.` : '')

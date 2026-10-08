@@ -88,6 +88,18 @@ describe('ensure', () => {
     expect(pushed[1].data.autoMode).toBeUndefined();
   });
 
+  it('carries review-only to the device and passes back only the device’s own ack', async () => {
+    const { router, pushed } = makeRouter();
+    const acked = router.ensure('mac-1', 'Mac', { agent: 'codex', cwd: '/proj', reviewOnly: true });
+    const old = router.ensure('mac-1', 'Mac', { agent: 'codex', cwd: '/proj', reviewOnly: true });
+    expect(pushed[0].data).toMatchObject({ op: 'ensure', reviewOnly: true });
+    router.settle('mac-1', pushed[0].data.requestId as string, { ok: true, sessionId: 's1', reviewOnly: true });
+    // An older Stem on the Mac answers without the flag: the ack stays absent.
+    router.settle('mac-1', pushed[1].data.requestId as string, { ok: true, sessionId: 's2' });
+    await expect(acked).resolves.toEqual({ ok: true, sessionId: 's1', reviewOnly: true });
+    await expect(old).resolves.toEqual({ ok: true, sessionId: 's2' });
+  });
+
   it('times out after 30s of silence', async () => {
     vi.useFakeTimers();
     const { router } = makeRouter();

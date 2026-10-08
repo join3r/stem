@@ -100,6 +100,8 @@ interface RunContext {
   /** Set for device-hosted runs: allowlist bucket and shell come from the device. */
   deviceId?: string;
   platform?: NodeJS.Platform;
+  /** The persona never edits: asks are answered here, read-only commands yes, the rest no, never a card. */
+  reviewOnly?: true;
 }
 
 /** What the auto-decision pass hands the card when it escalates instead. */
@@ -252,12 +254,19 @@ export class HarnessService implements HarnessBridge {
     // The persona's opt-in to the agent's own Auto mode, re-applied on every
     // ensure like the model, so flipping it takes effect on the next call.
     const autoMode = req.autoMode === true ? (true as const) : undefined;
+    // Review only wins over Auto: Auto would let the agent approve its own edits.
+    const reviewOnly = req.reviewOnly === true ? (true as const) : undefined;
 
     // Session continuity: the mapping is a cache of the host's truth.
     const key = { threadId: req.threadId, host: hostKey, agent, cwd };
     if (req.freshSession) await forgetSession(key);
     const remembered = req.freshSession ? null : await lookupSession(key);
-    const spec = { agent, cwd, ...(model ? { model } : {}), ...(autoMode ? { autoMode } : {}) };
+    const spec = {
+      agent,
+      cwd,
+      ...(model ? { model } : {}),
+      ...(reviewOnly ? { reviewOnly } : autoMode ? { autoMode } : {})
+    };
     let ensured = await host.ensureSession({ ...spec, ...(remembered ? { sessionId: remembered } : {}) });
     if (!ensured.ok && remembered) {
       // The host lost or refused the remembered session; a fresh one beats an error.
@@ -267,6 +276,14 @@ export class HarnessService implements HarnessBridge {
     }
     if (!ensured.ok) {
       return { ok: false, error: `The ${agent} agent could not start on ${host.label()}: ${ensured.error}` };
+    }
+    // A host that did not confirm review-only (a Mac on an older Stem) would
+    // run the reviewer with edit rights: refuse instead.
+    if (reviewOnly && !ensured.reviewOnly) {
+      return {
+        ok: false,
+        error: `${host.label()} cannot run review-only coding agents yet — update Stem there, then try again.`
+      };
     }
     const sessionId = ensured.sessionId;
     await rememberSession({ ...key, sessionId });
@@ -323,8 +340,8 @@ export class HarnessService implements HarnessBridge {
           cwd,
           sessionId,
           ...(model ? { model } : {}),
-          ...(autoMode ? { autoMode } : {}),
-          prompt: await this.promptWithFacts(prompt)
+          ...(reviewOnly ? { reviewOnly } : autoMode ? { autoMode } : {}),
+          prompt: req.noRecall ? prompt : await this.promptWithFacts(prompt)
         },
         {
           onEvent: (events) => {
@@ -347,7 +364,8 @@ export class HarnessService implements HarnessBridge {
                 unattended: req.isMail === true,
                 runId,
                 ...(hostKey !== 'server' ? { deviceId: hostKey } : {}),
-                ...(host.platform?.() ? { platform: host.platform() } : {})
+                ...(host.platform?.() ? { platform: host.platform() } : {}),
+                ...(reviewOnly ? { reviewOnly } : {})
               },
               ask
             )
@@ -514,6 +532,12 @@ export class HarnessService implements HarnessBridge {
    * clears it. Any policy failure falls through to the card, never to an allow.
    */
   private async askPermission(ctx: RunContext, ask: HarnessPermissionAsk): Promise<HarnessPermissionDecision> {
+    // Ahead of the tiers and outside their try: a reviewer's ask must never
+    // fall through to a card the user could approve an edit on.
+    if (ctx.reviewOnly) {
+      const command = ask.toolName === 'execute' ? (ask.command ?? undefined) : undefined;
+      return this.decideReviewAsk(ctx, ask, command).decision;
+    }
     let annotations: CardAnnotations = {};
     try {
       const auto = await this.decideAsk(ctx, ask);
@@ -666,6 +690,35 @@ export class HarnessService implements HarnessBridge {
     // yolo means no cards anywhere; everything else stays a card as before.
     if (mode === 'yolo') return allowVia('yolo');
     return {};
+  }
+
+  /**
+   * A review-only run's asks, answered here and never as a card: a reviewer has
+   * no business editing, so only a command the built-in read-only list covers,
+   * reading inside the pinned folder, runs; every edit, fetch, tool and other
+   * command is refused back to the agent. The user's own allowlist is not
+   * consulted (it may hold commands that write), and neither are yolo or the
+   * judge (both can approve writes).
+   */
+  private decideReviewAsk(
+    ctx: RunContext,
+    ask: HarnessPermissionAsk,
+    command: string | undefined
+  ): { decision: HarnessPermissionDecision } {
+    const shell = ctx.deviceId ? (ctx.platform ?? hostShellFromPlatform()) : hostShellFromPlatform();
+    const reads =
+      !!command &&
+      !!ctx.cwd &&
+      classify(command, { allowlist: [] }, shell, { confine: { cwd: ctx.cwd, roots: [ctx.cwd] } }).tier === 'run';
+    const pick = reads
+      ? ask.options.find((o) => o.kind === 'allow_once')
+      : (ask.options.find((o) => o.kind === 'reject_once') ?? ask.options.find((o) => o.kind === 'reject_always'));
+    log('harness', reads ? 'review-only run read' : 'review-only run refused an ask', {
+      agent: ctx.agent,
+      title: ask.title,
+      ...(command ? { command } : {})
+    });
+    return { decision: pick ? { optionId: pick.optionId } : { expired: true } };
   }
 
   /** Count a judged refusal; true once the user should decide (exec/service.ts escalates). */

@@ -28,9 +28,13 @@ export interface HarnessSessionSpec {
    * (PersonaHarnessPin.autoMode). Claude only; absent = acceptEdits.
    */
   autoMode?: true;
+  /** Never edits (PersonaHarnessPin.reviewOnly); the host acks it in the result. */
+  reviewOnly?: true;
 }
 
-export type HarnessEnsureResult = { ok: true; sessionId: string } | { ok: false; error: string };
+export type HarnessEnsureResult =
+  | { ok: true; sessionId: string; reviewOnly?: true }
+  | { ok: false; error: string };
 
 /** An escalated permission ask, host-independent (ACP request boiled down). */
 export interface HarnessPermissionAsk {
@@ -77,6 +81,8 @@ export interface HarnessRunTurnInput {
   model?: string;
   /** Auto opt-in, carried for the same reason. */
   autoMode?: true;
+  /** Review only, carried for the same reason. */
+  reviewOnly?: true;
   maxTurnMs?: number;
 }
 

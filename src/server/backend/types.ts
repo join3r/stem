@@ -138,6 +138,10 @@ export interface HarnessRequest {
    * payload: an assistant cannot talk its agent out of Stem's approval cards.
    */
   autoMode?: true;
+  /** The persona's review-only pin, injected the same way (PersonaHarnessPin.reviewOnly). */
+  reviewOnly?: true;
+  /** The delegating turn runs without the user's memory: no background facts for the agent. */
+  noRecall?: true;
   freshSession?: boolean;
   /**
    * The tool call's own id in the turn strip, passed through so live progress

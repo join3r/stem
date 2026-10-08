@@ -1297,6 +1297,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (input.mail) turn.mail = { conversationId: input.mail.conversationId, participants: input.mail.participants };
       if (input.persona) turn.personaId = input.persona.id;
       if (input.persona?.harness) turn.personaHarness = input.persona.harness;
+      if (input.persona?.recall === false || isPrivate) turn.noRecall = true;
       if (input.persona?.computer) turn.personaComputer = input.persona.computer;
       if (input.persona?.browser) turn.personaBrowser = input.persona.browser;
       // coding_agent / computer / browser: the persona's pins, or for a chat
@@ -3003,6 +3004,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         let device: string | undefined;
         let model: string | undefined;
         let autoMode: true | undefined;
+        let reviewOnly: true | undefined;
         const choosing = grant.kind === 'chat' && grant.target === null;
         if (grant.kind === 'pin') {
           const clamped = clampPinnedCwd(str(req.cwd), grant.pin);
@@ -3015,6 +3017,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           model = grant.pin.model?.trim() || undefined;
           // Same for the Auto opt-in: only the persona editor sets it.
           autoMode = grant.pin.autoMode === true ? true : undefined;
+          reviewOnly = grant.pin.reviewOnly === true ? true : undefined;
         } else {
           agent = grant.target ? grant.target.agent : str(req.agent);
           device = grant.target ? grant.target.device : str(req.device);
@@ -3042,6 +3045,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           device,
           model,
           ...(autoMode ? { autoMode } : {}),
+          ...(reviewOnly ? { reviewOnly } : {}),
+          ...(turn?.noRecall ? { noRecall: true as const } : {}),
           freshSession: req.fresh_session === true,
           itemId: typeof req.item_id === 'string' && req.item_id ? req.item_id : undefined,
           threadId: turn?.threadId ?? '',

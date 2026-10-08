@@ -170,6 +170,12 @@ export interface TurnContext {
    * agent runs.
    */
   personaHarness?: PersonaHarnessPin;
+  /**
+   * The turn sees nothing of the user's memory (a recall-off persona, a blind
+   * agent, a private chat): the coding agent it delegates to gets no
+   * background facts either.
+   */
+  noRecall?: true;
   /** The turn's persona computer-control pin: the Mac the `computer` tool drives. */
   personaComputer?: PersonaComputerPin;
   /** The turn's persona browser pin: the Mac whose browser the `browser` tool drives. */

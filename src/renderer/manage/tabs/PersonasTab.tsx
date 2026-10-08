@@ -49,7 +49,8 @@ function summaryLabel(
       : '';
     const agent = p.harness.model ? `${p.harness.agent} (${p.harness.model})` : p.harness.agent;
     parts.push(p.harness.cwd ? `${agent}${where} in ${p.harness.cwd}` : `${agent}${where}`);
-    if (p.harness.autoMode) parts.push('approves its own actions');
+    if (p.harness.reviewOnly) parts.push('reviews only');
+    else if (p.harness.autoMode) parts.push('approves its own actions');
   }
   if (p.computer) {
     parts.push(`controls ${devices.find((d) => d.id === p.computer?.device)?.label ?? p.computer.device}`);
@@ -144,6 +145,7 @@ function sameEdit(a: Persona, b: Persona): boolean {
     (a.harness?.device ?? '') === (b.harness?.device ?? '') &&
     (a.harness?.model ?? '') === (b.harness?.model ?? '') &&
     (a.harness?.autoMode ?? false) === (b.harness?.autoMode ?? false) &&
+    (a.harness?.reviewOnly ?? false) === (b.harness?.reviewOnly ?? false) &&
     (a.computer?.device ?? '') === (b.computer?.device ?? '') &&
     (a.browser?.device ?? '') === (b.browser?.device ?? '') &&
     (a.canSpawn ?? false) === (b.canSpawn ?? false) &&
@@ -767,7 +769,30 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                         <FolderSearch size={14} />
                       </button>
                     </div>
-                    {p.harness?.agent.trim().toLowerCase() === 'claude' && (
+                    {['claude', 'codex'].includes(p.harness?.agent.trim().toLowerCase() ?? '') && (
+                      <label className="persona-cap">
+                        <input
+                          type="checkbox"
+                          checked={p.harness!.reviewOnly === true}
+                          onChange={(e) => {
+                            const harness = { ...p.harness! };
+                            if (e.target.checked) harness.reviewOnly = true;
+                            else delete harness.reviewOnly;
+                            setDraft({ ...p, harness });
+                          }}
+                        />
+                        <span>
+                          Review only, never edits{' '}
+                          <InfoTip label="About review only">
+                            The agent reads the folder and runs read-only commands such as git diff,
+                            and Stem refuses anything that would change a file, without asking you.
+                            Pin it to the same folder as the persona that writes the code, so a
+                            second model reviews each change.
+                          </InfoTip>
+                        </span>
+                      </label>
+                    )}
+                    {p.harness?.agent.trim().toLowerCase() === 'claude' && !p.harness.reviewOnly && (
                       <label className="persona-cap">
                         <input
                           type="checkbox"

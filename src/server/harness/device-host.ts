@@ -193,7 +193,8 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
         cwd: spec.cwd,
         ...(spec.sessionId ? { sessionId: spec.sessionId } : {}),
         ...(spec.model ? { model: spec.model } : {}),
-        ...(spec.autoMode ? { autoMode: true as const } : {})
+        ...(spec.autoMode ? { autoMode: true as const } : {}),
+        ...(spec.reviewOnly ? { reviewOnly: true as const } : {})
       };
       const reached = deps.pushTo(deviceId, HARNESS_REQUEST_FRAME, frame);
       if (reached === 0) {
@@ -251,6 +252,7 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
         prompt: input.prompt,
         ...(input.model ? { model: input.model } : {}),
         ...(input.autoMode ? { autoMode: true as const } : {}),
+        ...(input.reviewOnly ? { reviewOnly: true as const } : {}),
         ...(input.maxTurnMs ? { maxTurnMs: input.maxTurnMs } : {})
       };
       const reached = deps.pushTo(deviceId, HARNESS_REQUEST_FRAME, frame);
@@ -318,7 +320,11 @@ export function createHarnessDeviceRouter(deps: HarnessDeviceRouterDeps): Harnes
         pending.delete(requestId);
         clearTimeout(held.timer);
         if (value && value.ok === true && typeof (value as { sessionId?: unknown }).sessionId === 'string') {
-          held.settle({ ok: true, sessionId: (value as { sessionId: string }).sessionId });
+          held.settle({
+            ok: true,
+            sessionId: (value as { sessionId: string }).sessionId,
+            ...((value as { reviewOnly?: unknown }).reviewOnly === true ? { reviewOnly: true as const } : {})
+          });
         } else {
           held.settle({ ok: false, error: errorText(value, 'The computer answered with nothing usable.') });
         }

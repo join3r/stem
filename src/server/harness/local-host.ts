@@ -167,6 +167,37 @@ export class LocalHarnessHost implements HarnessHost {
         // actually holds.
         sessionOptions: { ...(spec.model ? { model: spec.model } : {}), ...(env ? { env } : {}) }
       });
+      if (spec.reviewOnly) {
+        // A reviewer never edits: Codex runs in its read-only sandbox, Claude
+        // Code in `default`, where every edit is an ask — and the service
+        // refuses those (and anything else that writes) without a card. Any
+        // other agent, or a mode that will not set, fails closed.
+        const mode = spec.agent === 'claude' ? 'default' : spec.agent === 'codex' ? 'read-only' : null;
+        if (!mode || !runtime.setMode) {
+          // quiet: cleanup of a session refused anyway — the returned error is the signal.
+          await runtime.close({ handle, reason: 'review only unavailable' }).catch(() => undefined);
+          return { ok: false, error: `Review only works with Claude Code or Codex, not ${spec.agent}.` };
+        }
+        try {
+          await runtime.setMode({ handle, mode });
+        } catch (e) {
+          // quiet: cleanup of a session refused anyway — the returned error is the signal.
+          await runtime.close({ handle, reason: 'review only refused' }).catch(() => undefined);
+          return {
+            ok: false,
+            error: `The ${spec.agent} agent refused its read-only mode: ${e instanceof Error ? e.message : String(e)}`
+          };
+        }
+        this.handles.set(sessionId, handle);
+        return { ok: true, sessionId, reviewOnly: true };
+      }
+      if (spec.agent === 'codex' && runtime.setMode) {
+        // Back to Codex's own default, in case this session ran review-only
+        // before the persona's box was unticked.
+        await runtime
+          .setMode({ handle, mode: 'agent' })
+          .catch((e) => degrade('harness', 'left a codex session in its previous mode', e));
+      }
       if (spec.agent === 'claude') {
         // Verified 2026-08-21 against claude-agent-acp@0.60: the adapter's
         // default `auto` mode self-approves everything it classifies as fine —
@@ -275,7 +306,8 @@ export class LocalHarnessHost implements HarnessHost {
           cwd: input.cwd,
           sessionId: input.sessionId,
           ...(input.model ? { model: input.model } : {}),
-          ...(input.autoMode ? { autoMode: input.autoMode } : {})
+          ...(input.autoMode ? { autoMode: input.autoMode } : {}),
+          ...(input.reviewOnly ? { reviewOnly: input.reviewOnly } : {})
         });
         if (!ensured.ok) return { ok: false, error: ensured.error };
         handle = this.handles.get(input.sessionId)!;

@@ -101,13 +101,14 @@ export function agentPersona(role: Persona, agent: MailAgent, starter: Pick<Pers
 export function spawnableRoles(
   personas: Persona[],
   participants: string[]
-): { id: string; name: string; model?: string; blind?: true }[] {
+): { id: string; name: string; model?: string; blind?: true; code?: 'writes' | 'reviews' }[] {
   return personas
     .filter((p) => !isPinned(p) || participants.includes(p.id))
     .map((p) => ({
       id: p.id,
       name: p.name,
       ...(p.model ? { model: p.model } : {}),
-      ...(p.recall === false ? { blind: true as const } : {})
+      ...(p.recall === false ? { blind: true as const } : {}),
+      ...(p.harness ? { code: p.harness.reviewOnly ? ('reviews' as const) : ('writes' as const) } : {})
     }));
 }

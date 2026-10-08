@@ -591,7 +591,7 @@ export interface StartTurnInput {
      * in this conversation. The model rides along so the lead can pick roles
      * on different models for independent attempts.
      */
-    roles?: { id: string; name: string; model?: string; blind?: true }[];
+    roles?: { id: string; name: string; model?: string; blind?: true; code?: 'writes' | 'reviews' }[];
     /**
      * Set when this delivery runs an AGENT (see MailAgent): its role's name
      * and who started it — the one it reports to.
@@ -1933,6 +1933,8 @@ export type DeviceHarnessRequest =
       model?: string;
       /** The persona's Auto opt-in (PersonaHarnessPin.autoMode); absent = acceptEdits. */
       autoMode?: true;
+      /** The persona never edits (PersonaHarnessPin.reviewOnly); the device must ack it. */
+      reviewOnly?: true;
     }
   | {
       /** For a run the requestId IS the turnId — events and the cancel frame cite it. */
@@ -1946,6 +1948,8 @@ export type DeviceHarnessRequest =
       model?: string;
       /** Auto opt-in, re-sent for the same reason. */
       autoMode?: true;
+      /** Review only, re-sent for the same reason. */
+      reviewOnly?: true;
       /** Enforced by the CLIENT (it owns the adapter); default ~2h there. */
       maxTurnMs?: number;
     }
@@ -1973,7 +1977,16 @@ export interface DeviceHarnessCancel {
  * result is the sole authority).
  */
 export type DeviceHarnessResult =
-  | { ok: true; sessionId: string }
+  | {
+      ok: true;
+      sessionId: string;
+      /**
+       * The device ran the session review-only, as asked. A device too old to
+       * know the flag never echoes it, and the server refuses the run rather
+       * than let a reviewer edit.
+       */
+      reviewOnly?: true;
+    }
   | { ok: true; stopReason: 'end_turn' | 'cancelled' | 'max_turn'; text: string; finalSeq: number }
   | { ok: true; models: string[]; currentModelId?: string }
   | { ok: false; error: string };
@@ -2695,6 +2708,14 @@ export interface PersonaHarnessPin {
    * only from the persona editor; claude only — other agents ignore it.
    */
   autoMode?: true;
+  /**
+   * Review only: the agent reads and runs read-only commands but never edits
+   * — Codex in its read-only sandbox, Claude Code in its default mode — and
+   * Stem refuses every ask that would write, without a card. For a reviewer
+   * persona pinned to the same folder as the one that writes the code. Wins
+   * over autoMode. Claude Code and Codex only; other agents refuse to start.
+   */
+  reviewOnly?: true;
 }
 
 /**
