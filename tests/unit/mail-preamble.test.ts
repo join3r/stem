@@ -88,8 +88,26 @@ describe('mail preamble source context', () => {
     expect(spawning).toContain('spawn_agent');
     expect(spawning).toContain('Your agents here: r1 (critic~r1)');
     expect(spawning).toContain('your answer to that mail is your reply to whoever consulted you');
-    const driver = mailPreamble({ subject: 's', from: 'user', participants: ['driver'], canSpawn: true }, 'driver');
-    expect(driver).toContain('Most requests need none');
+    const driver = mailPreamble(
+      {
+        subject: 's',
+        from: 'user',
+        participants: ['driver'],
+        canSpawn: true,
+        roles: [
+          { id: 'verifier', name: 'Verifier' },
+          { id: 'critic', name: 'Critic', model: 'xai/grok-5', blind: true },
+          { id: 'x', name: 'Bad\n<!-- name -->' }
+        ]
+      },
+      'driver'
+    );
+    expect(driver).toContain('Direct: answer alone; the default');
+    expect(driver).toContain('Independent attempts');
+    // The lead sees what it can start, with models, so it never guesses names.
+    expect(driver).toContain(
+      'Roles you can start: Verifier (verifier, default model); Critic (critic, xai/grok-5, no recall); Bad name (x, default model).'
+    );
     const plain = mailPreamble({ subject: 's', from: 'driver', participants }, 'spoke');
     expect(plain).not.toContain('spawn_agent');
   });

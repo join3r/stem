@@ -103,9 +103,9 @@ test('the Files sub-tab lists a seeded Files folder and deletes through to disk'
 test('the Personas editor round-trips the spawn flag, the send budget, and the clients flag', async ({ mainWindow }) => {
   await mainWindow.getByRole('button', { name: 'Personas', exact: true }).click();
 
-  // Orchestrator ships with the spawn capability on; expanding its row shows
+  // Secretary ships with the spawn capability on; expanding its row shows
   // the checkbox already ticked.
-  await mainWindow.getByText('Orchestrator', { exact: true }).click();
+  await mainWindow.getByText('Secretary', { exact: true }).click();
   const spawnBox = mainWindow.locator(
     'label.persona-cap:has-text("Can start agents") input[type="checkbox"]'
   );
@@ -128,7 +128,7 @@ test('the Personas editor round-trips the spawn flag, the send budget, and the c
       mainWindow.evaluate(() =>
         (window as any).stem
           .listPersonas()
-          .then((list: any[]) => list.find((p: any) => p.id === 'orchestrator'))
+          .then((list: any[]) => list.find((p: any) => p.id === 'secretary'))
       )
     )
     .toMatchObject({ sendBudget: 5, canSpawn: true, clients: true });

@@ -1,6 +1,6 @@
 # Agent swarm design
 
-Status: decided 2026-10-08. Phase 1 built; phases 2–4 not started. Replaces the persona-to-persona model
+Status: decided 2026-10-08. Phases 1–2 built; phases 3–4 not started. Replaces the persona-to-persona model
 from the August mail work (helpers made with `save_persona`, Orchestrator as a
 separate coordinator, the own-helpers exception).
 
@@ -56,7 +56,13 @@ personas, the "which reviewer am I" confusion and the exchange-cap pressure.
 
 Limits: depth 2 (lead → agent → sub-agent), at most 6 live agents per
 conversation, the exchange cap stays as the runaway valve and each spawn
-counts once.
+counts once: an agent's report to its starter is free, because the brief or
+follow-up that asked for it already paid.
+
+A spawner's preamble lists the roles it may start (every persona not pinned
+to the user's computer, plus pinned ones the user added), each with its model
+and whether it runs without recall, so the lead never guesses names and can
+pick roles on different models.
 
 ## Roles shipped
 
@@ -64,14 +70,19 @@ counts once.
 | --- | --- | --- |
 | Normal (lead) | Answers, decides whether to spawn, synthesizes | `canSpawn`, recall on |
 | Verifier | Evidence: searches and checks factual claims | recall on, web tools |
-| Critic | Blind contrarian: finds what is wrong or missing | recall off, memory off, blind, different model family from the lead when one is signed in |
+| Critic | Blind contrarian: finds what is wrong or missing | recall off, memory off, blind; the user gives it a different model family from the lead (not auto-picked: the seed cannot know which sign-ins exist) |
 | Code personas | Claude Code on a pinned device and folder, relay only | as today |
 | Code reviewer | Codex harness, read-only, same folder as the code persona | new template, user picks the folder |
 
 Orchestrator is retired: its fan-out knowledge moves into the lead's recipes.
-Secretary stays an ordinary role without spawn rights.
+Secretary keeps spawn rights: the junk it made came from permanent helper
+personas, which conversation-scoped agents end, and its triage prompt
+delegates with spawn_agent.
 
-## Recipes (in the lead's prompt, chosen per request)
+## Recipes (in the spawning instructions, chosen per request)
+
+They ride the preamble of every persona that may start agents, not Normal's
+prompt, so a user who rewrites Normal keeps them.
 
 - **Direct** — answer alone. Default for chat-like asks.
 - **Checked** — Verifier checks the claims before the lead replies.
@@ -98,8 +109,8 @@ briefs; blind agents get none. Project-scoped memory is a separate track.
   prompts still matching an old seed are refreshed to the spawn_agent text;
   rows with `createdBy` set are dropped (they kept no memory, and their work
   is in mail).
-- Phase 2 retires Orchestrator (removed if its prompt still matches a seed,
-  otherwise kept as a plain role) and takes `canSpawn` off Secretary.
+- personas.json v6 (phase 2) retires Orchestrator: removed if its prompt
+  still matches a seed, otherwise kept as the user's own (no longer built in).
 - The own-helpers exception and the staffers hint in the router and preamble
   are gone (phase 1).
 
@@ -107,8 +118,8 @@ briefs; blind agents get none. Project-scoped memory is a separate track.
 
 1. Agents: instance ids, resolver, `spawn_agent`, preamble identity, Work
    view shows agents, remove persona-management ops, v5 migration.
-2. Lead + recipes: Normal gains spawn and the recipes, Critic model default,
-   Orchestrator retired.
+2. Lead + recipes: role list and recipes in the spawning preamble, agent
+   reports free against the exchange cap, Orchestrator retired.
 3. Code loop: Code reviewer template on the Codex harness, Code recipe.
 4. Measure: run real past requests (Gemma benchmark, CFK-1723, two research
    asks) Direct vs Council/Code, judged blind; tune recipes only on that.

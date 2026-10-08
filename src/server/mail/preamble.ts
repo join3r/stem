@@ -104,6 +104,7 @@ export function mailPreamble(
     names?: Record<string, string>;
     canSpawn?: boolean;
     agents?: string[];
+    roles?: { id: string; name: string; model?: string; blind?: true }[];
     agent?: { role: string; spawnedBy: string };
     source?: { itemId: string; body: string; attachmentNames?: string[] };
   },
@@ -140,13 +141,35 @@ export function mailPreamble(
   // Starting agents (spawn_agent): calibrated against cost — every agent is a
   // full turn per mail, so the default is to answer alone, and agents are for
   // independent pieces or for a check by someone who did not write the work.
+  // The recipes are the shapes that hold up elsewhere: a checker helps when it
+  // has something the author lacked (tools, a cold read, another model), and
+  // independent attempts compared once beat rounds of same-model debate.
+  const roles = (mail.roles ?? [])
+    .map((r) => {
+      const name = cleanName(r.name) || r.id;
+      const model = cleanName(r.model);
+      const traits = [r.id !== name ? r.id : '', model || 'default model', r.blind ? 'no recall' : '']
+        .filter(Boolean)
+        .join(', ');
+      return `${name} (${traits})`;
+    })
+    .join('; ');
   const spawning = mail.canSpawn
     ? 'You can start agents with spawn_agent: a named instance of an existing persona that works one piece ' +
       'of this job and reports back to you (blind true for a reviewer that must judge without knowing who ' +
-      'wrote the work). Most requests need none — do the work yourself. Start agents when a job splits into ' +
-      'independent pieces worth running in parallel, or when the answer deserves a check by someone who did ' +
-      'not write it. Start all of a job’s agents in the same turn: their replies come back to you together as ' +
-      'one mail. Continue an agent with send_mail to its id.' +
+      'wrote the work). Start all of a job’s agents in the same turn: their replies come back to you together ' +
+      'as one mail. Continue an agent with send_mail to its id. Pick the cheapest way that fits the request — ' +
+      'Direct: answer alone; the default, and right for most requests. ' +
+      'Checked: your answer rests on facts that could be wrong (numbers, dates, versions, quotes) — draft it, ' +
+      'have one agent of a checking role verify those claims with its tools, then answer. ' +
+      'Council: a consequential or contested question — in one turn start agents that gather evidence on ' +
+      'separate sub-questions, plus a blind critic given your draft to read cold; then answer, revising at ' +
+      'most once. ' +
+      'Independent attempts: a hard problem with a checkable answer — two or three blind agents solve it ' +
+      'separately, on different models where the roles allow; compare their reasoning and keep the ' +
+      'best-argued answer, not the majority. ' +
+      'Never start agents for a chat-like ask, and never send an agent work you could finish in the same time.' +
+      (roles ? ` Roles you can start: ${roles}.` : '') +
       (agents.length ? ` Your agents here: ${agents.map(label).join(', ')}.` : '')
     : '';
   const role = mail.agent

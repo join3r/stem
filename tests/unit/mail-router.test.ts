@@ -36,13 +36,16 @@ const personasPath = personasStorePath();
 const settingsPath = settingsStorePath();
 const deviceQueuePath = mailDeviceQueuePath();
 
-beforeEach(() => {
+beforeEach(async () => {
   mkdirSync(dirname(mailPath), { recursive: true });
   rmSync(mailPath, { force: true });
   rmSync(personasPath, { force: true });
   rmSync(settingsPath, { force: true });
   rmSync(deviceQueuePath, { force: true });
   resetActivity();
+  // Orchestrator is no longer seeded (v6); these tests use it as a generic
+  // coordinator that may start agents.
+  await savePersona({ id: 'orchestrator', name: 'Orchestrator', prompt: 'o', canSpawn: true });
 });
 afterEach(async () => {
   // Drain the store's write chain before removing the file: a test that ends
@@ -1730,7 +1733,9 @@ describe('spawn_agent', () => {
       },
       { mode: 'ok', reply: 'assembled six' }
     ];
-    await updateMailSettings({ exchangeCap: 20 });
+    // Six briefs spend six hops; the six reports back are free, so a cap of
+    // six still assembles every reply instead of forcing them onto the user.
+    await updateMailSettings({ exchangeCap: 6 });
     await router.compose({ to: ['normal'], subject: 'cap', body: 'go' });
     await vi.waitFor(async () => {
       const m = await readMail();
@@ -1740,6 +1745,9 @@ describe('spawn_agent', () => {
     expect((await readMail()).conversations[0].agents).toHaveLength(6);
     // One assembly carried all six replies.
     expect(fake.starts.filter((s) => s.persona?.id === 'normal')).toHaveLength(2);
+    const after = await readMail();
+    expect(after.items.filter((i) => i.from.startsWith('critic~') && i.to.includes('user'))).toHaveLength(0);
+    expect(after.conversations[0].exchangeCount).toBe(6);
   });
 });
 

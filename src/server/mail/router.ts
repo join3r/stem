@@ -15,7 +15,7 @@ import * as activity from '../activity';
 import { degrade } from '../degrade';
 import { noteTurnStart } from '../live-turns';
 import { getPersona, listPersonas } from '../workspace/personas';
-import { agentId, agentName, agentPersona, agentSlug, isAgentId, isPinned, MAX_AGENTS } from './agents';
+import { agentId, agentName, agentPersona, agentSlug, isAgentId, isPinned, MAX_AGENTS, spawnableRoles } from './agents';
 import {
   listPersonaNotes,
   personaOwnsMemory,
@@ -35,6 +35,7 @@ import {
   settleMailApproval,
   CapError,
   createConversation,
+  exchangeHops,
   readMail,
   setConversationSession,
   setConversationStatus,
@@ -94,7 +95,7 @@ import {
 // Agents (mail/agents.ts) are the other way work fans out: a persona with the
 // spawn capability starts named instances of other personas with spawn_agent.
 // An agent belongs to whoever started it — only that persona or agent mails
-// it, and its reply goes back there — so a consulted Orchestrator runs its own
+// it, and its reply goes back there — so a consulted coordinator runs its own
 // workers and answers whoever consulted it once. Every send that reaches an
 // agent opens (or widens) the sender's join, so agents started one call at a
 // time in one turn still come back as one assembly. Agents live on the
@@ -821,7 +822,9 @@ export class MailRouter {
       'reply goes to whoever mailed you — or send_mail to ["user"].';
     if (personaTo.length) {
       const cap = await this.exchangeCap();
-      if (conversation.exchangeCount + personaTo.length > cap) return { ok: false, error: capRefusal };
+      if (conversation.exchangeCount + exchangeHops(conversation, ctx.personaId, personaTo) > cap) {
+        return { ok: false, error: capRefusal };
+      }
       const budget = caller?.sendBudget;
       if (budget !== undefined && !rerouteOnly) {
         const spent = conversation.sendCounts[ctx.personaId] ?? 0;
@@ -1432,6 +1435,7 @@ export class MailRouter {
             names,
             ...(persona.canSpawn ? { canSpawn: true } : {}),
             ...(own.length ? { agents: own } : {}),
+            ...(persona.canSpawn ? { roles: spawnableRoles(registry, conversation.participants) } : {}),
             ...(selfAgent ? { agent: selfAgent } : {}),
             ...(source ? { source } : {})
           }
@@ -1584,7 +1588,7 @@ export class MailRouter {
       if (!conversation) return;
       const join = this.joinFor(conversationId, initiator);
       const cap = await this.exchangeCap();
-      if (conversation.exchangeCount + 1 <= cap) {
+      if (conversation.exchangeCount + exchangeHops(conversation, personaId, [initiator]) <= cap) {
         try {
           // Exempt from the sender's budget: finishing an assignment must
           // always be possible, however capped the persona's own sends are.

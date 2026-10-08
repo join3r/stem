@@ -8,11 +8,18 @@ personas. Replies arrive in your Inbox. A persona that makes pictures while answ
 ## Agents
 
 A persona allowed to start agents (the "Can start agents" box in its editor;
-Normal, Secretary and Orchestrator ship with it on) can hand pieces of a job to
+Normal and Secretary ship with it on) can hand pieces of a job to
 agents. An agent is a named copy of one of your personas, such as two Critics
 called reviewer-a and reviewer-b, that works its piece and reports back to the
 persona that started it. Several agents started together work in parallel, and
-their reports come back as one. An agent started blind judges without your
+their reports come back as one. The persona decides per request whether
+agents are worth the extra turns. It answers most requests alone. When an
+answer rests on facts that could be wrong, one agent checks them first. For a
+consequential question, agents gather evidence in parallel and a blind Critic
+reads the draft cold. For a hard problem, two or three agents solve it
+separately and the persona keeps the best-argued answer. A Critic on a
+different model from the persona that leads gives a more independent read;
+set its model in its editor. An agent started blind judges without your
 memory and without knowing who wrote the work. Agents keep no memory, never
 answer you directly, and never appear in the Personas list: they belong to the
 conversation and go away with it. Their work shows under **Work** like any
@@ -20,6 +27,10 @@ other persona's. A conversation can have at most six agents. An agent never
 gets integrations its starter lacks, and a persona that works on your
 computer (a coding agent, screen or browser control) is started as an agent
 only in a conversation you added it to.
+
+Orchestrator is no longer a built-in persona, because every persona that can
+start agents now does its job. If you had edited Orchestrator's prompt, it
+stays as one of your own personas.
 
 ## Scheduled tasks
 

@@ -90,3 +90,24 @@ export function agentPersona(role: Persona, agent: MailAgent, starter: Pick<Pers
   else delete persona.mcpServers;
   return persona;
 }
+
+/**
+ * The roles a persona may start agents of here, for its preamble: every
+ * persona not pinned to the user's computer, plus pinned ones the user put in
+ * the conversation (the same rule bridgeSpawn enforces). Without the list a
+ * lead guesses at persona names; with the model it can pick roles on
+ * different models for independent attempts.
+ */
+export function spawnableRoles(
+  personas: Persona[],
+  participants: string[]
+): { id: string; name: string; model?: string; blind?: true }[] {
+  return personas
+    .filter((p) => !isPinned(p) || participants.includes(p.id))
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      ...(p.model ? { model: p.model } : {}),
+      ...(p.recall === false ? { blind: true as const } : {})
+    }));
+}

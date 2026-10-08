@@ -586,6 +586,13 @@ export interface StartTurnInput {
     /** Agents this persona started in this conversation — the ones it may mail. */
     agents?: string[];
     /**
+     * The personas this one may start agents of (set with canSpawn): every
+     * persona not pinned to the user's computer, plus pinned ones the user put
+     * in this conversation. The model rides along so the lead can pick roles
+     * on different models for independent attempts.
+     */
+    roles?: { id: string; name: string; model?: string; blind?: true }[];
+    /**
      * Set when this delivery runs an AGENT (see MailAgent): its role's name
      * and who started it — the one it reports to.
      */

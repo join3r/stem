@@ -36,17 +36,17 @@ const persona = (over: Partial<Persona> = {}): Persona => ({
 });
 
 describe('first read', () => {
-  it('seeds the five built-ins and writes the file', async () => {
+  it('seeds the four built-ins and writes the file', async () => {
     const personas = await listPersonas();
-    expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'orchestrator', 'critic']);
+    expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'critic']);
     expect(personas.every((p) => p.builtin)).toBe(true);
-    expect(onDisk().version).toBe(5);
+    expect(onDisk().version).toBe(6);
   });
 
   it('degrades a corrupt file to the built-ins rather than throwing', async () => {
     writeFileSync(path, '{ not json', 'utf8');
     const personas = await listPersonas();
-    expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'orchestrator', 'critic']);
+    expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'critic']);
   });
 
   it('re-seeds a built-in missing from the stored list, keeping edits to the rest', async () => {
@@ -101,10 +101,9 @@ describe('save', () => {
     expect(verifier?.prompt).toBe('stricter');
   });
 
-  it('round-trips the spawn capability; Normal, Secretary and Orchestrator seed with it on', async () => {
+  it('round-trips the spawn capability; Normal and Secretary seed with it on', async () => {
     expect((await getPersona('normal'))?.canSpawn).toBe(true);
     expect((await getPersona('secretary'))?.canSpawn).toBe(true);
-    expect((await getPersona('orchestrator'))?.canSpawn).toBe(true);
     expect((await getPersona('verifier'))?.canSpawn).toBeUndefined();
     await savePersona(persona({ canSpawn: true }));
     expect((await getPersona('p1'))?.canSpawn).toBe(true);
@@ -162,40 +161,49 @@ describe('save', () => {
     expect((await getPersona('critic'))?.recall).toBe(false);
     expect((await getPersona('verifier'))?.recall).toBeUndefined();
     // …and the read persists it: the file on disk now says so too.
-    expect(onDisk().version).toBe(5);
+    expect(onDisk().version).toBe(6);
     expect(onDisk().personas.find((p: Persona) => p.id === 'critic')?.recall).toBe(false);
     // The user turns it back on: written at the current version, the choice survives the next read.
     const critic = (await getPersona('critic'))!;
     await savePersona({ ...critic, recall: true });
-    expect(onDisk().version).toBe(5);
+    expect(onDisk().version).toBe(6);
     expect((await getPersona('critic'))?.recall).toBeUndefined();
   });
 
-  it('a v3 file refreshes an untouched legacy Secretary/Orchestrator prompt, never an edited one', async () => {
+  it('a v3 file refreshes an untouched legacy Secretary prompt and retires an untouched Orchestrator', async () => {
     const seeded = await listPersonas();
     const seedOf = (id: string) => seeded.find((p) => p.id === id)!.prompt;
     const raw = onDisk();
     raw.version = 3;
+    // The phase-1 seeds the deployed server still carried.
+    raw.personas.push({
+      id: 'orchestrator',
+      name: 'Orchestrator',
+      prompt:
+        'You are Orchestrator. Split large tasks into independent pieces, delegate each piece, and assemble ' +
+        'the results into one coherent answer. When a task cannot be split, or the delegation tools are not ' +
+        'available yet, do the work directly and say so.'
+    });
     for (const p of raw.personas) {
-      // The phase-1 seed the deployed server still carried.
-      if (p.id === 'orchestrator') {
+      if (p.id === 'secretary') {
         p.prompt =
-          'You are Orchestrator. Split large tasks into independent pieces, delegate each piece, and assemble ' +
-          'the results into one coherent answer. When a task cannot be split, or the delegation tools are not ' +
-          'available yet, do the work directly and say so.';
+          'You are Secretary. You triage requests: decide what a task needs, bring in the right personas, ' +
+          'schedule follow-ups with your task tools, and keep the inbox quiet. Prefer delegating over doing the ' +
+          'work yourself. When a tool you would use for delegation is not available yet, say what you would ' +
+          'delegate and to whom instead of improvising.';
       }
-      if (p.id === 'secretary') p.prompt = 'You are my own secretary.';
     }
     writeFileSync(path, JSON.stringify(raw), 'utf8');
-    expect((await getPersona('orchestrator'))?.prompt).toBe(seedOf('orchestrator'));
-    expect((await getPersona('secretary'))?.prompt).toBe('You are my own secretary.');
-    expect(onDisk().version).toBe(5);
+    expect(await getPersona('orchestrator')).toBeNull();
+    expect((await getPersona('secretary'))?.prompt).toBe(seedOf('secretary'));
+    expect(onDisk().version).toBe(6);
   });
 
   it('a v4 file drops agent-made helper personas, refreshes helper-era seeds, and lets Normal start agents', async () => {
     await listPersonas(); // seed
     const raw = onDisk();
     raw.version = 4;
+    raw.personas.push({ id: 'orchestrator', name: 'Orchestrator', prompt: '' });
     for (const p of raw.personas) {
       delete p.canSpawn;
       if (p.id === 'secretary' || p.id === 'orchestrator') p.canManagePersonas = true;
@@ -217,10 +225,10 @@ describe('save', () => {
     const personas = await listPersonas();
     expect(personas.find((p) => p.id === 'h1')).toBeUndefined();
     expect(personas.find((p) => p.id === 'u1')).toBeTruthy();
-    expect(personas.find((p) => p.id === 'orchestrator')?.prompt).toContain('spawn_agent');
+    expect(personas.find((p) => p.id === 'orchestrator')).toBeUndefined();
     expect(personas.find((p) => p.id === 'secretary')?.canSpawn).toBe(true);
     expect(personas.find((p) => p.id === 'normal')?.canSpawn).toBe(true);
-    expect(onDisk().version).toBe(5);
+    expect(onDisk().version).toBe(6);
     expect(JSON.stringify(onDisk())).not.toContain('createdBy');
   });
 
@@ -237,7 +245,7 @@ describe('save', () => {
     expect((await getPersona('b'))?.canSpawn).toBe(true);
   });
 
-  it('a v1 file grants Secretary and Orchestrator the flag once; unticking sticks on the current version', async () => {
+  it('a v1 file grants Secretary the flag once; unticking sticks on the current version', async () => {
     await listPersonas(); // seed
     const raw = onDisk();
     raw.version = 1;
@@ -245,13 +253,38 @@ describe('save', () => {
     writeFileSync(path, JSON.stringify(raw), 'utf8');
     // v1 read: the stored rows gain the flag the seeds carry — appending-only
     // seeding never fixes an existing row, so the migration must.
-    expect((await getPersona('orchestrator'))?.canSpawn).toBe(true);
     expect((await getPersona('secretary'))?.canSpawn).toBe(true);
     // The user unticks it — the write lands at the current version and the choice sticks.
-    const orchestrator = (await getPersona('orchestrator'))!;
-    await savePersona({ ...orchestrator, canSpawn: undefined });
-    expect(onDisk().version).toBe(5);
-    expect((await getPersona('orchestrator'))?.canSpawn).toBeUndefined();
+    const secretary = (await getPersona('secretary'))!;
+    await savePersona({ ...secretary, canSpawn: undefined });
+    expect(onDisk().version).toBe(6);
+    expect((await getPersona('secretary'))?.canSpawn).toBeUndefined();
+  });
+
+  it('a v5 file retires an untouched Orchestrator and keeps an edited one as the user’s own', async () => {
+    await listPersonas(); // seed
+    const v5Seed =
+      'You are Orchestrator. Split large tasks into independent pieces and delegate each piece to an agent: ' +
+      'spawn_agent with an existing persona as its role, a short name, and the piece as its brief (blind true for ' +
+      'a reviewer that must judge without knowing who wrote the work). Start all the pieces in the same turn: ' +
+      'their replies come back to you together as one mail, which is when you combine the results. Report one ' +
+      'assembled answer to whoever gave you the task. When a task cannot be split, do the work directly and say so.';
+    const write = (prompt: string) => {
+      const raw = onDisk();
+      raw.version = 5;
+      raw.personas = raw.personas.filter((p: Persona) => p.id !== 'orchestrator');
+      raw.personas.push({ id: 'orchestrator', name: 'Orchestrator', prompt, canSpawn: true, builtin: true });
+      writeFileSync(path, JSON.stringify(raw), 'utf8');
+    };
+    write(v5Seed);
+    expect(await getPersona('orchestrator')).toBeNull();
+    expect(onDisk().version).toBe(6);
+    write('My own coordinator.');
+    const kept = await getPersona('orchestrator');
+    expect(kept).toMatchObject({ prompt: 'My own coordinator.', canSpawn: true });
+    expect(kept?.builtin).toBeUndefined();
+    await deletePersona('orchestrator');
+    expect(await getPersona('orchestrator')).toBeNull();
   });
 
   it('round-trips the clients flag; off is stored as absence and junk never lands', async () => {

@@ -19,14 +19,15 @@ import { deletePersonaMemory } from './persona-memory';
 // persona would come back blank.
 
 interface PersonasFile {
-  version: 5;
+  version: 6;
   personas: Persona[];
 }
 
 /**
  * The seeded personas. Prompts are starting points the user is expected to
- * rewrite; the Secretary and Orchestrator name tools that arrive in later
- * phases, and say so, rather than pretending to powers they don't have yet.
+ * rewrite. Normal is the usual lead: it may start agents, and how to use them
+ * well (the recipes) comes with the spawning instructions, not its prompt, so
+ * a user who writes their own Normal keeps them.
  */
 const BUILTINS: Persona[] = [
   {
@@ -57,19 +58,6 @@ const BUILTINS: Persona[] = [
       '(each gets a name and a brief) and schedule follow-ups with schedule_task (set its ' +
       'personaId so the run happens as the right persona). Keep the inbox quiet: mail the user ' +
       'only decisions and results, not process.',
-    canSpawn: true,
-    builtin: true
-  },
-  {
-    id: 'orchestrator',
-    name: 'Orchestrator',
-    prompt:
-      'You are Orchestrator. Split large tasks into independent pieces and delegate each piece ' +
-      'to an agent: spawn_agent with an existing persona as its role, a short name, and the ' +
-      'piece as its brief (blind true for a reviewer that must judge without knowing who wrote ' +
-      'the work). Start all the pieces in the same turn: their replies come back to you together ' +
-      'as one mail, which is when you combine the results. Report one assembled answer to ' +
-      'whoever gave you the task. When a task cannot be split, do the work directly and say so.',
     canSpawn: true,
     builtin: true
   },
@@ -191,11 +179,22 @@ const LEGACY_SEED_PROMPTS: Record<string, string[]> = {
     "You are Secretary. You triage requests: decide what a task needs and delegate rather than doing the work yourself. Bring the right personas into the conversation with add_persona, hand them their piece with send_mail, and schedule follow-ups with schedule_task (set its personaId so the run happens as the right persona). Keep the inbox quiet: mail the user only decisions and results, not process.",
     "You are Secretary. You triage requests: decide what a task needs and delegate rather than doing the work yourself. Bring the right personas into the conversation with add_persona, hand them their piece with send_mail, and schedule follow-ups with schedule_task (set its personaId so the run happens as the right persona). When no existing persona fits, create one with save_persona and clean it up with delete_persona when its job is done. Keep the inbox quiet: mail the user only decisions and results, not process.",
     "You are Secretary. You triage requests: decide what a task needs and delegate rather than doing the work yourself. Bring the right personas into the conversation with add_persona, hand them their piece with send_mail, and schedule follow-ups with schedule_task (set its personaId so the run happens as the right persona). When no existing persona fits, create one with save_persona and clean it up with delete_persona when its job is done. When a job needs several workers, hand the whole job to Orchestrator in one brief: it creates and runs its own helpers and returns one assembled answer. Keep the inbox quiet: mail the user only decisions and results, not process.",
-  ],
+  ]
+};
+
+/**
+ * Every seed text of a retired built-in. Orchestrator's fan-out knowledge now
+ * lives in the spawning instructions every agent-starting persona gets (see
+ * mail/preamble.ts), so a separate coordinator only added a hop. A stored row
+ * whose prompt is one of these was never edited and is removed on upgrade; an
+ * edited one stays, as an ordinary persona the user owns.
+ */
+const RETIRED_SEED_PROMPTS: Record<string, string[]> = {
   orchestrator: [
     "You are Orchestrator. Split large tasks into independent pieces, delegate each piece, and assemble the results into one coherent answer. When a task cannot be split, or the delegation tools are not available yet, do the work directly and say so.",
     "You are Orchestrator. Split large tasks into independent pieces and delegate each piece. Create workers with save_persona (for example researcher-1, researcher-2 as copies of a role prompt), bring them into the conversation with add_persona, then send ALL the delegations in ONE send_mail call — their replies come back to you together as a single assembly mail, which is when you combine the results. Delete your workers with delete_persona when the task is done. Report one assembled answer to the user. When a task cannot be split, do the work directly and say so.",
     "You are Orchestrator. Split large tasks into independent pieces and delegate each piece. Create workers with save_persona (for example researcher-1, researcher-2 as copies of a role prompt; recall false for a reviewer that must judge blind), bring them into the conversation with add_persona, tell each worker its name in its brief, then send ALL the delegations in ONE send_mail call — their replies come back to you together as a single assembly mail, which is when you combine the results. Delete your workers with delete_persona when the task is done. Report one assembled answer to whoever gave you the task — the user, or the persona that consulted you. When a task cannot be split, do the work directly and say so.",
+    "You are Orchestrator. Split large tasks into independent pieces and delegate each piece to an agent: spawn_agent with an existing persona as its role, a short name, and the piece as its brief (blind true for a reviewer that must judge without knowing who wrote the work). Start all the pieces in the same turn: their replies come back to you together as one mail, which is when you combine the results. Report one assembled answer to whoever gave you the task. When a task cannot be split, do the work directly and say so.",
   ]
 };
 
@@ -262,10 +261,19 @@ function coerce(parsed: unknown): PersonasFile {
       if (row && seed && legacy.includes(row.prompt)) row.prompt = seed.prompt;
     }
   }
+  // v6 retires Orchestrator: every persona that starts agents now gets the
+  // fan-out instructions it carried. An untouched row goes; an edited one
+  // stays as the user's own persona (no longer built in, so deletable).
+  if (version < 6) {
+    for (const [id, retired] of Object.entries(RETIRED_SEED_PROMPTS)) {
+      const at = personas.findIndex((p) => p.id === id);
+      if (at >= 0 && retired.includes(personas[at].prompt)) personas.splice(at, 1);
+    }
+  }
   for (const builtin of BUILTINS) {
     if (!seen.has(builtin.id)) personas.push({ ...builtin });
   }
-  return { version: 5, personas };
+  return { version: 6, personas };
 }
 
 // The registry is written by the editor's IPC (and migrations on read); the

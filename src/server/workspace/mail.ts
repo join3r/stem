@@ -443,6 +443,23 @@ export class CapError extends Error {
 }
 
 /**
+ * What one item spends of the exchange cap. Every persona recipient of a
+ * persona's mail counts — counting only pure persona→persona items would let a
+ * CC to the user launder the hop past the runaway guard — except an agent's
+ * report to whoever started it: the brief or follow-up that asked for it
+ * already paid, so a job of six agents costs six hops, not twelve.
+ */
+export function exchangeHops(
+  conversation: Pick<MailConversation, 'agents'>,
+  from: string,
+  to: string[]
+): number {
+  if (from === 'user') return 0;
+  const starter = conversation.agents?.find((a) => a.id === from)?.spawnedBy;
+  return to.filter((t) => t !== 'user' && t !== starter).length;
+}
+
+/**
  * Append one item, stamping the conversation's activity clocks: `updatedAt`
  * always, `userUpdatedAt` only when the item addresses the user (that is the
  * unread/placement input), `exchangeCount`/`sendCounts` only for
@@ -485,10 +502,7 @@ export function appendMailItem(
     ) {
       item.stale = true;
     }
-    // Every persona recipient of a persona's mail spends cap budget — counting
-    // only pure persona→persona items would let a CC to the user launder the
-    // hop past the runaway guard.
-    const hops = item.from === 'user' ? 0 : item.to.filter((t) => t !== 'user').length;
+    const hops = exchangeHops(conversation, item.from, item.to);
     if (guard && hops > 0) {
       if (conversation.exchangeCount + hops > guard.exchangeCap) throw new CapError('exchange');
       if (guard.senderBudget !== undefined && !guard.budgetExempt) {
