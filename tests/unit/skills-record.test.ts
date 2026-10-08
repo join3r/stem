@@ -133,15 +133,38 @@ describe('authorRecording', () => {
     expect(out).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
-  it('tells an over-long body how much to cut', async () => {
+  it('shortens a body that only broke the size limit without rewriting from the recording', async () => {
     const prompts: string[] = [];
     const long = `${BODY}\n${'Narration that says nothing. '.repeat(160)}`;
     const llm: LlmClient = {
-      complete: async (p) => (prompts.push(p), JSON.stringify({ skill: { ...skill, body: prompts.length === 1 ? long : BODY } }))
+      complete: async (p) => {
+        prompts.push(p);
+        if (prompts.length === 1) return JSON.stringify({ skill: { ...skill, body: long }, variables: [{ name: 'Date', from: 'the email' }] });
+        return '```markdown\n' + BODY + '\n```';
+      }
+    };
+    const out = await authorRecording(llm, { examples: [EXAMPLE], answers: [], previous: null });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('<body>');
+    expect(prompts[1]).not.toContain('--- Recording');
+    expect(out.ok && out.draft.body).toBe(BODY);
+    expect(out.ok && out.variables).toEqual([{ name: 'Date', from: 'the email' }]);
+  });
+
+  it('tells an over-long body how much to cut when shortening fails', async () => {
+    const prompts: string[] = [];
+    const long = `${BODY}\n${'Narration that says nothing. '.repeat(160)}`;
+    const llm: LlmClient = {
+      complete: async (p) => {
+        prompts.push(p);
+        if (p.includes('<body>')) return long;
+        return JSON.stringify({ skill: { ...skill, body: prompts.length === 1 ? long : BODY } });
+      }
     };
     const out = await authorRecording(llm, { examples: [EXAMPLE], answers: [], previous: null });
     expect(out.ok).toBe(true);
-    expect(prompts[1]).toMatch(/Cut at least \d+ bytes \(about \d+%\)/);
+    expect(prompts).toHaveLength(4);
+    expect(prompts[3]).toMatch(/Cut at least \d+ bytes \(about \d+%\)/);
   });
 
   it('keeps the name on a rewrite', async () => {

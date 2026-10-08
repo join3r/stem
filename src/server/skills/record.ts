@@ -1,6 +1,6 @@
 import type { LlmClient, LlmImage } from '../recall/llm';
 import type { RecordedStep, RecordingDraft, RecordingExample, RecordingLink, RecordingPractice, RecordingVariable } from '../../shared/types';
-import { SKILL_CONTRACT_TEXT, formatViolations, validateSkill, type SkillDraft } from './contract';
+import { SKILL_BODY_MAX_BYTES, SKILL_CONTRACT_TEXT, formatViolations, validateSkill, type SkillDraft } from './contract';
 import { parseAuthorReply, renderTurn } from './author';
 import type { LearnTurn } from './thread-evidence';
 
@@ -188,10 +188,48 @@ export function parseRecordExtras(output: string): RecordExtras {
 
 // Three: an over-long practice rewrite often needs two rounds of cutting.
 const MAX_ATTEMPTS = 3;
+const SHRINK_ATTEMPTS = 2;
+/** Where a shortening pass aims: under the limit with room for the model's miscount. */
+const SHRINK_TARGET_BYTES = SKILL_BODY_MAX_BYTES - 400;
+
+export function buildShrinkPrompt(body: string): string {
+  const bytes = Buffer.byteLength(body, 'utf8');
+  return [
+    `Below is the body of a skill: steps an assistant follows to repeat a task. It is ${bytes} bytes and must be at most ${SHRINK_TARGET_BYTES} bytes, so cut about ${Math.ceil(((bytes - SHRINK_TARGET_BYTES) / bytes) * 100)}% of it.`,
+    'Keep: the headings "## When to use", "## Steps" and "## Verification" in that order; every action, control label, setting value, file path, shortcut, and where each changing value comes from.',
+    'Cut: explanations of why, repetition, narration, filler words, and examples that restate a step. Merge small consecutive steps into one line.',
+    'Reply with ONLY the new body in Markdown — no code fence, no comment.',
+    '',
+    '<body>',
+    body,
+    '</body>'
+  ].join('\n');
+}
+
+/**
+ * A body that only broke the size limit, shortened on its own. Rewriting from
+ * the whole recording again puts the detail back: the Joinit practice rewrite
+ * stayed over 4 KB through three full attempts, each told how much to cut.
+ */
+async function shrinkBody(llm: LlmClient, draft: SkillDraft): Promise<SkillDraft | null> {
+  let current = draft;
+  for (let attempt = 1; attempt <= SHRINK_ATTEMPTS; attempt += 1) {
+    // quiet: a failed shortening falls back to the ordinary retry, whose outcome the caller reports.
+    const reply = await llm.complete(buildShrinkPrompt(current.body)).catch(() => '');
+    const body = reply.trim().replace(/^```(?:markdown|md)?\n([\s\S]*?)\n```$/, '$1').trim();
+    if (!body) return null;
+    current = { ...current, body };
+    const violations = validateSkill(current);
+    if (violations.length === 0) return current;
+    if (!violations.every((v) => v.tooLong)) return null;
+  }
+  return null;
+}
 
 export async function authorRecording(llm: LlmClient, input: RecordAuthorInput, images: LlmImage[] = []): Promise<RecordAuthorOutcome> {
   const base = buildRecordPrompt(input);
   let prompt = base;
+  let shrunk = false;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     let reply: string;
     try {
@@ -206,6 +244,11 @@ export async function authorRecording(llm: LlmClient, input: RecordAuthorInput, 
       const draft = input.previous ? { ...parsed.draft, name: input.previous.name } : parsed.draft;
       const violations = validateSkill(draft);
       if (violations.length === 0) return { ok: true, draft, ...parseRecordExtras(reply) };
+      if (!shrunk && violations.every((v) => v.tooLong)) {
+        shrunk = true;
+        const shorter = await shrinkBody(llm, draft);
+        if (shorter) return { ok: true, draft: shorter, ...parseRecordExtras(reply) };
+      }
       if (attempt === MAX_ATTEMPTS) return { ok: false, reason: 'invalid', detail: formatViolations(violations) };
       prompt = `${base}\n\n---\n\nYour previous answer was rejected. You returned:\nname: ${draft.name}\ndescription: ${draft.description}\n\n${draft.body}\n\nIt broke the contract:\n${formatViolations(violations)}\n\nFix every point and reply again with the same JSON shape.`;
       continue;

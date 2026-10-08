@@ -34,6 +34,8 @@ export interface SkillDraft {
 export interface SkillViolation {
   field: 'name' | 'description' | 'body';
   message: string;
+  /** Set on the size violation, which a shortening pass can repair on its own. */
+  tooLong?: true;
 }
 
 /**
@@ -143,6 +145,7 @@ export function validateSkill(draft: SkillDraft): SkillViolation[] {
       const cut = bytes - SKILL_BODY_MAX_BYTES + 300;
       violations.push({
         field: 'body',
+        tooLong: true,
         message: `body is ${bytes} bytes; the limit is ${SKILL_BODY_MAX_BYTES}. Cut at least ${cut} bytes (about ${Math.ceil((cut / bytes) * 100)}%): drop narration and explanations, merge small steps, keep every action.`
       });
     }
