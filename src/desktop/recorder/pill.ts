@@ -7,6 +7,9 @@ import { workspaceVisibilityOptions } from '../platform';
 // to ("← Mail"), and Note / Pause / Stop. Hovering it drops down the last few
 // steps. Like the banner it is a sandboxed data: page with no preload; every
 // button navigates to a sentinel URL the main process cancels and acts on.
+// A real click on a window that never takes focus does not reach the page on
+// macOS, acceptFirstMouse or not, so the helper's tap reports every press and
+// pressAt clicks whatever button lies under it.
 
 const WIDTH = 460;
 const HEIGHT = 44;
@@ -43,7 +46,20 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
 <div class="list" id="list"></div>
 <form class="note" id="noteForm"><input id="noteInput" placeholder="A note for Stem (optional)" maxlength="500"><button type="submit">Add</button></form>
 </div><script>
-  const go = (what, q) => { location.href = '${SENTINEL}' + what + (q ? '?' + new URLSearchParams(q) : ''); };
+  // A press can arrive twice (the page's own click and the helper's report).
+  let last = { what: '', at: 0 };
+  const go = (what, q) => {
+    if (what !== 'hover') {
+      if (last.what === what && Date.now() - last.at < 600) return;
+      last = { what, at: Date.now() };
+    }
+    location.href = '${SENTINEL}' + what + (q ? '?' + new URLSearchParams(q) : '');
+  };
+  window.press = (x, y) => {
+    const el = document.elementFromPoint(x, y)?.closest('button, input');
+    if (el?.tagName === 'INPUT') el.focus();
+    else if (el) el.click();
+  };
   document.getElementById('stopBtn').onclick = () => go('stop');
   document.getElementById('pauseBtn').onclick = () => go('pause');
   document.getElementById('noteBtn').onclick = () => go('note-open');
@@ -87,6 +103,8 @@ export interface RecorderPill {
   show(): void;
   hide(): void;
   render(view: PillView): void;
+  /** A left press at screen point (x, y); clicks the pill's button there, if any. */
+  pressAt(x: number, y: number): void;
   destroy(): void;
 }
 
@@ -191,6 +209,13 @@ export function createRecorderPill(handlers: RecorderPillHandlers): RecorderPill
     render(next) {
       view = next;
       paint();
+    },
+    pressAt(x, y) {
+      if (!win || win.isDestroyed() || !win.isVisible()) return;
+      const b = win.getBounds();
+      if (x < b.x || y < b.y || x >= b.x + b.width || y >= b.y + b.height) return;
+      const js = `window.press && window.press(${x - b.x}, ${y - b.y});`;
+      void win.webContents.executeJavaScript(js, true).catch(() => undefined);
     },
     destroy() {
       if (win && !win.isDestroyed()) win.destroy();

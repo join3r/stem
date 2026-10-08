@@ -41,7 +41,8 @@ export type HelperEvent =
   | { event: 'rec-step'; step: RecordedStep }
   | { event: 'rec-seen'; seen: { t: number; app: string; window: string; url?: string; text: string; hash?: string } }
   | { event: 'rec-shot'; shot: { t: number; app: string; window: string; path: string } }
-  | { event: 'rec-note'; note: string };
+  | { event: 'rec-note'; note: string }
+  | { event: 'rec-press'; x: number; y: number };
 
 /** Where the helper binary is, building it first in development. Throws with a readable reason. */
 export async function resolveHelperPath(): Promise<string> {

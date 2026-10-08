@@ -45,6 +45,7 @@ describe.runIf(mac)('recorder', () => {
   let views: PillView[];
   let invoked: { channel: string; args: unknown[] }[];
   let shown: number;
+  let presses: [number, number][];
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'stem-rec-test-'));
@@ -53,6 +54,7 @@ describe.runIf(mac)('recorder', () => {
     views = [];
     invoked = [];
     shown = 0;
+    presses = [];
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -67,7 +69,7 @@ describe.runIf(mac)('recorder', () => {
       hideMain: () => undefined,
       revealMain: () => undefined,
       helpers: { spawn: async () => helper, oneShot: async () => ({ ok: true }) },
-      pill: () => ({ show: () => void shown++, hide: () => undefined, render: (v) => void views.push(v), destroy: () => undefined }),
+      pill: () => ({ show: () => void shown++, hide: () => undefined, render: (v) => void views.push(v), pressAt: (x, y) => void presses.push([x, y]), destroy: () => undefined }),
       recordingsRoot: () => root
     });
   }
@@ -102,6 +104,16 @@ describe.runIf(mac)('recorder', () => {
     expect(views.at(-1)?.paused).toBe(true);
     expect((await rec.togglePause()).phase).toBe('recording');
     expect(helper.calls.filter((c) => c === 'record-pause')).toHaveLength(2);
+    await rec.cancel();
+  });
+
+  it('hands the helper\'s presses to the pill, paused or not', async () => {
+    const rec = make();
+    await rec.start('t', null);
+    helper.fire({ event: 'rec-press', x: 700, y: 30 });
+    await rec.togglePause();
+    helper.fire({ event: 'rec-press', x: 650, y: 30 });
+    expect(presses).toEqual([[700, 30], [650, 30]]);
     await rec.cancel();
   });
 

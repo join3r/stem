@@ -148,6 +148,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       case 'rec-note':
         log('recorder', 'helper note', { note: event.note });
         break;
+      case 'rec-press':
+        pill.pressAt(event.x, event.y);
+        break;
       default:
         break;
     }

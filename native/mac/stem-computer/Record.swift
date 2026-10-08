@@ -14,6 +14,10 @@ import ImageIO
 //   {"event":"rec-seen", "seen":{t, app, window, url?, text, hash}}
 //   {"event":"rec-shot", "shot":{t, app, window, path}}
 //   {"event":"rec-note", "note":"..."}            (something the person should know)
+//   {"event":"rec-press", "x":..., "y":...}       (a left press anywhere, paused too:
+//                                                  macOS drops real clicks on the
+//                                                  never-key pill, so Stem presses
+//                                                  its buttons from here)
 // Passwords never leave this process: a secure field's value is "[password]".
 
 final class Recorder {
@@ -191,9 +195,13 @@ final class Recorder {
       if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
       return
     }
-    guard active else { return }
     // Stem's own computer-control runs post tagged events; they are not the person.
     if event.getIntegerValueField(.eventSourceUserData) == STEM_EVENT_TAG { return }
+    if type == .leftMouseDown, isRunning {
+      let at = event.location
+      queue.async { emit(["event": "rec-press", "x": Double(at.x), "y": Double(at.y)]) }
+    }
+    guard active else { return }
     switch type {
     case .leftMouseDown, .rightMouseDown:
       let at = event.location
