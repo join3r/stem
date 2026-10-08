@@ -78,6 +78,18 @@ export function standingAnswersBlock(answers: { title: string; body: string }[] 
   ];
 }
 
+/** A persona name as a preamble label: one line, no fence/comment markers, at most 64 chars. */
+function cleanName(name: string | undefined): string {
+  if (!name) return '';
+  const flat = name
+    .replace(/<!--|-->|<|>/g, '')
+    // eslint-disable-next-line no-control-regex -- stripping control chars is the point
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return flat.length > 64 ? `${flat.slice(0, 63)}…` : flat;
+}
+
 /**
  * The model-visible mail-delivery preamble, fenced for replay stripping +
  * detection. `self` is the persona this delivery runs as, kept out of the
@@ -112,10 +124,11 @@ export function mailPreamble(
   // participant set, and this line is how a persona learns who else is in it.
   const participants = mail.participants ?? [];
   // A persona reads ids in To: lists and other personas' briefs, but knows
-  // itself and its colleagues by name — "name (id)" bridges the two. Names are
-  // persona-authored, so the fence closer is stripped like everywhere else.
+  // itself and its colleagues by name — "name (id)" bridges the two. Names can
+  // be agent-authored (save_persona), so one renders as a short single-line
+  // label: no line breaks or comment markers to fake preamble text with.
   const label = (id: string) => {
-    const name = mail.names?.[id]?.split(MAIL_CLOSE).join('').trim();
+    const name = cleanName(mail.names?.[id]);
     return name && name !== id ? `${name} (${id})` : id;
   };
   const others = participants.filter((p) => p !== mail.from && p !== self);
