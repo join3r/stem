@@ -19,7 +19,7 @@ import type { LearnTurn } from './thread-evidence';
 
 export const SKILL_RECORD_INSTRUCTIONS = `The user recorded themselves doing a task on their Mac so that you can do it for them next time. Write it up as a skill.
 
-The evidence is what THEY did, not what an assistant did: every click named by the control's role and label, every value typed into a field, copies and pastes, keys, and switches between apps and windows, in order. Web pages carry their address. Where a typed or pasted value could be traced to text that was on their screen just before, the source is quoted beside it ("← from: Mail · PO-4411: …delivery on October 14…"). A value marked "(no source found)" was not in any text they had in view; pictures of what was on screen just before it may follow. Notes are things the user wrote down while recording, and they outrank your guesses. "[password]" marks a secret that was not recorded: the skill must say the user's sign-in is needed there, never invent one.
+The evidence is what THEY did, not what an assistant did: every click named by the control's role and label, every value typed into a field, copies and pastes, keys, and switches between apps and windows, in order. Web pages carry their address. Clicks in an Open or Save dialog carry the files selected and the folder shown: a full path when one was recorded, else only names — then the skill says how to find the file on the Mac by its name (\`mdfind -name\` or \`find\` in the named folder) instead of asking the user for its path. Where a typed or pasted value could be traced to text that was on their screen just before, the source is quoted beside it ("← from: Mail · PO-4411: …delivery on October 14…"). A value marked "(no source found)" was not in any text they had in view; pictures of what was on screen just before it may follow. Notes are things the user wrote down while recording, and they outrank your guesses. "[password]" marks a secret that was not recorded: the skill must say the user's sign-in is needed there, never invent one.
 
 Your job:
 1. Work out the procedure, and what stays the same from run to run (which app, which menu, which form, which button) versus what changes (a date, an order number, a quantity, which customer).
@@ -53,6 +53,9 @@ function renderStep(step: RecordedStep, index: number, source: string | null, no
     case 'click': {
       const verb = step.button === 'right' ? 'right-clicked' : (step.count ?? 1) > 1 ? 'double-clicked' : 'clicked';
       what = `${verb} ${step.role ?? 'element'}${step.label ? ` "${step.label}"` : ''}${step.within ? ` in ${step.within}` : ''}`;
+      if (step.file) what += ` (file ${step.file})`;
+      if (step.files) what += ` with ${step.files.split('\n').map((f) => JSON.stringify(f)).join(', ')} selected`;
+      if (step.folder) what += step.folder.startsWith('/') ? ` [folder ${step.folder}]` : ` [in a folder named "${step.folder}"]`;
       break;
     }
     case 'type':
@@ -272,7 +275,7 @@ export function cleanExample(raw: unknown): RecordingExample | null {
     if (typeof x.kind !== 'string' || !STEP_KINDS.has(x.kind)) continue;
     const step: RecordedStep = { kind: x.kind as RecordedStep['kind'], t: num(x.t), app: str(x.app, 120) ?? '', window: str(x.window, 200) ?? '' };
     const opt: [keyof RecordedStep, number][] = [
-      ['bundleId', 200], ['url', 600], ['role', 60], ['label', 200], ['within', 200], ['field', 200],
+      ['bundleId', 200], ['url', 600], ['role', 60], ['label', 200], ['within', 200], ['file', 600], ['files', 2000], ['folder', 600], ['field', 200],
       ['value', 4000], ['before', 400], ['text', 2000], ['combo', 60]
     ];
     for (const [k, max] of opt) {

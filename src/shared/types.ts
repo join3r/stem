@@ -1633,6 +1633,12 @@ export interface RecordedStep {
   label?: string;
   /** click: the titled region around it (`group "Delivery"`). */
   within?: string;
+  /** click in a file list: the file's path, when the list exposes it. */
+  file?: string;
+  /** click on a file dialog's button: the selected files (paths or names), one per line. */
+  files?: string;
+  /** click in a file dialog: the folder it shows (a path, or only its name). */
+  folder?: string;
   button?: 'right';
   count?: number;
   /** type/paste: the field and the value ("[password]" for secure fields). */

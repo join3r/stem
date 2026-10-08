@@ -251,6 +251,7 @@ final class Recorder {
     if !Recorder.isSecretApp(ctx.bundleId) {
       if let label = Recorder.describe(hit), !Recorder.looksLikeCard(label) { extra["label"] = label }
       if let within = Recorder.container(of: hit) { extra["within"] = within }
+      for (k, v) in Recorder.fileContext(hit, role: role) where extra[k] == nil { extra[k] = v }
     }
     if right { extra["button"] = "right" }
     if count > 1 { extra["count"] = count }
@@ -587,6 +588,122 @@ final class Recorder {
       }
       cur = AX.attribute(c, kAXParentAttribute as String).map { $0 as! AXUIElement }
       hops += 1
+    }
+    return nil
+  }
+
+  // MARK: files picked in Open/Save dialogs and Finder
+
+  /// How open/save panels and Finder describe their file lists.
+  private static let fileViews: Set<String> = ["list view", "column view", "icon view", "gallery view"]
+  private static let listRoles: Set<String> = ["AXOutline", "AXBrowser", "AXList", "AXTable"]
+
+  /// A click in a file list or on a dialog's button, named by the files it is
+  /// about: a row's name is the file's name (its cell is an unnamed text field
+  /// otherwise), and the dialog's Open/Import/Save carries what was selected
+  /// and which folder it was in — else the author is left asking for paths.
+  static func fileContext(_ hit: AXUIElement, role: String) -> [String: Any] {
+    let inView = ancestorView(of: hit)
+    let dialog = ancestor(of: hit, role: "AXSheet") ?? ancestor(of: hit, role: "AXWindow")
+    var out: [String: Any] = [:]
+    if inView != nil, let row = ancestor(of: hit, role: "AXRow"), let item = fileItem(row) {
+      out["label"] = item.name
+      if let path = item.path { out["file"] = path }
+    }
+    guard let dialog, inView != nil || (role == "AXButton" && isDialog(dialog)), let view = inView ?? findView(in: dialog) else { return out }
+    if role == "AXButton" {
+      let picked = selectedRows(of: view).compactMap(fileItem)
+      if !picked.isEmpty { out["files"] = clip(picked.map { $0.path ?? $0.name }.joined(separator: "\n"), 2000) }
+    }
+    if let folder = folder(of: dialog, view: view) { out["folder"] = folder }
+    return out
+  }
+
+  /// Only a dialog's buttons are worth searching the window for a file list.
+  private static func isDialog(_ w: AXUIElement) -> Bool {
+    if AX.string(w, kAXRoleAttribute as String) == "AXSheet" { return true }
+    let subrole = AX.string(w, kAXSubroleAttribute as String) ?? ""
+    return subrole == "AXDialog" || subrole == "AXSystemDialog" || AX.string(w, kAXIdentifierAttribute as String) == "open-panel"
+      || AX.string(w, kAXIdentifierAttribute as String) == "save-panel"
+  }
+
+  private static func ancestorView(of el: AXUIElement) -> AXUIElement? {
+    var cur: AXUIElement? = el
+    var hops = 0
+    while let c = cur, hops < 10 {
+      if isFileView(c) { return c }
+      cur = AX.attribute(c, kAXParentAttribute as String).map { $0 as! AXUIElement }
+      hops += 1
+    }
+    return nil
+  }
+
+  private static func isFileView(_ el: AXUIElement) -> Bool {
+    guard listRoles.contains(AX.string(el, kAXRoleAttribute as String) ?? "") else { return false }
+    return fileViews.contains((AX.string(el, kAXDescriptionAttribute as String) ?? "").lowercased())
+  }
+
+  private static func findView(in root: AXUIElement) -> AXUIElement? {
+    var queue: [(AXUIElement, Int)] = [(root, 0)]
+    var visited = 0
+    while !queue.isEmpty, visited < 800 {
+      let (e, depth) = queue.removeFirst()
+      visited += 1
+      if isFileView(e) { return e }
+      // Rows hold no further views; skip their cells.
+      if depth < 12, AX.string(e, kAXRoleAttribute as String) != "AXRow" { queue.append(contentsOf: AX.children(e).map { ($0, depth + 1) }) }
+    }
+    return nil
+  }
+
+  private static func selectedRows(of view: AXUIElement) -> [AXUIElement] {
+    for attr in [kAXSelectedRowsAttribute as String, kAXSelectedChildrenAttribute as String] {
+      if let rows = AX.attribute(view, attr) as? [AXUIElement], !rows.isEmpty { return Array(rows.prefix(20)) }
+    }
+    return []
+  }
+
+  /// A file's path from whichever attribute the list exposes it under.
+  private static func filePath(_ el: AXUIElement) -> String? {
+    for attr in ["AXURL", "AXFilename", "AXDocument"] {
+      guard let s = AX.string(el, attr) else { continue }
+      if s.hasPrefix("file://"), let url = URL(string: s) { return url.path }
+      if s.hasPrefix("/") { return s }
+    }
+    return nil
+  }
+
+  /// The file a row stands for: its name (the first text in it) and its path when exposed.
+  static func fileItem(_ row: AXUIElement) -> (name: String, path: String?)? {
+    var name: String?
+    var path = filePath(row)
+    var queue: [(AXUIElement, Int)] = [(row, 0)]
+    while !queue.isEmpty, name == nil || path == nil {
+      let (e, depth) = queue.removeFirst()
+      let r = AX.string(e, kAXRoleAttribute as String) ?? ""
+      if name == nil, r == "AXTextField" || r == "AXStaticText" { name = clean(AX.string(e, kAXValueAttribute as String)) }
+      if path == nil { path = filePath(e) }
+      if depth < 3 { queue.append(contentsOf: AX.children(e).map { ($0, depth + 1) }) }
+    }
+    if name == nil, let path { name = (path as NSString).lastPathComponent }
+    guard let name else { return nil }
+    return (name, path)
+  }
+
+  /// The folder a dialog shows: a full path when the window or a selected
+  /// file exposes one, else the name in the location pop-up above the list.
+  private static func folder(of dialog: AXUIElement, view: AXUIElement) -> String? {
+    if let doc = filePath(dialog) { return doc }
+    if let row = selectedRows(of: view).first, let path = fileItem(row)?.path { return (path as NSString).deletingLastPathComponent }
+    guard let top = AX.frame(view)?.minY else { return nil }
+    var queue: [(AXUIElement, Int)] = [(dialog, 0)]
+    var visited = 0
+    while !queue.isEmpty, visited < 600 {
+      let (e, depth) = queue.removeFirst()
+      visited += 1
+      let r = AX.string(e, kAXRoleAttribute as String) ?? ""
+      if r == "AXPopUpButton", let f = AX.frame(e), f.maxY <= top + 4, let v = clean(AX.string(e, kAXValueAttribute as String)) { return v }
+      if depth < 10, r != "AXRow", !CFEqual(e, view) { queue.append(contentsOf: AX.children(e).map { ($0, depth + 1) }) }
     }
     return nil
   }

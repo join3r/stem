@@ -62,6 +62,20 @@ describe('renderExample', () => {
     expect(text).toContain('pressed cmd+shift+a');
   });
 
+  it('carries the files picked in an Open dialog, and cleanExample keeps them', () => {
+    const example = cleanExample({
+      steps: [
+        { kind: 'click', t: 0, app: 'DaVinci Resolve', window: 'Import Media', role: 'textfield', label: 'Intro.mp4', within: 'outline "list view"', folder: 'joinit stock' },
+        { kind: 'click', t: 900, app: 'DaVinci Resolve', window: 'Import Media', role: 'button', label: 'Open', files: '/Users/me/stock/Intro.mp4\n/Users/me/stock/Outro.mp4', folder: '/Users/me/stock' }
+      ],
+      links: [],
+      unmatched: []
+    })!;
+    const text = renderExample(example);
+    expect(text).toContain('clicked textfield "Intro.mp4" in outline "list view" [in a folder named "joinit stock"]');
+    expect(text).toContain('clicked button "Open" with "/Users/me/stock/Intro.mp4", "/Users/me/stock/Outro.mp4" selected [folder /Users/me/stock]');
+  });
+
   it('frames every example and the earlier draft', () => {
     const prompt = buildRecordPrompt({
       examples: [EXAMPLE, EXAMPLE],
