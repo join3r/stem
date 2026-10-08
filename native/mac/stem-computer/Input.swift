@@ -119,23 +119,27 @@ final class Input {
     try post(CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2, wheel1: vertical, wheel2: horizontal, wheel3: 0))
   }
 
-  /// Types text as Unicode, in short chunks: keyboardSetUnicodeString takes a
-  /// bounded string per event, and a chunked stream also lets the app keep up.
+  /// Types text one character at a time. A character the current keyboard
+  /// layout can produce goes out as that real key (code + shift/option) with
+  /// the character attached; only the rest fall back to a bare Unicode event.
+  /// Qt apps such as DaVinci Resolve drop the bare Unicode events — chunked
+  /// "virtual key 0" typing left their text fields untouched.
   func type(text: String) throws {
     guard !text.isEmpty else { throw HelperError("Nothing to type.") }
-    let scalars = Array(text.utf16)
-    var i = 0
-    while i < scalars.count {
-      let end = min(i + 20, scalars.count)
-      var chunk = Array(scalars[i..<end])
-      let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
-      down?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: &chunk)
-      try post(down)
-      let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
-      up?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: &chunk)
-      try post(up)
-      pause(15)
-      i = end
+    let layout = KeyMap.currentLayoutChars()
+    for ch in text {
+      var units = Array(String(ch).utf16)
+      let mapped: KeyMap.Parsed? = ch == "\n" || ch == "\r" ? KeyMap.Parsed(code: 0x24, flags: [])
+        : ch == "\t" ? KeyMap.Parsed(code: 0x30, flags: [])
+        : layout[ch]
+      let code = mapped?.code ?? 0
+      for isDown in [true, false] {
+        let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: isDown)
+        event?.flags = mapped?.flags ?? []
+        event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+        try post(event)
+      }
+      pause(8)
     }
   }
 

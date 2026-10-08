@@ -1,3 +1,4 @@
+import Carbon
 import CoreGraphics
 import Foundation
 
@@ -59,5 +60,40 @@ enum KeyMap {
     default: break
     }
     throw HelperError("Unknown key \"\(last)\". Use xdotool names: Return, Tab, Escape, space, BackSpace, Delete, Up/Down/Left/Right, Home, End, Page_Up, Page_Down, F1–F12, or a single character.")
+  }
+
+  /// Character → key + modifiers on the keyboard layout in use now, read with
+  /// UCKeyTranslate over every key under none/shift/option/shift+option. The
+  /// first (plainest) way to reach a character wins.
+  static func currentLayoutChars() -> [Character: Parsed] {
+    guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+          let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return [:] }
+    let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data
+    var out: [Character: Parsed] = [:]
+    let mods: [(UInt32, CGEventFlags)] = [
+      (0, []), (UInt32(shiftKey >> 8), .maskShift),
+      (UInt32(optionKey >> 8), .maskAlternate), (UInt32((shiftKey | optionKey) >> 8), [.maskShift, .maskAlternate])
+    ]
+    data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
+      guard let layout = buf.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return }
+      for (modState, flags) in mods {
+        for code in 0..<128 {
+          var dead: UInt32 = 0
+          var length = 0
+          var chars = [UniChar](repeating: 0, count: 4)
+          let status = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDown), modState,
+                                      UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                                      &dead, chars.count, &length, &chars)
+          guard status == noErr, length == 1 else { continue }
+          let str = String(utf16CodeUnits: chars, count: length)
+          // Control characters (Return, Tab, arrows' private-use codes) are not typed text.
+          guard let ch = str.first, let scalar = str.unicodeScalars.first,
+                scalar.value >= 0x20, !(0xF700...0xF8FF).contains(scalar.value),
+                out[ch] == nil else { continue }
+          out[ch] = Parsed(code: CGKeyCode(code), flags: flags)
+        }
+      }
+    }
+    return out
   }
 }

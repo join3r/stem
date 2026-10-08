@@ -16,8 +16,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const SOURCE_DIR = resolve(here, '..', 'native', 'mac', 'stem-computer');
 export const OUTPUT = resolve(here, '..', 'build', 'native', 'stem-computer');
 
-// AppKit for the running-apps list, ScreenCaptureKit for per-window capture (the macOS 14 floor).
-const FRAMEWORKS = ['CoreGraphics', 'ImageIO', 'ApplicationServices', 'Foundation', 'AppKit', 'ScreenCaptureKit'];
+// AppKit for the running-apps list, ScreenCaptureKit for per-window capture (the macOS 14 floor),
+// Carbon for the keyboard layout `type` takes key codes from.
+const FRAMEWORKS = ['CoreGraphics', 'ImageIO', 'ApplicationServices', 'Foundation', 'AppKit', 'ScreenCaptureKit', 'Carbon'];
 
 export function sourceFiles() {
   return readdirSync(SOURCE_DIR)
