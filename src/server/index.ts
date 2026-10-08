@@ -404,8 +404,8 @@ function registerIpc(): void {
   registerChatsIpc(deps);
   registerPinsIpc(deps);
   registerPersonasIpc({ runtime: () => runtime! });
-  // Fired by the store on every registry write — editor saves and the mail
-  // bridge's save_persona/delete_persona alike — so every connected client's
+  // Fired by the store on every registry write — editor saves and on-read
+  // migrations alike — so every connected client's
   // persona list (the composer's To: field included) stays current.
   onPersonasChanged(() => emit('personas:changed', undefined));
   registerMailIpc({ router: () => mailRouter, runtime: () => runtime! });
@@ -884,14 +884,11 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
       return { deviceId: target.deviceId, label: target.label, online };
     }
   });
-  // The send_mail/add_persona/save_persona/delete_persona tools inside a
-  // persona's delivery turn route here; the runtime supplies the conversation
-  // + sender off the live turn.
+  // The send_mail/spawn_agent tools inside a persona's delivery turn route
+  // here; the runtime supplies the conversation + sender off the live turn.
   runtime.setMailBridge({
     send: (req, ctx) => mailRouter!.bridgeSend(req, ctx),
-    addPersona: (personaId, ctx) => mailRouter!.bridgeAddPersona(personaId, ctx),
-    savePersona: (req, ctx) => mailRouter!.bridgeSavePersona(req, ctx),
-    deletePersona: (personaId, ctx) => mailRouter!.bridgeDeletePersona(personaId, ctx),
+    spawnAgent: (req, ctx) => mailRouter!.bridgeSpawn(req, ctx),
     rememberNote: (req, ctx) => mailRouter!.bridgeRememberNote(req, ctx),
     readNotes: (ids, ctx) => mailRouter!.bridgeReadNotes(ids, ctx)
   });

@@ -79,24 +79,38 @@ describe('mail preamble source context', () => {
     expect(STRIP_RE.test(`${text}\n\nbody`)).toBe(true);
   });
 
-  it('a consulted persona that can staff hears it may run its own helpers; others do not', () => {
-    const staffing = mailPreamble(
-      { subject: 's', from: 'driver', participants: [...participants, 'h1'], canStaff: true, helpers: ['h1'], names: { h1: 'researcher-1' } },
+  it('a persona that can spawn hears about spawn_agent and its own agents; others do not', () => {
+    const spawning = mailPreamble(
+      { subject: 's', from: 'driver', participants, canSpawn: true, agents: ['critic~r1'], names: { 'critic~r1': 'r1' } },
       'spoke'
     );
-    expect(staffing).toContain('except your own helpers');
-    expect(staffing).toContain('save_persona');
-    expect(staffing).toContain('Your helpers already here: researcher-1 (h1)');
+    expect(spawning).toContain('except agents you start');
+    expect(spawning).toContain('spawn_agent');
+    expect(spawning).toContain('Your agents here: r1 (critic~r1)');
+    expect(spawning).toContain('your answer to that mail is your reply to whoever consulted you');
+    const driver = mailPreamble({ subject: 's', from: 'user', participants: ['driver'], canSpawn: true }, 'driver');
+    expect(driver).toContain('Most requests need none');
     const plain = mailPreamble({ subject: 's', from: 'driver', participants }, 'spoke');
-    expect(plain).not.toContain('save_persona');
+    expect(plain).not.toContain('spawn_agent');
   });
 
-  it('the driver hears which participant can take a multi-worker job whole', () => {
-    const text = mailPreamble(
-      { subject: 's', from: 'user', participants, staffers: ['spoke'], names: { spoke: 'Orchestrator' } },
-      'driver'
-    );
-    expect(text).toContain('Orchestrator (spoke) can run helper personas of its own');
+  it('an agent is told it is one and reports to whoever started it', () => {
+    const mail = {
+      subject: 's',
+      from: 'driver',
+      participants,
+      names: { driver: 'Secretary', 'critic~reviewer-b': 'reviewer-b' },
+      agent: { role: 'Critic', spawnedBy: 'driver' }
+    };
+    const text = mailPreamble(mail, 'critic~reviewer-b');
+    expect(text).toContain('You are reviewer-b (critic~reviewer-b).');
+    expect(text).toContain('an instance of Critic, started by Secretary (driver)');
+    expect(text).toContain('your report to Secretary (driver)');
+    expect(text).toContain('You cannot mail anyone else;');
+    // Blind: the starter goes unnamed like every other sender cue.
+    const blind = mailPreamble(mail, 'critic~reviewer-b', undefined, true);
+    expect(blind).not.toContain('Secretary');
+    expect(blind).toContain('your report to whoever started you');
   });
 
   it('a persona without a memory store hears nothing about notes', () => {

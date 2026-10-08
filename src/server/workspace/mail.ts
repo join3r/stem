@@ -8,6 +8,7 @@ import type {
   GeneratedImageRef,
   MailApproval,
   MailApprovalStatus,
+  MailAgent,
   MailConversation,
   MailItem,
   MailListResult,
@@ -183,6 +184,7 @@ function coerceConversation(raw: unknown): MailConversation | null {
       if (n !== undefined && n > 0) sendCounts[personaId] = n;
     }
   }
+  const agents = coerceAgents(r.agents);
   return {
     id: r.id,
     // Cleaned on READ, not only on write: subjects stored before the hygiene
@@ -192,6 +194,7 @@ function coerceConversation(raw: unknown): MailConversation | null {
     subject: cleanMailSubject(typeof r.subject === 'string' ? r.subject : ''),
     participants,
     sessions,
+    ...(agents.length ? { agents } : {}),
     ...(r.private === true ? { private: true as const } : {}),
     status,
     exchangeCount: num(r.exchangeCount) ?? 0,
@@ -201,6 +204,25 @@ function coerceConversation(raw: unknown): MailConversation | null {
     userSentAt: num(r.userSentAt) ?? 0,
     createdAt: num(r.createdAt) ?? 0
   };
+}
+
+function coerceAgents(raw: unknown): MailAgent[] {
+  if (!Array.isArray(raw)) return [];
+  const agents: MailAgent[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const a = entry as Record<string, unknown>;
+    if (typeof a.id !== 'string' || typeof a.role !== 'string' || typeof a.name !== 'string') continue;
+    if (typeof a.spawnedBy !== 'string' || !a.id || agents.some((x) => x.id === a.id)) continue;
+    agents.push({
+      id: a.id,
+      role: a.role,
+      name: a.name,
+      spawnedBy: a.spawnedBy,
+      ...(a.blind === true ? { blind: true as const } : {})
+    });
+  }
+  return agents;
 }
 
 function coerceEntry(raw: unknown): InboxEntry | null {
@@ -495,11 +517,25 @@ export function appendMailItem(
   });
 }
 
-/** Grow a conversation's participant set (the add_persona tool). Idempotent. */
+/** Grow a conversation's participant set (the user's add control). Idempotent. */
 export function addParticipant(conversationId: string, personaId: string): Promise<MailListResult> {
   return update((store) => {
     const conversation = conversationOf(store, conversationId);
     if (!conversation.participants.includes(personaId)) conversation.participants.push(personaId);
+  });
+}
+
+/**
+ * Record an agent started in a conversation (spawn_agent). Refuses a second
+ * agent under the same id — the caller checks first and says why; this is the
+ * race backstop.
+ */
+export function addAgent(conversationId: string, agent: MailAgent): Promise<MailListResult> {
+  return update((store) => {
+    const conversation = conversationOf(store, conversationId);
+    const agents = conversation.agents ?? [];
+    if (agents.some((a) => a.id === agent.id)) throw new Error(`An agent named "${agent.name}" already exists here.`);
+    conversation.agents = [...agents, agent];
   });
 }
 

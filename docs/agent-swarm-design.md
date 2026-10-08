@@ -1,6 +1,6 @@
 # Agent swarm design
 
-Status: decided 2026-10-08, not built. Replaces the persona-to-persona model
+Status: decided 2026-10-08. Phase 1 built; phases 2–4 not started. Replaces the persona-to-persona model
 from the August mail work (helpers made with `save_persona`, Orchestrator as a
 separate coordinator, the own-helpers exception).
 
@@ -93,12 +93,15 @@ briefs; blind agents get none. Project-scoped memory is a separate track.
 
 ## Migration
 
-- personas.json v5: `canManagePersonas` becomes `canSpawn` on Normal only;
-  Orchestrator is removed if its prompt still matches a seed, otherwise kept
-  as a plain role; rows with `createdBy` set are deleted (their sessions are
-  not resumable as agents and the work they did is in mail).
+- personas.json v5 (phase 1): `canManagePersonas` is renamed `canSpawn` (kept
+  on Secretary and Orchestrator) and Normal gains it; Secretary/Orchestrator
+  prompts still matching an old seed are refreshed to the spawn_agent text;
+  rows with `createdBy` set are dropped (they kept no memory, and their work
+  is in mail).
+- Phase 2 retires Orchestrator (removed if its prompt still matches a seed,
+  otherwise kept as a plain role) and takes `canSpawn` off Secretary.
 - The own-helpers exception and the staffers hint in the router and preamble
-  are removed.
+  are gone (phase 1).
 
 ## Phases
 

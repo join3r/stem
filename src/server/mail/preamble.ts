@@ -102,9 +102,9 @@ export function mailPreamble(
     from: string;
     participants?: string[];
     names?: Record<string, string>;
-    canStaff?: boolean;
-    helpers?: string[];
-    staffers?: string[];
+    canSpawn?: boolean;
+    agents?: string[];
+    agent?: { role: string; spawnedBy: string };
     source?: { itemId: string; body: string; attachmentNames?: string[] };
   },
   self?: string,
@@ -124,9 +124,10 @@ export function mailPreamble(
   // participant set, and this line is how a persona learns who else is in it.
   const participants = mail.participants ?? [];
   // A persona reads ids in To: lists and other personas' briefs, but knows
-  // itself and its colleagues by name — "name (id)" bridges the two. Names can
-  // be agent-authored (save_persona), so one renders as a short single-line
-  // label: no line breaks or comment markers to fake preamble text with.
+  // itself and its colleagues by name — "name (id)" bridges the two. Names are
+  // user-authored (personas) or model-picked (agents), so one renders as a
+  // short single-line label: no line breaks or comment markers to fake
+  // preamble text with.
   const label = (id: string) => {
     const name = cleanName(mail.names?.[id]);
     return name && name !== id ? `${name} (${id})` : id;
@@ -135,29 +136,38 @@ export function mailPreamble(
   // participants[0] drives: it receives the user's mails and alone answers them.
   // A delivery without a participant list (older callers) is treated as driving.
   const isDriver = !participants.length || participants[0] === self;
-  const helpers = (mail.helpers ?? []).filter((h) => h !== self);
-  const staffers = (mail.staffers ?? []).filter((h) => h !== self && participants.includes(h));
-  // A consulted persona that may staff its own helpers runs sub-work itself
-  // instead of handing it back to the driver (router.bridgeSend's exception).
-  const staffing =
-    !isDriver && mail.canStaff
-      ? 'You may run sub-work yourself through helper personas you create: save_persona (recall false for a ' +
-        'blind reviewer), add_persona, then ONE send_mail to all of them — their replies come back to you ' +
-        'together as one mail, and your answer to that mail is your reply to whoever consulted you. ' +
-        (helpers.length ? `Your helpers already here: ${helpers.map(label).join(', ')}. ` : '') +
-        'Tell each helper who it is by name in its brief, and delete your helpers with delete_persona when the ' +
-        'job is done.'
-      : '';
-  const role = blind
+  const agents = (mail.agents ?? []).filter((a) => a !== self);
+  // Starting agents (spawn_agent): calibrated against cost — every agent is a
+  // full turn per mail, so the default is to answer alone, and agents are for
+  // independent pieces or for a check by someone who did not write the work.
+  const spawning = mail.canSpawn
+    ? 'You can start agents with spawn_agent: a named instance of an existing persona that works one piece ' +
+      'of this job and reports back to you (blind true for a reviewer that must judge without knowing who ' +
+      'wrote the work). Most requests need none — do the work yourself. Start agents when a job splits into ' +
+      'independent pieces worth running in parallel, or when the answer deserves a check by someone who did ' +
+      'not write it. Start all of a job’s agents in the same turn: their replies come back to you together as ' +
+      'one mail. Continue an agent with send_mail to its id.' +
+      (agents.length ? ` Your agents here: ${agents.map(label).join(', ')}.` : '')
+    : '';
+  const role = mail.agent
+    ? // An agent: one job's worker, reporting to whoever started it. A blind
+      // agent is not told who that is, like every other sender cue.
+      `You are an agent: an instance of ${cleanName(mail.agent.role) || 'a persona'}, started ${
+        blind ? '' : `by ${label(mail.agent.spawnedBy)} `
+      }for one piece of a job. Work your brief; your plain final message is your report to ${
+        blind ? 'whoever started you' : label(mail.agent.spawnedBy)
+      }. You cannot mail anyone else${spawning ? ' except agents you start yourself' : ''}; if the job needs ` +
+      `more than your brief, say so in your report.${spawning ? ` ${spawning}` : ''}`
+    : blind
     ? isDriver
       ? others.length
         ? `Also on this conversation: ${others.map(label).join(', ')}. You may bring one in with the send_mail tool when the ` +
           'task calls for its role; its reply arrives as a later mail to you, and your current turn ends after ' +
-          'sending. Your plain final message goes back to whoever mailed you.'
-        : ''
+          `sending. Your plain final message goes back to whoever mailed you.${spawning ? ` ${spawning}` : ''}`
+        : spawning
       : `You are a consulted participant here; the driver (${label(participants[0])}) alone coordinates the ` +
-        `personas, so you cannot mail the others${staffing ? ' except your own helpers' : ''}. Answer whoever ` +
-        `mailed you — your plain final message goes back to them.${staffing ? ` ${staffing}` : ''}`
+        `personas, so you cannot mail the others${spawning ? ' except agents you start' : ''}. Answer whoever ` +
+        `mailed you — your plain final message goes back to them.${spawning ? ` ${spawning}` : ''}`
     : isDriver
     ? others.length
       ? // Calibrated between two observed failures: a soft "you may consult"
@@ -179,18 +189,14 @@ export function mailPreamble(
         'mail to you, and your current turn ends after sending. To answer the USER after a consultation, call ' +
         'send_mail with to ["user"] and fold what the consultations added into that one answer — never repeat ' +
         'a reply the user can already read. A plain final message goes back to whoever mailed you, which ' +
-        'mid-conversation may be a persona, not the user.' +
-        (staffers.length
-          ? ` ${staffers.map(label).join(', ')} can run helper personas of its own: for a job that needs ` +
-            'several workers, hand it the whole job in one brief instead of briefing the workers yourself — ' +
-            'it staffs them and returns one assembled answer.'
-          : '')
-      : 'send_mail can also reach the user directly (to ["user"]) — useful for a progress note mid-work.'
+        `mid-conversation may be a persona, not the user.${spawning ? ` ${spawning}` : ''}`
+      : 'send_mail can also reach the user directly (to ["user"]) — useful for a progress note mid-work.' +
+        (spawning ? ` ${spawning}` : '')
     : `You are a consulted participant here; the driver (${label(participants[0])}) alone answers the user and ` +
-      `alone coordinates the personas, so you cannot mail the others${staffing ? ' except your own helpers' : ''} ` +
+      `alone coordinates the personas, so you cannot mail the others${spawning ? ' except agents you start' : ''} ` +
       'and a send_mail to ["user"] is rerouted to the driver. Answer whoever mailed you — your plain final ' +
       'message goes back to them. If another persona should be involved, say so in that reply so the driver ' +
-      `can arrange it.${staffing ? ` ${staffing}` : ''}`;
+      `can arrange it.${spawning ? ` ${spawning} Their replies come back to you, and your answer to that mail is your reply to whoever consulted you.` : ''}`;
   // The wave's source: the user mail this work answers, quoted verbatim so the
   // sender's delegation body can stay a short assignment. The quoted body is
   // user-authored text landing inside our comment fence — strip any literal

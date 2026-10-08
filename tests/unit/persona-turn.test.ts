@@ -64,9 +64,8 @@ describe('personaTurnFields', () => {
     expect((await personaTurnFields(base)).persona.notes).toEqual([{ id: note.id, title: 'A lesson' }]);
     // notes: false skips the store read where nothing renders the index.
     expect((await personaTurnFields(base, { notes: false })).persona.notes).toBeUndefined();
-    // Memory switched off, or an agent-made helper: no index, so no remember_note pitch.
+    // Memory switched off (agents run that way too): no index, so no remember_note pitch.
     expect((await personaTurnFields({ ...base, memory: false })).persona.notes).toBeUndefined();
-    expect((await personaTurnFields({ ...base, createdBy: 'orchestrator' })).persona.notes).toBeUndefined();
     // Absent knobs stay absent rather than becoming undefined keys.
     const plain = await personaTurnFields({ ...base, memory: false });
     expect(plain).toEqual({ persona: { id: 'p-turn', name: 'Turn', prompt: 'You are Turn.' } });

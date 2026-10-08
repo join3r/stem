@@ -271,34 +271,31 @@ export interface MailBridgeContext {
 /** What a mail-bridge op answers the tool with. */
 export type MailBridgeResult = { ok: true; text: string } | { ok: false; error: string };
 
-/** save_persona's payload: the only fields an agent may set on a persona. */
-export interface SavePersonaRequest {
-  /** Present = edit a persona the caller created; absent = create. */
-  id?: string;
+/** spawn_agent's payload: which persona to start as an agent, its name, and its brief. */
+export interface SpawnAgentRequest {
+  /** Persona id or name — the agent's role. */
+  role?: string;
+  /** Short name, unique in the conversation (slugged by the router). */
   name?: string;
-  prompt?: string;
-  model?: string;
-  effort?: string;
-  /** false = a blind helper: no recall injection, no recall search, blind preamble (see Persona.recall). */
-  recall?: boolean;
+  /** The agent's first mail: its piece of the job. */
+  brief?: string;
+  /** Judge blind: no recall, and its mails never name the sender. */
+  blind?: boolean;
 }
 
 /**
  * The seam the backend uses to reach the mail router from inside a mail
  * delivery turn: send_mail (persona→persona hops and mid-chain mail to the
- * user), add_persona (growing the conversation's participant set), and
- * save_persona/delete_persona (a persona managing its own helper personas).
- * All but send are gated by the calling persona's canManagePersonas flag.
+ * user) and spawn_agent (starting a named agent from an existing persona,
+ * gated by the caller's canSpawn), plus the persona's own notebook.
  */
 export interface MailBridge {
   send(req: { to: string[]; body: string }, ctx: MailBridgeContext): Promise<MailBridgeResult>;
-  addPersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult>;
-  savePersona(req: SavePersonaRequest, ctx: MailBridgeContext): Promise<MailBridgeResult>;
-  deletePersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult>;
+  spawnAgent(req: SpawnAgentRequest, ctx: MailBridgeContext): Promise<MailBridgeResult>;
   /**
    * remember_note: the calling persona saves one lesson into its own memory
-   * store (workspace/persona-memory.ts). Refused for personas without a store
-   * (agent-created helpers). The store written is always the CALLER's — the
+   * store (workspace/persona-memory.ts). Refused for agents and personas
+   * without a store. The store written is always the CALLER's — the
    * payload carries no persona id to write elsewhere.
    */
   rememberNote(req: { title?: string; body?: string }, ctx: MailBridgeContext): Promise<MailBridgeResult>;
@@ -469,7 +466,7 @@ export interface ChatBackend extends EventEmitter {
   // tools route through. Pass null to detach. No-op on a backend without scheduling.
   setTaskBridge(bridge: TaskBridge | null): void;
 
-  // Mail: wire the bridge the assistant's send_mail/add_persona tools route
+  // Mail: wire the bridge the assistant's send_mail/spawn_agent tools route
   // through. Pass null to detach. No-op on a backend without mail.
   setMailBridge(bridge: MailBridge | null): void;
 

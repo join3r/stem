@@ -1,25 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatBackend, MailBridgeContext, MailBridgeResult, ParkRequest, SavePersonaRequest } from '../backend/types';
+import type { ChatBackend, MailBridgeContext, MailBridgeResult, ParkRequest, SpawnAgentRequest } from '../backend/types';
 import type {
   GeneratedImageRef,
   BackendEventEnvelope,
   MailApproval,
   MailComposeInput,
+  MailConversation,
   MailListResult,
+  Persona,
   TurnAttachment
 } from '../../shared/types';
 import { attachmentPreviews } from '../pi/attachments';
 import * as activity from '../activity';
 import { degrade } from '../degrade';
 import { noteTurnStart } from '../live-turns';
-import {
-  deletePersona,
-  getPersona,
-  listPersonas,
-  savePersonaFor,
-  updatePersonaFields,
-  type BridgePersonaFields
-} from '../workspace/personas';
+import { getPersona, listPersonas } from '../workspace/personas';
+import { agentId, agentName, agentPersona, agentSlug, isAgentId, MAX_AGENTS } from './agents';
 import {
   listPersonaNotes,
   personaOwnsMemory,
@@ -33,6 +29,7 @@ import { attachScheduledWork, beginMailWork, type WorkHandle } from './work';
 import { readSettings } from '../workspace/settings';
 import { cleanMailSubject } from '../../shared/mail-subject';
 import {
+  addAgent,
   addParticipant,
   appendMailItem,
   settleMailApproval,
@@ -92,11 +89,16 @@ import {
 // same thread later had two coordinators independently briefing one worker
 // with the same implementation task. Parallelism therefore only exists where
 // the driver deliberately fans out; a spoke needing another spoke's input says
-// so in its reply, and the driver arranges it. The exception is a spoke's own
-// helpers: a persona with the manage-personas capability may mail personas it
-// created, so a consulted Orchestrator runs its sub-agents itself and answers
-// whoever consulted it once (the embedding benchmark's driver otherwise briefed
-// the reviewers itself and ran out of exchanges before they finished).
+// so in its reply, and the driver arranges it.
+//
+// Agents (mail/agents.ts) are the other way work fans out: a persona with the
+// spawn capability starts named instances of other personas with spawn_agent.
+// An agent belongs to whoever started it — only that persona or agent mails
+// it, and its reply goes back there — so a consulted Orchestrator runs its own
+// workers and answers whoever consulted it once. Every send that reaches an
+// agent opens (or widens) the sender's join, so agents started one call at a
+// time in one turn still come back as one assembly. Agents live on the
+// conversation, never in the persona registry.
 //
 // Stale replies: every delivery carries the userSentAt of the user mail its
 // wave answers (the epoch), inherited hop to hop. A reply landing on the user
@@ -554,10 +556,9 @@ export class MailRouter {
 
   /**
    * The user pulling a persona into an existing conversation (the header's
-   * add control — the human counterpart of add_persona, so no capability
-   * gate). The persona joins the participant set and becomes reachable by
-   * send_mail and addressed by future replies; it gets no turn of its own
-   * until someone mails it — same contract as add_persona.
+   * add control, so no capability gate). The persona joins the participant
+   * set and becomes reachable by send_mail and addressed by future replies; it
+   * gets no turn of its own until someone mails it.
    */
   async addParticipant(conversationId: string, personaId: string): Promise<MailListResult> {
     const persona = await getPersona(personaId);
@@ -724,12 +725,12 @@ export class MailRouter {
     this.opts.onChange();
   }
 
-  // ---- the mail bridge (send_mail / add_persona from inside a delivery turn) ----
+  // ---- the mail bridge (send_mail / spawn_agent from inside a delivery turn) ----
 
   /**
    * send_mail: append the item and queue a delivery turn per persona recipient.
-   * Recipients are validated against the conversation's LIVE participant set
-   * (add_persona may have grown it this very turn); the cap is checked fresh
+   * Recipients are validated against the conversation's LIVE participants and
+   * agents (spawn_agent may have added one this very turn); the cap is checked fresh
    * per call, and at the cap a persona-addressed send is refused with
    * instructions to return to the user instead.
    */
@@ -742,14 +743,15 @@ export class MailRouter {
     const conversation = conversations.find((c) => c.id === ctx.conversationId);
     if (!conversation) return { ok: false, error: 'This mail conversation no longer exists.' };
     if (to.includes(ctx.personaId)) return { ok: false, error: 'You cannot mail yourself.' };
-    const reachable = new Set([...conversation.participants, 'user']);
+    const agents = conversation.agents ?? [];
+    const reachable = new Set([...conversation.participants, ...agents.map((a) => a.id), 'user']);
     const bad = to.filter((t) => !reachable.has(t));
     if (bad.length) {
       return {
         ok: false,
         error:
           `Not reachable from this conversation: ${bad.join(', ')}. ` +
-          `Recipients must be its participants (${conversation.participants.join(', ')}) or "user".`
+          `Recipients must be its participants (${conversation.participants.join(', ')}), agents you started, or "user".`
       };
     }
     // Hub and spoke: only the driver (participants[0]) coordinates. A consulted
@@ -757,26 +759,30 @@ export class MailRouter {
     // never be briefed twice by two coordinators, and parallel branches exist
     // only where the driver deliberately fanned out.
     //
-    // The one exception is a spoke's OWN helpers: a persona with the
-    // manage-personas capability may mail personas it created (save_persona),
-    // so an Orchestrator consulted by the driver runs its sub-agents itself —
-    // their replies assemble back to it, and its one answer goes to whoever
-    // consulted it. Nobody else ever briefs those helpers, so the one-coordinator
-    // property still holds per job.
+    // Agents sit beside that rule: each belongs to whoever started it, and
+    // only its starter mails it — the driver included, for agents a consulted
+    // persona started — so one job still has exactly one coordinator.
     const driverId = conversation.participants[0];
     const initiator = this.turnInitiators.get(ctx.turnId) ?? 'user';
-    const caller = await getPersona(ctx.personaId);
+    const caller = await this.resolveMember(conversation, ctx.personaId);
+    const own = new Set(agents.filter((a) => a.spawnedBy === ctx.personaId).map((a) => a.id));
+    const othersAgents = to.filter((t) => isAgentId(t) && !own.has(t) && t !== initiator);
+    if (othersAgents.length) {
+      return {
+        ok: false,
+        error:
+          `${othersAgents.join(', ')} ${othersAgents.length === 1 ? 'was' : 'were'} started by another persona, ` +
+          'and only whoever starts an agent mails it. Mail your own agents, or say in your reply what you need.'
+      };
+    }
     if (ctx.personaId !== driverId) {
-      const ownHelpers = caller?.canManagePersonas
-        ? new Set((await listPersonas()).filter((p) => p.createdBy === ctx.personaId).map((p) => p.id))
-        : new Set<string>();
-      const disallowed = to.filter((t) => t !== 'user' && t !== initiator && !ownHelpers.has(t));
+      const disallowed = to.filter((t) => t !== 'user' && t !== initiator && !own.has(t));
       if (disallowed.length) {
         return {
           ok: false,
           error:
-            `Only the driver (${driverId}) mails the personas in this conversation` +
-            `${caller?.canManagePersonas ? ', apart from helpers you created yourself' : ''}. You can reply to ` +
+            `Only the driver (${driverId}) mails the personas in this conversation; you may mail agents you ` +
+            `started yourself. You can reply to ` +
             `${initiator === 'user' ? 'the user' : initiator} — send_mail, or just finish your turn — and if ` +
             `${disallowed.join(', ')} should be involved, say so in that reply so the driver can arrange it.`
         };
@@ -884,9 +890,16 @@ export class MailRouter {
       delivered.push(recipient);
       this.enqueueDelivery(ctx.conversationId, recipient, body, ctx.personaId, epoch, sourceItemId);
     }
-    // Fanning out — two or more deliveries from one send — opens (or widens)
-    // this sender's join: the replies come back as one assembly turn.
-    if (delivered.length >= 2 || (delivered.length >= 1 && this.joinFor(ctx.conversationId, ctx.personaId))) {
+    // Fanning out — two or more deliveries from one send, or any send to an
+    // agent — opens (or widens) this sender's join: the replies come back as
+    // one assembly turn. Agents always join because spawn_agent starts them one
+    // call at a time; without it, a lead starting three reviewers in one turn
+    // would get three separate reply turns instead of one.
+    if (
+      delivered.length >= 2 ||
+      (delivered.length >= 1 && this.joinFor(ctx.conversationId, ctx.personaId)) ||
+      delivered.some(isAgentId)
+    ) {
       await this.openJoin(ctx.conversationId, ctx.personaId, initiator, epoch, sourceItemId, delivered);
     }
     this.updateActivityDetail(ctx.conversationId);
@@ -903,145 +916,110 @@ export class MailRouter {
   }
 
   /**
-   * add_persona: grow the conversation's participant set. Gated by the calling
-   * persona's capability flag — the To: list is the conversation's reachability
-   * boundary, and widening it is a power the user grants per persona.
+   * spawn_agent: start a named agent — an instance of an existing persona —
+   * in this conversation and hand it its brief. Gated by the caller's canSpawn
+   * (an agent's own canSpawn already folds in the depth limit, see
+   * agentPersona). The brief goes out through bridgeSend, so the caps, the
+   * one-coordinator rule and the join all apply exactly as to any send.
    */
-  async bridgeAddPersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult> {
-    const caller = await getPersona(ctx.personaId);
-    if (!caller?.canManagePersonas) {
-      return {
-        ok: false,
-        error:
-          'Your persona does not have the manage-personas capability. Tell the user who should be added instead ' +
-          '(they can add the persona, or grant the capability in the Personas tab).'
-      };
-    }
-    const wanted = personaId.trim();
-    if (!wanted) return { ok: false, error: 'Give add_persona a persona id.' };
-    // Resolve by id first, then by (unique, case-insensitive) name — the model
-    // usually knows personas by name.
-    const personas = await listPersonas();
-    const target =
-      personas.find((p) => p.id === wanted) ??
-      personas.find((p) => p.name.toLowerCase() === wanted.toLowerCase());
-    if (!target) return { ok: false, error: `No persona "${wanted}" exists.` };
+  async bridgeSpawn(req: SpawnAgentRequest, ctx: MailBridgeContext): Promise<MailBridgeResult> {
+    const brief = req.brief?.trim();
+    if (!brief) return { ok: false, error: 'Give spawn_agent a brief: the piece of work this agent should do.' };
     const { conversations } = await readMail();
     const conversation = conversations.find((c) => c.id === ctx.conversationId);
     if (!conversation) return { ok: false, error: 'This mail conversation no longer exists.' };
-    if (conversation.participants.includes(target.id)) {
-      return { ok: true, text: `${target.name} is already in this conversation.` };
+    const caller = await this.resolveMember(conversation, ctx.personaId);
+    if (!caller?.canSpawn) {
+      return {
+        ok: false,
+        error: isAgentId(ctx.personaId)
+          ? 'An agent started by an agent cannot start agents of its own. Do the work yourself, or say in your reply what else is needed.'
+          : 'Your persona cannot start agents — the user grants that per persona in the Personas tab. Do the work ' +
+            'yourself, or say in your reply who should help.'
+      };
     }
-    await addParticipant(ctx.conversationId, target.id);
-    this.opts.onChange();
-    return { ok: true, text: `Added ${target.name} (${target.id}). Mail it with send_mail to bring it in.` };
-  }
-
-  /**
-   * save_persona: a persona creating (or editing) its own helper personas.
-   * Gated like add_persona; only the plain fields land (name/prompt/model/
-   * effort — never a harness pin or a capability flag), and edits are limited
-   * to personas the caller itself created.
-   */
-  async bridgeSavePersona(req: SavePersonaRequest, ctx: MailBridgeContext): Promise<MailBridgeResult> {
-    const caller = await getPersona(ctx.personaId);
-    if (!caller?.canManagePersonas) {
+    const wanted = req.role?.trim() ?? '';
+    const personas = await listPersonas();
+    const role =
+      personas.find((p) => p.id === wanted) ??
+      personas.find((p) => p.name.toLowerCase() === wanted.toLowerCase());
+    if (!role) {
       return {
         ok: false,
         error:
-          'Your persona does not have the manage-personas capability. Describe the persona to the user ' +
-          'instead (they can create it, or grant the capability in the Personas tab).'
+          `${wanted ? `No persona "${wanted}" exists` : 'Give spawn_agent a role'}. Roles are the existing ` +
+          `personas: ${personas.map((p) => `${p.name} (${p.id})`).join(', ')}.`
       };
     }
-    const fields: BridgePersonaFields = {
-      ...(typeof req.name === 'string' ? { name: req.name } : {}),
-      ...(typeof req.prompt === 'string' ? { prompt: req.prompt } : {}),
-      ...(typeof req.model === 'string' ? { model: req.model } : {}),
-      ...(typeof req.effort === 'string' ? { effort: req.effort } : {}),
-      ...(typeof req.recall === 'boolean' ? { recall: req.recall } : {})
+    const name = agentSlug(req.name ?? '');
+    if (!name) return { ok: false, error: 'Give the agent a short name (letters, digits, dashes), like reviewer-a.' };
+    const id = agentId(role.id, name);
+    const agents = conversation.agents ?? [];
+    const taken = agents.find((a) => a.name === name);
+    if (taken) {
+      return {
+        ok: false,
+        error:
+          taken.id === id && taken.spawnedBy === ctx.personaId
+            ? `${name} is already running here. Continue it with send_mail to "${id}" instead of starting it again.`
+            : `An agent named ${name} already exists in this conversation. Pick another name.`
+      };
+    }
+    if (agents.length >= MAX_AGENTS) {
+      const yours = agents.filter((a) => a.spawnedBy === ctx.personaId).map((a) => a.id);
+      return {
+        ok: false,
+        error:
+          `This conversation already has ${MAX_AGENTS} agents, the most it may have.` +
+          (yours.length ? ` Continue one of yours with send_mail: ${yours.join(', ')}.` : ' Do the rest of the work yourself.')
+      };
+    }
+    // A recall-off caller (a blind reviewer that may spawn) only starts blind
+    // agents: it must not reach the user's history through one.
+    const blind = req.blind === true || caller.recall === false;
+    try {
+      await addAgent(conversation.id, { id, role: role.id, name, spawnedBy: ctx.personaId, ...(blind ? { blind: true } : {}) });
+    } catch (error) {
+      // quiet: the tool result IS the error channel (a racing spawn took the name).
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    const sent = await this.bridgeSend({ to: [id], body: brief }, ctx);
+    if (!sent.ok) return { ok: false, error: `${name} was created but its brief was not sent: ${sent.error}` };
+    this.opts.onChange();
+    return {
+      ok: true,
+      text:
+        `Started ${name} (${role.name}${blind ? ', blind' : ''}) as "${id}". Its reply comes back to you together ` +
+        'with every other agent you start in this turn — start them all now, then finish your turn.'
     };
-    try {
-      if (!req.id?.trim()) {
-        const persona = await savePersonaFor(ctx.personaId, fields);
-        return {
-          ok: true,
-          text:
-            `Created ${persona.name} (${persona.id}). Bring it into this conversation with ` +
-            'add_persona before mailing it.'
-        };
-      }
-      const target = await this.resolvePersona(req.id);
-      if (!target) return { ok: false, error: `No persona "${req.id}" exists.` };
-      if (target.createdBy !== ctx.personaId) {
-        return { ok: false, error: `You may only edit personas you created; "${target.name}" is not one.` };
-      }
-      const updated = await updatePersonaFields(target.id, fields);
-      return { ok: true, text: `Updated ${updated.name} (${updated.id}). Changes apply from its next mail.` };
-    } catch (error) {
-      // quiet: the tool result IS the error channel — the calling persona gets
-      // the store's refusal (name clash, unwritable file) verbatim and reacts.
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  }
-
-  /**
-   * delete_persona: a persona cleaning up helpers it created. Refused while
-   * the target still has mail in flight anywhere — a queued delivery to a
-   * deleted persona could only fail.
-   */
-  async bridgeDeletePersona(personaId: string, ctx: MailBridgeContext): Promise<MailBridgeResult> {
-    const caller = await getPersona(ctx.personaId);
-    if (!caller?.canManagePersonas) {
-      return { ok: false, error: 'Your persona does not have the manage-personas capability.' };
-    }
-    const wanted = personaId.trim();
-    if (!wanted) return { ok: false, error: 'Give delete_persona a persona id.' };
-    const target = await this.resolvePersona(wanted);
-    if (!target) return { ok: false, error: `No persona "${wanted}" exists.` };
-    if (target.createdBy !== ctx.personaId) {
-      return { ok: false, error: `You may only delete personas you created; "${target.name}" is not one.` };
-    }
-    for (const lane of this.lanes.values()) {
-      if (lane.active.has(target.id) || lane.queue.some((t) => t.personaId === target.id)) {
-        return { ok: false, error: `${target.name} still has mail in flight; wait for it to finish.` };
-      }
-    }
-    for (const join of this.joins.values()) {
-      if (join.awaiting.has(target.id) || join.senderId === target.id) {
-        return { ok: false, error: `${target.name} is still part of an open fan-out; wait for it to finish.` };
-      }
-    }
-    try {
-      await deletePersona(target.id);
-    } catch (error) {
-      // quiet: the tool result IS the error channel — the calling persona gets
-      // the store's refusal verbatim and reacts.
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-    return { ok: true, text: `Deleted ${target.name}.` };
   }
 
   /**
    * remember_note: the calling persona saves one lesson into its OWN memory
    * store — the payload names no persona, so nothing can write elsewhere.
-   * Refused for personas without a store (agent-created helpers): their whole
-   * point is to be disposable, and the refusal says where a lasting lesson
-   * should go instead.
+   * Refused for agents and personas without a store: an agent is one job's
+   * worker, and the refusal says where a lasting lesson should go instead.
    */
   async bridgeRememberNote(
     req: { title?: string; body?: string },
     ctx: MailBridgeContext
   ): Promise<MailBridgeResult> {
+    if (isAgentId(ctx.personaId)) {
+      return {
+        ok: false,
+        error:
+          'You are an agent started for one job and keep no memory. If this lesson should outlive the job, ' +
+          'put it in your reply so whoever started you can keep it.'
+      };
+    }
     const caller = await getPersona(ctx.personaId);
     if (!caller) return { ok: false, error: 'Your persona no longer exists.' };
     if (!personaOwnsMemory(caller)) {
       return {
         ok: false,
-        error: caller.createdBy
-          ? 'Your persona is a temporary helper and keeps no memory. If this lesson should outlive you, ' +
-            'put it in your reply so the persona that created you can remember it.'
-          : 'Your persona keeps no private memory — it is switched off for this persona. If the lesson ' +
-            'matters, put it in your reply instead.'
+        error:
+          'Your persona keeps no private memory — it is switched off for this persona. If the lesson ' +
+          'matters, put it in your reply instead.'
       };
     }
     const body = req.body?.trim();
@@ -1058,15 +1036,11 @@ export class MailRouter {
 
   /** read_notes: full bodies from the calling persona's own store, by note id. */
   async bridgeReadNotes(ids: string[], ctx: MailBridgeContext): Promise<MailBridgeResult> {
+    if (isAgentId(ctx.personaId)) return { ok: false, error: 'You are an agent started for one job and keep no memory.' };
     const caller = await getPersona(ctx.personaId);
     if (!caller) return { ok: false, error: 'Your persona no longer exists.' };
     if (!personaOwnsMemory(caller)) {
-      return {
-        ok: false,
-        error: caller.createdBy
-          ? 'Your persona is a temporary helper and keeps no memory.'
-          : 'Your persona keeps no private memory — it is switched off for this persona.'
-      };
+      return { ok: false, error: 'Your persona keeps no private memory — it is switched off for this persona.' };
     }
     const wanted = [...new Set(ids.map((id) => id.trim()).filter(Boolean))].slice(0, 10);
     if (!wanted.length) return { ok: false, error: 'Give read_notes at least one note id from your index.' };
@@ -1086,16 +1060,20 @@ export class MailRouter {
     };
   }
 
-  /** Resolve by id first, then by (unique, case-insensitive) name. */
-  private async resolvePersona(idOrName: string) {
-    const personas = await listPersonas();
-    return (
-      personas.find((p) => p.id === idOrName) ??
-      personas.find((p) => p.name.toLowerCase() === idOrName.toLowerCase())
-    );
+  /**
+   * A participant or agent of this conversation, as the persona row its turns
+   * run with: a participant is its registry row; an agent is its role's row
+   * under the agent's id and name (agentPersona). Null when either is gone.
+   */
+  private async resolveMember(conversation: MailConversation | undefined, id: string): Promise<Persona | null> {
+    if (!isAgentId(id)) return getPersona(id);
+    const agent = conversation?.agents?.find((a) => a.id === id);
+    const role = agent ? await getPersona(agent.role) : null;
+    return agent && role ? agentPersona(role, agent) : null;
   }
 
   private async personaName(personaId: string): Promise<string> {
+    if (isAgentId(personaId)) return agentName(personaId);
     return (await getPersona(personaId))?.name ?? personaId;
   }
 
@@ -1187,7 +1165,7 @@ export class MailRouter {
     branchIds: string[]
   ): Promise<void> {
     const personas = await listPersonas();
-    const nameOf = (id: string) => personas.find((p) => p.id === id)?.name ?? id;
+    const nameOf = (id: string) => (isAgentId(id) ? agentName(id) : personas.find((p) => p.id === id)?.name ?? id);
     const existing = this.joinFor(conversationId, senderId);
     if (existing) {
       for (const id of branchIds) existing.awaiting.set(id, nameOf(id));
@@ -1266,13 +1244,18 @@ export class MailRouter {
     let releaseRepoLock: (() => void) | undefined;
     let work: WorkHandle | undefined;
     try {
-      const persona = await getPersona(personaId);
+      const persona = await this.resolveMember(
+        (await readMail()).conversations.find((c) => c.id === conversationId),
+        personaId
+      );
       if (!persona) {
         this.settleBranchFailure(conversationId, from, personaId, 'no longer exists.');
         await this.appendReply(
           conversationId,
           personaId,
-          `The persona this mail was addressed to no longer exists.`,
+          isAgentId(personaId)
+            ? 'The persona this agent was started from no longer exists.'
+            : 'The persona this mail was addressed to no longer exists.',
           'failed',
           epoch
         );
@@ -1379,23 +1362,24 @@ export class MailRouter {
       // and a scheduled run of the same persona behave the same.
       const personaFields = await personaTurnFields(persona);
       const notes = personaFields.persona.notes;
-      // Participants by name, self included: the preamble tells the persona
-      // who it is ("You are embedding-reviewer-b") — a helper briefed by id
-      // with "558d… owns reviews/a/" otherwise cannot tell which one it is —
-      // and which helpers of its own it may mail as sub-agents.
+      // Participants and agents by name, self included: the preamble tells the
+      // persona who it is ("You are reviewer-b") — a worker briefed by id with
+      // "558d… owns reviews/a/" otherwise cannot tell which one it is — and
+      // which agents of its own it may mail.
       const registry = await listPersonas();
+      const agents = conversation.agents ?? [];
       const names: Record<string, string> = {};
       for (const id of conversation.participants) {
         const name = registry.find((p) => p.id === id)?.name;
         if (name) names[id] = name;
       }
+      for (const a of agents) names[a.id] = a.name;
       names[personaId] = persona.name;
-      const staffers = conversation.participants.filter(
-        (id) => id !== personaId && registry.find((p) => p.id === id)?.canManagePersonas
-      );
-      const helpers = persona.canManagePersonas
-        ? conversation.participants.filter((id) => registry.find((p) => p.id === id)?.createdBy === personaId)
-        : [];
+      const self = agents.find((a) => a.id === personaId);
+      const own = agents.filter((a) => a.spawnedBy === personaId).map((a) => a.id);
+      const selfAgent = self
+        ? { role: registry.find((p) => p.id === self.role)?.name ?? self.role, spawnedBy: self.spawnedBy }
+        : undefined;
       const threadIdRef = { current: threadId ?? null };
       const settling = this.waitForSettle(turnId, threadIdRef);
       let started;
@@ -1417,8 +1401,9 @@ export class MailRouter {
             from,
             participants: conversation.participants,
             names,
-            ...(staffers.length ? { staffers } : {}),
-            ...(persona.canManagePersonas ? { canStaff: true, helpers } : {}),
+            ...(persona.canSpawn ? { canSpawn: true } : {}),
+            ...(own.length ? { agents: own } : {}),
+            ...(selfAgent ? { agent: selfAgent } : {}),
             ...(source ? { source } : {})
           }
         });

@@ -579,17 +579,17 @@ export interface StartTurnInput {
     subject: string;
     from: string;
     participants: string[];
-    /** Display names by persona id (participants and the persona itself), for the preamble. */
+    /** Display names by persona or agent id (participants, agents, and the persona itself), for the preamble. */
     names?: Record<string, string>;
+    /** The persona may start agents (Persona.canSpawn, within the depth limit). */
+    canSpawn?: boolean;
+    /** Agents this persona started in this conversation — the ones it may mail. */
+    agents?: string[];
     /**
-     * The persona may create and run helper personas (canManagePersonas). A
-     * consulted persona with it may mail its own helpers — `helpers` lists the
-     * ones already in this conversation.
+     * Set when this delivery runs an AGENT (see MailAgent): its role's name
+     * and who started it — the one it reports to.
      */
-    canStaff?: boolean;
-    helpers?: string[];
-    /** Other participants that can run helpers of their own — the driver may hand them a multi-worker job whole. */
-    staffers?: string[];
+    agent?: { role: string; spawnedBy: string };
     /**
      * The user mail that began the current wave, riding non-driver deliveries
      * so a consulted persona reads the original request verbatim instead of a
@@ -2730,20 +2730,18 @@ export interface Persona {
    */
   lightweight?: boolean;
   /**
-   * May manage personas: grow a mail conversation's participant set
-   * (add_persona) and create, edit, and delete its own helper personas
-   * (save_persona / delete_persona). Off by default because the To: list is
-   * the conversation's reachability boundary and the registry is the user's —
-   * widening either is the user's call per persona. Secretary and Orchestrator
-   * ship with it on. (Stored `canAddPersonas` from before the rename migrates
-   * to this flag on read.)
+   * May start agents (spawn_agent): named, conversation-scoped instances of
+   * other personas that work a piece of a job and report back to it. Off by
+   * default — every agent is a full turn, and the To: list is the user's.
+   * Stored `canManagePersonas` / `canAddPersonas` from before migrate to this
+   * flag on read.
    */
-  canManagePersonas?: boolean;
+  canSpawn?: boolean;
   /**
    * Whether this persona keeps a private memory (expertise notes). Default on;
    * stored only when switched off (`false`) — e.g. the built-in Critic, whose
-   * value is the untainted outside view, ships without one. Agent-created
-   * helpers keep no memory regardless of this flag (see `createdBy`).
+   * value is the untainted outside view, ships without one. Agents (spawned
+   * instances, see MailAgent) keep no memory regardless of this flag.
    */
   memory?: boolean;
   /**
@@ -2758,12 +2756,6 @@ export interface Persona {
    * scheduled-run rules as before.
    */
   recall?: boolean;
-  /**
-   * Creator persona id, present only on agent-created personas. Round-trips
-   * from the store like `builtin` — never taken from an editor/bridge caller —
-   * and gates which personas a persona may edit or delete (only its own).
-   */
-  createdBy?: string;
   /**
    * Max persona-addressed mails this persona may INITIATE per wave (per
    * conversation, reset on each user send), 1..100. Unset = unlimited.
@@ -2790,9 +2782,7 @@ export interface Persona {
    * server-hosted servers are one flat list — the question is which
    * integrations, not which machine. Names that no longer match a configured
    * server stay inert (the editor flags them). Editor-only, like every other
-   * capability: the mail bridge cannot set it, and a persona an agent creates
-   * inherits its creator's list so a restriction cannot be laundered through
-   * add_persona.
+   * capability: the mail bridge cannot set it.
    */
   mcpServers?: string[];
   /** Seeded by Stem. Editable like any persona, but cannot be deleted. */
@@ -2802,9 +2792,8 @@ export interface Persona {
 /**
  * One entry in a persona's private memory: a durable lesson from its past work
  * (a procedure, a gotcha, a stable domain fact) — deliberately NOT facts about
- * the user, which live in the one global recall. Only built-ins and
- * editor-made personas keep notes; agent-created helpers (createdBy set) get
- * none, and a persona's store dies with delete_persona.
+ * the user, which live in the one global recall. Personas keep notes; agents
+ * (spawned instances) never do, and a persona's store dies with the persona.
  */
 export interface PersonaNote {
   /** Short id, unique within this persona's store — what read_notes fetches by. */
@@ -2975,6 +2964,26 @@ export interface MailApproval {
   };
 }
 
+/**
+ * An agent: a named instance of a persona (its role) inside one mail
+ * conversation, started by spawn_agent to work one piece of a job. It runs
+ * with the role's prompt, model and capabilities, keeps no memory, reports to
+ * whoever started it, and ends with the conversation — it never enters the
+ * persona registry. Its id is `<roleId>~<name>`, so any client can label it
+ * from the persona list alone.
+ */
+export interface MailAgent {
+  id: string;
+  /** The persona id it is an instance of. */
+  role: string;
+  /** Short slug, unique within the conversation (reviewer-a). */
+  name: string;
+  /** Persona or agent id that started it — the one it reports to. */
+  spawnedBy: string;
+  /** Judges blind: no recall, and its mails never name the sender. */
+  blind?: true;
+}
+
 export interface MailConversation {
   id: string;
   subject: string;
@@ -2986,6 +2995,12 @@ export interface MailConversation {
   participants: string[];
   /** personaId -> hidden pi threadId, created on that persona's first delivery. */
   sessions: Record<string, string>;
+  /**
+   * Agents started in this conversation (spawn_agent). Not participants: the
+   * user never addresses them, and they never answer the user. Each has its
+   * own hidden thread in `sessions` under its id.
+   */
+  agents?: MailAgent[];
   /**
    * Composed private: every delivery in it runs as a private turn (nothing
    * captured into Recall, no recall injected or searchable, no persona

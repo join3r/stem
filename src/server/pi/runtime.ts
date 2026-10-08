@@ -679,7 +679,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private instructionsApprovalProcesses = new Map<string, PiProcess | null>();
   /** Wired by main to route the assistant's schedule_task/notify_user tools. */
   private taskBridge: TaskBridge | null = null;
-  /** Wired by main to route the assistant's send_mail/add_persona tools. */
+  /** Wired by main to route the assistant's send_mail/spawn_agent tools. */
   private mailBridge: MailBridge | null = null;
   /** Wired by main to route the assistant's run_command tool. */
   private execBridge: ExecBridge | null = null;
@@ -3351,13 +3351,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           op?: string;
           to?: unknown;
           body?: string;
-          personaId?: string;
-          id?: string;
+          role?: string;
           name?: string;
-          prompt?: string;
-          model?: string;
-          effort?: string;
-          recall?: unknown;
+          brief?: string;
+          blind?: unknown;
           title?: string;
           ids?: unknown;
         };
@@ -3385,30 +3382,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             const to = Array.isArray(req.to) ? req.to.filter((t): t is string => typeof t === 'string') : [];
             return respond(await bridge.send({ to, body: req.body ?? '' }, ctx));
           }
-          case 'add_persona':
-            return respond(await bridge.addPersona(req.personaId ?? '', ctx));
+          case 'spawn_agent':
+            return respond(
+              await bridge.spawnAgent(
+                { role: req.role, name: req.name, brief: req.brief, ...(req.blind === true ? { blind: true } : {}) },
+                ctx
+              )
+            );
           case 'remember_note':
             return respond(await bridge.rememberNote({ title: req.title, body: req.body }, ctx));
           case 'read_notes': {
             const ids = Array.isArray(req.ids) ? req.ids.filter((t): t is string => typeof t === 'string') : [];
             return respond(await bridge.readNotes(ids, ctx));
           }
-          case 'save_persona':
-            return respond(
-              await bridge.savePersona(
-                {
-                  id: req.id,
-                  name: req.name,
-                  prompt: req.prompt,
-                  model: req.model,
-                  effort: req.effort,
-                  ...(typeof req.recall === 'boolean' ? { recall: req.recall } : {})
-                },
-                ctx
-              )
-            );
-          case 'delete_persona':
-            return respond(await bridge.deletePersona(req.personaId ?? '', ctx));
           default:
             return respond({ ok: false, error: `Unknown mail op "${req.op}".` });
         }
@@ -3721,7 +3707,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         this.handleTaskBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
-      // A mail tool round-trip (send_mail / add_persona): routed to the mail
+      // A mail tool round-trip (send_mail / spawn_agent): routed to the mail
       // router with the conversation identity read from the worker's live turn.
       if (ev.method === 'input' && ev.title === MAIL_BRIDGE_TITLE) {
         this.handleMailBridgeRequest(worker, id, ev.placeholder as string | undefined);

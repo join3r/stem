@@ -20,8 +20,8 @@ import { readSettings } from '../workspace/settings';
 export function registerPersonasIpc(deps: { runtime: () => ChatBackend }): void {
   registerServer('personas:list', () => listPersonas());
   // Change announcements (`personas:changed`) come from the store itself —
-  // every write path fires them, this IPC and the mail bridge's save_persona
-  // alike — so the mutators here just return the fresh list.
+  // every write path fires them — so the mutators here just return the fresh
+  // list.
   registerServer('personas:save', (_e, persona: unknown) => savePersona(persona));
   registerServer('personas:delete', (_e, id: string) => deletePersona(id));
   // Persona memory notes (workspace/persona-memory.ts): the editor's browse/

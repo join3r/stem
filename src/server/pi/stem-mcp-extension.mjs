@@ -1838,7 +1838,7 @@ export default async function stemMcpBridge(pi) {
   // current thread id, so a task is always bound to the conversation it's created in.
   registerTaskTools(pi);
 
-  // Mail: send_mail / add_persona inside a persona's mail-delivery turn. Both
+  // Mail: send_mail / spawn_agent inside a persona's mail-delivery turn. Both
   // route to the MailRouter in main via a ctx.ui.input round-trip; main reads
   // the conversation, participant set, and sender off the live turn, so the
   // tools are inert (and say so) outside a mail delivery.
@@ -2595,8 +2595,8 @@ function registerMailTools(pi) {
     name: 'send_mail',
     label: 'Send mail',
     description:
-      'Send a mail within the CURRENT mail conversation. Recipients are the conversation\'s other personas ' +
-      'and/or "user". Mailing a persona is asynchronous: finish your turn after sending — its reply arrives ' +
+      'Send a mail within the CURRENT mail conversation. Recipients are the conversation\'s other personas, ' +
+      'agents you started (to continue their work), and/or "user". Mailing a persona is asynchronous: finish your turn after sending — its reply arrives ' +
       'as a later mail to you. A persona you mail automatically sees the user\'s current request quoted as ' +
       'context, so do not restate it: the body should carry only that persona\'s specific assignment. ' +
       'To delegate pieces of a task to SEVERAL personas, list them all in ONE call: ' +
@@ -2610,7 +2610,7 @@ function registerMailTools(pi) {
         to: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Recipient persona ids from this conversation, and/or "user".'
+          description: 'Recipient persona or agent ids from this conversation, and/or "user".'
         },
         body: { type: 'string', description: 'The mail body.' }
       },
@@ -2624,87 +2624,49 @@ function registerMailTools(pi) {
   });
 
   pi.registerTool({
-    name: 'add_persona',
-    label: 'Add persona to conversation',
+    name: 'spawn_agent',
+    label: 'Start an agent',
     description:
-      'Add an existing persona to the CURRENT mail conversation\'s participant list so it becomes reachable ' +
-      'with send_mail. Only personas whose configuration grants the manage-personas capability may call this. ' +
-      'The persona is added silently — mail it to bring it in.',
+      'Start an AGENT for one piece of the current job: a named instance of an existing persona (its role) ' +
+      'that works only in this conversation and reports back to you. Its brief is its first mail. Start ' +
+      'several agents in the same turn to work pieces in parallel - every reply comes back to you together ' +
+      'as one mail, so start them all, then finish your turn. Two agents can share a role (reviewer-a and ' +
+      'reviewer-b as Critic). Continue an agent later with send_mail to its id. Agents keep no memory and end ' +
+      'with the conversation. Only personas allowed to start agents may call this. Only works during a mail ' +
+      'delivery.',
     parameters: {
       type: 'object',
       properties: {
-        personaId: { type: 'string', description: 'The id of the persona to add (it must already exist).' }
-      },
-      required: ['personaId']
-    },
-    async execute(_id, params, _signal, _onUpdate, ctx) {
-      const res = await mailBridge(ctx, { op: 'add_persona', personaId: params?.personaId });
-      if (!res.ok) return taskErr(res.error || 'Could not add the persona.');
-      return taskOk(res.text || 'Persona added.');
-    }
-  });
-
-  pi.registerTool({
-    name: 'save_persona',
-    label: 'Create or edit a persona',
-    description:
-      'Create a helper persona (omit id), or edit one YOU created (pass its id). Only these fields can be ' +
-      'set: name, prompt, model, effort, recall - a persona created here has no coding-agent pin and no special ' +
-      'capabilities; the user grants those in the Personas tab. Only personas whose configuration grants ' +
-      'the manage-personas capability may call this. A new persona is registry-wide but NOT yet in this ' +
-      'conversation - bring it in with add_persona before mailing it. Use copies of one role prompt ' +
-      '(researcher-1, researcher-2, ...) to work pieces of a task in parallel.',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Id of a persona you created, to edit it. Omit to create a new one.' },
-        name: { type: 'string', description: 'Unique display name - this is what the To: field addresses.' },
-        prompt: { type: 'string', description: 'The persona\'s role prompt.' },
-        model: { type: 'string', description: 'Optional model pin (provider/modelId). Omit for the app default.' },
-        effort: { type: 'string', description: 'Optional reasoning-effort pin.' },
-        recall: {
+        role: { type: 'string', description: 'Id or name of the persona the agent is an instance of.' },
+        name: {
+          type: 'string',
+          description: 'Short name, unique in this conversation (letters, digits, dashes), e.g. reviewer-a.'
+        },
+        brief: {
+          type: 'string',
+          description:
+            'The agent\'s assignment. It also sees the user\'s request quoted, so say only what this agent must ' +
+            'do, plus any context the request does not carry. Tell it what to return.'
+        },
+        blind: {
           type: 'boolean',
           description:
-            'Set false for a BLIND helper - a reviewer, judge or cold reader that must not see the user\'s ' +
-            'memory or past conversations (earlier results, who wrote what). Its mails also arrive without ' +
-            'naming the sender. Omit for an ordinary helper.'
+            'true for a reviewer, judge or cold reader that must not see the user\'s memory or who wrote the ' +
+            'work: no recall, and its mails never name the sender.'
         }
       },
-      required: []
+      required: ['role', 'name', 'brief']
     },
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const res = await mailBridge(ctx, {
-        op: 'save_persona',
-        id: params?.id,
+        op: 'spawn_agent',
+        role: params?.role,
         name: params?.name,
-        prompt: params?.prompt,
-        model: params?.model,
-        effort: params?.effort,
-        ...(typeof params?.recall === 'boolean' ? { recall: params.recall } : {})
+        brief: params?.brief,
+        ...(params?.blind === true ? { blind: true } : {})
       });
-      if (!res.ok) return taskErr(res.error || 'Could not save the persona.');
-      return taskOk(res.text || 'Persona saved.');
-    }
-  });
-
-  pi.registerTool({
-    name: 'delete_persona',
-    label: 'Delete a persona',
-    description:
-      'Delete a persona YOU created (clean up your helpers when a task is done). Refused for personas ' +
-      'you did not create, and while the target still has mail in flight. Only personas whose ' +
-      'configuration grants the manage-personas capability may call this.',
-    parameters: {
-      type: 'object',
-      properties: {
-        personaId: { type: 'string', description: 'Id (or unique name) of the persona to delete.' }
-      },
-      required: ['personaId']
-    },
-    async execute(_id, params, _signal, _onUpdate, ctx) {
-      const res = await mailBridge(ctx, { op: 'delete_persona', personaId: params?.personaId });
-      if (!res.ok) return taskErr(res.error || 'Could not delete the persona.');
-      return taskOk(res.text || 'Persona deleted.');
+      if (!res.ok) return taskErr(res.error || 'Could not start the agent.');
+      return taskOk(res.text || 'Agent started.');
     }
   });
 
@@ -2716,7 +2678,7 @@ function registerMailTools(pi) {
       'stable fact about your domain or tools that would help you on a FUTURE task. Your saved notes are ' +
       'listed (id + title) at the top of every mail delivery and scheduled run you receive; fetch a full note with ' +
       'read_notes. Do NOT save facts about the user (a separate memory owns those) or one-off task details with no ' +
-      'reuse value. Not available to temporary helper personas. Only works when running as a persona.',
+      'reuse value. Not available to agents. Only works when running as a persona.',
     parameters: {
       type: 'object',
       properties: {
@@ -2925,7 +2887,7 @@ const COMPUTER_UNPINNED_REFUSAL =
   'Personas → "Computer this persona controls"), chats with no persona when Settings → Features → Computer ' +
   'control allows it. Do not retry, and do not work around ' +
   'it by scripting the GUI over run_command (osascript at System Events, cliclick) — that is refused too. ' +
-  'Hand the task to the pinned persona (add_persona + send_mail in a mail thread), or tell the user which ' +
+  'Hand the task to the pinned persona (spawn_agent with it as the role, in a mail thread), or tell the user which ' +
   'persona should take it, or that one needs setting up.';
 
 const COMPUTER_ACTIONS = [
@@ -3395,7 +3357,7 @@ const BROWSER_BRIDGE_TITLE = 'stem-browser-bridge';
 const BROWSER_UNPINNED_REFUSAL =
   'Browser control is not available in this conversation: personas get it from a browser pin (Manage → ' +
   'Personas → "Browser this persona controls"), chats with no persona when Settings → Features → Browser ' +
-  'control allows it. Do not retry. Hand the task to the pinned persona (add_persona + send_mail in a mail ' +
+  'control allows it. Do not retry. Hand the task to the pinned persona (spawn_agent with it as the role, in a mail ' +
   'thread), or tell the user which persona should take it, or that one needs setting up.';
 
 const BROWSER_ACTIONS = [

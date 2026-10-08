@@ -134,6 +134,13 @@ final class Session {
     func personaName(_ id: String) -> String {
         if id == "user" { return "You" }
         if id.hasPrefix("task:") { return "Scheduled task" }
+        // An agent (`<roleId>~<name>`) reads as its name and its role.
+        if let sep = id.range(of: "~", options: .backwards), sep.lowerBound > id.startIndex {
+            let name = String(id[sep.upperBound...])
+            let roleId = String(id[..<sep.lowerBound])
+            if let role = personas.first(where: { $0.id == roleId })?.name { return "\(name) (\(role))" }
+            return name
+        }
         return personas.first { $0.id == id }?.name ?? id
     }
 

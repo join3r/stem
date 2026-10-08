@@ -189,8 +189,16 @@ export function hasMailWaiting(c: MailConversation): boolean {
   return c.userUpdatedAt > (c.userSentAt ?? 0);
 }
 
-/** The persona's display name for a mail address ('user' handled by callers). */
+/**
+ * The display name for a mail address ('user' handled by callers). An agent
+ * (`<roleId>~<name>`, see MailAgent) reads as its name and its role.
+ */
 export function personaName(personas: Persona[], id: string): string {
   if (id.startsWith('task:')) return 'Scheduled task';
+  const at = id.lastIndexOf('~');
+  if (at > 0) {
+    const role = personas.find((p) => p.id === id.slice(0, at))?.name;
+    return role ? `${id.slice(at + 1)} (${role})` : id.slice(at + 1);
+  }
   return personas.find((p) => p.id === id)?.name ?? id;
 }

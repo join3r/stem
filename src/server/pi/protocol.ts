@@ -47,7 +47,7 @@ export const INSTRUCTIONS_APPROVAL_TITLE = 'stem-instructions-approval';
 export const TASK_BRIDGE_TITLE = 'stem-task-bridge';
 
 /**
- * Mail tool round-trip (`input`): send_mail / add_persona. The op payload rides
+ * Mail tool round-trip (`input`): send_mail / spawn_agent. The op payload rides
  * in `placeholder`; PiRuntime resolves WHICH conversation and persona is
  * calling from the worker's live turn — never from the payload — and routes the
  * op to the MailRouter, answering with a JSON result string.

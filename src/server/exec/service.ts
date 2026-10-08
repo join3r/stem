@@ -459,7 +459,7 @@ export class ExecService implements ExecBridge {
           error:
             `Driving the screen of ${label} — clicking, typing, scripting its apps or System Settings — is the ` +
             `job of the persona pinned to that computer, ${names}: it has the \`computer\` tool and the user's ` +
-            `consent for it. Hand the task to ${names} (add_persona + send_mail in a mail thread, or tell the ` +
+            `consent for it. Hand the task to ${names} (spawn_agent with it as the role in a mail thread, or tell the ` +
             `user to ask ${names}) rather than scripting the GUI from here. run_command on ${label} stays for ` +
             'shell work: files, git, scripts, `open -a`.'
         };

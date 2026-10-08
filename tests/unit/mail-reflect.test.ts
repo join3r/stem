@@ -1,13 +1,13 @@
 // The reflection pass: after a settled delivery turn, one completion extracts
 // 0–3 durable work notes into the persona's memory. The properties under test:
-// eligibility (helpers and missing personas never reflect), the too-small-to-
+// eligibility (agents and missing personas never reflect), the too-small-to-
 // matter skip, defensive parsing of the model's reply, that notes land with
 // source 'reflection', and that nothing here ever rejects.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { rmSync } from 'node:fs';
 import { parseReflection, reflectOnDelivery } from '../../src/server/mail/reflect';
 import { listPersonaNotes, savePersonaNote } from '../../src/server/workspace/persona-memory';
-import { savePersona, savePersonaFor } from '../../src/server/workspace/personas';
+import { savePersona } from '../../src/server/workspace/personas';
 import { personaMemoryDir, personasStorePath, settingsStorePath } from '../../src/server/workspace/paths';
 import type { ChatBackend } from '../../src/server/backend/types';
 
@@ -99,11 +99,10 @@ describe('reflectOnDelivery', () => {
     expect(prompts[0]).toContain('answering [] is the normal outcome');
   });
 
-  it('never reflects for an agent-created helper or a persona that no longer exists', async () => {
-    const helper = await savePersonaFor('orchestrator', { name: 'researcher-1', prompt: 'r' });
+  it('never reflects for an agent or a persona that no longer exists', async () => {
     const prompts: string[] = [];
     const runtime = fakeRuntime({ prompts });
-    await reflectOnDelivery(runtime, { personaId: helper.id, assignment, threadId: 't1' });
+    await reflectOnDelivery(runtime, { personaId: 'verifier~researcher-1', assignment, threadId: 't1' });
     await reflectOnDelivery(runtime, { personaId: 'never-existed', assignment, threadId: 't1' });
     expect(prompts).toEqual([]);
   });

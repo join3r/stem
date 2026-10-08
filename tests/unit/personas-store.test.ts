@@ -11,9 +11,7 @@ import {
   listPersonas,
   onPersonasChanged,
   resolveClientPersona,
-  savePersona,
-  savePersonaFor,
-  updatePersonaFields
+  savePersona
 } from '../../src/server/workspace/personas';
 import { personasStorePath } from '../../src/server/workspace/paths';
 import type { Persona } from '../../src/shared/types';
@@ -42,7 +40,7 @@ describe('first read', () => {
     const personas = await listPersonas();
     expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'orchestrator', 'critic']);
     expect(personas.every((p) => p.builtin)).toBe(true);
-    expect(onDisk().version).toBe(4);
+    expect(onDisk().version).toBe(5);
   });
 
   it('degrades a corrupt file to the built-ins rather than throwing', async () => {
@@ -103,14 +101,15 @@ describe('save', () => {
     expect(verifier?.prompt).toBe('stricter');
   });
 
-  it('round-trips the manage-personas capability; Secretary and Orchestrator seed with it on', async () => {
-    expect((await getPersona('secretary'))?.canManagePersonas).toBe(true);
-    expect((await getPersona('orchestrator'))?.canManagePersonas).toBe(true);
-    expect((await getPersona('verifier'))?.canManagePersonas).toBeUndefined();
-    await savePersona(persona({ canManagePersonas: true }));
-    expect((await getPersona('p1'))?.canManagePersonas).toBe(true);
-    await savePersona(persona({ canManagePersonas: false }));
-    expect((await getPersona('p1'))?.canManagePersonas).toBeUndefined();
+  it('round-trips the spawn capability; Normal, Secretary and Orchestrator seed with it on', async () => {
+    expect((await getPersona('normal'))?.canSpawn).toBe(true);
+    expect((await getPersona('secretary'))?.canSpawn).toBe(true);
+    expect((await getPersona('orchestrator'))?.canSpawn).toBe(true);
+    expect((await getPersona('verifier'))?.canSpawn).toBeUndefined();
+    await savePersona(persona({ canSpawn: true }));
+    expect((await getPersona('p1'))?.canSpawn).toBe(true);
+    await savePersona(persona({ canSpawn: false }));
+    expect((await getPersona('p1'))?.canSpawn).toBeUndefined();
   });
 
   it('round-trips the memory opt-out; Critic seeds without a memory, the rest with one', async () => {
@@ -163,12 +162,12 @@ describe('save', () => {
     expect((await getPersona('critic'))?.recall).toBe(false);
     expect((await getPersona('verifier'))?.recall).toBeUndefined();
     // …and the read persists it: the file on disk now says so too.
-    expect(onDisk().version).toBe(4);
+    expect(onDisk().version).toBe(5);
     expect(onDisk().personas.find((p: Persona) => p.id === 'critic')?.recall).toBe(false);
-    // The user turns it back on: written as v3, the choice survives the next read.
+    // The user turns it back on: written at the current version, the choice survives the next read.
     const critic = (await getPersona('critic'))!;
     await savePersona({ ...critic, recall: true });
-    expect(onDisk().version).toBe(4);
+    expect(onDisk().version).toBe(5);
     expect((await getPersona('critic'))?.recall).toBeUndefined();
   });
 
@@ -190,47 +189,69 @@ describe('save', () => {
     writeFileSync(path, JSON.stringify(raw), 'utf8');
     expect((await getPersona('orchestrator'))?.prompt).toBe(seedOf('orchestrator'));
     expect((await getPersona('secretary'))?.prompt).toBe('You are my own secretary.');
-    expect(onDisk().version).toBe(4);
+    expect(onDisk().version).toBe(5);
   });
 
-  it('migrates the pre-rename canAddPersonas flag on read', async () => {
+  it('a v4 file drops agent-made helper personas, refreshes helper-era seeds, and lets Normal start agents', async () => {
     await listPersonas(); // seed
     const raw = onDisk();
-    raw.version = 1;
+    raw.version = 4;
     for (const p of raw.personas) {
-      delete p.canManagePersonas;
-      if (p.id === 'secretary') p.canAddPersonas = true;
+      delete p.canSpawn;
+      if (p.id === 'secretary' || p.id === 'orchestrator') p.canManagePersonas = true;
+      // The seed d8d7cea shipped, which still names save_persona.
+      if (p.id === 'orchestrator') {
+        p.prompt =
+          'You are Orchestrator. Split large tasks into independent pieces and delegate each piece. Create workers ' +
+          'with save_persona (for example researcher-1, researcher-2 as copies of a role prompt; recall false for a ' +
+          'reviewer that must judge blind), bring them into the conversation with add_persona, tell each worker its ' +
+          'name in its brief, then send ALL the delegations in ONE send_mail call — their replies come back to you ' +
+          'together as a single assembly mail, which is when you combine the results. Delete your workers with ' +
+          'delete_persona when the task is done. Report one assembled answer to whoever gave you the task — the ' +
+          'user, or the persona that consulted you. When a task cannot be split, do the work directly and say so.';
+      }
+    }
+    raw.personas.push({ id: 'h1', name: 'embedding-reviewer-a', prompt: 'r', createdBy: 'secretary' });
+    raw.personas.push({ id: 'u1', name: 'Mine', prompt: 'm' });
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    const personas = await listPersonas();
+    expect(personas.find((p) => p.id === 'h1')).toBeUndefined();
+    expect(personas.find((p) => p.id === 'u1')).toBeTruthy();
+    expect(personas.find((p) => p.id === 'orchestrator')?.prompt).toContain('spawn_agent');
+    expect(personas.find((p) => p.id === 'secretary')?.canSpawn).toBe(true);
+    expect(personas.find((p) => p.id === 'normal')?.canSpawn).toBe(true);
+    expect(onDisk().version).toBe(5);
+    expect(JSON.stringify(onDisk())).not.toContain('createdBy');
+  });
+
+  it('migrates the pre-rename canAddPersonas and canManagePersonas flags on read', async () => {
+    await savePersona(persona({ id: 'a', name: 'A' }));
+    await savePersona(persona({ id: 'b', name: 'B' }));
+    const raw = onDisk();
+    for (const p of raw.personas) {
+      if (p.id === 'a') p.canAddPersonas = true;
+      if (p.id === 'b') p.canManagePersonas = true;
     }
     writeFileSync(path, JSON.stringify(raw), 'utf8');
-    expect((await getPersona('secretary'))?.canManagePersonas).toBe(true);
+    expect((await getPersona('a'))?.canSpawn).toBe(true);
+    expect((await getPersona('b'))?.canSpawn).toBe(true);
   });
 
   it('a v1 file grants Secretary and Orchestrator the flag once; unticking sticks on the current version', async () => {
     await listPersonas(); // seed
     const raw = onDisk();
     raw.version = 1;
-    for (const p of raw.personas) delete p.canManagePersonas;
+    for (const p of raw.personas) delete p.canSpawn;
     writeFileSync(path, JSON.stringify(raw), 'utf8');
     // v1 read: the stored rows gain the flag the seeds carry — appending-only
     // seeding never fixes an existing row, so the migration must.
-    expect((await getPersona('orchestrator'))?.canManagePersonas).toBe(true);
-    expect((await getPersona('secretary'))?.canManagePersonas).toBe(true);
-    // The user unticks it — the write lands as v2 and the choice sticks.
+    expect((await getPersona('orchestrator'))?.canSpawn).toBe(true);
+    expect((await getPersona('secretary'))?.canSpawn).toBe(true);
+    // The user unticks it — the write lands at the current version and the choice sticks.
     const orchestrator = (await getPersona('orchestrator'))!;
-    await savePersona({ ...orchestrator, canManagePersonas: undefined });
-    expect(onDisk().version).toBe(4);
-    expect((await getPersona('orchestrator'))?.canManagePersonas).toBeUndefined();
-  });
-
-  it('never lets a caller set createdBy; it survives from the stored row', async () => {
-    await savePersona(persona({ createdBy: 'orchestrator' } as Partial<Persona>));
-    expect((await getPersona('p1'))?.createdBy).toBeUndefined();
-    // A row that HAS createdBy on disk keeps it across an editor save.
-    const raw = onDisk();
-    raw.personas.find((p: Persona) => p.id === 'p1').createdBy = 'orchestrator';
-    writeFileSync(path, JSON.stringify(raw), 'utf8');
-    await savePersona(persona({ prompt: 'edited' }));
-    expect((await getPersona('p1'))?.createdBy).toBe('orchestrator');
+    await savePersona({ ...orchestrator, canSpawn: undefined });
+    expect(onDisk().version).toBe(5);
+    expect((await getPersona('orchestrator'))?.canSpawn).toBeUndefined();
   });
 
   it('round-trips the clients flag; off is stored as absence and junk never lands', async () => {
@@ -315,86 +336,18 @@ describe('delete', () => {
   });
 });
 
-describe('bridge mutators', () => {
-  it('savePersonaFor stamps createdBy and only the plain fields', async () => {
-    const created = await savePersonaFor('orchestrator', {
-      name: 'researcher-1',
-      prompt: 'dig',
-      model: 'anthropic/claude-fable-5',
-      effort: 'high'
-    });
-    const stored = await getPersona(created.id);
-    expect(stored).toMatchObject({
-      name: 'researcher-1',
-      prompt: 'dig',
-      createdBy: 'orchestrator'
-    });
-    expect(stored?.harness).toBeUndefined();
-    expect(stored?.canManagePersonas).toBeUndefined();
-  });
-
-  it('savePersonaFor hands the creator’s MCP allowlist down, and never widens it', async () => {
-    await savePersona({ id: 'boss', name: 'boss', prompt: '', mcpServers: ['notes'] });
-    const helper = await savePersonaFor('boss', { name: 'helper', prompt: '' });
-    expect(helper.mcpServers).toEqual(['notes']);
-    expect((await getPersona(helper.id))?.mcpServers).toEqual(['notes']);
-    // A copy: tightening the creator later does not reach back into the helper.
-    await savePersona({ id: 'boss', name: 'boss', prompt: '', mcpServers: [] });
-    expect((await getPersona(helper.id))?.mcpServers).toEqual(['notes']);
-    // An unrestricted creator makes an unrestricted helper, as before.
-    const free = await savePersonaFor('orchestrator', { name: 'free', prompt: '' });
-    expect(free.mcpServers).toBeUndefined();
-    // The bridge edit path cannot touch the list.
-    await updatePersonaFields(helper.id, { name: 'helper', prompt: '', mcpServers: ['logs'] } as never);
-    expect((await getPersona(helper.id))?.mcpServers).toEqual(['notes']);
-  });
-
-  it('savePersonaFor can make a blind helper; a recall-off creator only makes blind ones', async () => {
-    const blind = await savePersonaFor('orchestrator', { name: 'judge', prompt: '', recall: false });
-    expect((await getPersona(blind.id))?.recall).toBe(false);
-    const open = await savePersonaFor('orchestrator', { name: 'open', prompt: '', recall: true });
-    expect((await getPersona(open.id))?.recall).toBeUndefined();
-    // Critic is recall-off: nothing it spawns reaches the user's history.
-    const fromCritic = await savePersonaFor('critic', { name: 'critic-helper', prompt: '' });
-    expect(fromCritic.recall).toBe(false);
-    await updatePersonaFields(fromCritic.id, { recall: true });
-    expect((await getPersona(fromCritic.id))?.recall).toBe(false);
-    // An ordinary creator may switch its helper back on.
-    await updatePersonaFields(blind.id, { recall: true });
-    expect((await getPersona(blind.id))?.recall).toBeUndefined();
-    await updatePersonaFields(blind.id, { recall: false });
-    expect((await getPersona(blind.id))?.recall).toBe(false);
-  });
-
-  it('savePersonaFor enforces name uniqueness', async () => {
-    await savePersonaFor('orchestrator', { name: 'researcher-1', prompt: '' });
-    await expect(savePersonaFor('orchestrator', { name: 'RESEARCHER-1', prompt: '' })).rejects.toThrow(
-      /already exists/
-    );
-  });
-
-  it('updatePersonaFields merges only the plain fields, keeping pins and flags', async () => {
-    await savePersona(
-      persona({ harness: { agent: 'claude', cwd: '/src' }, canManagePersonas: true, sendBudget: 3 })
-    );
-    const updated = await updatePersonaFields('p1', { prompt: 'sharper' });
-    expect(updated.prompt).toBe('sharper');
-    const stored = await getPersona('p1');
-    expect(stored?.harness).toEqual({ agent: 'claude', cwd: '/src' });
-    expect(stored?.canManagePersonas).toBe(true);
-    expect(stored?.sendBudget).toBe(3);
-  });
-
+describe('change hook', () => {
   it('the store-level change hook fires once per successful write', async () => {
     let fired = 0;
     onPersonasChanged(() => fired++);
     try {
       await savePersona(persona());
       expect(fired).toBe(1);
-      await savePersonaFor('orchestrator', { name: 'helper', prompt: '' });
+      await deletePersona('p1');
       expect(fired).toBe(2);
+      await savePersona(persona());
       await expect(savePersona(persona({ id: 'p2', name: 'code — stem' }))).rejects.toThrow();
-      expect(fired).toBe(2); // a refused write announces nothing
+      expect(fired).toBe(3); // a refused write announces nothing
     } finally {
       onPersonasChanged(null);
     }

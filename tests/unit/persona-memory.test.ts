@@ -32,12 +32,11 @@ afterEach(() => {
 });
 
 describe('standing answers', () => {
-  it('only a code persona with memory on keeps them; agent-made helpers do not', () => {
+  it('only a code persona with memory on keeps them', () => {
     const harness = { agent: 'claude', cwd: '/repo' };
-    expect(personaKeepsAnswers({ createdBy: undefined, harness })).toBe(true);
-    expect(personaKeepsAnswers({ createdBy: undefined, harness, memory: false })).toBe(false);
-    expect(personaKeepsAnswers({ createdBy: 'orchestrator', harness })).toBe(false);
-    expect(personaKeepsAnswers({ createdBy: undefined })).toBe(false);
+    expect(personaKeepsAnswers({ harness })).toBe(true);
+    expect(personaKeepsAnswers({ harness, memory: false })).toBe(false);
+    expect(personaKeepsAnswers({})).toBe(false);
   });
 
   it('replaces the answer to a repeated question and survives as source answer', async () => {
@@ -54,20 +53,19 @@ describe('standing answers', () => {
 });
 
 describe('ownership', () => {
-  it('built-ins and editor-made personas own a memory; agent-created helpers do not', () => {
-    expect(personaOwnsMemory({ createdBy: undefined })).toBe(true);
-    expect(personaOwnsMemory({ createdBy: 'orchestrator' })).toBe(false);
+  it('a persona owns a memory by default', () => {
+    expect(personaOwnsMemory({})).toBe(true);
   });
 
   it('the memory flag opts a persona out; only an explicit false does', () => {
-    expect(personaOwnsMemory({ createdBy: undefined, memory: false })).toBe(false);
-    expect(personaOwnsMemory({ createdBy: undefined, memory: true })).toBe(true);
-    expect(personaOwnsMemory({ createdBy: undefined, memory: undefined })).toBe(true);
+    expect(personaOwnsMemory({ memory: false })).toBe(false);
+    expect(personaOwnsMemory({ memory: true })).toBe(true);
+    expect(personaOwnsMemory({ memory: undefined })).toBe(true);
   });
 
   it('a code persona (harness pin) keeps no memory: its wrapper is a relay and the agent has its own', () => {
-    expect(personaOwnsMemory({ createdBy: undefined, harness: { agent: 'claude', cwd: '/repo' } })).toBe(false);
-    expect(personaOwnsMemory({ createdBy: undefined, memory: true, harness: { agent: 'claude', cwd: '/repo' } })).toBe(false);
+    expect(personaOwnsMemory({ harness: { agent: 'claude', cwd: '/repo' } })).toBe(false);
+    expect(personaOwnsMemory({ memory: true, harness: { agent: 'claude', cwd: '/repo' } })).toBe(false);
   });
 });
 

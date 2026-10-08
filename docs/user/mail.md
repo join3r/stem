@@ -5,6 +5,19 @@ The first recipient coordinates the conversation and can consult the other
 personas. Replies arrive in your Inbox. A persona that makes pictures while answering
 (see [image generation](settings.md#image-generation)) attaches them to its reply.
 
+## Agents
+
+A persona allowed to start agents (the "Can start agents" box in its editor;
+Normal, Secretary and Orchestrator ship with it on) can hand pieces of a job to
+agents. An agent is a named copy of one of your personas, such as two Critics
+called reviewer-a and reviewer-b, that works its piece and reports back to the
+persona that started it. Several agents started together work in parallel, and
+their reports come back as one. An agent started blind judges without your
+memory and without knowing who wrote the work. Agents keep no memory, never
+answer you directly, and never appear in the Personas list: they belong to the
+conversation and go away with it. Their work shows under **Work** like any
+other persona's. A conversation can have at most six agents.
+
 ## Scheduled tasks
 
 A scheduled task that finds something worth telling you sends mail. All firings

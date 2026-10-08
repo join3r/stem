@@ -3,7 +3,7 @@
 // failure — plus session reuse (a reply resumes the persona's hidden thread),
 // the persona plumbing on the turn it starts, and the P2 chain mechanics: a
 // turn that used send_mail gets NO implicit reply, hops are cap-bounded, and
-// add_persona is gated by the calling persona's capability flag.
+// spawn_agent is gated by the calling persona's capability flag.
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -17,7 +17,7 @@ import {
   setConversationSession,
   setConversationStatus
 } from '../../src/server/workspace/mail';
-import { listPersonas, savePersona, savePersonaFor } from '../../src/server/workspace/personas';
+import { listPersonas, savePersona } from '../../src/server/workspace/personas';
 import { listPersonaNotes, savePersonaNote } from '../../src/server/workspace/persona-memory';
 import { updateMailSettings } from '../../src/server/workspace/settings';
 import {
@@ -28,12 +28,7 @@ import {
   settingsStorePath
 } from '../../src/server/workspace/paths';
 import { queueMailForDevice, queuedMailConversationIds } from '../../src/server/workspace/mail-device-queue';
-import type {
-  ChatBackend,
-  MailBridge,
-  MailBridgeContext,
-  SavePersonaRequest
-} from '../../src/server/backend/types';
+import type { ChatBackend, MailBridge, MailBridgeContext } from '../../src/server/backend/types';
 import type { StartTurnInput } from '../../src/shared/types';
 
 const mailPath = mailStorePath();
@@ -66,7 +61,7 @@ interface TurnScript {
   reply?: string;
   replies?: string[];
   error?: string;
-  /** Runs mid-turn with the wired mail bridge — the fake's send_mail/add_persona. */
+  /** Runs mid-turn with the wired mail bridge — the fake's send_mail/spawn_agent. */
   bridge?: (bridge: MailBridge, ctx: MailBridgeContext) => Promise<void>;
   /** The turn stops for the user's Allow/Deny (PiRuntime.parkTurn): aborted, tagged parked. */
   parked?: { kind: 'exec' | 'harness'; command: string; reason?: string };
@@ -173,9 +168,7 @@ function makeRouter(
   const router = new MailRouter({ runtime: fake.backend, onChange, ...(codingDevice ? { codingDevice } : {}) });
   fake.backend.setMailBridge({
     send: (req, ctx) => router.bridgeSend(req, ctx),
-    addPersona: (personaId, ctx) => router.bridgeAddPersona(personaId, ctx),
-    savePersona: (req, ctx) => router.bridgeSavePersona(req, ctx),
-    deletePersona: (personaId, ctx) => router.bridgeDeletePersona(personaId, ctx),
+    spawnAgent: (req, ctx) => router.bridgeSpawn(req, ctx),
     rememberNote: (req, ctx) => router.bridgeRememberNote(req, ctx),
     readNotes: (ids, ctx) => router.bridgeReadNotes(ids, ctx)
   });
@@ -673,61 +666,6 @@ describe('mail router', () => {
     expect(fake.starts.map((s) => s.persona?.id)).toEqual(['verifier', 'verifier']);
   });
 
-  it('add_persona is gated by the capability flag and grows the participant set', async () => {
-    const fake = fakeBackend();
-    const router = makeRouter(fake);
-    fake.scripts = [
-      {
-        mode: 'ok',
-        reply: 'no powers',
-        bridge: async (bridge, ctx) => {
-          const res = await bridge.addPersona('orchestrator', ctx);
-          expect(res.ok).toBe(false);
-          if (!res.ok) expect(res.error).toContain('capability');
-        }
-      }
-    ];
-    await router.compose({ to: ['verifier'], subject: 'gated', body: 'q' });
-    await settledMail();
-    expect((await readMail()).conversations[0].participants).toEqual(['verifier']);
-
-    // Secretary ships with the flag on — and may add by NAME, not just id.
-    const fake2 = fakeBackend();
-    const router2 = makeRouter(fake2);
-    fake2.scripts = [
-      {
-        mode: 'ok',
-        reply: 'delegated',
-        bridge: async (bridge, ctx) => {
-          expect((await bridge.addPersona('Orchestrator', ctx)).ok).toBe(true);
-          // Now reachable: a send to the fresh participant is accepted.
-          expect((await bridge.send({ to: ['orchestrator'], body: 'take this' }, ctx)).ok).toBe(true);
-        }
-      },
-      { mode: 'ok', reply: 'on it' },
-      // The hop back at Secretary: end the chain ON THE USER, so no delivery
-      // outlives this test.
-      {
-        mode: 'ok',
-        reply: 'closing',
-        bridge: async (bridge, ctx) => {
-          expect((await bridge.send({ to: ['user'], body: 'delegated and done' }, ctx)).ok).toBe(true);
-        }
-      }
-    ];
-    await router2.compose({ to: ['secretary'], subject: 'grown', body: 'delegate' });
-    const mail = await vi.waitFor(async () => {
-      const m = await readMail();
-      const grown = m.conversations.find((c) => c.subject === 'grown');
-      expect(grown).toBeTruthy();
-      expect(grown!.status).not.toBe('working');
-      expect(m.items.some((i) => i.body === 'delegated and done')).toBe(true);
-      return m;
-    });
-    const grown = mail.conversations.find((c) => c.subject === 'grown')!;
-    expect(grown.participants).toEqual(['secretary', 'orchestrator']);
-  });
-
   it('a mid-chain mail to the user does not change how the conversation ends', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);
@@ -1147,10 +1085,7 @@ describe('fan-out joins', () => {
     expect(mail.items.filter((i) => i.from !== 'user' && i.to.includes('w2'))).toHaveLength(1);
   });
 
-  it('a consulted persona that can manage personas runs its own helpers as sub-agents', async () => {
-    const h1 = await savePersonaFor('orchestrator', { name: 'reviewer-a', prompt: '' });
-    const h2 = await savePersonaFor('orchestrator', { name: 'reviewer-b', prompt: '' });
-    const stranger = await savePersonaFor('secretary', { name: 'secretary-helper', prompt: '' });
+  it('a consulted persona that can spawn runs its own agents and answers its consulter once', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);
     fake.scriptsByPersona.secretary = [
@@ -1158,9 +1093,11 @@ describe('fan-out joins', () => {
         mode: 'ok',
         reply: 'handing off',
         bridge: async (bridge, ctx) => {
+          expect((await bridge.spawnAgent({ role: 'verifier', name: 'stranger', brief: 'side job' }, ctx)).ok).toBe(true);
           expect((await bridge.send({ to: ['orchestrator'], body: 'run the reviews' }, ctx)).ok).toBe(true);
         }
       },
+      // One assembly: its own agent's reply and Orchestrator's answer together.
       {
         mode: 'ok',
         reply: 'answered',
@@ -1174,42 +1111,51 @@ describe('fan-out joins', () => {
         mode: 'ok',
         reply: 'staffing',
         bridge: async (bridge, ctx) => {
-          expect((await bridge.addPersona(h1.id, ctx)).ok).toBe(true);
-          expect((await bridge.addPersona(h2.id, ctx)).ok).toBe(true);
-          expect((await bridge.addPersona(stranger.id, ctx)).ok).toBe(true);
-          // Another persona's helper stays out of reach: hub and spoke still holds.
-          const refused = await bridge.send({ to: [stranger.id], body: 'help' }, ctx);
+          // Started one call at a time, they still assemble as one wave.
+          expect((await bridge.spawnAgent({ role: 'critic', name: 'Reviewer A', brief: 'review half a' }, ctx)).ok).toBe(true);
+          expect((await bridge.spawnAgent({ role: 'Critic', name: 'reviewer-b', brief: 'review half b' }, ctx)).ok).toBe(true);
+          // Secretary's agent stays out of reach: one coordinator per job.
+          const refused = await bridge.send({ to: ['verifier~stranger'], body: 'help' }, ctx);
           expect(refused.ok).toBe(false);
-          if (!refused.ok) expect(refused.error).toContain('apart from helpers you created yourself');
-          expect((await bridge.send({ to: [h1.id, h2.id], body: 'review your half' }, ctx)).ok).toBe(true);
+          if (!refused.ok) expect(refused.error).toContain('started by another persona');
         }
       },
       { mode: 'ok', reply: 'assembled reviews' }
     ];
-    fake.scriptsByPersona[h1.id] = [{ mode: 'ok', reply: 'a-done' }];
-    fake.scriptsByPersona[h2.id] = [{ mode: 'ok', reply: 'b-done' }];
+    fake.scriptsByPersona['critic~reviewer-a'] = [{ mode: 'ok', reply: 'a-done' }];
+    fake.scriptsByPersona['critic~reviewer-b'] = [{ mode: 'ok', reply: 'b-done' }];
+    fake.scriptsByPersona['verifier~stranger'] = [{ mode: 'ok', reply: 'side-done' }];
     await router.compose({ to: ['secretary', 'orchestrator'], subject: 'reviews', body: 'go' });
     await vi.waitFor(async () => {
       const m = await readMail();
       expect(m.items.some((i) => i.body === 'final answer for the user' && i.to.includes('user'))).toBe(true);
       expect(m.conversations[0].status).toBe('idle');
     });
-    // The helpers' replies assembled back to Orchestrator, whose one answer
+    // The agents' replies assembled back to Orchestrator, whose one answer
     // went to the persona that consulted it — not to the user.
-    const assembly = fake.starts.find((s) => s.input.includes('Replies to your delegations'));
-    expect(assembly?.persona?.id).toBe('orchestrator');
-    expect(assembly?.input).toContain('a-done');
+    const assembly = fake.starts.find((s) => s.persona?.id === 'orchestrator' && s.input.includes('a-done'));
+    expect(assembly?.input).toContain('Replies to your delegations');
     expect(assembly?.input).toContain('b-done');
     const mail = await readMail();
     expect(mail.items.find((i) => i.body === 'assembled reviews')?.to).toEqual(['secretary']);
-    // Each helper's delivery told it who it is, and Orchestrator's named its helpers.
-    const helperStart = fake.starts.find((s) => s.persona?.id === h2.id);
-    expect(helperStart?.mail?.names?.[h2.id]).toBe('reviewer-b');
+    // The agents live on the conversation, never in the registry.
+    expect(mail.conversations[0].agents?.map((a) => [a.id, a.spawnedBy])).toEqual([
+      ['verifier~stranger', 'secretary'],
+      ['critic~reviewer-a', 'orchestrator'],
+      ['critic~reviewer-b', 'orchestrator']
+    ]);
+    expect(mail.conversations[0].participants).toEqual(['secretary', 'orchestrator']);
+    expect((await listPersonas()).some((p) => p.id.includes('~'))).toBe(false);
+    // Each agent's delivery told it who it is and who it reports to; it runs
+    // the role's prompt without a memory.
+    const agentStart = fake.starts.find((s) => s.persona?.id === 'critic~reviewer-b');
+    expect(agentStart?.persona?.name).toBe('reviewer-b');
+    expect(agentStart?.persona?.prompt).toContain('You are Critic');
+    expect(agentStart?.persona?.notes).toBeUndefined();
+    expect(agentStart?.mail?.agent).toEqual({ role: 'Critic', spawnedBy: 'orchestrator' });
     const orchestratorStart = fake.starts.filter((s) => s.persona?.id === 'orchestrator').at(-1);
-    expect(orchestratorStart?.mail?.canStaff).toBe(true);
-    expect(orchestratorStart?.mail?.helpers).toEqual([h1.id, h2.id]);
-    // Secretary heard that Orchestrator can staff a multi-worker job itself.
-    expect(fake.starts.find((s) => s.persona?.id === 'secretary')?.mail?.staffers).toEqual(['orchestrator']);
+    expect(orchestratorStart?.mail?.canSpawn).toBe(true);
+    expect(orchestratorStart?.mail?.agents).toEqual(['critic~reviewer-a', 'critic~reviewer-b']);
   });
 
   it('two fan-outs in one turn widen the same join into one assembly', async () => {
@@ -1531,42 +1477,8 @@ describe('send budgets', () => {
   });
 });
 
-describe('persona management from the bridge', () => {
-  it('save_persona creates with createdBy, drops smuggled fields, and edits only its own', async () => {
-    const fake = fakeBackend();
-    const router = makeRouter(fake);
-    fake.scriptsByPersona.orchestrator = [
-      {
-        mode: 'ok',
-        reply: 'staffed',
-        bridge: async (bridge, ctx) => {
-          const smuggled = {
-            name: 'helper',
-            prompt: 'dig',
-            harness: { agent: 'claude', cwd: '/' },
-            canManagePersonas: true,
-            sendBudget: 99
-          } as SavePersonaRequest;
-          expect((await bridge.savePersona(smuggled, ctx)).ok).toBe(true);
-          // Edit its own creation, resolved by name.
-          expect((await bridge.savePersona({ id: 'helper', prompt: 'dig deeper' }, ctx)).ok).toBe(true);
-          const notOwn = await bridge.savePersona({ id: 'verifier', prompt: 'hijack' }, ctx);
-          expect(notOwn.ok).toBe(false);
-          if (!notOwn.ok) expect(notOwn.error).toContain('you created');
-          expect((await bridge.send({ to: ['user'], body: 'staffed up' }, ctx)).ok).toBe(true);
-        }
-      }
-    ];
-    await router.compose({ to: ['orchestrator'], subject: 'staffing', body: 'go' });
-    await settledMail();
-    const helper = (await listPersonas()).find((p) => p.name === 'helper')!;
-    expect(helper).toMatchObject({ prompt: 'dig deeper', createdBy: 'orchestrator' });
-    expect(helper.harness).toBeUndefined();
-    expect(helper.canManagePersonas).toBeUndefined();
-    expect(helper.sendBudget).toBeUndefined();
-  });
-
-  it('both ops are gated by the manage-personas capability', async () => {
+describe('spawn_agent', () => {
+  it('is gated by canSpawn, and an agent started by an agent cannot start more', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);
     fake.scriptsByPersona.verifier = [
@@ -1574,71 +1486,150 @@ describe('persona management from the bridge', () => {
         mode: 'ok',
         reply: 'powerless',
         bridge: async (bridge, ctx) => {
-          const save = await bridge.savePersona({ name: 'rogue', prompt: '' }, ctx);
-          expect(save.ok).toBe(false);
-          if (!save.ok) expect(save.error).toContain('capability');
-          const del = await bridge.deletePersona('normal', ctx);
-          expect(del.ok).toBe(false);
-          if (!del.ok) expect(del.error).toContain('capability');
+          const res = await bridge.spawnAgent({ role: 'critic', name: 'x', brief: 'go' }, ctx);
+          expect(res.ok).toBe(false);
+          if (!res.ok) expect(res.error).toContain('cannot start agents');
         }
       }
     ];
     await router.compose({ to: ['verifier'], subject: 'gated', body: 'go' });
     await settledMail();
-    expect((await listPersonas()).some((p) => p.name === 'rogue')).toBe(false);
-  });
+    expect((await readMail()).conversations[0].agents).toBeUndefined();
 
-  it('delete_persona is scoped to own creations and refused while the target works', async () => {
-    const fake = fakeBackend();
-    const router = makeRouter(fake);
-    fake.scriptsByPersona.orchestrator = [
+    // Normal → an Orchestrator agent (may spawn, one level down) → a Critic
+    // agent, whose own spawn is refused by the depth limit.
+    const fake2 = fakeBackend();
+    const router2 = makeRouter(fake2);
+    fake2.scriptsByPersona.normal = [
+      {
+        mode: 'ok',
+        reply: 'delegating',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.spawnAgent({ role: 'orchestrator', name: 'boss', brief: 'run it' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'done for the user' }
+    ];
+    fake2.scriptsByPersona['orchestrator~boss'] = [
       {
         mode: 'ok',
         reply: 'staffing',
         bridge: async (bridge, ctx) => {
-          const notOwn = await bridge.deletePersona('verifier', ctx);
-          expect(notOwn.ok).toBe(false);
-          if (!notOwn.ok) expect(notOwn.error).toContain('you created');
-          expect((await bridge.savePersona({ name: 'helper2', prompt: '' }, ctx)).ok).toBe(true);
-          expect((await bridge.addPersona('helper2', ctx)).ok).toBe(true);
-          const helperId = (await listPersonas()).find((p) => p.name === 'helper2')!.id;
-          expect((await bridge.send({ to: [helperId], body: 'work' }, ctx)).ok).toBe(true);
-          // In flight (the delivery just queued): the delete must refuse.
-          const busy = await bridge.deletePersona('helper2', ctx);
-          expect(busy.ok).toBe(false);
-          if (!busy.ok) expect(busy.error).toContain('in flight');
+          expect((await bridge.spawnAgent({ role: 'critic', name: 'leaf', brief: 'check' }, ctx)).ok).toBe(true);
         }
       },
-      // helper2's implicit reply comes back — now the cleanup succeeds.
+      { mode: 'ok', reply: 'boss report' }
+    ];
+    fake2.scriptsByPersona['critic~leaf'] = [
       {
         mode: 'ok',
-        reply: 'cleanup',
+        reply: 'leaf report',
         bridge: async (bridge, ctx) => {
-          expect((await bridge.deletePersona('helper2', ctx)).ok).toBe(true);
-          expect((await bridge.send({ to: ['user'], body: 'cleaned up' }, ctx)).ok).toBe(true);
+          const res = await bridge.spawnAgent({ role: 'verifier', name: 'deeper', brief: 'x' }, ctx);
+          expect(res.ok).toBe(false);
+          if (!res.ok) expect(res.error).toContain('started by an agent');
         }
       }
     ];
-    await router.compose({ to: ['orchestrator'], subject: 'lifecycle', body: 'go' });
+    await router2.compose({ to: ['normal'], subject: 'depth', body: 'go' });
     await vi.waitFor(async () => {
       const m = await readMail();
-      expect(m.items.some((i) => i.body === 'cleaned up')).toBe(true);
-      expect(m.conversations[0].status).not.toBe('working');
+      expect(m.items.some((i) => i.body === 'done for the user' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations.find((c) => c.subject === 'depth')?.status).toBe('idle');
     });
-    expect((await listPersonas()).some((p) => p.name === 'helper2')).toBe(false);
+    const mail = await readMail();
+    const depth = mail.conversations.find((c) => c.subject === 'depth')!;
+    expect(depth.agents?.map((a) => a.id)).toEqual(['orchestrator~boss', 'critic~leaf']);
+    expect(mail.items.find((i) => i.body === 'leaf report')?.to).toEqual(['orchestrator~boss']);
+    expect(mail.items.find((i) => i.body === 'boss report')?.to).toEqual(['normal']);
+  });
+
+  it('runs a blind agent without recall, refuses a taken name, and continues an agent by send_mail', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.normal = [
+      {
+        mode: 'ok',
+        reply: 'first wave',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.spawnAgent({ role: 'verifier', name: 'judge', brief: 'judge it', blind: true }, ctx)).ok).toBe(true);
+          const again = await bridge.spawnAgent({ role: 'verifier', name: 'judge', brief: 'again' }, ctx);
+          expect(again.ok).toBe(false);
+          if (!again.ok) expect(again.error).toContain('send_mail to "verifier~judge"');
+          const missing = await bridge.spawnAgent({ role: 'nobody', name: 'x', brief: 'y' }, ctx);
+          expect(missing.ok).toBe(false);
+          if (!missing.ok) expect(missing.error).toContain('Roles are the existing personas');
+        }
+      },
+      {
+        mode: 'ok',
+        reply: 'second wave',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['verifier~judge'], body: 'look again' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'final' }
+    ];
+    fake.scriptsByPersona['verifier~judge'] = [
+      {
+        mode: 'ok',
+        reply: 'verdict 1',
+        bridge: async (bridge, ctx) => {
+          const note = await bridge.rememberNote({ title: 't', body: 'b' }, ctx);
+          expect(note.ok).toBe(false);
+          if (!note.ok) expect(note.error).toContain('keep no memory');
+        }
+      },
+      { mode: 'ok', reply: 'verdict 2' }
+    ];
+    await router.compose({ to: ['normal'], subject: 'blind', body: 'judge my draft' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'final' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations[0].status).toBe('idle');
+    });
+    const starts = fake.starts.filter((s) => s.persona?.id === 'verifier~judge');
+    expect(starts).toHaveLength(2);
+    expect(starts.every((s) => s.persona?.recall === false)).toBe(true);
+    // The second delivery resumed the agent's own thread.
+    expect(starts[1].threadId).toBeTruthy();
+    expect(starts[1].input).toBe('look again');
+    expect((await readMail()).conversations[0].agents).toEqual([
+      { id: 'verifier~judge', role: 'verifier', name: 'judge', spawnedBy: 'normal', blind: true }
+    ]);
+  });
+
+  it('caps a conversation at six agents', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.normal = [
+      {
+        mode: 'ok',
+        reply: 'many',
+        bridge: async (bridge, ctx) => {
+          for (let n = 1; n <= 6; n++) {
+            expect((await bridge.spawnAgent({ role: 'critic', name: `r${n}`, brief: 'go' }, ctx)).ok).toBe(true);
+          }
+          const seventh = await bridge.spawnAgent({ role: 'critic', name: 'r7', brief: 'go' }, ctx);
+          expect(seventh.ok).toBe(false);
+          if (!seventh.ok) expect(seventh.error).toContain('6 agents');
+        }
+      },
+      { mode: 'ok', reply: 'assembled six' }
+    ];
+    await updateMailSettings({ exchangeCap: 20 });
+    await router.compose({ to: ['normal'], subject: 'cap', body: 'go' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'assembled six')).toBe(true);
+      expect(m.conversations[0].status).toBe('idle');
+    });
+    expect((await readMail()).conversations[0].agents).toHaveLength(6);
+    // One assembly carried all six replies.
+    expect(fake.starts.filter((s) => s.persona?.id === 'normal')).toHaveLength(2);
   });
 });
 
-// With the worker pool, process/exit events are attributed: their params carry
-// the threadId of the turn the dying child held (null when it sat idle). The
-// regression this pins: an idle extra worker's routine retirement mid-delivery
-// used to fail the delivery — the user got "run failed: the backend process
-// exited" while the real reply, completed minutes later, was silently dropped.
-// A delivery has no wall clock of its own. It settles when its turn does —
-// completed, failed, aborted, or the carrying worker dying — and nothing else.
-// The 30-minute clamp this replaces killed a coding-agent run (an iOS archive
-// plus upload) mid-flight on 2026-09-03 and mailed the user "the run timed
-// out", with the coding_agent tool reading it as a user cancellation.
 describe('mail delivery has no wall clock', () => {
   it('a turn still running after hours is still working, then its reply lands', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -2074,26 +2065,6 @@ describe('persona memory', () => {
     const notes = await listPersonaNotes('verifier');
     expect(notes).toHaveLength(1);
     expect(notes[0]).toMatchObject({ title: 'Gotcha', body: 'clocks are UTC', source: 'tool' });
-  });
-
-  it('an agent-created helper is refused remember_note and told where lessons go instead', async () => {
-    const helper = await savePersonaFor('orchestrator', { name: 'researcher-1', prompt: 'r' });
-    const fake = fakeBackend();
-    const router = makeRouter(fake);
-    const refusals: string[] = [];
-    fake.script = {
-      mode: 'ok',
-      reply: 'done',
-      bridge: async (bridge, ctx) => {
-        const res = await bridge.rememberNote({ body: 'a lesson' }, ctx);
-        if (!res.ok) refusals.push(res.error);
-      }
-    };
-    await router.compose({ to: [helper.id], subject: 's', body: 'q' });
-    await settledMail();
-    expect(refusals).toHaveLength(1);
-    expect(refusals[0]).toContain('temporary helper');
-    expect(await listPersonaNotes(helper.id)).toEqual([]);
   });
 
   it('a memory-off persona delivers without a note index and is refused both memory ops', async () => {

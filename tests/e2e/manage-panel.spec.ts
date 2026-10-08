@@ -100,16 +100,16 @@ test('the Files sub-tab lists a seeded Files folder and deletes through to disk'
   }
 });
 
-test('the Personas editor round-trips the manage flag, the send budget, and the clients flag', async ({ mainWindow }) => {
+test('the Personas editor round-trips the spawn flag, the send budget, and the clients flag', async ({ mainWindow }) => {
   await mainWindow.getByRole('button', { name: 'Personas', exact: true }).click();
 
-  // Orchestrator ships with the manage-personas capability on; expanding its
-  // row shows the checkbox already ticked.
+  // Orchestrator ships with the spawn capability on; expanding its row shows
+  // the checkbox already ticked.
   await mainWindow.getByText('Orchestrator', { exact: true }).click();
-  const manageBox = mainWindow.locator(
-    'label.persona-cap:has-text("Can manage personas") input[type="checkbox"]'
+  const spawnBox = mainWindow.locator(
+    'label.persona-cap:has-text("Can start agents") input[type="checkbox"]'
   );
-  await expect(manageBox).toBeChecked();
+  await expect(spawnBox).toBeChecked();
 
   // Chats-from-clients ships OFF for every persona — opening one up is the
   // user's call, so the box starts unticked and the tick must land in the store.
@@ -131,5 +131,5 @@ test('the Personas editor round-trips the manage flag, the send budget, and the 
           .then((list: any[]) => list.find((p: any) => p.id === 'orchestrator'))
       )
     )
-    .toMatchObject({ sendBudget: 5, canManagePersonas: true, clients: true });
+    .toMatchObject({ sendBudget: 5, canSpawn: true, clients: true });
 });

@@ -33,8 +33,7 @@ import { ServerFolderPicker } from '../ServerFolderPicker';
 function summaryLabel(
   p: Persona,
   models: ModelSummary[],
-  devices: DeviceInfo[],
-  personas: Persona[]
+  devices: DeviceInfo[]
 ): string {
   const parts: string[] = [];
   if (p.model) {
@@ -57,9 +56,6 @@ function summaryLabel(
   }
   if (p.browser) {
     parts.push(`uses the browser on ${devices.find((d) => d.id === p.browser?.device)?.label ?? p.browser.device}`);
-  }
-  if (p.createdBy) {
-    parts.push(`created by ${personas.find((x) => x.id === p.createdBy)?.name ?? p.createdBy}`);
   }
   if (p.memory === false) parts.push(p.harness ? 'no standing answers' : 'no private memory');
   if (p.recall === false) parts.push('no recall');
@@ -150,7 +146,7 @@ function sameEdit(a: Persona, b: Persona): boolean {
     (a.harness?.autoMode ?? false) === (b.harness?.autoMode ?? false) &&
     (a.computer?.device ?? '') === (b.computer?.device ?? '') &&
     (a.browser?.device ?? '') === (b.browser?.device ?? '') &&
-    (a.canManagePersonas ?? false) === (b.canManagePersonas ?? false) &&
+    (a.canSpawn ?? false) === (b.canSpawn ?? false) &&
     (a.memory ?? true) === (b.memory ?? true) &&
     (a.recall ?? true) === (b.recall ?? true) &&
     (a.sendBudget ?? 0) === (b.sendBudget ?? 0) &&
@@ -543,7 +539,6 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
       prompt: from?.prompt ?? ''
     };
     delete draft.builtin;
-    delete draft.createdBy;
     setDraft(draft);
     setRowExpanded(draft.id, true);
   }
@@ -599,7 +594,7 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                     {p.name}
                   </strong>
                   <em>
-                    {summaryLabel(p, models, devices, personas)}
+                    {summaryLabel(p, models, devices)}
                     {dirty && !expanded.has(p.id) ? ' · unsaved' : ''}
                   </em>
                 </span>
@@ -871,17 +866,16 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                   <label className="persona-cap">
                     <input
                       type="checkbox"
-                      checked={p.canManagePersonas === true}
-                      onChange={(e) =>
-                        setDraft({ ...p, canManagePersonas: e.target.checked || undefined })
-                      }
+                      checked={p.canSpawn === true}
+                      onChange={(e) => setDraft({ ...p, canSpawn: e.target.checked || undefined })}
                     />
                     <span>
-                      Can manage personas{' '}
-                      <InfoTip label="About managing personas">
-                        Lets this persona widen a mail conversation’s To: list (add_persona) and
-                        create, edit, and delete its own helper personas (save_persona /
-                        delete_persona).
+                      Can start agents{' '}
+                      <InfoTip label="About agents">
+                        Lets this persona start agents in a mail conversation: named copies of
+                        your other personas that each work one piece of a job and report back to
+                        it. Agents keep no memory and disappear with the conversation; they never
+                        appear in this list.
                       </InfoTip>
                     </span>
                   </label>
@@ -890,7 +884,6 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       type="checkbox"
                       checked={p.memory !== false}
                       onChange={(e) => setDraft({ ...p, memory: e.target.checked ? undefined : false })}
-                      disabled={!!p.createdBy}
                     />
                     <span>
                       {p.harness ? 'Keeps standing answers' : 'Keeps private memory'}{' '}
@@ -1047,10 +1040,9 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       {savingId === p.id ? 'Saving…' : 'Save'}
                     </button>
                   </div>
-                  {/* Only SAVED personas with a store: agent-created helpers and
-                      memory-off personas keep none, and a never-saved draft has no
-                      id on the server yet. */}
-                  {saved && !p.createdBy && p.memory !== false && (
+                  {/* Only SAVED personas with a store: memory-off personas keep
+                      none, and a never-saved draft has no id on the server yet. */}
+                  {saved && p.memory !== false && (
                     <PersonaNotes personaId={p.id} kind={p.harness ? 'answers' : 'memory'} />
                   )}
                 </div>

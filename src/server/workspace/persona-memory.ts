@@ -18,9 +18,8 @@ import { personaMemoryDir } from './paths';
 // doing its job.
 //
 // WHO owns a store is decided by the persona row, not by this module's
-// callers agreeing to agree: built-ins and editor-made personas do,
-// agent-created helpers (createdBy set) do not — the same "privileged starts
-// absent" rule savePersonaFor applies to flags and pins — and a persona whose
+// callers agreeing to agree: personas do; agents (spawned instances, which
+// the router resolves with memory off) do not; and a persona whose
 // memory flag is switched off (the built-in Critic, or the editor toggle)
 // keeps none either: no store at all, not a hidden one, because a store the
 // persona writes but never reads is pure confusion. A code persona (harness
@@ -34,17 +33,17 @@ import { personaMemoryDir } from './paths';
 // the agent asked. Rendered whole into the relay's preamble (no read_notes),
 // so the persona can answer the agent itself instead of asking the user the
 // same thing every time. Nothing writes them automatically from a model.
-// Every write path checks one of the two owners; the store dies with
-// delete_persona.
+// Every write path checks one of the two owners; the store dies with the
+// persona.
 
 /** Whether this persona keeps a private memory of lessons (see module doc). */
-export function personaOwnsMemory(persona: Pick<Persona, 'createdBy' | 'memory' | 'harness'>): boolean {
-  return !persona.createdBy && persona.memory !== false && !persona.harness;
+export function personaOwnsMemory(persona: Pick<Persona, 'memory' | 'harness'>): boolean {
+  return persona.memory !== false && !persona.harness;
 }
 
 /** Whether this persona keeps standing answers for its coding agent's questions (code personas). */
-export function personaKeepsAnswers(persona: Pick<Persona, 'createdBy' | 'memory' | 'harness'>): boolean {
-  return !persona.createdBy && persona.memory !== false && !!persona.harness;
+export function personaKeepsAnswers(persona: Pick<Persona, 'memory' | 'harness'>): boolean {
+  return persona.memory !== false && !!persona.harness;
 }
 
 /** Hard cap per persona — the index is injected wholesale, so it must stay small. */
@@ -389,7 +388,7 @@ export function applyConsolidation(personaId: string, plan: ConsolidationPlan): 
   });
 }
 
-/** Remove a persona's whole store (delete_persona's cleanup). Quietly idempotent. */
+/** Remove a persona's whole store (deletePersona's cleanup). Quietly idempotent. */
 export function deletePersonaMemory(personaId: string): Promise<void> {
   return enqueue(async () => {
     await rm(notesPath(personaId), { force: true });

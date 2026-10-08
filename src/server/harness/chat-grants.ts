@@ -107,7 +107,7 @@ function resolveMacGrant(
         `This conversation runs as ${personaLabel(turn.persona.name)}, which ${t.personaLacks}, so it has ` +
         `no ${t.feature}. A persona gets it from ${t.pinWhere}; only chats that run as no persona follow ` +
         `Settings → Features → ${t.settingsGroup}. Do not retry. ${t.noWorkaround} Hand the task to the ` +
-        'pinned persona (add_persona + send_mail in a mail thread), or tell the user which persona should ' +
+        'pinned persona (spawn_agent with it as the role, in a mail thread), or tell the user which persona should ' +
         'take it, or that one needs setting up.'
     };
   }

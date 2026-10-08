@@ -17,7 +17,7 @@ import {
   readPersonaMemory,
   savePersonaNote
 } from '../../src/server/workspace/persona-memory';
-import { savePersonaFor } from '../../src/server/workspace/personas';
+import { savePersona } from '../../src/server/workspace/personas';
 import { personaMemoryDir, personasStorePath, settingsStorePath } from '../../src/server/workspace/paths';
 import type { ChatBackend } from '../../src/server/backend/types';
 
@@ -125,8 +125,8 @@ describe('consolidatePersonaMemory', () => {
   it('skips a store too small to tidy, a memoryless persona, and a failing model — never rejects', async () => {
     await seed(2);
     expect((await consolidatePersonaMemory(fakeRuntime('[]'), 'verifier')).reason).toMatch(/too few/);
-    const helper = await savePersonaFor('orchestrator', { name: 'helper', prompt: 'h' });
-    expect((await consolidatePersonaMemory(fakeRuntime('[]'), helper.id)).reason).toMatch(/no memory/);
+    await savePersona({ id: 'quiet', name: 'Quiet', prompt: 'h', memory: false });
+    expect((await consolidatePersonaMemory(fakeRuntime('[]'), 'quiet')).reason).toMatch(/no memory/);
     await seed(1);
     const failing = fakeRuntime(() => {
       throw new Error('model down');

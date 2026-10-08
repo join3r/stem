@@ -19,7 +19,7 @@ import { deletePersonaMemory } from './persona-memory';
 // persona would come back blank.
 
 interface PersonasFile {
-  version: 4;
+  version: 5;
   personas: Persona[];
 }
 
@@ -33,6 +33,7 @@ const BUILTINS: Persona[] = [
     id: 'normal',
     name: 'Normal',
     prompt: '',
+    canSpawn: true,
     builtin: true
   },
   {
@@ -52,30 +53,24 @@ const BUILTINS: Persona[] = [
     name: 'Secretary',
     prompt:
       'You are Secretary. You triage requests: decide what a task needs and delegate rather ' +
-      'than doing the work yourself. Bring the right personas into the conversation with ' +
-      'add_persona, hand them their piece with send_mail, and schedule follow-ups with ' +
-      'schedule_task (set its personaId so the run happens as the right persona). When no ' +
-      'existing persona fits, create one with save_persona and clean it up with delete_persona ' +
-      'when its job is done. When a job needs several workers, hand the whole job to Orchestrator ' +
-      'in one brief: it creates and runs its own helpers and returns one assembled answer. Keep ' +
-      'the inbox quiet: mail the user only decisions and results, not process.',
-    canManagePersonas: true,
+      'than doing the work yourself. Start agents from the existing personas with spawn_agent ' +
+      '(each gets a name and a brief) and schedule follow-ups with schedule_task (set its ' +
+      'personaId so the run happens as the right persona). Keep the inbox quiet: mail the user ' +
+      'only decisions and results, not process.',
+    canSpawn: true,
     builtin: true
   },
   {
     id: 'orchestrator',
     name: 'Orchestrator',
     prompt:
-      'You are Orchestrator. Split large tasks into independent pieces and delegate each piece. ' +
-      'Create workers with save_persona (for example researcher-1, researcher-2 as copies of a ' +
-      'role prompt; recall false for a reviewer that must judge blind), bring them into the ' +
-      'conversation with add_persona, tell each worker its name in its brief, then send ALL the ' +
-      'delegations in ONE send_mail call — their replies come back to you together as a single ' +
-      'assembly mail, which is when you combine the results. Delete your workers with ' +
-      'delete_persona when the task is done. Report one assembled answer to whoever gave you the ' +
-      'task — the user, or the persona that consulted you. When a task cannot be split, do the ' +
-      'work directly and say so.',
-    canManagePersonas: true,
+      'You are Orchestrator. Split large tasks into independent pieces and delegate each piece ' +
+      'to an agent: spawn_agent with an existing persona as its role, a short name, and the ' +
+      'piece as its brief (blind true for a reviewer that must judge without knowing who wrote ' +
+      'the work). Start all the pieces in the same turn: their replies come back to you together ' +
+      'as one mail, which is when you combine the results. Report one assembled answer to ' +
+      'whoever gave you the task. When a task cannot be split, do the work directly and say so.',
+    canSpawn: true,
     builtin: true
   },
   {
@@ -148,13 +143,12 @@ function coercePersona(raw: unknown): Persona | null {
   const browser = coerceDevicePin(r.browser);
   if (browser) persona.browser = browser;
   if (r.lightweight === true) persona.lightweight = true;
-  // `canAddPersonas` is the flag's pre-rename spelling — files written before
-  // the rename migrate here, on read.
-  if (r.canManagePersonas === true || r.canAddPersonas === true) persona.canManagePersonas = true;
+  // `canManagePersonas` and `canAddPersonas` are the flag's earlier spellings —
+  // files written before the renames migrate here, on read.
+  if (r.canSpawn === true || r.canManagePersonas === true || r.canAddPersonas === true) persona.canSpawn = true;
   // Memory defaults on; only an explicit opt-out is stored (see the type doc).
   if (r.memory === false) persona.memory = false;
   if (r.recall === false) persona.recall = false;
-  if (typeof r.createdBy === 'string' && r.createdBy.trim()) persona.createdBy = r.createdBy.trim();
   if (typeof r.sendBudget === 'number' && Number.isFinite(r.sendBudget)) {
     persona.sendBudget = Math.min(100, Math.max(1, Math.round(r.sendBudget)));
   }
@@ -186,19 +180,22 @@ function coerceMcpServers(raw: unknown): string[] | undefined {
  * Every earlier seed text of a built-in's prompt. Seeding only appends missing
  * rows, so an install keeps whatever prompt it first got — the deployed server
  * still ran the phase-1 Secretary and Orchestrator, which never heard of
- * save_persona. A stored prompt that matches one of these exactly was never
- * edited by the user, so the v4 migration replaces it with the current seed;
- * an edited prompt is left alone.
+ * save_persona, and later ones still name the helper-persona tools agents
+ * lost to spawn_agent. A stored prompt that matches one of these exactly was
+ * never edited by the user, so the migration replaces it with the current
+ * seed; an edited prompt is left alone.
  */
 const LEGACY_SEED_PROMPTS: Record<string, string[]> = {
   secretary: [
     "You are Secretary. You triage requests: decide what a task needs, bring in the right personas, schedule follow-ups with your task tools, and keep the inbox quiet. Prefer delegating over doing the work yourself. When a tool you would use for delegation is not available yet, say what you would delegate and to whom instead of improvising.",
     "You are Secretary. You triage requests: decide what a task needs and delegate rather than doing the work yourself. Bring the right personas into the conversation with add_persona, hand them their piece with send_mail, and schedule follow-ups with schedule_task (set its personaId so the run happens as the right persona). Keep the inbox quiet: mail the user only decisions and results, not process.",
     "You are Secretary. You triage requests: decide what a task needs and delegate rather than doing the work yourself. Bring the right personas into the conversation with add_persona, hand them their piece with send_mail, and schedule follow-ups with schedule_task (set its personaId so the run happens as the right persona). When no existing persona fits, create one with save_persona and clean it up with delete_persona when its job is done. Keep the inbox quiet: mail the user only decisions and results, not process.",
+    "You are Secretary. You triage requests: decide what a task needs and delegate rather than doing the work yourself. Bring the right personas into the conversation with add_persona, hand them their piece with send_mail, and schedule follow-ups with schedule_task (set its personaId so the run happens as the right persona). When no existing persona fits, create one with save_persona and clean it up with delete_persona when its job is done. When a job needs several workers, hand the whole job to Orchestrator in one brief: it creates and runs its own helpers and returns one assembled answer. Keep the inbox quiet: mail the user only decisions and results, not process.",
   ],
   orchestrator: [
     "You are Orchestrator. Split large tasks into independent pieces, delegate each piece, and assemble the results into one coherent answer. When a task cannot be split, or the delegation tools are not available yet, do the work directly and say so.",
     "You are Orchestrator. Split large tasks into independent pieces and delegate each piece. Create workers with save_persona (for example researcher-1, researcher-2 as copies of a role prompt), bring them into the conversation with add_persona, then send ALL the delegations in ONE send_mail call — their replies come back to you together as a single assembly mail, which is when you combine the results. Delete your workers with delete_persona when the task is done. Report one assembled answer to the user. When a task cannot be split, do the work directly and say so.",
+    "You are Orchestrator. Split large tasks into independent pieces and delegate each piece. Create workers with save_persona (for example researcher-1, researcher-2 as copies of a role prompt; recall false for a reviewer that must judge blind), bring them into the conversation with add_persona, tell each worker its name in its brief, then send ALL the delegations in ONE send_mail call — their replies come back to you together as a single assembly mail, which is when you combine the results. Delete your workers with delete_persona when the task is done. Report one assembled answer to whoever gave you the task — the user, or the persona that consulted you. When a task cannot be split, do the work directly and say so.",
   ]
 };
 
@@ -212,7 +209,13 @@ function coerce(parsed: unknown): PersonasFile {
   const personas: Persona[] = [];
   const seen = new Set<string>();
   const list = Array.isArray(raw.personas) ? raw.personas : [];
+  const version = typeof raw.version === 'number' ? raw.version : 1;
   for (const entry of list) {
+    // v4 and earlier let agents create helper personas (save_persona), stamped
+    // `createdBy`. Agents are conversation-scoped now (spawn_agent), so the
+    // leftovers are dropped once: nobody can address them any more, and they
+    // kept no memory to lose.
+    if (version < 5 && typeof (entry as { createdBy?: unknown } | null)?.createdBy === 'string') continue;
     const persona = coercePersona(entry);
     if (!persona || seen.has(persona.id)) continue;
     // `builtin` is decided by the seed list, not the file: a hand-edited flag
@@ -223,17 +226,16 @@ function coerce(parsed: unknown): PersonasFile {
     seen.add(persona.id);
     personas.push(persona);
   }
-  // v1 files predate canManagePersonas: grant it to the stored Secretary and
-  // Orchestrator rows, whose whole job needs it — seeding only appends missing
-  // ids, so an existing row never gains a flag a later phase seeds (deployed
-  // v1 files even show Secretary without the P2-era canAddPersonas for this
-  // exact reason). Version-gated (not granted on every read) so unticking the
-  // box sticks once the file is written as v2.
-  const version = typeof raw.version === 'number' ? raw.version : 1;
+  // v1 files predate the delegation flag (now canSpawn): grant it to the
+  // stored Secretary and Orchestrator rows, whose whole job needs it — seeding
+  // only appends missing ids, so an existing row never gains a flag a later
+  // phase seeds (deployed v1 files even show Secretary without the P2-era
+  // canAddPersonas for this exact reason). Version-gated (not granted on every
+  // read) so unticking the box sticks once the file is written.
   if (version < 2) {
     for (const id of ['secretary', 'orchestrator']) {
       const row = personas.find((p) => p.id === id);
-      if (row) row.canManagePersonas = true;
+      if (row) row.canSpawn = true;
     }
   }
   // v2 files predate the recall flag: the stored Critic gains the opt-out the
@@ -244,7 +246,12 @@ function coerce(parsed: unknown): PersonasFile {
     const critic = personas.find((p) => p.id === 'critic');
     if (critic) critic.recall = false;
   }
-  if (version < 4) {
+  // v5 brings agents: Normal, the usual driver, may start them too.
+  if (version < 5) {
+    const normal = personas.find((p) => p.id === 'normal');
+    if (normal) normal.canSpawn = true;
+  }
+  if (version < 5) {
     for (const [id, legacy] of Object.entries(LEGACY_SEED_PROMPTS)) {
       const row = personas.find((p) => p.id === id);
       const seed = BUILTINS.find((b) => b.id === id);
@@ -254,12 +261,12 @@ function coerce(parsed: unknown): PersonasFile {
   for (const builtin of BUILTINS) {
     if (!seen.has(builtin.id)) personas.push({ ...builtin });
   }
-  return { version: 4, personas };
+  return { version: 5, personas };
 }
 
-// The registry can change from two directions — the editor's IPC and the mail
-// bridge (save_persona/delete_persona) — so the changed-notification lives
-// here, at the store, where every successful write passes.
+// The registry is written by the editor's IPC (and migrations on read); the
+// changed-notification lives here, at the store, where every successful write
+// passes.
 let changed: (() => void) | null = null;
 
 /** Register the (single) listener told after every successful registry write. */
@@ -396,103 +403,16 @@ export function savePersona(input: unknown): Promise<Persona[]> {
     if (clash) throw new Error(`A persona named "${clash.name}" already exists.`);
     const at = store.personas.findIndex((p) => p.id === persona.id);
     if (at >= 0) {
-      // `builtin` and `createdBy` survive the round-trip from the store, never
-      // from the caller — an editor save can't launder either.
+      // `builtin` survives the round-trip from the store, never from the
+      // caller — an editor save can't make a persona undeletable.
       if (store.personas[at].builtin) persona.builtin = true;
       else delete persona.builtin;
-      if (store.personas[at].createdBy) persona.createdBy = store.personas[at].createdBy;
-      else delete persona.createdBy;
       store.personas[at] = persona;
     } else {
       delete persona.builtin;
-      delete persona.createdBy;
       store.personas.push(persona);
     }
   });
-}
-
-/**
- * What the mail bridge may set on a persona — never pins, capabilities, or
- * budgets. `recall` is the one flag allowed, because switching it off only
- * takes something away: a reviewer that must judge without the user's history
- * (the embedding benchmark's blind relevance reviewers read the pilot results
- * through recall) has to be created that way by the agent that staffs it.
- */
-export interface BridgePersonaFields {
-  name?: string;
-  prompt?: string;
-  model?: string;
-  effort?: string;
-  recall?: boolean;
-}
-
-function requireUniqueName(store: PersonasFile, name: string, exceptId: string): void {
-  const clash = store.personas.find(
-    (p) => p.id !== exceptId && p.name.toLowerCase() === name.toLowerCase()
-  );
-  if (clash) throw new Error(`A persona named "${clash.name}" already exists.`);
-}
-
-/**
- * Create a persona on an agent's behalf (the save_persona bridge op). Only the
- * bridge fields land, `createdBy` is stamped from the caller, and everything
- * privileged (harness, flags, budget) starts absent — except the MCP
- * allowlist, which the helper inherits from its creator: a persona kept away
- * from a server must not be able to reach it by spawning an unrestricted
- * helper and mailing it the request.
- */
-export async function savePersonaFor(creatorId: string, fields: BridgePersonaFields): Promise<Persona> {
-  const name = fields.name?.trim();
-  if (!name) throw new Error('A persona needs at least a name.');
-  const persona: Persona = {
-    id: randomUUID(),
-    name,
-    prompt: typeof fields.prompt === 'string' ? fields.prompt : '',
-    createdBy: creatorId
-  };
-  if (fields.model?.trim()) persona.model = fields.model.trim();
-  if (fields.effort?.trim()) persona.effort = fields.effort.trim();
-  if (fields.recall === false) persona.recall = false;
-  await update((store) => {
-    requireUniqueName(store, persona.name, persona.id);
-    const creator = store.personas.find((p) => p.id === creatorId);
-    if (creator?.mcpServers) persona.mcpServers = [...creator.mcpServers];
-    // Same inheritance as the allowlist: a recall-off creator cannot reach the
-    // user's history through a helper it spawns.
-    if (creator?.recall === false) persona.recall = false;
-    store.personas.push(persona);
-  });
-  return persona;
-}
-
-/**
- * Merge only the bridge fields onto a stored persona (the save_persona edit
- * path). Everything else on the row — harness pin, flags, budget, createdBy —
- * is untouched, so an agent edit can never widen a persona's powers.
- */
-export async function updatePersonaFields(id: string, fields: BridgePersonaFields): Promise<Persona> {
-  let updated: Persona | undefined;
-  await update((store) => {
-    const at = store.personas.findIndex((p) => p.id === id);
-    if (at < 0) throw new Error(`No persona "${id}" exists.`);
-    const row = { ...store.personas[at] };
-    if (fields.name?.trim()) {
-      requireUniqueName(store, fields.name.trim(), id);
-      row.name = fields.name.trim();
-    }
-    if (typeof fields.prompt === 'string') row.prompt = fields.prompt;
-    if (fields.model?.trim()) row.model = fields.model.trim();
-    if (fields.effort?.trim()) row.effort = fields.effort.trim();
-    if (fields.recall === false) row.recall = false;
-    else if (fields.recall === true) {
-      const creator = row.createdBy ? store.personas.find((p) => p.id === row.createdBy) : undefined;
-      if (creator?.recall !== false) delete row.recall;
-    }
-    store.personas[at] = row;
-    updated = row;
-  });
-  if (!updated) throw new Error(`No persona "${id}" exists.`);
-  return updated;
 }
 
 /** Delete a persona. Built-ins are refused (the seed would resurrect them blank). */
@@ -504,8 +424,7 @@ export async function deletePersona(id: string): Promise<Persona[]> {
     store.personas = store.personas.filter((p) => p.id !== id);
   });
   // The persona's memory dies with it — deliberately, so a later persona that
-  // happens to reuse the name never inherits notes it did not earn. Both
-  // delete paths (editor IPC, delete_persona bridge) funnel through here.
+  // happens to reuse the name never inherits notes it did not earn.
   await deletePersonaMemory(id).catch((err) =>
     degrade('personas', 'left a deleted persona’s notes file behind', err)
   );
