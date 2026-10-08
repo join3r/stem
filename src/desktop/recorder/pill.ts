@@ -7,6 +7,9 @@ import { workspaceVisibilityOptions } from '../platform';
 // to ("← Mail"), and Note / Pause / Stop. Hovering it drops down the last few
 // steps. Like the banner it is a sandboxed data: page with no preload; every
 // button navigates to a sentinel URL the main process cancels and acts on.
+// The page's script goes in through executeJavaScript once it loads: the
+// packaged app's CSP (script-src 'self') covers data: pages too, so an inline
+// <script> never runs there, and the timer and buttons were dead.
 // A real click on a window that never takes focus does not reach the page on
 // macOS, acceptFirstMouse or not, so the helper's tap reports every press and
 // pressAt clicks whatever button lies under it.
@@ -45,7 +48,9 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
 <button id="noteBtn">Note</button><button id="pauseBtn">Pause</button><button class="stop" id="stopBtn">Stop</button></div>
 <div class="list" id="list"></div>
 <form class="note" id="noteForm"><input id="noteInput" placeholder="A note for Stem (optional)" maxlength="500"><button type="submit">Add</button></form>
-</div><script>
+</div></body></html>`;
+
+const SCRIPT = `(() => {
   // A press can arrive twice (the page's own click and the helper's report).
   let last = { what: '', at: 0 };
   const go = (what, q) => {
@@ -79,7 +84,7 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
     list.replaceChildren(...(s.recent.length ? s.recent : ['Nothing yet']).map((t) => { const d = document.createElement('div'); d.textContent = t; return d; }));
     if (s.noting && document.activeElement?.id !== 'noteInput') { const i = document.getElementById('noteInput'); i.value = ''; i.focus(); }
   };
-</script></body></html>`;
+})();`;
 
 export interface PillView {
   paused: boolean;
@@ -188,7 +193,10 @@ export function createRecorderPill(handlers: RecorderPillHandlers): RecorderPill
         /* a malformed sentinel is ignored */
       }
     });
-    win.webContents.on('did-finish-load', paint);
+    win.webContents.on('did-finish-load', () => {
+      if (!win || win.isDestroyed()) return;
+      void win.webContents.executeJavaScript(SCRIPT).then(paint, () => undefined);
+    });
     void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(HTML)}`);
     return win;
   }
