@@ -116,6 +116,9 @@ function makeService(
   const approvals: HarnessApprovalRequest[] = [];
   const resolved: string[] = [];
   const service = new HarnessService({
+    // Card-focused suites: the first refusal goes to the user. The blocking
+    // tests pass their own streak.
+    blockStreak: 1,
     settings: async () => ({}),
     // Manual mode by default (backend/fake.ts precedent): approval-queue tests
     // get their cards without an LLM judge in the way.
@@ -555,7 +558,7 @@ describe('approval tiers', () => {
     expect(judge).not.toHaveBeenCalled();
   });
 
-  it('a judge-safe command auto-allows, judged against the harness brief', async () => {
+  it('a judge-safe command auto-allows, judged against the user’s words, not the brief', async () => {
     let decision: unknown;
     const judge = vi.fn<HarnessServiceDeps['judge']>(async () => ({ verdict: 'safe' }));
     const host = execAskingHost('npm test', (d) => (decision = d));
@@ -563,12 +566,17 @@ describe('approval tiers', () => {
       readSettings: async () => serverSettings({ approvalMode: 'assisted' }),
       judge
     });
-    await service.handleHarnessRequest(REQ);
+    await service.handleHarnessRequest({
+      ...REQ,
+      judgeContext: { userWords: ['make the tool print its version'], actions: [] }
+    });
     expect(decision).toEqual({ optionId: 'allow' });
     expect(approvals).toHaveLength(0);
-    // command, cwd, exec settings, defaults, then the intent: the agent's brief.
-    expect(judge.mock.calls[0][0]).toBe('npm test');
-    expect(judge.mock.calls[0][4]).toBe('add a --version flag');
+    // The parent turn's user words — never the brief the persona wrote.
+    const call = judge.mock.calls[0][0];
+    expect(call.command).toBe('npm test');
+    expect(call.context.userWords).toEqual(['make the tool print its version']);
+    expect(JSON.stringify(call.context)).not.toContain('add a --version flag');
   });
 
   it('a judge-flagged command cards, carrying the verdict and reason', async () => {
@@ -691,7 +699,66 @@ describe('approval tiers', () => {
     await pending;
     expect(decisions[0]).toEqual({ optionId: 'allow' });
     expect(judge).toHaveBeenCalledTimes(1);
-    expect(judge.mock.calls[0][0]).toBe('git status');
+    expect(judge.mock.calls[0][0].command).toBe('git status');
+  });
+
+  it('rejects a judged ask back to the agent until the escalation point, then cards', async () => {
+    const decisions: unknown[] = [];
+    const judge = vi.fn<HarnessServiceDeps['judge']>(async () => ({ verdict: 'unsafe', reason: 'not asked for' }));
+    const host = scriptedHost({
+      turn: async (_input, sink) => {
+        for (const cmd of ['rm -rf a', 'rm -rf b', 'rm -rf c']) {
+          decisions.push(
+            await sink.onPermission({ permissionId: cmd, title: cmd, toolName: 'execute', command: cmd, options: OPTIONS })
+          );
+        }
+        return { ok: true, stopReason: 'end_turn', text: 'done' };
+      }
+    });
+    const { service, approvals } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'assisted' }),
+      judge,
+      blockStreak: 3
+    });
+    const pending = service.handleHarnessRequest(REQ);
+    await vi.waitFor(() => expect(approvals).toHaveLength(1));
+    expect(approvals[0].title).toBe('rm -rf c');
+    service.resolveApproval(approvals[0].id, 'reject');
+    await pending;
+    const reject = OPTIONS.find((o) => o.kind === 'reject_once')!.optionId;
+    expect(decisions.slice(0, 2)).toEqual([{ optionId: reject }, { optionId: reject }]);
+  });
+
+  it('parks a mail run at the escalation point instead of carding, and says so in the result', async () => {
+    const judge = vi.fn<HarnessServiceDeps['judge']>(async () => ({ verdict: 'unsafe', reason: 'not asked for' }));
+    const host = scriptedHost({
+      turn: async (_input, sink) => {
+        await sink.onPermission({ permissionId: 'p', title: 'npm publish', toolName: 'execute', command: 'npm publish', options: OPTIONS });
+        return { ok: true, stopReason: 'cancelled', text: '' };
+      }
+    });
+    const { service, approvals } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'assisted' }),
+      judge
+    });
+    const result = await service.handleHarnessRequest({ ...REQ, isMail: true, isScheduled: true });
+    expect(approvals).toHaveLength(0);
+    expect(result).toMatchObject({ ok: false, park: { kind: 'harness', command: 'npm publish', reason: 'not asked for' } });
+  });
+
+  it('lets a command the user allowed on a parked run through once', async () => {
+    const decisions: unknown[] = [];
+    const judge = vi.fn<HarnessServiceDeps['judge']>(async () => ({ verdict: 'unsafe' }));
+    const host = execAskingHost('npm publish', (d) => decisions.push(d));
+    const { service } = makeService(host, {
+      readSettings: async () => serverSettings({ approvalMode: 'assisted' }),
+      judge,
+      blockStreak: 3
+    });
+    service.grantOnce(REQ.threadId, 'npm publish');
+    await service.handleHarnessRequest(REQ);
+    expect(decisions[0]).toEqual({ optionId: 'allow' });
+    expect(judge).not.toHaveBeenCalled();
   });
 });
 

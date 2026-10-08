@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatBackend, MailBridgeContext, MailBridgeResult, SavePersonaRequest } from '../backend/types';
+import type { ChatBackend, MailBridgeContext, MailBridgeResult, ParkRequest, SavePersonaRequest } from '../backend/types';
 import type {
   GeneratedImageRef,
   BackendEventEnvelope,
+  MailApproval,
   MailComposeInput,
   MailListResult,
   TurnAttachment
@@ -34,6 +35,7 @@ import { cleanMailSubject } from '../../shared/mail-subject';
 import {
   addParticipant,
   appendMailItem,
+  settleMailApproval,
   CapError,
   createConversation,
   readMail,
@@ -175,6 +177,13 @@ interface JoinState {
   notes: string[];
 }
 
+/** How a delivery's turn ended: ok, failed, or parked for the user's Allow/Deny. */
+interface DeliverySettle {
+  status: 'ok' | 'failed' | 'parked';
+  error?: string;
+  parked?: ParkRequest;
+}
+
 export interface MailRouterOptions {
   runtime: ChatBackend;
   /** Pushed to every client whenever mail changes (a delivery landed, etc.). */
@@ -200,6 +209,14 @@ export interface MailRouterOptions {
    * run's mail carry them. Absent in tests that don't care.
    */
   generatedImages?: (threadId: string) => GeneratedImageRef[];
+  /**
+   * The user allowed a parked command: let exactly it run once on that thread
+   * without the safety check (ExecService / HarnessService grantOnce). Absent
+   * in tests that don't care.
+   */
+  grantOnce?: (kind: 'exec' | 'harness', threadId: string, command: string) => void;
+  /** Resume a scheduled run the user answered (the scheduler owns its threads). */
+  resumeScheduledRun?: (taskId: string, threadId: string, body: string) => Promise<void>;
 }
 
 /**
@@ -322,8 +339,117 @@ export class MailRouter {
       ...(files ? { attachments: await attachmentPreviews(files) } : {})
     });
     const source = result.items[result.items.length - 1];
+    // A run parked for the user's Allow/Deny that they answered with a mail
+    // instead: the mail goes to the parked persona, on its own thread, with a
+    // note that its request went unanswered — the user's new words reach the
+    // safety check from there. The driver gets it only when nothing is parked.
+    const parked = await this.supersedeParks(conversationId);
+    if (parked.length) {
+      for (const park of parked) {
+        const note =
+          `[Stem] Your request to run \`${park.command}\` was not answered; the user wrote this instead. ` +
+          'If it settles the question, act on it; otherwise carry on without that command.';
+        this.enqueueDelivery(
+          conversationId,
+          park.resume.personaId,
+          `${note}\n\n${trimmed}`,
+          park.resume.from,
+          source.at,
+          park.resume.sourceItemId || source.id,
+          files
+        );
+      }
+      return result;
+    }
     this.enqueueDelivery(conversationId, driver, trimmed, 'user', source.at, source.id, files);
     return result;
+  }
+
+  /**
+   * The user's answer to a parked run (an approval item's Allow/Deny). Settles
+   * the item once — a second answer finds it settled and is refused — then
+   * resumes the persona's own thread: an allowed command may run exactly once
+   * without the safety check, a denied one is reported as the user's no.
+   */
+  async resolveApproval(itemId: string, decision: 'allow' | 'deny'): Promise<{ ok: boolean; error?: string }> {
+    const approval = await settleMailApproval(itemId, decision === 'allow' ? 'allowed' : 'denied');
+    if (!approval) return { ok: false, error: 'That approval was already answered.' };
+    const { conversations, items } = await readMail();
+    const item = items.find((i) => i.id === itemId);
+    const conversation = conversations.find((c) => c.id === item?.conversationId);
+    if (!item || !conversation) return { ok: false, error: 'That mail conversation no longer exists.' };
+    const r = approval.resume;
+    if (decision === 'allow') this.opts.grantOnce?.(approval.kind, r.threadId, approval.command);
+    const body =
+      decision === 'allow'
+        ? `[Stem] The user allowed \`${approval.command}\`. Run it now, exactly as before, and carry on with the task.`
+        : `[Stem] The user denied \`${approval.command}\`. Carry on without it, and do not reach the same effect another way.`;
+    if (r.taskId) {
+      if (!this.opts.resumeScheduledRun) return { ok: false, error: 'Scheduled runs cannot be resumed here.' };
+      await this.opts.resumeScheduledRun(r.taskId, r.threadId, body);
+    } else {
+      this.enqueueDelivery(conversation.id, r.personaId, body, r.from, r.epoch, r.sourceItemId);
+    }
+    this.opts.onChange();
+    return { ok: true };
+  }
+
+  /** Mark this conversation's pending approvals superseded; returns them as they were. */
+  private async supersedeParks(conversationId: string, status: 'superseded' | 'cancelled' = 'superseded'): Promise<MailApproval[]> {
+    const { items } = await readMail();
+    const pending = items.filter((i) => i.conversationId === conversationId && i.approval?.status === 'pending');
+    const settled: MailApproval[] = [];
+    for (const item of pending) {
+      const approval = await settleMailApproval(item.id, status);
+      if (approval) settled.push(approval);
+    }
+    return settled;
+  }
+
+  /**
+   * Hold a delivery whose run parked: append the approval item to the user and
+   * leave the wave's join untouched, so the resumed turn settles the branch
+   * the ordinary way. The conversation drains as awaiting the user.
+   */
+  private async parkDelivery(p: {
+    conversationId: string;
+    personaId: string;
+    threadId: string;
+    from: string;
+    epoch: number;
+    sourceItemId: string;
+    request: ParkRequest;
+  }): Promise<void> {
+    const name = await this.personaName(p.personaId);
+    const where = p.request.deviceLabel ? ` on ${p.request.deviceLabel}` : '';
+    await appendMailItem({
+      conversationId: p.conversationId,
+      from: p.personaId,
+      to: ['user'],
+      body:
+        `${name} paused this task: Stem's safety check would not run a command${where} without you. ` +
+        'Allow it to let the task continue, or deny it.',
+      approval: {
+        id: randomUUID(),
+        kind: p.request.kind,
+        command: p.request.command,
+        ...(p.request.cwd ? { cwd: p.request.cwd } : {}),
+        ...(p.request.deviceLabel ? { deviceLabel: p.request.deviceLabel } : {}),
+        ...(p.request.reason ? { reason: p.request.reason } : {}),
+        status: 'pending',
+        resume: {
+          personaId: p.personaId,
+          threadId: p.threadId,
+          from: p.from,
+          epoch: p.epoch,
+          sourceItemId: p.sourceItemId,
+          ...(p.request.deviceId ? { deviceId: p.request.deviceId } : {})
+        }
+      }
+    });
+    const current = this.drainStatus.get(p.conversationId) ?? 'idle';
+    if (DRAIN_RANK['awaiting-user'] > DRAIN_RANK[current]) this.drainStatus.set(p.conversationId, 'awaiting-user');
+    this.opts.onChange();
   }
 
   /**
@@ -444,7 +570,10 @@ export class MailRouter {
     // quiet: an unwritable queue store leaves the wait standing, and the stop
     // still reports honestly on what it could reach below.
     const waitDropped = await dropQueuedMail(conversationId).catch(() => false);
-    if (!active.length && !queued && !waitDropped) return { stopped: false };
+    // A parked run is stopped by cancelling its approval: nothing resumes it.
+    // quiet: an unwritable store leaves the approval answerable; the stop still reports on the rest.
+    const parksCancelled = (await this.supersedeParks(conversationId, 'cancelled').catch(() => [])).length > 0;
+    if (!active.length && !queued && !waitDropped && !parksCancelled) return { stopped: false };
     this.stopping.add(conversationId);
     if (lane && queued) {
       // Dropped tasks never reach deliver(), so their pending counts settle here.
@@ -511,6 +640,8 @@ export class MailRouter {
     headline?: string;
     /** Pictures to carry; absent = whatever the run's thread made since the last take. */
     images?: GeneratedImageRef[];
+    /** A parked run: the item carries its Allow/Deny, answered by resolveApproval. */
+    park?: ParkRequest;
   }): Promise<string> {
     // One conversation per task, found by the task id on its items; created on
     // the first notify. Keeps every firing of a watch task in one thread of mail.
@@ -536,7 +667,29 @@ export class MailRouter {
       ...(headline ? { subject: headline } : {}),
       // Pictures the run made before this notify go with it; later ones join
       // the result (attachTaskResult).
-      ...(input.images?.length ? { images: input.images } : this.imagesField(input.threadId))
+      ...(input.images?.length ? { images: input.images } : this.imagesField(input.threadId)),
+      ...(input.park && input.threadId
+        ? {
+            approval: {
+              id: randomUUID(),
+              kind: input.park.kind,
+              command: input.park.command,
+              ...(input.park.cwd ? { cwd: input.park.cwd } : {}),
+              ...(input.park.deviceLabel ? { deviceLabel: input.park.deviceLabel } : {}),
+              ...(input.park.reason ? { reason: input.park.reason } : {}),
+              status: 'pending' as const,
+              resume: {
+                personaId: input.personaId ?? 'normal',
+                threadId: input.threadId,
+                from: 'user',
+                epoch: Date.now(),
+                sourceItemId: '',
+                taskId: input.taskId,
+                ...(input.park.deviceId ? { deviceId: input.park.deviceId } : {})
+              }
+            }
+          }
+        : {})
     });
     const notification = delivered.items.at(-1);
     if (input.threadId && notification) await attachScheduledWork(input.threadId, target.id, notification.id, from);
@@ -1246,6 +1399,23 @@ export class MailRouter {
       noteTurnStart(runThreadId, started.turnId);
 
       const settle = await settling.done.finally(() => this.liveThreads.delete(runThreadId));
+      if (settle.parked && !this.stopping.has(conversationId)) {
+        // The run stopped for the user's Allow/Deny. Its branch stays open in
+        // the join (if one is waiting on it); the approval item is the park,
+        // and the answer resumes this same thread (resolveApproval).
+        await work.finish('ok');
+        this.turnMailSent.delete(turnId);
+        await this.parkDelivery({
+          conversationId,
+          personaId,
+          threadId: runThreadId,
+          from,
+          epoch,
+          sourceItemId,
+          request: settle.parked
+        });
+        return;
+      }
       await work.finish(this.stopping.has(conversationId) ? 'aborted' : settle.status === 'ok' ? 'ok' : 'failed', settle.error);
       const sent = this.turnMailSent.get(turnId);
       this.turnMailSent.delete(turnId);
@@ -1492,15 +1662,15 @@ export class MailRouter {
   private waitForSettle(
     turnId: string,
     threadIdRef: { current: string | null }
-  ): { done: Promise<{ status: 'ok' | 'failed'; error?: string }>; abandon: () => void } {
-    let finish!: (status: 'ok' | 'failed', error?: string) => void;
-    const done = new Promise<{ status: 'ok' | 'failed'; error?: string }>((resolve) => {
+  ): { done: Promise<DeliverySettle>; abandon: () => void } {
+    let finish!: (status: DeliverySettle['status'], error?: string, parked?: ParkRequest) => void;
+    const done = new Promise<DeliverySettle>((resolve) => {
       let settled = false;
-      finish = (status, error) => {
+      finish = (status, error, parked) => {
         if (settled) return;
         settled = true;
         this.opts.runtime.off('event', onEvent);
-        resolve({ status, ...(error ? { error } : {}) });
+        resolve({ status, ...(error ? { error } : {}), ...(parked ? { parked } : {}) });
       };
       const onEvent = (event: BackendEventEnvelope) => {
         // A process exit is attributed: its threadId names the turn the dying
@@ -1519,12 +1689,17 @@ export class MailRouter {
           }
           return;
         }
-        const p = event.params as { threadId?: string; turn?: { id?: string }; error?: string } | undefined;
+        const p = event.params as
+          | { threadId?: string; turn?: { id?: string }; error?: string; parked?: ParkRequest }
+          | undefined;
         const matches = p?.turn?.id
           ? p.turn.id === turnId
           : threadIdRef.current != null && p?.threadId === threadIdRef.current;
         if (!matches) return;
-        if (event.method === 'turn/completed') finish('ok');
+        // Stopped for the user's Allow/Deny (PiRuntime.parkTurn): not a failure.
+        const terminal = event.method === 'turn/completed' || event.method === 'turn/failed' || event.method === 'turn/aborted';
+        if (terminal && p?.parked) finish('parked', undefined, p.parked);
+        else if (event.method === 'turn/completed') finish('ok');
         else if (event.method === 'turn/failed') finish('failed', typeof p?.error === 'string' ? p.error : undefined);
         else if (event.method === 'turn/aborted') finish('failed', 'the turn was aborted');
       };

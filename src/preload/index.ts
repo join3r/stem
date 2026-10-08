@@ -437,6 +437,8 @@ const api: StemApi = {
   addMailParticipant: (conversationId: string, personaId: string) =>
     ipcRenderer.invoke('mail:addParticipant', conversationId, personaId),
   stopMail: (conversationId: string) => ipcRenderer.invoke('mail:stop', conversationId),
+  resolveMailApproval: (itemId: string, decision: 'allow' | 'deny') =>
+    ipcRenderer.invoke('mail:resolveApproval', itemId, decision),
   setMailRead: (conversationIds: string[], read: boolean) =>
     ipcRenderer.invoke('mail:setRead', conversationIds, read),
   setMailArchived: (conversationIds: string[], archived: boolean) =>

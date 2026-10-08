@@ -98,6 +98,8 @@ describe('ExecService judge', () => {
     } as unknown as ChatBackend;
 
     service = new ExecService({
+      // These suites are about the card: escalate on the first refusal.
+      blockStreak: 1,
       runtime: () => runtime,
       readSettings: async () => settings,
       updateExecSettings: async () => settings,
@@ -125,7 +127,9 @@ describe('ExecService judge', () => {
       currentModel: 'anthropic/claude-opus-4'
     });
     expect(result.ok).toBe(false);
-    expect(completeOpts).toHaveLength(1);
+    // Stage 1, then stage 2 for what stage 1 did not call safe.
+    expect(completeOpts).toHaveLength(2);
+    expect(completeOpts[1]?.effort).toBe('high');
     expect(completeOpts[0]?.priority).toBe(true);
     expect(completeOpts[0]?.timeoutMs).toBe(JUDGE_TIMEOUT_MS);
     expect(JUDGE_TIMEOUT_MS).toBe(60_000);
@@ -138,10 +142,10 @@ describe('ExecService judge', () => {
     expect(approvals[0]?.judgeVerdict).toBe('unsure');
   });
 
-  it("hands the judge the turn's earlier commands", async () => {
-    let prompt = '';
+  it("hands the judge the user's words and the agent's earlier commands", async () => {
+    const prompts: string[] = [];
     completeImpl = async (p: string) => {
-      prompt = p;
+      prompts.push(p);
       return 'unsure';
     };
     await service.handleExecRequest({
@@ -149,11 +153,28 @@ describe('ExecService judge', () => {
       cwd,
       threadId: 't1',
       isScheduled: false,
-      userText: 'quit the app, reinstall it and start it',
-      recentCommands: ['kill -TERM 4020 && ./scripts/install.sh']
+      userText: 'only this message',
+      judgeContext: {
+        userWords: ['quit the app, reinstall it and start it'],
+        actions: [{ command: 'kill -TERM 4020 && ./scripts/install.sh', refused: false }]
+      }
     });
-    expect(prompt).toContain('already ran');
-    expect(prompt).toContain('- kill -TERM 4020 && ./scripts/install.sh');
+    expect(prompts[0]).toContain('quit the app, reinstall it and start it');
+    expect(prompts[0]).not.toContain('only this message');
+    expect(prompts[0]).toContain('- kill -TERM 4020 && ./scripts/install.sh');
+  });
+
+  it('stage 2 can clear what stage 1 flagged, and the command runs', async () => {
+    completeImpl = async (p: string) => (p.includes('Think it through first') ? 'It is the step asked for.\nsafe' : 'unsure');
+    const result = await service.handleExecRequest({
+      command: 'echo hi',
+      cwd,
+      threadId: 't1',
+      isScheduled: false,
+      judgeContext: { userWords: ['say hi'], actions: [] }
+    });
+    expect(result.ok).toBe(true);
+    expect(approvals).toHaveLength(0);
   });
 
   it('prefers the safety check’s own effort over the shared background one', async () => {
@@ -251,6 +272,8 @@ describe('ExecService read confinement (H-01)', () => {
     approvals = [];
     judged = [];
     service = new ExecService({
+      // These suites are about the card: escalate on the first refusal.
+      blockStreak: 1,
       runtime: () =>
         ({
           listModels: async () => [model('anthropic/claude-opus-4', 'anthropic', true)],
@@ -281,7 +304,8 @@ describe('ExecService read confinement (H-01)', () => {
       currentModel: 'anthropic/claude-opus-4'
     });
     expect(result.ok).toBe(false);
-    expect(judged).toHaveLength(1);
+    // Both stages saw it; neither cleared it.
+    expect(judged).toHaveLength(2);
     expect(approvals).toHaveLength(1);
   });
 
@@ -293,7 +317,7 @@ describe('ExecService read confinement (H-01)', () => {
       isScheduled: false,
       currentModel: 'anthropic/claude-opus-4'
     });
-    expect(judged).toHaveLength(1);
+    expect(judged).toHaveLength(2);
   });
 
   it('a read inside the chat\'s scratch runs without judge or card', async () => {
@@ -327,6 +351,8 @@ describe('ExecService working directory', () => {
     settings.exec.approvalMode = 'manual';
     approvals = [];
     service = new ExecService({
+      // These suites are about the card: escalate on the first refusal.
+      blockStreak: 1,
       runtime: () => ({}) as unknown as ChatBackend,
       readSettings: async () => settings,
       updateExecSettings: async () => settings,
@@ -421,6 +447,8 @@ describe('ExecService device targeting', () => {
       }
     } as unknown as ChatBackend;
     service = new ExecService({
+      // These suites are about the card: escalate on the first refusal.
+      blockStreak: 1,
       runtime: () => runtime,
       readSettings: async () => settings,
       updateExecSettings: async (patch) => {
@@ -471,7 +499,7 @@ describe('ExecService device targeting', () => {
     expect(result.ok).toBe(true);
     // Locally `ls -la` is tier 1; on the device it went to the judge (who said
     // unsure) and then to a card.
-    expect(judgeCalls).toHaveLength(1);
+    expect(judgeCalls).toHaveLength(2);
     // The judge prompt names the machine that will run it, not this one.
     expect(judgeCalls[0]).toContain("Vlado's MacBook");
     expect(judgeCalls[0]).toContain('under zsh');
@@ -580,10 +608,14 @@ describe('ExecService device targeting', () => {
     expect(ran).toHaveLength(1);
   });
 
-  it('scheduled runs still never get a card', async () => {
+  it('scheduled runs never get a card: past the escalation point they park for the user', async () => {
     const result = await request({ isScheduled: true });
     expect(result.ok).toBe(false);
-    expect((result as { error: string }).error).toContain('scheduled');
+    expect((result as { error: string }).error).toContain('paused this task');
+    expect((result as { park?: { command: string; deviceId?: string } }).park).toMatchObject({
+      kind: 'exec',
+      deviceId: 'mac-1'
+    });
     expect(approvals).toHaveLength(0);
     expect(ran).toHaveLength(0);
   });
@@ -672,6 +704,8 @@ describe('ExecService approval queue', () => {
     armed = [];
     resolved = [];
     service = new ExecService({
+      // These suites are about the card: escalate on the first refusal.
+      blockStreak: 1,
       runtime: () => ({ listModels: async () => [], complete: async () => 'unsure' }) as unknown as ChatBackend,
       readSettings: async () => settings,
       updateExecSettings: async () => settings,
@@ -776,5 +810,137 @@ describe('ExecService approval queue', () => {
     expect(service.pendingApprovals().map((r) => r.command)).toEqual(['ls -la', 'df -h']);
     service.settleAll();
     expect(service.pendingApprovals()).toEqual([]);
+  });
+});
+
+// Claude Code's escalation: a command the judge will not clear goes back to the
+// agent with the reason until three in a row (or twenty in all) were refused on
+// one thread; from there the user decides — a card in a chat, a park when
+// nobody is watching. An Allow from the user starts the count over.
+describe('ExecService blocking and escalation', () => {
+  let cwd: string;
+  let approvals: ExecApprovalRequest[];
+  let answer: 'allowOnce' | 'deny';
+  let verdict: string;
+  let service: ExecService;
+  let settings: AppSettings;
+
+  const send = (command: string, extra: Partial<Parameters<ExecService['handleExecRequest']>[0]> = {}) =>
+    service.handleExecRequest({ command, cwd, threadId: 't1', isScheduled: false, ...extra });
+
+  beforeEach(() => {
+    settings = baseSettings();
+    cwd = realpathSync(mkdtempSync(join(tmpdir(), 'stem-exec-block-')));
+    approvals = [];
+    answer = 'deny';
+    verdict = 'unsafe — not asked for';
+    const runtime = {
+      listModels: async () => [model('anthropic/claude-opus-4', 'anthropic', true)],
+      complete: async (prompt: string) => (prompt.includes('Think it through first') ? `reasoning\n${verdict}` : verdict)
+    } as unknown as ChatBackend;
+    service = new ExecService({
+      runtime: () => runtime,
+      readSettings: async () => settings,
+      updateExecSettings: async () => settings,
+      emitApprovalRequest: (request) => {
+        approvals.push(request);
+        queueMicrotask(() => service.resolveApproval(request.id, answer));
+      },
+      emitApprovalResolved: () => undefined
+    });
+  });
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('refuses back to the agent with the reason, then asks the user on the third in a row', async () => {
+    const first = await send('echo one');
+    expect(first).toMatchObject({ ok: false, blocked: true });
+    expect((first as { error: string }).error).toContain('not asked for');
+    expect((first as { error: string }).error).toMatch(/Do not reach the same effect another way/);
+    await send('echo two');
+    expect(approvals).toHaveLength(0);
+    await send('echo three');
+    expect(approvals).toHaveLength(1);
+  });
+
+  it('counts per thread', async () => {
+    await send('echo one');
+    await send('echo two');
+    await send('echo three', { threadId: 't2' });
+    expect(approvals).toHaveLength(0);
+  });
+
+  it('a command that runs breaks the streak', async () => {
+    await send('echo one');
+    await send('echo two');
+    verdict = 'safe';
+    expect((await send('echo fine')).ok).toBe(true);
+    verdict = 'unsafe';
+    await send('echo three');
+    expect(approvals).toHaveLength(0);
+  });
+
+  it('an Allow on the card starts the count over', async () => {
+    answer = 'allowOnce';
+    await send('echo one');
+    await send('echo two');
+    expect((await send('echo three')).ok).toBe(true);
+    expect(approvals).toHaveLength(1);
+    await send('echo four');
+    expect(approvals).toHaveLength(1);
+  });
+
+  it('keeps asking after a deny until the user allows something', async () => {
+    await send('echo one');
+    await send('echo two');
+    await send('echo three');
+    await send('echo four');
+    expect(approvals).toHaveLength(2);
+  });
+
+  it('parks an unattended run at the escalation point instead of a card', async () => {
+    expect(await send('echo one', { isScheduled: true })).toMatchObject({ ok: false, blocked: true });
+    await send('echo two', { isScheduled: true });
+    const third = await send('echo three', { isScheduled: true });
+    expect(third).toMatchObject({ ok: false, park: { kind: 'exec', command: 'echo three', reason: 'not asked for' } });
+    expect(approvals).toHaveLength(0);
+  });
+
+  it('sends a judge that could not run straight to the user', async () => {
+    const runtime = {
+      listModels: async () => [model('anthropic/claude-opus-4', 'anthropic', true)],
+      complete: async () => {
+        throw new Error('pi completion timed out.');
+      }
+    } as unknown as ChatBackend;
+    (service as unknown as { deps: { runtime: () => ChatBackend } }).deps.runtime = () => runtime;
+    await send('echo one');
+    // The first refusal, yet a card: a judge that failed said nothing about the command.
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]?.judgeVerdict).toBe('failed');
+  });
+
+  it('runs a command the user allowed on a parked run once, without the judge', async () => {
+    service.grantOnce('t1', 'echo granted');
+    expect((await send('echo granted')).ok).toBe(true);
+    // Once: the same command again is judged as usual.
+    expect(await send('echo granted')).toMatchObject({ ok: false, blocked: true });
+    // Exactly that command: another one never rides the grant.
+    service.grantOnce('t1', 'echo granted');
+    expect(await send('echo other')).toMatchObject({ ok: false, blocked: true });
+  });
+
+  it('a Stop on the thread cancels its card — never reported as the user declining', async () => {
+    answer = 'deny';
+    (service as unknown as { deps: { emitApprovalRequest: (r: ExecApprovalRequest) => void } }).deps.emitApprovalRequest = (r) => {
+      approvals.push(r);
+      queueMicrotask(() => service.abortThread('t1'));
+    };
+    await send('echo one');
+    await send('echo two');
+    const result = await send('echo three');
+    expect((result as { error: string }).error).toBe('The command was cancelled.');
   });
 });

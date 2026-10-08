@@ -39,6 +39,7 @@ import { type BackgroundRole, resolveRoleEffort } from '../../shared/modelRoles'
 import { CUSTOM_PROVIDER_ID_RE, isCustomProviderId } from '../../shared/providers';
 import { degrade } from '../degrade';
 import { DEFAULT_SCRATCH_TTL_DAYS } from '../exec/scratch';
+import { JUDGE_RULE_MAX_CHARS } from '../exec/judge-context';
 import { customModelId, DEFAULT_LOCAL_EMBED_MODEL, EMBED_CATALOG } from '../recall/embed-catalog';
 import { DEFAULT_LOCAL_RERANK_MODEL, RERANK_CATALOG } from '../recall/rerank-catalog';
 import { GTE_FACT_PILOT_ID } from '../recall/gte-model-artifact';
@@ -110,6 +111,9 @@ const DEFAULTS: ServerSettings = {
     approvalMode: 'assisted',
     judgeModel: null,
     judgeEffort: null,
+    judgeAllow: '',
+    judgeDeny: '',
+    judgeEnvironment: '',
     allowlist: [],
     deviceAllowlists: {},
     scratchTtlDays: DEFAULT_SCRATCH_TTL_DAYS,
@@ -206,6 +210,11 @@ const TASK_NOTIFY_MODES: readonly TaskNotifyMode[] = ['alert', 'nudge', 'inbox']
  * own default rather than sending pi a level it will reject.
  */
 const EFFORT_LEVELS: readonly string[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+
+/** One of the user's safety-check rule boxes: a string, capped like the judge reads it. */
+function judgeRuleText(raw: unknown): string {
+  return typeof raw === 'string' ? raw.slice(0, JUDGE_RULE_MAX_CHARS) : '';
+}
 
 function coerceEffort(raw: unknown): string | null {
   return typeof raw === 'string' && EFFORT_LEVELS.includes(raw) ? raw : null;
@@ -490,6 +499,9 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
       rawExec.approvalMode === 'manual' || rawExec.approvalMode === 'yolo' ? rawExec.approvalMode : 'assisted',
     judgeModel: typeof rawExec.judgeModel === 'string' && rawExec.judgeModel.trim() ? rawExec.judgeModel : null,
     judgeEffort: coerceEffort(rawExec.judgeEffort),
+    judgeAllow: judgeRuleText(rawExec.judgeAllow),
+    judgeDeny: judgeRuleText(rawExec.judgeDeny),
+    judgeEnvironment: judgeRuleText(rawExec.judgeEnvironment),
     // Dedupe + trim, drop empties, and cap size so a runaway writer can't bloat
     // settings.json (the allowlist is matched per command, so order is cosmetic).
     allowlist: [

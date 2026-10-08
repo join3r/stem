@@ -1,3 +1,4 @@
+import type { ParkRequest } from '../backend/types';
 import { TaskScheduler } from '../scheduler';
 import { rewriteTaskPrompt } from '../scheduler/rewrite';
 import { reflectOnDelivery } from '../mail/reflect';
@@ -46,6 +47,8 @@ export function initTaskScheduler(deps: {
     headline?: string;
     /** Pictures to carry; absent = whatever the run's thread made since the last take. */
     images?: GeneratedImageRef[];
+    /** A parked run's Allow/Deny, carried on the item. */
+    park?: ParkRequest;
   }) => Promise<string | void>;
   /**
    * The run behind a notification settled with a reply: put it on that mail.
@@ -96,6 +99,30 @@ export function initTaskScheduler(deps: {
       : {}),
     // A run that made pictures and never notified still mails them: deleting
     // its thread would delete the only copy, and nobody would ever see them.
+    // A run stopped for the user's Allow/Deny: the approval is a mail from the
+    // task, like its notify; the run's thread stays for the answer to resume.
+    onParked: async (args) => {
+      await deps.deliverTaskMail({
+        subject: args.title,
+        body:
+          `This task paused: Stem's safety check would not run a command` +
+          `${args.request.deviceLabel ? ` on ${args.request.deviceLabel}` : ''} without you. ` +
+          'Allow it to let the run continue, or deny it.',
+        taskId: args.taskId,
+        threadId: args.threadId,
+        ...(args.personaId ? { personaId: args.personaId } : {}),
+        park: args.request
+      });
+    },
+    onResumedReply: async (args) => {
+      await deps.deliverTaskMail({
+        subject: args.title,
+        body: args.reply,
+        taskId: args.taskId,
+        threadId: args.threadId,
+        ...(args.personaId ? { personaId: args.personaId } : {})
+      });
+    },
     onUnreportedImages: async (args) => {
       const images = deps.runtime.takeGeneratedImages(args.threadId);
       if (!images.length) return false;
@@ -169,6 +196,7 @@ export function initTaskScheduler(deps: {
     // persona's hidden session. Either works: no run ever writes there.
     schedule: async (req, threadId) => scheduler.create(req, threadId),
     listForThread: async (threadId) => scheduler.listForThread(threadId),
+    originThread: (taskId) => scheduler.snapshot().find((t) => t.id === taskId)?.threadId ?? null,
     cancel: async (taskId) => {
       const before = scheduler.snapshot().length;
       await scheduler.remove(taskId);

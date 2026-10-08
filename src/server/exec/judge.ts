@@ -4,6 +4,8 @@ import { resolveRoleEffort } from '../../shared/modelRoles';
 import { log } from '../log';
 import { hostShellFromPlatform } from './host-shell';
 import { buildJudgePrompt, parseJudgeVerdict, resolveJudgeModel } from './policy';
+import type { JudgeContext } from './judge-context';
+import type { StageRecord } from './decisions';
 
 // The LLM safety judge, shared by run_command (ExecService) and coding-agent
 // permission asks (HarnessService). It is a heuristic, not a security boundary —
@@ -14,6 +16,8 @@ import { buildJudgePrompt, parseJudgeVerdict, resolveJudgeModel } from './policy
 // practice and dumped perfectly fine commands onto approval cards. Windows
 // Electron-as-Node cold start needs more headroom than 30s (Windows especially).
 export const JUDGE_TIMEOUT_MS = 60_000;
+/** Stage 2 thinks at High before it answers: more time, on the few commands it sees. */
+export const JUDGE_STAGE2_TIMEOUT_MS = 120_000;
 
 /** listModels() is an RPC to the backend; cache it — the judge runs per command. */
 const MODELS_CACHE_TTL_MS = 5 * 60_000;
@@ -35,7 +39,30 @@ export function judgeFailureReason(detail: string): string | undefined {
   return undefined;
 }
 
-export type JudgeResult = { verdict: 'safe' | 'unsafe' | 'unsure' | 'failed'; reason?: string };
+export type JudgeResult = {
+  verdict: 'safe' | 'unsafe' | 'unsure' | 'failed';
+  reason?: string;
+  /** The stage-1 prompt as the model read it, for the decision log. */
+  prompt?: string;
+  stage1?: StageRecord;
+  stage2?: StageRecord;
+};
+
+export interface JudgeRequest {
+  command: string;
+  cwd: string;
+  settings: Pick<ExecSettings, 'judgeModel' | 'judgeEffort' | 'judgeAllow' | 'judgeDeny' | 'judgeEnvironment'>;
+  defaults: DefaultsSettings;
+  /** The user's words and the agent's earlier commands (judge-context.ts). */
+  context: JudgeContext;
+  currentModel?: string | null;
+  shell?: HostShell | NodeJS.Platform;
+  /**
+   * Set for a device-targeted command: the judge must reason about the shell
+   * that will actually run it, on the machine it will actually run on.
+   */
+  shellLabel?: string;
+}
 
 export type JudgeFn = SafetyJudge['judge'];
 
@@ -62,43 +89,78 @@ export class SafetyJudge {
     return models;
   }
 
-  async judge(
-    command: string,
-    cwd: string,
-    settings: Pick<ExecSettings, 'judgeModel' | 'judgeEffort'>,
-    defaults: DefaultsSettings,
-    userIntent?: string,
-    currentModel?: string | null,
-    shell: HostShell | NodeJS.Platform = hostShellFromPlatform(),
-    // Set for a device-targeted command: the judge must reason about the shell
-    // that will actually run it, on the machine it will actually run on.
-    shellLabel?: string,
-    // The turn's earlier commands, so a step is judged as a step of the task.
-    recentCommands?: readonly string[]
-  ): Promise<JudgeResult> {
+  /**
+   * Two stages, after Claude Code's auto-mode classifier. Stage 1 answers in
+   * one word at the judge's own effort and clears most commands. Only what it
+   * does not call safe goes to stage 2: the same prompt, thinking at High, the
+   * verdict on its last line. A small model reading fast blocks too much;
+   * reasoning undoes most of that without telling it to trust the agent.
+   */
+  async judge(req: JudgeRequest): Promise<JudgeResult> {
+    const promptInput = {
+      command: req.command,
+      cwd: req.cwd,
+      shell: req.shell ?? hostShellFromPlatform(),
+      shellLabel: req.shellLabel,
+      userWords: req.context.userWords,
+      actions: req.context.actions,
+      rules: { allow: req.settings.judgeAllow, deny: req.settings.judgeDeny, environment: req.settings.judgeEnvironment }
+    };
+    const prompt = buildJudgePrompt(promptInput, 1);
+    let model: string | null;
+    const started = Date.now();
+    let stage1: StageRecord;
     try {
-      const runtime = this.deps.runtime();
-      const models = await this.listModelsCached();
       // The shared background model if one is set, else the live chat's own —
       // resolveJudgeModel only answers null when it was handed no models at all,
       // and complete() then uses its own default, which is the best available
       // answer anyway.
-      const model = resolveJudgeModel(settings, defaults, models, currentModel ?? null);
-      const reply = await runtime.complete(buildJudgePrompt(command, cwd, userIntent, shell, shellLabel, recentCommands), {
+      model = resolveJudgeModel(req.settings, req.defaults, await this.listModelsCached(), req.currentModel ?? null);
+      const reply = await this.deps.runtime().complete(prompt, {
         model,
         // The judge sits between you and every command you run, so it feels the
         // effort setting more than any other role does — its own if it has been
         // given one, else the shared Quick tasks level, else Low.
-        effort: resolveRoleEffort('judge', settings.judgeEffort, defaults.backgroundEffort),
+        effort: resolveRoleEffort('judge', req.settings.judgeEffort, req.defaults.backgroundEffort),
         timeoutMs: JUDGE_TIMEOUT_MS,
         priority: true
       });
-      return parseJudgeVerdict(reply);
+      stage1 = { ...parseJudgeVerdict(reply), ms: Date.now() - started };
     } catch (e) {
+      // quiet: failure() logs it, and the 'failed' verdict hands the command to the user.
+      return { ...failure(e), prompt, stage1: { verdict: 'failed', ms: Date.now() - started } };
+    }
+    if (stage1.verdict === 'safe') return { verdict: 'safe', reason: stage1.reason, prompt, stage1 };
+
+    const started2 = Date.now();
+    try {
+      const reply = await this.deps.runtime().complete(buildJudgePrompt(promptInput, 2), {
+        model,
+        effort: 'high',
+        timeoutMs: JUDGE_STAGE2_TIMEOUT_MS,
+        priority: true
+      });
+      const stage2: StageRecord = { ...parseJudgeVerdict(reply, 'last'), ms: Date.now() - started2 };
+      return { verdict: stage2.verdict, reason: stage2.reason, prompt, stage1, stage2 };
+    } catch (e) {
+      // quiet: logged below, and nothing degrades — stage 2 only ever widens
+      // what runs, so losing it keeps stage 1's answer and the user still decides.
       const detail = (e instanceof Error ? e.message : String(e)).trim() || 'unknown error';
-      log('exec', 'judge failed — escalating to approval', { error: detail });
-      const reason = judgeFailureReason(detail);
-      return reason ? { verdict: 'failed', reason } : { verdict: 'failed' };
+      log('exec', 'judge stage 2 failed — keeping stage 1', { error: detail });
+      return {
+        verdict: stage1.verdict,
+        reason: stage1.reason,
+        prompt,
+        stage1,
+        stage2: { verdict: 'failed', ms: Date.now() - started2 }
+      };
     }
   }
+}
+
+function failure(e: unknown): JudgeResult {
+  const detail = (e instanceof Error ? e.message : String(e)).trim() || 'unknown error';
+  log('exec', 'judge failed — escalating to approval', { error: detail });
+  const reason = judgeFailureReason(detail);
+  return reason ? { verdict: 'failed', reason } : { verdict: 'failed' };
 }

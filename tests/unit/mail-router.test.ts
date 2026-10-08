@@ -68,6 +68,8 @@ interface TurnScript {
   error?: string;
   /** Runs mid-turn with the wired mail bridge — the fake's send_mail/add_persona. */
   bridge?: (bridge: MailBridge, ctx: MailBridgeContext) => Promise<void>;
+  /** The turn stops for the user's Allow/Deny (PiRuntime.parkTurn): aborted, tagged parked. */
+  parked?: { kind: 'exec' | 'harness'; command: string; reason?: string };
 }
 
 interface FakeBackend {
@@ -131,8 +133,13 @@ function fakeBackend(): FakeBackend {
             });
           }
           emitter.emit('event', {
-            method: script.mode === 'ok' ? 'turn/completed' : 'turn/failed',
-            params: { threadId, turn: { id: turnId }, ...(script.error ? { error: script.error } : {}) },
+            method: script.parked ? 'turn/aborted' : script.mode === 'ok' ? 'turn/completed' : 'turn/failed',
+            params: {
+              threadId,
+              turn: { id: turnId },
+              ...(script.error ? { error: script.error } : {}),
+              ...(script.parked ? { parked: script.parked } : {})
+            },
             receivedAt: Date.now()
           });
         })();
@@ -2315,5 +2322,91 @@ describe('device-pinned code personas (offline hold)', () => {
     });
     expect(await queuedMailConversationIds()).toEqual(new Set());
     expect(await router.flushDeviceQueue('dev-1')).toBe(0);
+  });
+});
+
+// A run the safety check stopped for the user's Allow/Deny parks: the approval
+// item is the park, the answer resumes the persona's own thread, and a mail
+// written instead of an answer goes to the parked persona.
+describe('parked runs', () => {
+  const parked = { kind: 'exec' as const, command: 'uv pip install torch', reason: 'not asked for' };
+
+  async function parkedMail() {
+    return vi.waitFor(async () => {
+      const mail = await readMail();
+      expect(mail.conversations[0]?.status).toBe('awaiting-user');
+      expect(mail.items.find((i) => i.approval)).toBeTruthy();
+      return mail;
+    });
+  }
+
+  it('appends the approval item instead of a failure, and an Allow resumes the same thread once', async () => {
+    const fake = fakeBackend();
+    const granted: string[] = [];
+    const router = new MailRouter({
+      runtime: fake.backend,
+      onChange: () => undefined,
+      grantOnce: (kind, threadId, command) => granted.push(`${kind}:${threadId}:${command}`)
+    });
+    fake.scripts = [{ mode: 'ok', parked }, { mode: 'ok', reply: 'benchmark done' }];
+    await router.compose({ to: ['verifier'], subject: 'bench', body: 'benchmark the models' });
+    const mail = await parkedMail();
+    const item = mail.items.find((i) => i.approval)!;
+    expect(item).toMatchObject({ from: 'verifier', to: ['user'] });
+    expect(item.approval).toMatchObject({ command: 'uv pip install torch', reason: 'not asked for', status: 'pending' });
+    expect(mail.items.some((i) => /failed/.test(i.body))).toBe(false);
+
+    expect(await router.resolveApproval(item.id, 'allow')).toEqual({ ok: true });
+    // A second answer finds it settled.
+    expect((await router.resolveApproval(item.id, 'deny')).ok).toBe(false);
+    expect(granted).toEqual([`exec:thread-1:uv pip install torch`]);
+    const after = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'benchmark done')).toBe(true);
+      return m;
+    });
+    expect(after.items.find((i) => i.id === item.id)?.approval?.status).toBe('allowed');
+    // Resumed on the persona's own thread, told what the user decided.
+    expect(fake.starts[1]).toMatchObject({ threadId: 'thread-1' });
+    expect(fake.starts[1]?.input).toContain('The user allowed `uv pip install torch`');
+  });
+
+  it('a Deny resumes without a grant and says so', async () => {
+    const fake = fakeBackend();
+    const granted: string[] = [];
+    const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined, grantOnce: (...a) => granted.push(a.join(':')) });
+    fake.scripts = [{ mode: 'ok', parked }, { mode: 'ok', reply: 'did it without' }];
+    await router.compose({ to: ['verifier'], subject: 'bench', body: 'benchmark the models' });
+    const item = (await parkedMail()).items.find((i) => i.approval)!;
+    await router.resolveApproval(item.id, 'deny');
+    await vi.waitFor(() => expect(fake.starts).toHaveLength(2));
+    expect(granted).toEqual([]);
+    expect(fake.starts[1]?.input).toContain('The user denied');
+  });
+
+  it('a mail written instead of an answer supersedes the approval and goes to the parked persona', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scripts = [{ mode: 'ok', parked }, { mode: 'ok', reply: 'ok, installing' }];
+    const { conversations } = await router.compose({ to: ['verifier'], subject: 'bench', body: 'benchmark the models' });
+    const item = (await parkedMail()).items.find((i) => i.approval)!;
+    await router.reply(conversations[0].id, 'yes, install torch into the venv');
+    await vi.waitFor(() => expect(fake.starts).toHaveLength(2));
+    expect(fake.starts[1]?.persona?.id).toBe('verifier');
+    expect(fake.starts[1]?.input).toContain('was not answered');
+    expect(fake.starts[1]?.input).toContain('yes, install torch into the venv');
+    expect((await readMail()).items.find((i) => i.id === item.id)?.approval?.status).toBe('superseded');
+    expect((await router.resolveApproval(item.id, 'allow')).ok).toBe(false);
+  });
+
+  it('a Stop cancels a parked approval so nothing resumes it', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scripts = [{ mode: 'ok', parked }];
+    const { conversations } = await router.compose({ to: ['verifier'], subject: 'bench', body: 'benchmark the models' });
+    const item = (await parkedMail()).items.find((i) => i.approval)!;
+    expect(await router.stopConversation(conversations[0].id)).toEqual({ stopped: true });
+    expect((await readMail()).items.find((i) => i.id === item.id)?.approval?.status).toBe('cancelled');
+    expect((await router.resolveApproval(item.id, 'allow')).ok).toBe(false);
   });
 });

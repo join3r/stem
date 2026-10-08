@@ -10,13 +10,14 @@ import type {
   ServerSettings
 } from '../../shared/types';
 import type { ChatBackend, ExecBridge, ExecBridgeResult, ExecRequest } from '../backend/types';
+import { recordDecision, type DecisionOutcome } from './decisions';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { ensureThreadScratch } from './scratch';
 import { clampTimeout, execEnv, resolveLoginPath, runCommand } from './executor';
 import { gitBashPathEnv, resolveHostShellTarget, type HostShellTarget } from './git-bash';
 import { SafetyJudge } from './judge';
-import { classify, deviceShellLabel, drivesGui } from './policy';
+import { classify, deviceShellLabel, drivesGui, type Classification } from './policy';
 import { execReadRoots, scanCommandAgainstRoots, scanProtected } from './protected';
 import { execDeviceRouter, resolveExecTarget } from '../exec-device/router';
 import { clientFoldersForDevice } from '../workspace/connected-folders';
@@ -51,6 +52,31 @@ const APPROVAL_TIMEOUT_ERROR =
   'minutes, so it did not run. This is not a refusal — the user may simply have been away. Ask whether ' +
   'they still want it before running anything else.';
 
+/**
+ * Claude Code's escalation point: a judged command is refused back to the
+ * agent until this many in a row (or BLOCK_TOTAL in all) were refused in one
+ * thread; from there the user decides — a card in a chat, a parked run when
+ * nobody is watching. An Allow from the user resets both counts.
+ */
+export const BLOCK_STREAK = 3;
+export const BLOCK_TOTAL = 20;
+
+/** What the agent reads when the safety check refuses a command it may not escalate yet. */
+export function blockedError(reason?: string): string {
+  return (
+    `Stem's safety check blocked this command${reason ? ` (${reason})` : ''}: it does not see the user asking ` +
+    'for it. Treat that boundary in good faith. Find a safer way to do the step that clearly stays within what ' +
+    'the user asked, or skip it and say so. Do not reach the same effect another way — a different tool, a ' +
+    'script, an encoding, another computer. If the step is really needed, say why in your reply; after repeated ' +
+    'blocks Stem asks the user.'
+  );
+}
+
+/** What the agent reads when its unattended run was parked for the user's decision. */
+export const PARKED_ERROR =
+  'Stem has asked the user to approve this command and paused this task until they answer. End your turn ' +
+  'now: do not reply, retry or work around it — Stem resumes you with their answer.';
+
 /** Concurrent command cap; further tool calls queue rather than forking shells. */
 const MAX_CONCURRENT = 2;
 
@@ -71,6 +97,8 @@ export interface ExecServiceDeps {
   clientFolders?: typeof clientFoldersForDevice;
   /** Test seam: the names of the personas pinned (computer pin) to a device. */
   computerPersonas?: (deviceId: string) => Promise<string[]>;
+  /** Test seam: refusals in a row before the user decides (default BLOCK_STREAK). */
+  blockStreak?: number;
 }
 
 /**
@@ -79,7 +107,7 @@ export interface ExecServiceDeps {
  * is that the assistant is never again told "the user declined" about a card
  * nobody answered.
  */
-type ApprovalOutcome = ExecDecision | 'timeout';
+type ApprovalOutcome = ExecDecision | 'timeout' | 'aborted';
 
 interface PendingApproval {
   threadId: string;
@@ -107,6 +135,10 @@ export class ExecService implements ExecBridge {
   private active = 0;
   private readonly waiters: Array<() => void> = [];
   private readonly safetyJudge: SafetyJudge;
+  /** Per thread: judged commands refused in a row, and in all (Claude Code's 3 / 20). */
+  private readonly blocks = new Map<string, { streak: number; total: number }>();
+  /** Per thread: exact commands the user allowed on a parked run, each good for one run. */
+  private readonly grants = new Map<string, string[]>();
 
   constructor(deps: ExecServiceDeps) {
     this.deps = deps;
@@ -156,75 +188,190 @@ export class ExecService implements ExecBridge {
     const guard = scanProtected(command, cwd, undefined, host.shell);
     if (guard.blocked) return { ok: false, error: guard.reason ?? 'Blocked by the read-only folder guard.' };
 
+    const base = { kind: 'exec' as const, threadId: req.threadId ?? null, command, cwd };
     // Yolo mode: everything runs — the protected-roots guard above is the only gate.
-    if (settings.approvalMode === 'yolo') return this.run(command, cwd, req, host);
+    if (settings.approvalMode === 'yolo') {
+      recordDecision({ ...base, outcome: 'ran-yolo' });
+      return this.run(command, cwd, req, host);
+    }
 
     // Tier 1: static + user allowlist (every chained segment must clear it), and
     // a read-only probe only inside the folders the file tools may read (H-01).
     const cls = classify(command, settings, host.shell, {
       confine: { cwd, roots: execReadRoots(host.shell) }
     });
-    if (cls.tier !== 'run') {
-      // Tier 2 (assisted mode only): one-word LLM judge classification (intent-aware
-      // when the turn's user message is known); errors/timeouts escalate. Manual mode
-      // skips straight to the card — judgeVerdict stays null so it can say so.
-      let judgeVerdict: 'unsafe' | 'unsure' | 'failed' | null = null;
-      let judgeReason: string | undefined;
-      if (settings.approvalMode === 'assisted') {
-        const verdict = await this.judge(
-          command,
-          cwd,
-          settings,
-          all.defaults,
-          req.userText,
-          req.currentModel,
-          host.shell,
-          undefined,
-          req.recentCommands
-        );
-        if (verdict.verdict === 'safe') return this.run(command, cwd, req, host);
-        judgeVerdict = verdict.verdict;
-        judgeReason = verdict.reason;
-      }
-      // Tier 3: the user decides — unless nobody is there to.
-      if (req.isScheduled) {
-        return {
-          ok: false,
-          error:
-            `The command "${command}" requires user approval, which is not available in scheduled/autonomous ` +
-            'runs. Use a simpler command that clears the approval policy, or leave this step for an interactive chat.'
-        };
-      }
-      const decision = await this.requestApproval({
-        threadId: req.threadId ?? '',
-        command,
-        cwd,
-        prefixes: cls.prefixes,
-        judgeVerdict,
-        judgeReason
+    if (cls.tier === 'run') {
+      this.noteRan(req.threadId);
+      recordDecision({ ...base, outcome: 'ran-allowlist' });
+      return this.run(command, cwd, req, host);
+    }
+    const gate = await this.gate({ command, cwdLabel: cwd, req, all, cls, shell: host.shell });
+    if (!gate.run) return gate.result;
+    if (gate.alwaysAllow && cls.prefixes.length) {
+      const cur = (await this.deps.readSettings()).exec.allowlist;
+      const merged = [...cur, ...cls.prefixes.filter((p) => !cur.includes(p))];
+      await this.deps.updateExecSettings({ allowlist: merged }).catch((e) => {
+        // This command runs either way, so nothing looks wrong now — the user
+        // is simply asked again next time for a prefix they were told they had
+        // allowed for good.
+        degrade('exec.allowlist', 'ran the command without remembering "always allow"', e);
       });
-      if (decision === 'deny') {
-        return { ok: false, error: 'The user declined to run this command.' };
-      }
-      if (decision === 'timeout') return { ok: false, error: APPROVAL_TIMEOUT_ERROR };
-      if (decision === 'alwaysAllow' && cls.prefixes.length) {
-        const cur = (await this.deps.readSettings()).exec.allowlist;
-        const merged = [...cur, ...cls.prefixes.filter((p) => !cur.includes(p))];
-        await this.deps.updateExecSettings({ allowlist: merged }).catch((e) => {
-          // This command runs either way, so nothing looks wrong now — the user
-          // is simply asked again next time for a prefix they were told they had
-          // allowed for good.
-          degrade('exec.allowlist', 'ran the command without remembering "always allow"', e);
-        });
+    }
+    return this.run(command, cwd, req, host);
+  }
+
+  /**
+   * Tiers 2 and 3 for a command the allowlist did not clear, on this host or a
+   * paired computer. In order: a one-shot grant from a parked run the user
+   * allowed; the two-stage judge (assisted mode); then, for what it will not
+   * call safe, Claude Code's escalation — refused back to the agent with the
+   * reason until BLOCK_STREAK in a row or BLOCK_TOTAL in all, after that the
+   * user decides: a card in a chat, a parked run when nobody is watching.
+   * Manual mode asks the user every time, as before.
+   */
+  private async gate(p: {
+    command: string;
+    cwdLabel: string;
+    req: ExecRequest;
+    all: ServerSettings;
+    cls: Classification;
+    shell: HostShell | NodeJS.Platform;
+    shellLabel?: string;
+    device?: { id: string; label: string };
+  }): Promise<{ run: true; alwaysAllow?: boolean } | { run: false; result: ExecBridgeResult }> {
+    const { command, req, all } = p;
+    const threadId = req.threadId ?? '';
+    const base = {
+      kind: 'exec' as const,
+      threadId: req.threadId ?? null,
+      command,
+      cwd: p.cwdLabel,
+      ...(p.device ? { device: p.device.id } : {})
+    };
+    if (this.takeGrant(threadId, command)) {
+      recordDecision({ ...base, outcome: 'ran-granted' });
+      return { run: true };
+    }
+    let judged: Awaited<ReturnType<SafetyJudge['judge']>> | null = null;
+    if (all.exec.approvalMode === 'assisted') {
+      judged = await this.safetyJudge.judge({
+        command,
+        cwd: p.cwdLabel,
+        settings: all.exec,
+        defaults: all.defaults,
+        context: req.judgeContext ?? { userWords: req.userText ? [req.userText] : [], actions: [] },
+        currentModel: req.currentModel,
+        shell: p.shell,
+        ...(p.shellLabel ? { shellLabel: p.shellLabel } : {})
+      });
+      if (judged.verdict === 'safe') {
+        this.noteRan(threadId);
+        recordDecision({ ...base, ...judgeFields(judged), outcome: 'ran-judge' });
+        return { run: true };
       }
     }
+    const verdict = judged ? (judged.verdict as 'unsafe' | 'unsure' | 'failed') : null;
+    const record = (outcome: DecisionOutcome, approvalId?: string): void =>
+      recordDecision({ ...base, ...(judged ? judgeFields(judged) : {}), outcome, ...(approvalId ? { approvalId } : {}) });
 
-    return this.run(command, cwd, req, host);
+    // Assisted mode refuses back to the agent until the escalation point. A
+    // judge that could not run says nothing about the command, so that one
+    // goes straight to the user, as it always has.
+    if (judged && judged.verdict !== 'failed' && !this.escalates(threadId)) {
+      record('blocked');
+      return { run: false, result: { ok: false, error: blockedError(judged.reason), blocked: true } };
+    }
+    // The user decides — and when nobody is watching, the run parks for them.
+    if (req.isScheduled) {
+      record('parked');
+      return {
+        run: false,
+        result: {
+          ok: false,
+          error: PARKED_ERROR,
+          park: {
+            kind: 'exec',
+            command,
+            cwd: p.cwdLabel,
+            ...(p.device ? { deviceId: p.device.id, deviceLabel: p.device.label } : {}),
+            ...(judged?.reason ? { reason: judged.reason } : {})
+          }
+        }
+      };
+    }
+    const approvalId = randomUUID();
+    const decision = await this.requestApproval(
+      {
+        threadId,
+        command,
+        cwd: p.cwdLabel,
+        prefixes: p.cls.prefixes,
+        judgeVerdict: verdict,
+        judgeReason: judged?.reason,
+        ...(p.device ? { deviceId: p.device.id, deviceLabel: p.device.label } : {})
+      },
+      approvalId
+    );
+    if (decision === 'deny') {
+      record('user-deny', approvalId);
+      return { run: false, result: { ok: false, error: 'The user declined to run this command.', blocked: true } };
+    }
+    if (decision === 'aborted') {
+      record('aborted', approvalId);
+      return { run: false, result: { ok: false, error: 'The command was cancelled.' } };
+    }
+    if (decision === 'timeout') {
+      record('timeout', approvalId);
+      return { run: false, result: { ok: false, error: APPROVAL_TIMEOUT_ERROR } };
+    }
+    record(decision === 'alwaysAllow' ? 'user-always' : 'user-allow', approvalId);
+    this.blocks.delete(threadId);
+    return { run: true, alwaysAllow: decision === 'alwaysAllow' };
+  }
+
+  /**
+   * Count a judged refusal and say whether the user should now decide. The
+   * refusal that reaches the threshold is itself escalated, so the third block
+   * in a row is a card (or a park), not a third silent refusal.
+   */
+  private escalates(threadId: string): boolean {
+    const count = this.blocks.get(threadId) ?? { streak: 0, total: 0 };
+    count.streak += 1;
+    count.total += 1;
+    this.blocks.set(threadId, count);
+    return count.streak >= (this.deps.blockStreak ?? BLOCK_STREAK) || count.total >= BLOCK_TOTAL;
+  }
+
+  /** A command ran without the user: the refusals are no longer in a row. */
+  private noteRan(threadId: string | null | undefined): void {
+    const count = this.blocks.get(threadId ?? '');
+    if (count) count.streak = 0;
+  }
+
+  /**
+   * Let exactly this command run once on this thread without the judge: the
+   * user allowed it on a parked run, and the resumed turn re-issues it. A
+   * different command, or the same one a second time, is judged as usual.
+   */
+  grantOnce(threadId: string, command: string): void {
+    const list = this.grants.get(threadId) ?? [];
+    list.push(command.trim());
+    this.grants.set(threadId, list);
+    this.blocks.delete(threadId);
+  }
+
+  private takeGrant(threadId: string, command: string): boolean {
+    const list = this.grants.get(threadId);
+    const at = list?.indexOf(command.trim()) ?? -1;
+    if (!list || at < 0) return false;
+    list.splice(at, 1);
+    if (!list.length) this.grants.delete(threadId);
+    return true;
   }
 
   abortThread(threadId: string): void {
     for (const [id, approval] of this.pending) {
-      if (approval.threadId === threadId) this.settleApproval(id, 'deny');
+      if (approval.threadId === threadId) this.settleApproval(id, 'aborted');
     }
     for (const exec of this.running) {
       if (exec.threadId === threadId) exec.controller.abort();
@@ -233,7 +380,7 @@ export class ExecService implements ExecBridge {
   }
 
   settleAll(): void {
-    for (const id of [...this.pending.keys()]) this.settleApproval(id, 'deny');
+    for (const id of [...this.pending.keys()]) this.settleApproval(id, 'aborted');
     for (const exec of this.running) exec.controller.abort();
   }
 
@@ -366,7 +513,11 @@ export class ExecService implements ExecBridge {
       }
     }
 
-    if (settings.approvalMode === 'yolo') return dispatch();
+    const base = { kind: 'exec' as const, threadId: req.threadId ?? null, command, cwd: cwdLabel, device: target.deviceId };
+    if (settings.approvalMode === 'yolo') {
+      recordDecision({ ...base, outcome: 'ran-yolo' });
+      return dispatch();
+    }
 
     // A learned reader on that machine still only auto-runs inside its own
     // scratch (cwd unknown here) and the folders it connected read & write.
@@ -382,60 +533,34 @@ export class ExecService implements ExecBridge {
         }
       }
     );
-    if (cls.tier !== 'run') {
-      let judgeVerdict: 'unsafe' | 'unsure' | 'failed' | null = null;
-      let judgeReason: string | undefined;
-      if (settings.approvalMode === 'assisted') {
-        const verdict = await this.judge(
-          command,
-          cwdLabel,
-          settings,
-          all.defaults,
-          req.userText,
-          req.currentModel,
-          host.platform,
-          deviceShellLabel(host.platform, label),
-          req.recentCommands
-        );
-        if (verdict.verdict === 'safe') return dispatch();
-        judgeVerdict = verdict.verdict;
-        judgeReason = verdict.reason;
-      }
-      if (req.isScheduled) {
-        return {
-          ok: false,
-          error:
-            `The command "${command}" requires user approval, which is not available in scheduled/autonomous ` +
-            'runs. Use a simpler command that clears the approval policy, or leave this step for an interactive chat.'
-        };
-      }
-      const decision = await this.requestApproval({
-        threadId: req.threadId ?? '',
-        command,
-        cwd: cwdLabel,
-        prefixes: cls.prefixes,
-        judgeVerdict,
-        judgeReason,
-        deviceId: target.deviceId,
-        deviceLabel: target.label
+    if (cls.tier === 'run') {
+      this.noteRan(req.threadId);
+      recordDecision({ ...base, outcome: 'ran-allowlist' });
+      return dispatch();
+    }
+    const gate = await this.gate({
+      command,
+      cwdLabel,
+      req,
+      all,
+      cls,
+      shell: host.platform,
+      shellLabel: deviceShellLabel(host.platform, label),
+      device: { id: target.deviceId, label: target.label }
+    });
+    if (!gate.run) return gate.result;
+    if (gate.alwaysAllow && cls.prefixes.length) {
+      // Into THIS device's bucket. Read fresh, like the local path: another
+      // card may have written the settings while this one was open.
+      const cur = (await this.deps.readSettings()).exec.deviceAllowlists ?? {};
+      const existing = cur[target.deviceId] ?? [];
+      const merged = {
+        ...cur,
+        [target.deviceId]: [...existing, ...cls.prefixes.filter((p) => !existing.includes(p))]
+      };
+      await this.deps.updateExecSettings({ deviceAllowlists: merged }).catch((e) => {
+        degrade('exec.allowlist', 'ran the command without remembering "always allow" for that computer', e);
       });
-      if (decision === 'deny') {
-        return { ok: false, error: 'The user declined to run this command.' };
-      }
-      if (decision === 'timeout') return { ok: false, error: APPROVAL_TIMEOUT_ERROR };
-      if (decision === 'alwaysAllow' && cls.prefixes.length) {
-        // Into THIS device's bucket. Read fresh, like the local path: another
-        // card may have written the settings while this one was open.
-        const cur = (await this.deps.readSettings()).exec.deviceAllowlists ?? {};
-        const existing = cur[target.deviceId] ?? [];
-        const merged = {
-          ...cur,
-          [target.deviceId]: [...existing, ...cls.prefixes.filter((p) => !existing.includes(p))]
-        };
-        await this.deps.updateExecSettings({ deviceAllowlists: merged }).catch((e) => {
-          degrade('exec.allowlist', 'ran the command without remembering "always allow" for that computer', e);
-        });
-      }
     }
     return dispatch();
   }
@@ -457,12 +582,7 @@ export class ExecService implements ExecBridge {
     return result.ok ? { ok: true, text: result.text } : { ok: false, error: result.error };
   }
 
-  private judge(...args: Parameters<SafetyJudge['judge']>): ReturnType<SafetyJudge['judge']> {
-    return this.safetyJudge.judge(...args);
-  }
-
-  private requestApproval(request: Omit<ExecApprovalRequest, 'id'>): Promise<ApprovalOutcome> {
-    const id = randomUUID();
+  private requestApproval(request: Omit<ExecApprovalRequest, 'id'>, id: string = randomUUID()): Promise<ApprovalOutcome> {
     return new Promise<ApprovalOutcome>((resolveDecision) => {
       const entry: PendingApproval = {
         threadId: request.threadId,
@@ -576,4 +696,13 @@ export class ExecService implements ExecBridge {
     if (next) next();
     else this.active -= 1;
   }
+}
+
+/** The judge's side of a decision-log record. */
+function judgeFields(judged: Awaited<ReturnType<SafetyJudge['judge']>>) {
+  return {
+    ...(judged.prompt ? { prompt: judged.prompt } : {}),
+    ...(judged.stage1 ? { stage1: judged.stage1 } : {}),
+    ...(judged.stage2 ? { stage2: judged.stage2 } : {})
+  };
 }

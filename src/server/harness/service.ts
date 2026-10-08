@@ -9,7 +9,10 @@ import type {
   ServerSettings,
   HarnessModelsResult
 } from '../../shared/types';
-import type { HarnessBridge, HarnessBridgeResult, HarnessRequest } from '../backend/types';
+import type { HarnessBridge, HarnessBridgeResult, HarnessRequest, ParkRequest } from '../backend/types';
+import { recordDecision } from '../exec/decisions';
+import type { JudgeContext } from '../exec/judge-context';
+import { BLOCK_STREAK, BLOCK_TOTAL, PARKED_ERROR } from '../exec/service';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { ensureThreadScratch } from '../exec/scratch';
@@ -47,6 +50,8 @@ const PROGRESS_THROTTLE_MS = 500;
 export type HarnessProgressUpdate = HarnessProgress;
 
 export interface HarnessServiceDeps {
+  /** Test seam: refusals in a row before the user decides (default BLOCK_STREAK). */
+  blockStreak?: number;
   /** The harness section of settings, read fresh per request. */
   settings: () => Promise<{ agents?: Record<string, { command?: string; model?: string }> }>;
   /**
@@ -86,8 +91,12 @@ interface RunContext {
   agent: string;
   hostLabel: string;
   cwd: string;
-  /** The brief the agent was given — the judge checks commands against it. */
-  intent: string;
+  /** The parent turn's user words and commands — the judge never reads the brief. */
+  judgeContext: JudgeContext;
+  /** A mail delivery: past the escalation point the run parks instead of raising a card. */
+  unattended: boolean;
+  /** The harness run, so a park can cancel it with its own reason. */
+  runId: string;
   /** Set for device-hosted runs: allowlist bucket and shell come from the device. */
   deviceId?: string;
   platform?: NodeJS.Platform;
@@ -120,6 +129,8 @@ interface RunningTurn {
    * comes back so the tool text names the real cause.
    */
   cancelReason?: string;
+  /** Set when an ask parked the run: the tool result says so instead of "cancelled". */
+  park?: ParkRequest;
 }
 
 export class HarnessService implements HarnessBridge {
@@ -133,6 +144,10 @@ export class HarnessService implements HarnessBridge {
    * current turn's, whose mail is redelivered anyway.
    */
   private readonly agentReplies = new Map<string, string[]>();
+  /** Per thread: judged asks refused in a row, and in all (exec/service.ts BLOCK_STREAK). */
+  private readonly blocks = new Map<string, { streak: number; total: number }>();
+  /** Per thread: exact commands the user allowed on a parked run, each good for one ask. */
+  private readonly grants = new Map<string, string[]>();
 
   constructor(deps: HarnessServiceDeps) {
     this.deps = deps;
@@ -326,9 +341,11 @@ export class HarnessService implements HarnessBridge {
                 agent,
                 hostLabel: host.label(),
                 cwd,
-                // The pre-facts brief: what the agent was asked to do, which is
-                // what its commands should serve.
-                intent: prompt,
+                // The user's words, never the brief: the brief is the persona's
+                // own text, and the judge does not take an agent's word.
+                judgeContext: req.judgeContext ?? { userWords: [], actions: [] },
+                unattended: req.isMail === true,
+                runId,
                 ...(hostKey !== 'server' ? { deviceId: hostKey } : {}),
                 ...(host.platform?.() ? { platform: host.platform() } : {})
               },
@@ -340,6 +357,11 @@ export class HarnessService implements HarnessBridge {
       this.running.set(runId, running);
 
       const result = await handle.result;
+      if (running.park) {
+        await activities.finish('cancelled', 'parked for the user\'s approval');
+        await settleRun(runId, { status: 'cancelled' });
+        return { ok: false, error: PARKED_ERROR, park: running.park };
+      }
       const status: HarnessRunStatus = !result.ok ? 'failed' : result.stopReason === 'cancelled' ? 'cancelled' : 'ok';
       await activities.finish(status, !result.ok ? result.error : running.cancelReason);
       await settleRun(runId, {
@@ -502,7 +524,23 @@ export class HarnessService implements HarnessBridge {
         error: e instanceof Error ? e.message : String(e)
       });
     }
-    return this.raiseCard(ctx, ask, annotations);
+    const decision = await this.raiseCard(ctx, ask, annotations);
+    const command = ask.toolName === 'execute' ? ask.command : undefined;
+    if (command) {
+      const chosen = 'optionId' in decision ? ask.options.find((o) => o.optionId === decision.optionId) : undefined;
+      const allowed = chosen?.kind?.startsWith('allow') === true;
+      // An Allow from the user resets the escalation counts, as in Claude Code.
+      if (allowed) this.blocks.delete(ctx.threadId);
+      recordDecision({
+        kind: 'harness',
+        threadId: ctx.threadId,
+        command,
+        cwd: ctx.cwd,
+        ...(ctx.deviceId ? { device: ctx.deviceId } : {}),
+        outcome: !chosen ? 'timeout' : allowed ? (chosen.kind === 'allow_always' ? 'user-always' : 'user-allow') : 'user-deny'
+      });
+    }
+    return decision;
   }
 
   private async decideAsk(
@@ -558,24 +596,66 @@ export class HarnessService implements HarnessBridge {
           });
       if (cls.tier === 'run') return allowVia('allowlist', command);
 
-      // Tier 2: the LLM judge, before any card exists — the card never flashes.
+      const base = {
+        kind: 'harness' as const,
+        threadId: ctx.threadId,
+        command,
+        cwd: ctx.cwd,
+        ...(ctx.deviceId ? { device: ctx.deviceId } : {})
+      };
+      if (this.takeGrant(ctx.threadId, command)) {
+        recordDecision({ ...base, outcome: 'ran-granted' });
+        return allowVia('judge', command);
+      }
+      // Tier 2: the two-stage judge, before any card exists — the card never flashes.
       if (mode === 'assisted') {
-        const verdict = await this.deps.judge(
+        const verdict = await this.deps.judge({
           command,
-          ctx.cwd,
-          all.exec,
-          all.defaults,
-          ctx.intent,
-          null,
-          ctx.deviceId ? (ctx.platform ?? hostShellFromPlatform()) : hostShellFromPlatform(),
-          ctx.deviceId
-            ? deviceShellLabel(
-                ctx.platform === 'darwin' || ctx.platform === 'win32' ? ctx.platform : 'linux',
-                ctx.hostLabel
-              )
-            : undefined
-        );
-        if (verdict.verdict === 'safe') return allowVia('judge', command);
+          cwd: ctx.cwd,
+          settings: all.exec,
+          defaults: all.defaults,
+          context: ctx.judgeContext,
+          shell: ctx.deviceId ? (ctx.platform ?? hostShellFromPlatform()) : hostShellFromPlatform(),
+          ...(ctx.deviceId
+            ? {
+                shellLabel: deviceShellLabel(
+                  ctx.platform === 'darwin' || ctx.platform === 'win32' ? ctx.platform : 'linux',
+                  ctx.hostLabel
+                )
+              }
+            : {})
+        });
+        const judged = {
+          ...(verdict.prompt ? { prompt: verdict.prompt } : {}),
+          ...(verdict.stage1 ? { stage1: verdict.stage1 } : {}),
+          ...(verdict.stage2 ? { stage2: verdict.stage2 } : {})
+        };
+        if (verdict.verdict === 'safe') {
+          const count = this.blocks.get(ctx.threadId);
+          if (count) count.streak = 0;
+          recordDecision({ ...base, ...judged, outcome: 'ran-judge' });
+          return allowVia('judge', command);
+        }
+        // Claude Code's escalation, as for run_command: rejected back to the
+        // agent until the streak or the total says the user should decide.
+        const reject = ask.options.find((o) => o.kind === 'reject_once');
+        // A judge that could not run goes straight to the user (exec precedent).
+        if (reject && verdict.verdict !== 'failed' && !this.escalates(ctx.threadId)) {
+          recordDecision({ ...base, ...judged, outcome: 'blocked' });
+          return { decision: { optionId: reject.optionId } };
+        }
+        if (ctx.unattended) {
+          recordDecision({ ...base, ...judged, outcome: 'parked' });
+          this.park(ctx, {
+            kind: 'harness',
+            command,
+            cwd: ctx.cwd,
+            ...(ctx.deviceId ? { deviceId: ctx.deviceId, deviceLabel: ctx.hostLabel } : {}),
+            ...(verdict.reason ? { reason: verdict.reason } : {})
+          });
+          return reject ? { decision: { optionId: reject.optionId } } : { decision: { expired: true } };
+        }
+        // A chat past the escalation point: the card decides (askPermission records it).
         return { annotations: { judgeVerdict: verdict.verdict, judgeReason: verdict.reason } };
       }
       // Manual mode: the card, saying so.
@@ -586,6 +666,41 @@ export class HarnessService implements HarnessBridge {
     // yolo means no cards anywhere; everything else stays a card as before.
     if (mode === 'yolo') return allowVia('yolo');
     return {};
+  }
+
+  /** Count a judged refusal; true once the user should decide (exec/service.ts escalates). */
+  private escalates(threadId: string): boolean {
+    const count = this.blocks.get(threadId) ?? { streak: 0, total: 0 };
+    count.streak += 1;
+    count.total += 1;
+    this.blocks.set(threadId, count);
+    return count.streak >= (this.deps.blockStreak ?? BLOCK_STREAK) || count.total >= BLOCK_TOTAL;
+  }
+
+  /** Stop the run and hand the ask to the mail router to park (the tool result carries it). */
+  private park(ctx: RunContext, request: ParkRequest): void {
+    const running = this.running.get(ctx.runId);
+    if (!running) return;
+    running.park = request;
+    running.cancelReason = 'parked for the user\'s approval';
+    running.handle.cancel(running.cancelReason);
+  }
+
+  /** The user allowed this exact command on a parked run: its next ask passes once. */
+  grantOnce(threadId: string, command: string): void {
+    const list = this.grants.get(threadId) ?? [];
+    list.push(command.trim());
+    this.grants.set(threadId, list);
+    this.blocks.delete(threadId);
+  }
+
+  private takeGrant(threadId: string, command: string): boolean {
+    const list = this.grants.get(threadId);
+    const at = list?.indexOf(command.trim()) ?? -1;
+    if (!list || at < 0) return false;
+    list.splice(at, 1);
+    if (!list.length) this.grants.delete(threadId);
+    return true;
   }
 
   /** The guard reason when the command references a read-only folder, else undefined. */

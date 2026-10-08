@@ -20,6 +20,7 @@ import type {
   StartTurnResult,
 } from '../../shared/types';
 import type { SkillBridge } from '../skills/bridge';
+import type { JudgeContext } from '../exec/judge-context';
 
 /**
  * The seam the backend uses to reach the scheduled-tasks subsystem (which lives in
@@ -66,11 +67,11 @@ export interface ExecRequest {
    */
   userText?: string;
   /**
-   * Commands this turn already ran, oldest first. The judge reads them to tell
-   * where in the task this command falls: "open the app" is the last step of
-   * "quit, reinstall and start it", not a failure to do the first two.
+   * The user's own words and the agent's earlier commands in this chat or mail
+   * conversation (exec/judge-context.ts): what the judge reads besides the
+   * command. Never agent prose — see judge-context.ts for why.
    */
-  recentCommands?: string[];
+  judgeContext?: JudgeContext;
   /**
    * The live chat's `provider/model` id when known. It is what the safety judge
    * runs on when neither it nor the shared background model is pinned — a
@@ -80,7 +81,30 @@ export interface ExecRequest {
 }
 
 /** What the ExecService answers a run_command round-trip with. */
-export type ExecBridgeResult = { ok: true; text: string } | { ok: false; error: string };
+export type ExecBridgeResult =
+  | { ok: true; text: string }
+  | {
+      ok: false;
+      error: string;
+      /** Stem's safety check refused it (not a failure to run): counts toward escalation. */
+      blocked?: true;
+      /**
+       * An unattended run reached the escalation point: the runtime ends the turn
+       * and the mail router or scheduler parks it for the user's Allow/Deny.
+       */
+      park?: ParkRequest;
+    };
+
+/** What a parked run asks the user to approve. */
+export interface ParkRequest {
+  kind: 'exec' | 'harness';
+  command: string;
+  cwd?: string;
+  deviceId?: string;
+  deviceLabel?: string;
+  /** Why the safety check would not run it, in its own words. */
+  reason?: string;
+}
 
 /**
  * The seam the backend uses to reach the command executor (which lives in main,
@@ -130,6 +154,8 @@ export interface HarnessRequest {
    * that can mail the user about it — where a plain scheduled run refuses.
    */
   isMail?: boolean;
+  /** The parent turn's user words and commands: what the judge reads for the agent's asks. */
+  judgeContext?: JudgeContext;
 }
 
 /** What the assistant's `computer` tool sends over its round-trip, after PiRuntime fills in the turn. */
@@ -195,7 +221,14 @@ export interface BrowserBridge {
 }
 
 /** What the HarnessService answers a coding_agent round-trip with. */
-export type HarnessBridgeResult = { ok: true; text: string } | { ok: false; error: string };
+export type HarnessBridgeResult =
+  | { ok: true; text: string }
+  | {
+      ok: false;
+      error: string;
+      /** The agent's ask reached the escalation point in an unattended run: park it. */
+      park?: ParkRequest;
+    };
 
 /**
  * The seam the backend uses to reach the coding-harness service (which lives
@@ -281,6 +314,12 @@ export interface TaskBridge {
   cancel(taskId: string): Promise<{ ok: boolean; error?: string }>;
   /** Surface a prominent in-app alert (the agent decided this run is worth showing). */
   notify(payload: { title?: string; message: string }, threadId: string): Promise<void>;
+  /**
+   * The chat or hidden mail thread a task was scheduled from — where the
+   * user's own words about it live. A run's prompt was written by the agent,
+   * so the safety judge reads the user there instead.
+   */
+  originThread(taskId: string): string | null;
 }
 
 /**

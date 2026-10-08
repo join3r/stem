@@ -490,7 +490,13 @@ export interface StartTurnInput {
    * has no thread history, so this is how a watch task knows what it has
    * reported and does not report it again.
    */
-  scheduled?: { at: string; taskId: string; prior?: ScheduledRunReport[] };
+  scheduled?: {
+    at: string;
+    taskId: string;
+    prior?: ScheduledRunReport[];
+    /** Server-side: a parked run continuing on its own thread after the user's Allow/Deny. */
+    resumed?: true;
+  };
   /**
    * Run this turn AS a persona, by id. The one client-settable persona input:
    * the `backend:startTurn` handler resolves the id against the registry and
@@ -2909,6 +2915,37 @@ export interface MailItem {
    * reply, the code that produced it. Absent on items predating the stamp.
    */
   sys?: SystemVersion;
+  /**
+   * A parked run's request for the user's Allow/Deny (the safety check would
+   * not run a command, and nobody was watching). The item is the park itself:
+   * persisted with the mail, answered by `mail:resolveApproval`.
+   */
+  approval?: MailApproval;
+}
+
+export type MailApprovalStatus = 'pending' | 'allowed' | 'denied' | 'superseded' | 'cancelled';
+
+export interface MailApproval {
+  id: string;
+  kind: 'exec' | 'harness';
+  command: string;
+  cwd?: string;
+  /** The paired computer it would run on (absent = the Stem server). */
+  deviceLabel?: string;
+  /** Why the safety check would not run it, in its words. */
+  reason?: string;
+  status: MailApprovalStatus;
+  /** Server-side: where the answer resumes the run. Clients ignore it. */
+  resume: {
+    personaId: string;
+    threadId: string;
+    from: string;
+    epoch: number;
+    sourceItemId: string;
+    deviceId?: string;
+    /** A scheduled run's park: the task and the run thread it resumes. */
+    taskId?: string;
+  };
 }
 
 export interface MailConversation {
@@ -3413,6 +3450,15 @@ export interface ExecSettings {
   judgeModel: string | null;
   /** Reasoning effort for the safety judge; null = {@link DefaultsSettings.backgroundEffort}. */
   judgeEffort: string | null;
+  /**
+   * The user's own rules for the safety check, read by both judge stages as
+   * the user's words: what to always allow, what never to allow (wins over
+   * everything), and facts about their setup ("the VPS container is
+   * disposable"). Free text, '' = none.
+   */
+  judgeAllow: string;
+  judgeDeny: string;
+  judgeEnvironment: string;
   /** User-approved command prefixes (e.g. "git push", "npm") that auto-run as tier 1. */
   allowlist: string[];
   /**
@@ -4599,6 +4645,8 @@ export interface StemApi {
   addMailParticipant(conversationId: string, personaId: string): Promise<MailListResult>;
   /** Stop a conversation's in-flight deliveries (queued dropped, turns interrupted). */
   stopMail(conversationId: string): Promise<{ stopped: boolean }>;
+  /** Allow or deny a parked run's command (an approval item in a conversation). */
+  resolveMailApproval(itemId: string, decision: 'allow' | 'deny'): Promise<{ ok: boolean; error?: string }>;
   setMailRead(conversationIds: string[], read: boolean): Promise<MailListResult>;
   setMailArchived(conversationIds: string[], archived: boolean): Promise<MailListResult>;
   snoozeMail(conversationIds: string[], until: number | null): Promise<MailListResult>;

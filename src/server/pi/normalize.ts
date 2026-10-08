@@ -16,6 +16,8 @@ import { SECRET_ENVELOPE_KEY, toolArgsOf } from './protocol';
 import type { InlinedSkill } from '../skills/inject';
 import type { BrowserGrant, CodingGrant, ComputerGrant } from '../harness/chat-grants';
 import type { SkillIssue } from '../skills/grade';
+import type { JudgeContext } from '../exec/judge-context';
+import type { ParkRequest } from '../backend/types';
 import { extractSources } from './web-search';
 import { IMAGE_TOOL_NAME } from './image-gen.mjs';
 import { newGenerationClock, type GenerationClock } from './generation-speed';
@@ -189,14 +191,13 @@ export interface TurnContext {
   /** The raw user message that started this turn — intent context for the exec safety judge. */
   userText?: string;
   /**
-   * What the exec safety judge reads as the request when it differs from
-   * userText: on a mail delivery, the user's own mail ahead of the brief that
-   * carried it — a brief is one persona's paraphrase and drops what the user
-   * asked for in their own words.
+   * What the safety judge reads besides the command: the user's own words and
+   * the agent's commands in this chat or mail conversation. Collected at turn
+   * start, then extended live as this turn's commands run or are refused.
    */
-  judgeIntent?: string;
-  /** Commands run_command already ran this turn, oldest first (the judge's view of progress). */
-  recentCommands?: string[];
+  judge?: JudgeContext;
+  /** Set when this unattended turn was stopped for the user's Allow/Deny (runtime parkTurn). */
+  parked?: ParkRequest;
   phase: 'pending' | 'thinking' | 'tool' | 'answer';
   lastEventAt?: number; // epoch ms of the last normalized event, for interval attribution
   timing?: TurnTimingBreakdown; // stashed by reportTurnTiming so recordTurnEntry can persist it

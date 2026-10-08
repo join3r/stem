@@ -8,9 +8,10 @@ import {
   useRef,
   useState
 } from 'react';
-import { File, Forward, Paperclip, Plus, Send, Square, X } from 'lucide-react';
+import { File, Forward, Paperclip, Plus, Send, ShieldAlert, Square, X } from 'lucide-react';
 import { MAIL_BETA_TITLE } from '../chats/ChatList';
 import type {
+  MailApproval,
   MailComposeInput,
   MailConversation,
   MailItem,
@@ -312,6 +313,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
           </div>
         </details>
       )}
+      {m.approval && <MailApprovalBlock itemId={m.id} approval={m.approval} />}
       {m.images && m.images.length > 0 && <GeneratedImages images={m.images} live={false} />}
       {m.attachments && m.attachments.length > 0 && (
         <div className="message-attachments">
@@ -596,3 +598,57 @@ export const MailComposeView = forwardRef<MailViewHandle, {
     </div>
   );
 });
+
+const APPROVAL_SETTLED: Record<Exclude<MailApproval['status'], 'pending'>, string> = {
+  allowed: 'You allowed it — the task continued.',
+  denied: 'You denied it — the task continued without it.',
+  superseded: 'You answered with a mail instead.',
+  cancelled: 'The conversation was stopped.'
+};
+
+/**
+ * A parked run's Allow/Deny: the command Stem's safety check would not run
+ * without the user, and why. Answering resumes the run on its own thread.
+ */
+function MailApprovalBlock({ itemId, approval }: { itemId: string; approval: MailApproval }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const answer = async (decision: 'allow' | 'deny') => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await window.stem.resolveMailApproval(itemId, decision);
+      if (!result.ok) setError(result.error ?? 'That approval could not be answered.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="mail-item-approval" aria-label="Approval needed">
+      <div className="mcp-approval-head">
+        <span className="row-icon">
+          <ShieldAlert size={14} />
+        </span>
+        <strong>{approval.kind === 'harness' ? 'The coding agent wants to run' : 'Run this command'}{approval.deviceLabel ? ` on ${approval.deviceLabel}` : ''}?</strong>
+      </div>
+      <pre className="exec-approval-command">{approval.command}</pre>
+      {approval.reason && <p className="muted">Safety check: {approval.reason}</p>}
+      {approval.cwd && <p className="muted">In {approval.cwd}</p>}
+      {error && <p className="error">{error}</p>}
+      {approval.status === 'pending' ? (
+        <div className="mcp-approval-actions">
+          <button type="button" className="push" onClick={() => void answer('deny')} disabled={busy}>
+            Deny
+          </button>
+          <button type="button" className="push default" onClick={() => void answer('allow')} disabled={busy}>
+            Allow once
+          </button>
+        </div>
+      ) : (
+        <p className="muted">{APPROVAL_SETTLED[approval.status]}</p>
+      )}
+    </section>
+  );
+}

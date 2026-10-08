@@ -188,7 +188,7 @@ export function mailPreamble(
     ...memory,
     ...standing,
     ...source,
-    'If you are blocked, need a decision, or an approval was refused, say exactly what you need in your reply: it lands in the sender’s inbox and the conversation waits for their answer.',
+    'If a command is blocked by the safety check, find a safer way that stays within what was asked, or carry on without that step; never reach the same effect another way. If Stem pauses this task for approval, end your turn — it resumes you with the answer. If you need a decision only the sender can make, say exactly what you need in your reply: it lands in their inbox and the conversation waits.',
     MAIL_CLOSE
   ].join('\n');
 }

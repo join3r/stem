@@ -3400,6 +3400,9 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-item-result { margin-top: var(--sp-5); padding-top: var(--sp-5); border-top: 0.5px solid var(--hair); }
 /* A code persona's mail: the coding agent's own words, collapsed under the persona's relay of them. */
 .mail-item-agent { margin-top: var(--sp-5); border: 0.5px solid var(--hair); border-radius: var(--radius-md); font-size: var(--fs-12); }
+/* A parked run's Allow/Deny inside its mail item. */
+.mail-item-approval { margin-top: var(--sp-5); padding: var(--sp-4) var(--sp-5); border: 0.5px solid var(--hair); border-radius: var(--radius-md); font-size: var(--fs-12); }
+.mail-item-approval .mcp-approval-actions { margin-top: var(--sp-4); }
 .mail-item-agent-summary { padding: var(--sp-4) var(--sp-5); cursor: pointer; color: var(--muted); line-height: 1.8; }
 .mail-item-agent-summary > * { margin-right: var(--sp-4); }
 .mail-item-agent-summary strong { color: var(--ink); }

@@ -164,8 +164,9 @@ describe('the approval matrix', () => {
     await untilCards(3);
 
     service.abortThread('chat-a');
-    expect(errorOf(await a1)).toContain('declined');
-    expect(errorOf(await a2)).toContain('declined');
+    // A Stop is not the user declining: the assistant is told it was cancelled.
+    expect(errorOf(await a1)).toBe('The command was cancelled.');
+    expect(errorOf(await a2)).toBe('The command was cancelled.');
 
     // The bystander survived, was promoted, and got a full window of its own.
     expect(service.pendingApprovals().map((r) => r.command)).toEqual(['df -h']);
@@ -184,7 +185,7 @@ describe('the approval matrix', () => {
 
     await vi.advanceTimersByTimeAsync(120_000);
     service.abortThread('chat-b');
-    expect(errorOf(await b1)).toContain('declined');
+    expect(errorOf(await b1)).toBe('The command was cancelled.');
 
     // The head was never settled, never re-armed, never re-announced: same card,
     // same deadline. A restarted clock here would quietly grant the head extra

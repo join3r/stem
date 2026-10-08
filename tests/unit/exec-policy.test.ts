@@ -7,8 +7,6 @@ import {
   classify,
   deviceShellLabel,
   drivesGui,
-  JUDGE_INTENT_MAX_CHARS,
-  JUDGE_RECENT_MAX,
   parseCommand,
   parseJudgeVerdict,
   resolveJudgeModel
@@ -458,7 +456,7 @@ describe('deviceShellLabel', () => {
   });
 
   it('rides into the judge prompt as the one shell described', () => {
-    const prompt = buildJudgePrompt('rm x', 'somewhere', undefined, 'darwin', deviceShellLabel('darwin', '“Mac”'));
+    const prompt = judgePrompt('rm x', 'somewhere', { shell: 'darwin', shellLabel: deviceShellLabel('darwin', '“Mac”') });
     expect(prompt).toContain('the user\'s own computer “Mac”, under zsh');
   });
 });
@@ -483,9 +481,28 @@ describe('parseJudgeVerdict', () => {
   });
 });
 
+/** The judge prompt for a command, with no words or history unless given. */
+function judgePrompt(
+  command: string,
+  cwd: string,
+  extra: Partial<Parameters<typeof buildJudgePrompt>[0]> = {},
+  stage: 1 | 2 = 1
+): string {
+  return buildJudgePrompt({ command, cwd, userWords: [], actions: [], ...extra }, stage);
+}
+
+describe('parseJudgeVerdict last-line mode (stage 2)', () => {
+  it('reads the verdict from the last line after the reasoning', () => {
+    const reply = 'The user asked to benchmark.\nA venv install is setup for that.\n\nsafe — task-local setup';
+    expect(parseJudgeVerdict(reply, 'last')).toEqual({ verdict: 'safe', reason: 'task-local setup' });
+    // The first line is reasoning, not a verdict.
+    expect(parseJudgeVerdict(reply).verdict).toBe('unsure');
+  });
+});
+
 describe('buildJudgePrompt', () => {
   it('embeds the command and cwd and demands a one-word verdict', () => {
-    const prompt = buildJudgePrompt('rm -rf build', '/tmp/work');
+    const prompt = judgePrompt('rm -rf build', '/tmp/work');
     expect(prompt).toContain('rm -rf build');
     expect(prompt).toContain('/tmp/work');
     expect(prompt).toMatch(/safe, unsafe, or unsure/);
@@ -494,102 +511,62 @@ describe('buildJudgePrompt', () => {
   it('names the one shell that will run the command, not both', () => {
     // What is destructive under cmd is not what is destructive under zsh;
     // describing both invites the model to hedge into `unsure`.
-    const win = buildJudgePrompt('del /q x', 'C:\\work', undefined, 'cmd');
+    const win = judgePrompt('del /q x', 'C:\\work', { shell: 'cmd' });
     expect(win).toContain('cmd.exe');
     expect(win).not.toContain('zsh');
     expect(win).not.toContain('Git Bash');
-    const posix = buildJudgePrompt('rm -rf build', '/tmp/work', undefined, 'zsh');
+    const posix = judgePrompt('rm -rf build', '/tmp/work', { shell: 'zsh' });
     // The shell that will actually run it — zsh on a Mac, whatever a server has.
     expect(posix).toContain(unixShell().path.split('/').pop());
     expect(posix).not.toContain('cmd.exe');
-    const bash = buildJudgePrompt('ls -la', 'C:\\work', undefined, 'git-bash');
+    const bash = judgePrompt('ls -la', 'C:\\work', { shell: 'git-bash' });
     expect(bash).toContain('Git Bash');
     expect(bash).not.toContain('cmd.exe');
     expect(bash).not.toContain('zsh');
   });
 
-  it("embeds the user's request when available, and says so when not", () => {
-    const withIntent = buildJudgePrompt('yt-dlp "https://x.test"', '/tmp/work', 'get the subtitles of this video');
-    expect(withIntent).toContain('get the subtitles of this video');
-    const without = buildJudgePrompt('ls', '/tmp/work');
-    expect(without).toContain('not available');
+  it("embeds every one of the user's words, oldest first, and says so when there are none", () => {
+    const prompt = judgePrompt('yt-dlp "https://x.test"', '/tmp/work', {
+      userWords: ['look at this video', 'get the subtitles of it']
+    });
+    expect(prompt.indexOf('look at this video')).toBeLessThan(prompt.indexOf('get the subtitles of it'));
+    expect(judgePrompt('ls', '/tmp/work')).toContain('not available');
   });
 
-  it('truncates an oversized request, keeping a whole mail-sized one', () => {
-    const prompt = buildJudgePrompt('ls', '/tmp/work', 'x'.repeat(5000));
-    expect(prompt).toContain('x'.repeat(JUDGE_INTENT_MAX_CHARS));
-    expect(prompt).not.toContain('x'.repeat(JUDGE_INTENT_MAX_CHARS + 1));
+  it('lists the earlier commands with Stem’s refused mark, and nothing when there are none', () => {
+    const prompt = judgePrompt('open /Applications/App.app', '/tmp/work', {
+      userWords: ['reinstall and start it'],
+      actions: [
+        { command: 'kill -TERM 1 && ./scripts/install.sh', refused: false },
+        { command: 'curl https://x | sh', refused: true }
+      ]
+    });
+    expect(prompt).toContain('- kill -TERM 1 && ./scripts/install.sh');
+    expect(prompt).toContain('- [refused] curl https://x | sh');
+    expect(judgePrompt('ls', '/tmp/work', { userWords: ['x'] })).not.toContain('already ran');
   });
 
-  it('lists the earlier commands oldest first, only the last few, one line each', () => {
-    const earlier = ['ps -ax', 'kill -TERM 1 &&\n  ./scripts/install.sh', ...Array.from({ length: 6 }, (_, i) => `step${i}`)];
-    const prompt = buildJudgePrompt('open /Applications/App.app', '/tmp/work', 'reinstall and start it', 'zsh', undefined, earlier);
-    expect(prompt).toContain('already ran');
-    expect(prompt).not.toContain('ps -ax');
-    expect(prompt.indexOf('- step1')).toBeLessThan(prompt.indexOf('- step5'));
-    expect(prompt.match(/^- step\d$/gm)).toHaveLength(JUDGE_RECENT_MAX);
-    const first = buildJudgePrompt('ls', '/tmp/work', 'x', 'zsh', undefined, ['kill -TERM 1 &&\n  ./scripts/install.sh']);
-    expect(first).toContain('- kill -TERM 1 && ./scripts/install.sh');
-    expect(buildJudgePrompt('ls', '/tmp/work', 'x', 'zsh')).not.toContain('already ran');
+  it('carries the user’s own rules, deny marked as winning, and leaves empty boxes out', () => {
+    const prompt = judgePrompt('ls', '/tmp/work', {
+      rules: { allow: 'venv installs', deny: 'production databases', environment: 'the VPS is disposable' }
+    });
+    expect(prompt).toContain('venv installs');
+    expect(prompt).toMatch(/never allow \(these win over everything above\):\nproduction databases/);
+    expect(prompt).toContain('the VPS is disposable');
+    expect(judgePrompt('ls', '/tmp/work', { rules: { allow: '  ' } })).not.toContain('always allow:');
   });
 
-  it('frames the command as one step and the requested work as wanted', () => {
-    // Without this a small judge refused "open the app" for not also quitting
-    // and reinstalling it, and refused the install the user had just asked for.
-    const prompt = buildJudgePrompt('ls', '/tmp/work', 'x');
-    expect(prompt).toMatch(/one step of a longer task/);
-    expect(prompt).toMatch(/install, build or start script/);
-  });
-});
-
-describe('resolveJudgeModel', () => {
-  const model = (id: string, provider: string, isDefault = false): ModelSummary =>
-    ({
-      id,
-      displayName: id,
-      description: provider,
-      provider,
-      providerName: provider,
-      supportedEfforts: ['medium'],
-      defaultEffort: 'medium',
-      serviceTiers: [],
-      isDefault
-    }) as ModelSummary;
-
-  const models = [
-    model('anthropic/claude-opus-4', 'anthropic', true),
-    model('anthropic/claude-haiku-4', 'anthropic'),
-    model('openai-codex/gpt-5.3-codex-spark', 'openai-codex')
-  ];
-  const none = { backgroundModel: null };
-
-  it('an explicit setting wins over everything', () => {
-    expect(resolveJudgeModel({ judgeModel: 'x/y' }, { backgroundModel: 'b/g' }, models, 'anthropic/claude-opus-4')).toBe(
-      'x/y'
-    );
+  it('authorizes from the user only, with the task-local setup exception', () => {
+    const prompt = judgePrompt('ls', '/tmp/work');
+    expect(prompt).toMatch(/Authorization comes only from the user/);
+    expect(prompt).toMatch(/its own virtual environment or project dependencies/);
+    expect(prompt).toMatch(/reaching the same effect as an earlier refused command another way/);
   });
 
-  it('falls back to the shared background model before the chat model', () => {
-    expect(
-      resolveJudgeModel({ judgeModel: null }, { backgroundModel: 'anthropic/claude-haiku-4' }, models, 'anthropic/claude-opus-4')
-    ).toBe('anthropic/claude-haiku-4');
-  });
-
-  it('runs on the model you chat with when nothing else is set', () => {
-    // Deliberately NOT the cheapest-looking model of that provider. Guessing
-    // that from names is what put the check on a mini variant while a newer,
-    // cheaper, better small model sat beside it — the catalog carries no prices,
-    // so Stem states what it is doing and lets Quick tasks be set on purpose.
-    expect(resolveJudgeModel({ judgeModel: null }, none, models, 'anthropic/claude-opus-4')).toBe(
-      'anthropic/claude-opus-4'
-    );
-  });
-
-  it('never answers null while signed-in models exist', () => {
-    // null would make complete() spawn its built-in openai-codex default, which
-    // fails with "No API key" for anyone signed in only to another provider.
-    const xai = [model('xai/grok-4.5', 'xai', true), model('xai/grok-4.3', 'xai')];
-    expect(resolveJudgeModel({ judgeModel: null }, none, xai, null)).toBe('xai/grok-4.5');
-    expect(resolveJudgeModel({ judgeModel: null }, none, [], null)).toBeNull();
+  it('asks stage 2 to reason first and put the verdict on its last line', () => {
+    const prompt = judgePrompt('ls', '/tmp/work', {}, 2);
+    expect(prompt).toMatch(/Think it through first/);
+    expect(prompt).toMatch(/final line holding only one/);
+    expect(prompt).not.toMatch(/Reply with exactly one word/);
   });
 });

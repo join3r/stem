@@ -69,6 +69,16 @@ final class MailStore {
     func setArchived(_ ids: [String], _ a: Bool) async { await mutate("mail:setArchived", [.init(ids), .bool(a)]) }
     func delete(_ id: String) async { await mutate("mail:delete", [.string(id)]) }
 
+    /// Allow or deny a parked run's command; the answer resumes it on the server.
+    func resolveApproval(_ itemId: String, allow: Bool) async {
+        do {
+            let r = try await client.call("mail:resolveApproval", [.string(itemId), .string(allow ? "allow" : "deny")],
+                                          as: MailApprovalResult.self)
+            if !r.ok { self.error = r.error ?? "That approval could not be answered." }
+        } catch { self.error = error.localizedDescription }
+        await reload()
+    }
+
     func stop(_ id: String) async {
         do { try await client.run("mail:stop", [.string(id)]) } catch { self.error = error.localizedDescription }
         await reload()

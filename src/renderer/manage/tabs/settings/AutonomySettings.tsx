@@ -26,9 +26,33 @@ const SCRATCH_TTLS: { label: string; days: number | null }[] = [
 /** One-line meaning of each approval mode, shown under the row so the pick is legible. */
 const APPROVAL_HINTS: Record<string, string> = {
   manual: 'Only allowlisted commands run on their own; everything else pauses for you',
-  assisted: 'A safety check clears commands that serve your request; only flagged ones pause',
+  assisted: 'A safety check runs what you asked for and turns the rest back; you decide after repeated refusals',
   yolo: 'Every command runs immediately, no questions asked'
 };
+
+type JudgeRuleField = 'judgeAllow' | 'judgeDeny' | 'judgeEnvironment';
+
+/** The safety check's three rule boxes: read as your own words, deny wins. */
+const JUDGE_RULE_ROWS: { field: JudgeRuleField; label: string; tip: string; placeholder: string }[] = [
+  {
+    field: 'judgeAllow',
+    label: 'Always allow',
+    tip: 'Things the safety check may let run without asking, in your words. It reads them on every command it checks.',
+    placeholder: 'e.g. Installing Python packages into a project venv. kubectl get/describe on any cluster.'
+  },
+  {
+    field: 'judgeDeny',
+    label: 'Never allow',
+    tip: 'Things the safety check must never let run without you — these win over everything else, including Always allow.',
+    placeholder: 'e.g. Anything that touches production databases. git push to main.'
+  },
+  {
+    field: 'judgeEnvironment',
+    label: 'About my setup',
+    tip: 'Facts that help the safety check judge a command: which machines, folders and services are yours and how much they matter.',
+    placeholder: 'e.g. The VPS container is disposable. Repos under ~/local are mine. ~/Documents/Archived is records — read only.'
+  }
+];
 
 /** "1.2 MB" / "834 KB" / "512 B" — one significant decimal above KB. */
 function formatSize(bytes: number): string {
@@ -107,6 +131,16 @@ export function AutonomySections() {
   const [clientDeviceId, setClientDeviceId] = useState<string | null>(null);
   // Debounced so typing a path doesn't spam the atomic settings writer.
   const bashPathTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ruleTimers = useRef<Partial<Record<JudgeRuleField, ReturnType<typeof setTimeout>>>>({});
+
+  // Typed, so saved after a pause and never reconciled back over the textarea:
+  // a round-trip per keystroke would put an older value under the cursor.
+  function saveRule(field: JudgeRuleField, value: string) {
+    setExec((cur) => (cur ? { ...cur, [field]: value } : cur));
+    const pending = ruleTimers.current[field];
+    if (pending) clearTimeout(pending);
+    ruleTimers.current[field] = setTimeout(() => void window.stem.updateExecSettings({ [field]: value }), 400);
+  }
 
   useEffect(() => {
     void window.stem.getSettings().then((s) => {
@@ -323,7 +357,11 @@ export function AutonomySections() {
                     Governs every command — ones Stem runs itself and ones a coding agent asks to
                     run. <strong>Manual</strong> — only allowlisted commands run on their own;
                     everything else pauses for your approval. <strong>Assisted</strong> — an AI
-                    safety check clears commands that serve your request; only flagged ones pause.{' '}
+                    safety check reads what you wrote and the commands run so far (never the
+                    assistant's own explanations) and runs what you asked for. Anything else is
+                    turned back to the assistant to find a safer way; after three refusals in a row
+                    you decide — a card in a chat, and mail or scheduled work pauses until you answer
+                    it in the Inbox.{' '}
                     <strong>Yolo</strong> — every command runs immediately, no questions asked (folders
                     you marked read-only stay protected). The safety check is a heuristic, not a
                     security boundary; the model it runs on lives under Models. A card that pauses
@@ -345,6 +383,29 @@ export function AutonomySections() {
                 onChange={(v) => updateExec({ approvalMode: v as ExecSettings['approvalMode'] })}
               />
             </ValueRow>
+
+            {exec.approvalMode === 'assisted' &&
+              JUDGE_RULE_ROWS.map((row) => (
+                <DisclosureRow
+                  key={row.field}
+                  label={
+                    <>
+                      {row.label}{' '}
+                      <InfoTip label={`About ${row.label.toLowerCase()}`}>{row.tip}</InfoTip>
+                    </>
+                  }
+                  value={exec[row.field].trim() ? 'set' : 'not set'}
+                >
+                  <textarea
+                    className="ci-textarea"
+                    value={exec[row.field]}
+                    onChange={(e) => saveRule(row.field, e.target.value)}
+                    rows={4}
+                    maxLength={4000}
+                    placeholder={row.placeholder}
+                  />
+                </DisclosureRow>
+              ))}
 
             {exec.approvalMode !== 'yolo' && (
               <DisclosureRow

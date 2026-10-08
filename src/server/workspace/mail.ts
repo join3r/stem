@@ -4,7 +4,15 @@ import { dirname } from 'node:path';
 import type { InboxEntry, InboxState } from '../../shared/inbox';
 import { toMs } from '../../shared/inbox';
 import { cleanMailSubject, deriveMailSubject, NO_SUBJECT, resolveMailSubject } from '../../shared/mail-subject';
-import type { GeneratedImageRef, MailConversation, MailItem, MailListResult, ScheduledRunReport } from '../../shared/types';
+import type {
+  GeneratedImageRef,
+  MailApproval,
+  MailApprovalStatus,
+  MailConversation,
+  MailItem,
+  MailListResult,
+  ScheduledRunReport
+} from '../../shared/types';
 import { coerceSystemVersion } from '../../shared/sys-version';
 import { systemVersion } from '../sys-version';
 import { degrade } from '../degrade';
@@ -34,6 +42,37 @@ interface MailFile {
 
 function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+const APPROVAL_STATUSES: readonly MailApprovalStatus[] = ['pending', 'allowed', 'denied', 'superseded', 'cancelled'];
+
+function coerceApproval(raw: unknown): MailApproval | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const a = raw as Record<string, unknown>;
+  const resume = a.resume && typeof a.resume === 'object' ? (a.resume as Record<string, unknown>) : null;
+  if (typeof a.id !== 'string' || typeof a.command !== 'string' || !resume) return undefined;
+  if (typeof resume.personaId !== 'string' || typeof resume.threadId !== 'string' || typeof resume.from !== 'string') {
+    return undefined;
+  }
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+  return {
+    id: a.id,
+    kind: a.kind === 'harness' ? 'harness' : 'exec',
+    command: a.command,
+    ...(str(a.cwd) ? { cwd: str(a.cwd) } : {}),
+    ...(str(a.deviceLabel) ? { deviceLabel: str(a.deviceLabel) } : {}),
+    ...(str(a.reason) ? { reason: str(a.reason) } : {}),
+    status: APPROVAL_STATUSES.includes(a.status as MailApprovalStatus) ? (a.status as MailApprovalStatus) : 'cancelled',
+    resume: {
+      personaId: resume.personaId,
+      threadId: resume.threadId,
+      from: resume.from,
+      epoch: num(resume.epoch) ?? 0,
+      sourceItemId: typeof resume.sourceItemId === 'string' ? resume.sourceItemId : '',
+      ...(str(resume.deviceId) ? { deviceId: str(resume.deviceId) } : {}),
+      ...(str(resume.taskId) ? { taskId: str(resume.taskId) } : {})
+    }
+  };
 }
 
 function coerceItem(raw: unknown): MailItem | null {
@@ -81,6 +120,8 @@ function coerceItem(raw: unknown): MailItem | null {
   }
   const sys = coerceSystemVersion(r.sys);
   if (sys) item.sys = sys;
+  const approval = coerceApproval(r.approval);
+  if (approval) item.approval = approval;
   if (Array.isArray(r.attachments)) {
     const attachments = r.attachments.flatMap((a) => {
       if (!a || typeof a !== 'object') return [];
@@ -536,6 +577,24 @@ export function setMailItemResult(itemId: string, result: string, images?: Gener
     conversation.updatedAt = Math.max(conversation.updatedAt, at);
     if (item.to.includes('user')) conversation.userUpdatedAt = Math.max(conversation.userUpdatedAt, at);
   });
+}
+
+/**
+ * Settle a parked run's approval item, once: only a pending one changes, so a
+ * second answer (two clients, a double tap) finds it settled and is refused.
+ * Returns the approval as it was while pending, or null when it was not.
+ */
+export async function settleMailApproval(itemId: string, status: Exclude<MailApprovalStatus, 'pending'>): Promise<MailApproval | null> {
+  let settled: MailApproval | null = null;
+  await update((store) => {
+    const item = store.items.find((i) => i.id === itemId);
+    if (!item?.approval || item.approval.status !== 'pending') return;
+    settled = { ...item.approval };
+    item.approval = { ...item.approval, status };
+    const conversation = conversationOf(store, item.conversationId);
+    conversation.updatedAt = Math.max(conversation.updatedAt, Date.now());
+  });
+  return settled;
 }
 
 /** Record the hidden pi thread a persona's deliveries run in. */

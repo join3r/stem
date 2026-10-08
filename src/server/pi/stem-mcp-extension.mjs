@@ -2854,8 +2854,10 @@ function registerExecTool(pi) {
       'Pass `cwd` only when the command must run in a specific existing directory; a relative `cwd` ' +
       'resolves inside this chat\'s scratch folder. Folders ' +
       'connected read-only are blocked entirely. Safe commands run immediately; others are screened by ' +
-      'an automatic safety check and may pause for the user\'s approval (denied automatically in ' +
-      'scheduled runs — prefer simple, clearly-safe commands there). Always quote arguments containing ' +
+      'an automatic safety check that reads only what the user asked for. A command it blocks comes back ' +
+      'with the reason: find a safer way that stays within the request, or skip the step — never reach the ' +
+      'same effect another way. After repeated blocks the user is asked (a card in a chat; when nobody is ' +
+      'watching the run pauses until they answer — then end your turn). Always quote arguments containing ' +
       'special characters (&, ?, ;, spaces) — e.g. agent-browser open "https://example.com/watch?v=x&t=1" ' +
       '— an unquoted & or ; changes what the shell runs and forces the approval path. Output is captured ' +
       'with the exit code and truncated past 64KB per stream; default timeout 60s (max 300s via ' +

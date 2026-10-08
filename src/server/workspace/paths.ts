@@ -456,6 +456,15 @@ export function pairingStorePath(): string {
  * cooldowns, and other diagnostics that would otherwise vanish with the
  * console. Rotated once at ~5MB to `stem.log.1`.
  */
+/**
+ * The safety judge's decision log (exec/decisions.ts). At the state root, not
+ * in pi-home, so the state export — an explicit list of named files plus a
+ * pi-home walk — never carries it: it holds the user's words and commands.
+ */
+export function judgeDecisionsPath(): string {
+  return process.env.STEM_JUDGE_DECISIONS_FILE ?? join(userDataRoot(), 'judge-decisions.jsonl');
+}
+
 export function logFilePath(): string {
   // STEM_LOG_FILE lets unit tests point at a throwaway file (and avoids touching
   // Electron's `app` when run outside the app).

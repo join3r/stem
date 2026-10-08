@@ -1,6 +1,6 @@
 import { beginMailWork, type WorkHandle } from '../mail/work';
 import { randomUUID } from 'node:crypto';
-import type { ChatBackend } from '../backend/types';
+import type { ChatBackend, ParkRequest } from '../backend/types';
 import type {
   BackendEventEnvelope,
   ScheduledRunReport,
@@ -64,6 +64,20 @@ export interface SchedulerOptions {
    * any (answers whether it mailed). Without it such a run's thread — the only
    * place its pictures live — is deleted with them unseen.
    */
+  /**
+   * A run stopped for the user's Allow/Deny (the safety check would not run a
+   * command and nobody was watching): mail the approval into the task's
+   * conversation. The run's thread is kept — the answer resumes it.
+   */
+  onParked?: (args: {
+    taskId: string;
+    title: string;
+    threadId: string;
+    personaId?: string;
+    request: ParkRequest;
+  }) => Promise<void>;
+  /** A resumed run's final reply, mailed into the task's conversation. */
+  onResumedReply?: (args: { taskId: string; title: string; threadId: string; personaId?: string; reply: string }) => Promise<void>;
   onUnreportedImages?: (args: {
     taskId: string;
     title: string;
@@ -647,6 +661,8 @@ export class TaskScheduler {
     let work: WorkHandle | undefined;
     /** The reflection pass, when one runs: the run's thread must outlive it. */
     let reflection: Promise<void> | undefined;
+    /** Stopped for the user's Allow/Deny: its reply is not a result, and it resumes later. */
+    let parked = false;
     try {
       const requestedTurnId = randomUUID();
       // The work record opens before the turn (a synchronous startTurn failure
@@ -684,7 +700,12 @@ export class TaskScheduler {
           );
         }
         const settle = await this.waitForSettle(turnId, run.threadId);
-        task.lastStatus = settle.status;
+        if (settle.status === 'parked') {
+          parked = true;
+          await this.mailPark(task, run.threadId, resolved.personaId, settle.parked!);
+          run.notified = true;
+        }
+        task.lastStatus = settle.status === 'parked' ? 'ok' : settle.status;
         this.recordOutcome(task, settle.status === 'failed' ? settle.error ?? 'The run did not finish.' : null);
         // What did this run teach the persona? Same pass a mail delivery gets,
         // for the same reason: a persona that runs nightly and never reflects
@@ -755,7 +776,7 @@ export class TaskScheduler {
     // Only a run that notified has a mail to carry it, and only a clean
     // settle has a reply worth the name (a failed run's partial text is not).
     const resultItemId = work?.group?.notificationItemIds?.at(-1);
-    if (!run.notified && run.threadId && task.lastStatus === 'ok' && this.opts.onUnreportedImages) {
+    if (!parked && !run.notified && run.threadId && task.lastStatus === 'ok' && this.opts.onUnreportedImages) {
       const mailed = await this.opts
         .onUnreportedImages({
           taskId: task.id,
@@ -771,7 +792,7 @@ export class TaskScheduler {
       if (mailed) run.notified = true;
     }
     // A reply-less run can still have pictures made after its notify.
-    if (resultItemId && run.notified && run.threadId && task.lastStatus === 'ok' && this.opts.onResult) {
+    if (!parked && resultItemId && run.notified && run.threadId && task.lastStatus === 'ok' && this.opts.onResult) {
       await this.opts
         .onResult({ taskId: task.id, threadId: run.threadId, itemId: resultItemId, result: reply ?? '' })
         .catch((err) => degrade('tasks', 'left a scheduled result out of its mail', err));
@@ -802,6 +823,69 @@ export class TaskScheduler {
     await this.persistAndArm();
   }
 
+  /** Mail a parked run's approval into its task conversation (the run's thread is kept for it). */
+  private async mailPark(
+    task: ScheduledTask,
+    threadId: string | null,
+    personaId: string | undefined,
+    request: ParkRequest
+  ): Promise<void> {
+    if (!threadId || !this.opts.onParked) return;
+    await this.opts
+      .onParked({ taskId: task.id, title: task.title, threadId, ...(personaId ? { personaId } : {}), request })
+      .catch((err) => degrade('tasks', 'parked a scheduled run without telling the user', err));
+  }
+
+  /**
+   * The user answered a parked run: continue it on its own thread, through the
+   * run queue like any firing (one scheduler-owned turn at a time), so its
+   * notify_user still reaches mail. The body says what the user decided; the
+   * run can park again, and its final reply is mailed to the task's conversation.
+   */
+  resumeParkedRun(taskId: string, threadId: string, body: string): Promise<void> {
+    const task = this.tasks.find((t) => t.id === taskId);
+    if (!task) return Promise.reject(new Error('That scheduled task no longer exists.'));
+    const resume = async (): Promise<void> => {
+      const resolved = await this.resolveRunsAs(task);
+      const run: ActiveRun = { taskId, threadId, turnId: null, preempted: false, notified: true };
+      this.activeRun = run;
+      try {
+        const started = await this.opts.runtime.startTurn({
+          turnId: randomUUID(),
+          threadId,
+          input: body,
+          ...resolved.extras,
+          webSearch: true,
+          scheduled: { at: new Date().toISOString(), taskId, resumed: true }
+        });
+        if (!started.turnId) return;
+        run.turnId = started.turnId;
+        const settle = await this.waitForSettle(started.turnId, threadId);
+        if (settle.status === 'parked') {
+          await this.mailPark(task, threadId, resolved.personaId, settle.parked!);
+          return;
+        }
+        const reply = settle.status === 'ok' ? (await this.opts.runtime.readWorkHistory?.(threadId))?.at(-1)?.finalText : undefined;
+        if (reply?.trim() && this.opts.onResumedReply) {
+          await this.opts.onResumedReply({
+            taskId,
+            title: task.title,
+            threadId,
+            ...(resolved.personaId ? { personaId: resolved.personaId } : {}),
+            reply
+          });
+        }
+        if (settle.status === 'failed') this.recordOutcome(task, settle.error ?? 'The resumed run did not finish.');
+      } catch (error) {
+        degrade('tasks', 'could not resume a parked scheduled run', error);
+      } finally {
+        this.activeRun = null;
+      }
+    };
+    this.queue = this.queue.then(resume, resume);
+    return Promise.resolve();
+  }
+
   /**
    * Delete the run's fresh thread unless a mail now points at it (a notify or a
    * failure mail — `notified` covers both). A pending reflection reads the
@@ -827,15 +911,18 @@ export class TaskScheduler {
    *  A failure carries the turn's terminal error text (when the backend reported one).
    *  `threadId` is the run's own thread, for events that carry no turn id and for
    *  attributing a worker's death; null when the backend named none. */
-  private waitForSettle(turnId: string, threadId: string | null): Promise<{ status: 'ok' | 'failed'; error?: string }> {
+  private waitForSettle(
+    turnId: string,
+    threadId: string | null
+  ): Promise<{ status: 'ok' | 'failed' | 'parked'; error?: string; parked?: ParkRequest }> {
     return new Promise((resolve) => {
       let done = false;
-      const finish = (status: 'ok' | 'failed', error?: string) => {
+      const finish = (status: 'ok' | 'failed' | 'parked', error?: string, parked?: ParkRequest) => {
         if (done) return;
         done = true;
         clearTimeout(timeout);
         this.opts.runtime.off('event', onEvent);
-        resolve({ status, ...(error ? { error } : {}) });
+        resolve({ status, ...(error ? { error } : {}), ...(parked ? { parked } : {}) });
       };
       const onEvent = (event: BackendEventEnvelope) => {
         // A process exit is attributed: its threadId names the turn the dying
@@ -849,12 +936,17 @@ export class TaskScheduler {
           if (!attributed || (p.threadId != null && p.threadId === threadId)) finish('failed');
           return;
         }
-        const p = event.params as { threadId?: string; turn?: { id?: string }; error?: string } | undefined;
+        const p = event.params as
+          | { threadId?: string; turn?: { id?: string }; error?: string; parked?: ParkRequest }
+          | undefined;
         // Match the turn id when present; a thread-only event counts when it
         // names our thread.
         const matches = p?.turn?.id ? p.turn.id === turnId : threadId !== null && p?.threadId === threadId;
         if (!matches) return;
-        if (event.method === 'turn/completed') finish('ok');
+        // Stopped for the user's Allow/Deny (PiRuntime.parkTurn): not a failure.
+        const terminal = event.method === 'turn/completed' || event.method === 'turn/failed' || event.method === 'turn/aborted';
+        if (terminal && p?.parked) finish('parked', undefined, p.parked);
+        else if (event.method === 'turn/completed') finish('ok');
         else if (event.method === 'turn/failed') finish('failed', typeof p?.error === 'string' ? p.error : undefined);
         else if (event.method === 'turn/aborted') finish('failed');
       };

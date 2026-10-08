@@ -60,7 +60,8 @@ import { resolveBrowserGrant, resolveCodingGrant, resolveComputerGrant } from '.
 import { browserChoicesText, codingChoicesText, computerChoicesText } from '../harness/chat-hosts';
 import { resolveHostShell } from '../exec/git-bash';
 import { ensureThreadScratch } from '../exec/scratch';
-import { JUDGE_RECENT_MAX } from '../exec/policy';
+import { capActions, capUserWords, parseJudgeSession, type JudgeAction, type JudgeContext } from '../exec/judge-context';
+import { readMail } from '../workspace/mail';
 import { clampPinnedCwd } from '../harness/pin';
 import { hostShellAgentHint } from '../exec/host-shell';
 import { previewText } from '../chats/preview';
@@ -88,6 +89,7 @@ import type {
   ExecBridge,
   HarnessBridge,
   MailBridge,
+  ParkRequest,
   TaskBridge
 } from '../backend/types';
 import type { SkillBridge } from '../skills/bridge';
@@ -233,6 +235,22 @@ function scheduledPreamble(at: string, notes?: { id: string; title: string }[], 
   ].join('\n');
 }
 
+/**
+ * A parked scheduled run continuing after the user answered its approval: the
+ * same fence (so replay strips it and the UI collapses it), but it says what
+ * happened instead of "no memory of any earlier conversation" — this thread
+ * is the run so far.
+ */
+function resumedPreamble(at: string): string {
+  return [
+    `<!--stem:scheduled at="${at}"-->`,
+    'This scheduled run was paused for the user\'s approval and now continues where it stopped. The message below is their answer.',
+    'If, and only if, the result is something the user should be told about, call the notify_user tool with a short message; your final reply is mailed to them either way.',
+    'Do not ask the user questions — there is no one to answer.',
+    SCHED_CLOSE
+  ].join('\n');
+}
+
 // No quotes around the attribute, deliberately: a quote inside a regex literal
 // derails the quiet-scanner's string-blanking pass for the rest of this file.
 const MAIL_STRIP_RE = /^<!--stem:mail from=([^>]*)-->[\s\S]*?<!--\/stem:mail-->\n+/;
@@ -245,9 +263,17 @@ const TOOL_PATH_KEYS = ['path', 'file_path', 'filename'] as const;
  * Stamp the turn origin on normalized events, including terminal events.
  * Keep the existing mail marker for consumers of the older event shape.
  */
-function tagTurnEvent(params: unknown, turn: Pick<TurnContext, 'isMail' | 'origin'>): unknown {
+function tagTurnEvent(params: unknown, turn: Pick<TurnContext, 'isMail' | 'origin' | 'parked'>): unknown {
   if (typeof params !== 'object' || params === null) return params;
-  return { ...params, ...(turn.isMail ? { mail: true } : {}), ...(turn.origin ? { origin: turn.origin } : {}) };
+  return {
+    ...params,
+    ...(turn.isMail ? { mail: true } : {}),
+    ...(turn.origin ? { origin: turn.origin } : {}),
+    // An unattended run stopped for the user's Allow/Deny: the mail router and
+    // the scheduler read this on the terminal event, where an abort would
+    // otherwise read as a failed run.
+    ...(turn.parked ? { parked: turn.parked } : {})
+  };
 }
 
 
@@ -1296,10 +1322,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const imageGen = await this.imageGenGrant(chatFeatures.images, !!turn.personaHarness);
       // The exec safety judge classifies commands relative to this request.
       turn.userText = input.input;
-      const userMail = input.mail?.source?.body.trim();
-      if (userMail) {
-        turn.judgeIntent = `The user's mail:\n${userMail}\n\nThe brief ${input.mail!.from} passed on with it:\n${input.input}`;
-      }
+      turn.judge = await this.judgeContextFor(threadId, input).catch((e) => {
+        // The judge still runs, on the message that started this turn: what it
+        // loses is the earlier conversation, which only ever widens what passes.
+        degrade('exec.judge', 'judged this turn without the earlier conversation', e);
+        return { userWords: input.mail || input.scheduled ? [] : capUserWords([input.input]), actions: [] };
+      });
       // Folders connected memorize:false: if the assistant reads inside one this turn,
       // we suppress capturing its reply into Recall (see onPiEvent / isCaptureSuppressed).
       turn.privateRoots = await getPrivateRoots().catch((e) => {
@@ -1568,6 +1596,25 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /** Abort the streaming turn: pi's abort reaches the extension tool, but the
    * actual child process of any command it is running lives in main — stop both. */
+  /**
+   * An unattended run reached the safety check's escalation point: mark the
+   * turn parked and stop it, so the mail router or the scheduler holds it for
+   * the user's Allow/Deny instead of reading the stop as a failure. The tool
+   * result still goes back first — it tells the model to end its turn — and
+   * the abort is what makes sure it does. True when the turn was parked.
+   */
+  private parkTurn(
+    worker: PiWorker,
+    turn: TurnContext | null | undefined,
+    result: { ok: boolean; park?: ParkRequest }
+  ): boolean {
+    if (!turn || result.ok || !result.park || !turn.isScheduled || turn.parked) return false;
+    turn.parked = result.park;
+    // After the response is on its way: aborting first would race the reply.
+    setImmediate(() => this.abortLiveTurn(worker, turn, 'parked for the user\'s approval'));
+    return true;
+  }
+
   private abortLiveTurn(worker: PiWorker, turn: TurnContext, reason?: string): void {
     turn.aborted = true;
     turn.abortRequested = true;
@@ -1755,6 +1802,60 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * from one — which misses a folder disconnected or renamed since. Any read that
    * fails throws: an unreadable record never counts as "nothing private".
    */
+  /**
+   * The user's own words and the agent's commands the safety judge reads for a
+   * turn starting now (exec/judge-context.ts). A chat: its session file, plus
+   * the message starting this turn (pi has not written it yet). A mail
+   * delivery: the conversation's user-authored mails from the mail store —
+   * never the delivery body, which is often another persona's brief — and the
+   * commands of every persona thread in it. A scheduled run: the words in the
+   * thread the task was scheduled from; its own prompt was written by an agent.
+   */
+  private async judgeContextFor(threadId: string, input: StartTurnInput): Promise<JudgeContext> {
+    const words: string[] = [];
+    const actions: JudgeAction[] = [];
+    const readSession = async (tid: string, opts: { words: boolean; actions: boolean }): Promise<void> => {
+      const file = await this.resolveSessionFile(tid);
+      if (!file) return;
+      const parsed = parseJudgeSession(
+        await readFile(file, 'utf8'),
+        opts.words ? { cleanUser: (content) => this.contentToParts(content).text } : {}
+      );
+      if (opts.words) words.push(...parsed.userWords);
+      if (opts.actions) actions.push(...parsed.actions);
+    };
+    const conversationWords = async (conversationId: string, withActions: boolean): Promise<void> => {
+      const mail = await readMail();
+      const conversation = mail.conversations.find((c) => c.id === conversationId);
+      words.push(
+        ...mail.items
+          .filter((i) => i.conversationId === conversationId && i.from === 'user')
+          .sort((a, b) => a.at - b.at)
+          .map((i) => i.body)
+      );
+      if (withActions && conversation) {
+        for (const tid of Object.values(conversation.sessions)) await readSession(tid, { words: false, actions: true });
+      }
+    };
+    if (input.mail) {
+      await conversationWords(input.mail.conversationId, true);
+    } else if (input.scheduled) {
+      const origin = this.taskBridge?.originThread(input.scheduled.taskId) ?? null;
+      if (origin) {
+        const mail = await readMail();
+        const conversation = mail.conversations.find((c) => Object.values(c.sessions).includes(origin));
+        if (conversation) await conversationWords(conversation.id, false);
+        else await readSession(origin, { words: true, actions: false });
+      }
+      // A run resumed after an approval continues its own thread.
+      await readSession(threadId, { words: false, actions: true });
+    } else {
+      await readSession(threadId, { words: true, actions: true });
+      words.push(input.input);
+    }
+    return { userWords: capUserWords(words), actions: capActions(actions) };
+  }
+
   async learnEvidence(threadId: string): Promise<LearnTurn[] | null> {
     const file = await this.resolveSessionFile(threadId);
     if (!file) return null;
@@ -2828,15 +2929,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           computerAnyDevice: turn?.computerGrant?.kind === 'chat' && turn.computerGrant.device === null,
           threadId: turn?.threadId ?? null,
           isScheduled: turn?.isScheduled === true,
-          userText: turn?.judgeIntent ?? turn?.userText,
-          recentCommands: turn?.recentCommands,
+          userText: turn?.userText,
+          judgeContext: turn?.judge,
           currentModel
         });
-        // Only commands that actually ran: a refused one is not progress, and
-        // listing it would tell the judge a step happened that never did.
-        if (turn && result.ok && req.command) {
-          turn.recentCommands = [...(turn.recentCommands ?? []), req.command].slice(-JUDGE_RECENT_MAX);
+        // Refused ones too, marked: Stem's own record of a refusal lets the judge
+        // see an agent retrying a blocked step another way.
+        if (turn?.judge && req.command) {
+          turn.judge = {
+            userWords: turn.judge.userWords,
+            actions: capActions([...turn.judge.actions, { command: req.command, refused: !result.ok }])
+          };
         }
+        if (this.parkTurn(worker, turn, result)) return respond(result);
         respond(result);
       } catch (e) {
         respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -2941,8 +3046,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           itemId: typeof req.item_id === 'string' && req.item_id ? req.item_id : undefined,
           threadId: turn?.threadId ?? '',
           isScheduled: turn?.isScheduled === true,
-          isMail: turn?.isMail === true
+          isMail: turn?.isMail === true,
+          ...(turn?.judge ? { judgeContext: turn.judge } : {})
         });
+        if (this.parkTurn(worker, turn, result)) return respond(result);
         // A wrong pick in a model-chooses chat comes back with the real options.
         if (!result.ok && choosing && device) {
           // quiet: the service's own error goes out either way; the options are an addendum.
@@ -4532,7 +4639,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // A mail delivery does the same with its own fence — who the mail is from, and
     // that the final message becomes the reply.
     const message = input.scheduled
-      ? `${scheduledPreamble(input.scheduled.at, input.persona?.notes, input.scheduled.prior)}\n\n${body}`
+      ? `${input.scheduled.resumed ? resumedPreamble(input.scheduled.at) : scheduledPreamble(input.scheduled.at, input.persona?.notes, input.scheduled.prior)}\n\n${body}`
       : input.mail
         ? `${mailPreamble(
             input.mail,

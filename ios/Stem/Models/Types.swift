@@ -229,6 +229,24 @@ struct MailItem: Decodable, Hashable, Identifiable {
     var attachments: [MessageAttachment]?
     var images: [GeneratedImageRef]?
     var agentReplies: [String]?
+    /// A parked run's Allow/Deny (the safety check would not run a command without the user).
+    var approval: MailApproval?
+}
+
+struct MailApproval: Decodable, Hashable {
+    var id: String
+    var kind: String
+    var command: String
+    var cwd: String?
+    var deviceLabel: String?
+    var reason: String?
+    /// pending | allowed | denied | superseded | cancelled
+    var status: String
+}
+
+struct MailApprovalResult: Decodable {
+    var ok: Bool
+    var error: String?
 }
 
 struct MailComposeInput: Encodable {

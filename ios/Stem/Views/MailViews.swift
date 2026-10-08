@@ -221,6 +221,7 @@ struct MailItemCard: View {
                 Text("Late reply — written before your newest message").font(.caption).foregroundStyle(.orange)
             }
             MarkdownView(item.body)
+            if let approval = item.approval { MailApprovalView(itemId: item.id, approval: approval) }
             AttachmentStrip(attachments: item.attachments ?? [])
             ForEach(item.images ?? [], id: \.id) { ref in GeneratedImage(ref: ref, store: nil, client: session.client) }
         }
@@ -228,6 +229,51 @@ struct MailItemCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(mine ? Color.accentColor.opacity(0.10) : Color(.secondarySystemBackground).opacity(0.7),
                     in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+/// A parked run's Allow/Deny: the command and why the safety check held it.
+struct MailApprovalView: View {
+    @Environment(Session.self) private var session
+    let itemId: String
+    let approval: MailApproval
+    @State private var busy = false
+
+    private var settled: String {
+        switch approval.status {
+        case "allowed": return "You allowed it — the task continued."
+        case "denied": return "You denied it — the task continued without it."
+        case "superseded": return "You answered with a mail instead."
+        default: return "The conversation was stopped."
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(approval.deviceLabel.map { "Run this on \($0)?" } ?? "Run this command?", systemImage: "exclamationmark.shield")
+                .font(.subheadline.weight(.semibold))
+            Text(approval.command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+            if let reason = approval.reason { Text("Safety check: \(reason)").font(.caption).foregroundStyle(.secondary) }
+            if approval.status == "pending" {
+                HStack {
+                    Button("Deny", role: .destructive) { answer(false) }.buttonStyle(.bordered)
+                    Button("Allow once") { answer(true) }.buttonStyle(.borderedProminent)
+                }
+                .disabled(busy)
+            } else {
+                Text(settled).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func answer(_ allow: Bool) {
+        busy = true
+        Task {
+            await session.mail.resolveApproval(itemId, allow: allow)
+            busy = false
+        }
     }
 }
 
