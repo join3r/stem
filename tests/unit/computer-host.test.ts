@@ -246,6 +246,19 @@ describe.skipIf(!mac)('createComputerHost', () => {
     expect(banner.targets.at(-1)).toBeNull();
   });
 
+  it('passes shot: false to the helper for a step in the middle of a batch, and accepts its text answer', async () => {
+    await writeComputerHostEnabled(true);
+    helper.call = function (this: FakeHelper, cmd: string, fields: Record<string, unknown> = {}) {
+      this.calls.push({ cmd, fields });
+      if (cmd === 'watch') return Promise.resolve({ ok: true });
+      return Promise.resolve({ ok: true, text: 'Done.', target: null });
+    };
+    host.onRequest({ requestId: 'r1', threadId: 't1', action: { kind: 'key', combo: 'Home' }, shot: false });
+    const [step] = await results();
+    expect(step!.result).toEqual({ ok: true, text: 'Done.', target: null });
+    expect(helper.calls.at(-1)).toEqual({ cmd: 'key', fields: { combo: 'Home', shot: false } });
+  });
+
   it('Stop on the banner fails the in-flight action as aborted, reports it, and ends the run', async () => {
     await writeComputerHostEnabled(true);
     helper.hold = () => undefined;

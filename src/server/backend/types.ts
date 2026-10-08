@@ -168,6 +168,8 @@ export interface ComputerRequest {
   action: ComputerAction;
   /** Injected from the live turn. */
   threadId: string;
+  /** False: answer without a picture (a step in the middle of a batch). */
+  shot?: false;
 }
 
 /**

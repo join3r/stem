@@ -3118,6 +3118,155 @@ export function computerResultContent(res) {
   return content;
 }
 
+/** The most steps one `computer` call may chain in `actions`. */
+const COMPUTER_MAX_STEPS = 10;
+
+/** What a step without a picture answers when it has nothing to say (the helper's placeholder). */
+const COMPUTER_NO_SHOT_TEXT = 'Done.';
+
+/** A step as the model will read it back in a batch report: `key "F9"`, `left_click (512, 300)`. */
+function computerStepLabel(params) {
+  const action = String((params && params.action) || '').trim();
+  const at = Array.isArray(params.coordinate) && params.coordinate.length === 2 ? ` (${params.coordinate.join(', ')})` : '';
+  if (action === 'type' || action === 'key' || action === 'hold_key') {
+    const text = typeof params.text === 'string' ? params.text : '';
+    return `${action} ${JSON.stringify(text.length > 40 ? `${text.slice(0, 39)}…` : text)}`;
+  }
+  if (['press', 'focus', 'menu', 'set_value'].includes(action) && Number.isInteger(params.element_id)) {
+    return `${action} ${params.element_id}`;
+  }
+  if (action === 'select_window') {
+    if (Number.isInteger(params.window_id)) return `select_window ${params.window_id}`;
+    if (typeof params.app === 'string' && params.app.trim()) return `select_window ${JSON.stringify(params.app.trim())}`;
+    return 'select_window (whole screen)';
+  }
+  if (action === 'wait' && Number.isFinite(params.duration)) return `wait ${params.duration}s`;
+  return action + at;
+}
+
+/**
+ * The call's steps: `action` alone (one step), or `actions` (up to
+ * COMPUTER_MAX_STEPS, each the shape of a single call). Every step is checked
+ * before the first one runs, so a typo in step 4 never leaves steps 1–3 done.
+ */
+export function computerStepsFrom(params) {
+  const p = params || {};
+  const hasOne = p.action !== undefined && p.action !== null && p.action !== '';
+  const many = p.actions;
+  if (hasOne && many !== undefined) return { ok: false, error: 'Give either `action` or `actions`, not both.' };
+  if (!hasOne && many === undefined) return { ok: false, error: 'Give `action` (one step) or `actions` (several, in order).' };
+  if (hasOne) {
+    const parsed = computerActionFrom(p);
+    return parsed.ok ? { ok: true, steps: [{ action: parsed.action, label: computerStepLabel(p) }] } : parsed;
+  }
+  if (!Array.isArray(many) || many.length === 0) return { ok: false, error: '`actions` must be a non-empty list of steps.' };
+  if (many.length > COMPUTER_MAX_STEPS) {
+    return { ok: false, error: `\`actions\` takes at most ${COMPUTER_MAX_STEPS} steps per call; split the rest into the next call.` };
+  }
+  const steps = [];
+  for (let i = 0; i < many.length; i++) {
+    const item = many[i];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return { ok: false, error: `Step ${i + 1} of \`actions\` is not an object like {"action": "key", "text": "Return"}.` };
+    }
+    const last = i === many.length - 1;
+    // Only the last step brings a picture back, so a look in the middle is
+    // wasted — and a zoom's picture is not clickable anyway.
+    if (!last && (item.action === 'zoom' || item.action === 'screenshot')) {
+      return { ok: false, error: `Step ${i + 1}: ${item.action} only as the last step (the last step always returns a picture).` };
+    }
+    const parsed = computerActionFrom(item);
+    if (!parsed.ok) return { ok: false, error: `Step ${i + 1} (${computerStepLabel(item)}): ${parsed.error}` };
+    steps.push({ action: parsed.action, label: computerStepLabel(item) });
+  }
+  return { ok: true, steps };
+}
+
+const numbered = (steps, from) => steps.map((s, i) => `${from + i + 1}. ${s.label}`).join(', ');
+
+/**
+ * Run the steps in order, one bridge round-trip each (the server's per-action
+ * checks and an older Mac both see ordinary single actions). Every step but
+ * the last asks for no picture (`shot: false`; an older Mac sends one anyway
+ * and it is dropped); the text a step produces (a windows list, a snapshot, a
+ * new window opening) is kept. The first failure stops the batch: the model
+ * reads which step failed and which were done, plus one fresh picture — unless
+ * the user took over, when nothing more is sent at all.
+ */
+async function runComputerSteps(ctx, steps, device) {
+  const notes = [];
+  for (let i = 0; i < steps.length; i++) {
+    const last = i === steps.length - 1;
+    const res = await computerBridge(ctx, {
+      action: steps[i].action,
+      ...(last ? {} : { shot: false }),
+      ...(device ? { device } : {})
+    });
+    if (!res.ok) {
+      const error = res.error || 'The action could not be performed.';
+      if (steps.length === 1) return taskErr(error);
+      const doneText = i > 0 ? `Done before it: ${numbered(steps.slice(0, i), 0)}.` : 'No step before it ran.';
+      const notRun = i < steps.length - 1 ? ` Not run: ${numbered(steps.slice(i + 1), i + 1)}.` : '';
+      const report = [`Step ${i + 1} of ${steps.length} (${steps[i].label}) failed: ${error}`, doneText + notRun, ...notes].join('\n\n');
+      // The user took over or pressed Stop: not one more action, not even a look.
+      if (res.aborted) return taskErr(report);
+      const look = await computerBridge(ctx, { action: { kind: 'screenshot' }, ...(device ? { device } : {}) });
+      if (!look.ok) return taskErr(report);
+      const [head, ...rest] = computerResultContent(look);
+      return { content: [{ type: 'text', text: `${report}\n\nAs things stand now — ${head.text}` }, ...rest], details: {}, isError: true };
+    }
+    if (!last) {
+      const text = typeof res.text === 'string' ? res.text.trim() : '';
+      if (text && text !== COMPUTER_NO_SHOT_TEXT) notes.push(`Step ${i + 1} (${steps[i].label}):\n${text}`);
+      continue;
+    }
+    const content = computerResultContent(res);
+    if (steps.length === 1) return { content, details: {} };
+    const intro = `Ran ${steps.length} steps in order: ${numbered(steps, 0)}. The picture is from after the last.`;
+    const [head, ...rest] = content;
+    return { content: [{ type: 'text', text: [intro, ...notes, head.text].join('\n\n') }, ...rest], details: {} };
+  }
+  return taskErr('No steps to run.');
+}
+
+/** The fields of one step: a single call's `action` and its arguments, or one item of `actions`. */
+const COMPUTER_STEP_PROPERTIES = {
+  action: {
+    type: 'string',
+    enum: COMPUTER_ACTIONS,
+    description:
+      'screenshot | left_click | right_click | middle_click | double_click | triple_click | mouse_move | ' +
+      'left_click_drag (start_coordinate → coordinate) | scroll | type (text) | key (text = key name) | ' +
+      'hold_key (text + duration) | wait (duration) | cursor_position | zoom (region) | list_windows | ' +
+      'select_window (window_id, or app + title; none = back to the whole screen) | snapshot (depth) | ' +
+      'press / focus / menu (element_id) | set_value (element_id + text).'
+  },
+  coordinate: {
+    type: 'array',
+    items: { type: 'number' },
+    description: '[x, y] in pixels of the last screenshot. Clicks and scrolls without it act at the cursor.'
+  },
+  start_coordinate: {
+    type: 'array',
+    items: { type: 'number' },
+    description: '[x, y] where a left_click_drag begins.'
+  },
+  text: { type: 'string', description: 'Text to type, or the key / chord for key and hold_key.' },
+  scroll_direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+  scroll_amount: { type: 'number', description: 'Lines to scroll (default 3).' },
+  duration: { type: 'number', description: 'Seconds: wait (max 10) or hold_key (max 5).' },
+  region: {
+    type: 'array',
+    items: { type: 'number' },
+    description: '[x, y, width, height] in screenshot pixels, for zoom.'
+  },
+  window_id: { type: 'number', description: 'A window id from list_windows, for select_window.' },
+  app: { type: 'string', description: 'An app name from list_windows, for select_window (its front window, or the one matching `title`).' },
+  title: { type: 'string', description: 'Part of a window title, to pick among an app\'s windows.' },
+  element_id: { type: 'number', description: 'An element id from the last snapshot, for press, focus, menu and set_value.' },
+  depth: { type: 'number', description: 'How deep snapshot walks the control tree (default 12).' }
+};
+
 function registerComputerTool(pi, turnContext) {
   pi.registerTool({
     name: 'computer',
@@ -3126,8 +3275,13 @@ function registerComputerTool(pi, turnContext) {
       "See and drive a Mac: the one this persona is pinned to (Manage → Personas → \"Computer this persona " +
       'controls"), or, in a chat with no persona, the one Settings → Features → Computer control names — or, ' +
       'when this turn\'s context lists Macs for you to choose from, the one you name in `device`. In such a ' +
-      'chat use it only when the user asks you to do something on their computer. One call is one action; every action answers with a fresh picture, so look before you act ' +
-      'and check after. Coordinates are PIXELS OF THE LAST PICTURE you were shown (top-left origin) — never ' +
+      'chat use it only when the user asks you to do something on their computer. Every call answers with a ' +
+      'fresh picture, so look before you act and check after. One call can chain several steps: `actions` (up ' +
+      'to 10, in order, one picture after the last). Batch what is predictable — keys, typing, clicks at ' +
+      'coordinates you can already see, a short wait — and take one look at the end, e.g. [key Home, ' +
+      'double_click, key F9]; act one step at a time when your next move depends on what this one shows. A ' +
+      'batch stops at its first failed step and says which. Coordinates are PIXELS OF THE LAST PICTURE you ' +
+      'were shown (top-left origin), in every step of a batch too — never ' +
       'guess them from memory of an earlier frame. Use `zoom` with a `region` to read small text (its picture is ' +
       'magnified: do not click from it, take a screenshot first). Prefer `run_command` with `device` set to this ' +
       'same computer for anything a shell does better (opening an app with `open -a`, files, git, scripts); click ' +
@@ -3155,62 +3309,35 @@ function registerComputerTool(pi, turnContext) {
     parameters: {
       type: 'object',
       properties: {
-        action: {
-          type: 'string',
-          enum: COMPUTER_ACTIONS,
+        ...COMPUTER_STEP_PROPERTIES,
+        actions: {
+          type: 'array',
+          maxItems: COMPUTER_MAX_STEPS,
+          items: { type: 'object', properties: COMPUTER_STEP_PROPERTIES, required: ['action'] },
           description:
-            'screenshot | left_click | right_click | middle_click | double_click | triple_click | mouse_move | ' +
-            'left_click_drag (start_coordinate → coordinate) | scroll | type (text) | key (text = key name) | ' +
-            'hold_key (text + duration) | wait (duration) | cursor_position | zoom (region) | list_windows | ' +
-            'select_window (window_id, or app + title; none = back to the whole screen) | snapshot (depth) | ' +
-            'press / focus / menu (element_id) | set_value (element_id + text).'
+            `Instead of \`action\`: up to ${COMPUTER_MAX_STEPS} steps run in order, each shaped like a single call ` +
+            '({"action": "key", "text": "Home"}, {"action": "double_click", "coordinate": [512, 300]}, …). Only the ' +
+            'last step returns a picture; zoom and screenshot only as the last step. Stops at the first failed step.'
         },
-        coordinate: {
-          type: 'array',
-          items: { type: 'number' },
-          description: '[x, y] in pixels of the last screenshot. Clicks and scrolls without it act at the cursor.'
-        },
-        start_coordinate: {
-          type: 'array',
-          items: { type: 'number' },
-          description: '[x, y] where a left_click_drag begins.'
-        },
-        text: { type: 'string', description: 'Text to type, or the key / chord for key and hold_key.' },
-        scroll_direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
-        scroll_amount: { type: 'number', description: 'Lines to scroll (default 3).' },
-        duration: { type: 'number', description: 'Seconds: wait (max 10) or hold_key (max 5).' },
-        region: {
-          type: 'array',
-          items: { type: 'number' },
-          description: '[x, y, width, height] in screenshot pixels, for zoom.'
-        },
-        window_id: { type: 'number', description: 'A window id from list_windows, for select_window.' },
-        app: { type: 'string', description: 'An app name from list_windows, for select_window (its front window, or the one matching `title`).' },
-        title: { type: 'string', description: 'Part of a window title, to pick among an app\'s windows.' },
-        element_id: { type: 'number', description: 'An element id from the last snapshot, for press, focus, menu and set_value.' },
-        depth: { type: 'number', description: 'How deep snapshot walks the control tree (default 12).' },
         device: {
           type: 'string',
           description:
             'Which Mac, by name — only when this turn\'s context lists Macs for you to choose from. Otherwise leave it out: the Mac is fixed.'
         }
       },
-      required: ['action']
     },
     async execute(_id, params, _signal, _onUpdate, ctx) {
       // A persona's computer pin, or a plain chat Settings allows. The gate
       // saves the round-trip; main's computer bridge enforces the same rule.
       const turnCtx = turnContext ? turnContext() : null;
       if (turnCtx && turnCtx.computer !== true) return taskErr(turnCtx.computerRefusal || COMPUTER_UNPINNED_REFUSAL);
-      const parsed = computerActionFrom(params || {});
+      const parsed = computerStepsFrom(params || {});
       if (!parsed.ok) return taskErr(parsed.error);
       const device =
         turnCtx && turnCtx.computerChoose && params && typeof params.device === 'string' && params.device.trim()
           ? params.device.trim()
           : undefined;
-      const res = await computerBridge(ctx, { action: parsed.action, ...(device ? { device } : {}) });
-      if (!res.ok) return taskErr(res.error || 'The action could not be performed.');
-      return { content: computerResultContent(res), details: {} };
+      return runComputerSteps(ctx, parsed.steps, device);
     }
   });
 }

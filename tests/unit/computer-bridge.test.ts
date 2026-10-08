@@ -283,6 +283,144 @@ describe('extension side', () => {
     }
   });
 
+  it('runs `actions` in order: no picture until the last step, intermediate text kept', async () => {
+    gate(true);
+    try {
+      const tool = await registeredComputer();
+      let n = 0;
+      const { asks, ctx } = scriptedCtx(() => {
+        n++;
+        // Step 1: a current Mac's text-only answer; step 2: an older Mac's frame
+        // (ignored); step 3: the last step's picture.
+        if (n === 1) return JSON.stringify({ ok: true, text: 'Done.' });
+        if (n === 2)
+          return JSON.stringify({
+            ok: true,
+            screenshot: { jpegBase64: 'T0xE', width: 1, height: 1 },
+            text: 'A new DaVinci Resolve window opened: 77 "Import Media".'
+          });
+        return JSON.stringify({ ok: true, screenshot: { jpegBase64: 'QUJD', width: 640, height: 400 }, cursor: { x: 1, y: 2 } });
+      });
+      const result = await tool.execute!(
+        'c',
+        {
+          actions: [
+            { action: 'key', text: 'Home' },
+            { action: 'double_click', coordinate: [512, 300] },
+            { action: 'key', text: 'F9' }
+          ]
+        },
+        undefined,
+        undefined,
+        ctx
+      );
+      expect(asks.map((a) => JSON.parse(a.payload))).toEqual([
+        { action: { kind: 'key', combo: 'Home' }, shot: false },
+        { action: { kind: 'click', x: 512, y: 300, button: 'left', count: 2 }, shot: false },
+        { action: { kind: 'key', combo: 'F9' } }
+      ]);
+      expect(result.isError).toBeFalsy();
+      const text = result.content[0]!.text!;
+      expect(text).toContain('Ran 3 steps in order: 1. key "Home", 2. double_click (512, 300), 3. key "F9"');
+      expect(text).toContain('Step 2 (double_click (512, 300)):\nA new DaVinci Resolve window opened');
+      expect(text).not.toContain('Done.');
+      expect(text).toContain('Screen 640×400 px');
+      expect(result.content).toHaveLength(2);
+      expect(result.content[1]).toMatchObject({ type: 'image', data: 'QUJD' });
+    } finally {
+      rmSync(gatePath, { force: true });
+    }
+  });
+
+  it('a failed step stops the batch, says what was done, and shows one picture of the state', async () => {
+    gate(true);
+    try {
+      const tool = await registeredComputer();
+      const { asks, ctx } = scriptedCtx((_t, payload) => {
+        const kind = JSON.parse(payload).action.kind;
+        if (kind === 'press') return JSON.stringify({ ok: false, error: 'press 4: the control is gone; take a new snapshot.' });
+        if (kind === 'screenshot')
+          return JSON.stringify({ ok: true, screenshot: { jpegBase64: 'Tk9X', width: 8, height: 6 }, cursor: { x: 0, y: 0 } });
+        return JSON.stringify({ ok: true, text: 'Done.' });
+      });
+      const result = await tool.execute!(
+        'c',
+        {
+          actions: [
+            { action: 'key', text: 'Home' },
+            { action: 'press', element_id: 4 },
+            { action: 'key', text: 'F9' }
+          ]
+        },
+        undefined,
+        undefined,
+        ctx
+      );
+      expect(asks.map((a) => JSON.parse(a.payload).action.kind)).toEqual(['key', 'press', 'screenshot']);
+      expect(result.isError).toBe(true);
+      const text = result.content[0]!.text!;
+      expect(text).toContain('Step 2 of 3 (press 4) failed: press 4: the control is gone');
+      expect(text).toContain('Done before it: 1. key "Home". Not run: 3. key "F9".');
+      expect(text).toContain('Screen 8×6 px');
+      expect(result.content[1]).toMatchObject({ type: 'image', data: 'Tk9X' });
+    } finally {
+      rmSync(gatePath, { force: true });
+    }
+  });
+
+  it('the user taking over mid-batch stops dead: no further step, no picture', async () => {
+    gate(true);
+    try {
+      const tool = await registeredComputer();
+      const { asks, ctx } = scriptedCtx((_t, payload) =>
+        JSON.parse(payload).action.kind === 'type'
+          ? JSON.stringify({ ok: false, error: 'The user took over the computer.', aborted: true })
+          : JSON.stringify({ ok: true, text: 'Done.' })
+      );
+      const result = await tool.execute!(
+        'c',
+        { actions: [{ action: 'key', text: 'cmd+l' }, { action: 'type', text: 'hello' }, { action: 'key', text: 'Return' }] },
+        undefined,
+        undefined,
+        ctx
+      );
+      expect(asks).toHaveLength(2);
+      expect(result.isError).toBe(true);
+      expect(result.content).toHaveLength(1);
+      expect(result.content[0]!.text).toContain('Step 2 of 3 (type "hello") failed: The user took over');
+      expect(result.content[0]!.text).toContain('Done before it: 1. key "cmd+l"');
+    } finally {
+      rmSync(gatePath, { force: true });
+    }
+  });
+
+  it('checks every step before running any: both forms, too many, a look mid-batch, a bad step', async () => {
+    gate(true);
+    try {
+      const tool = await registeredComputer();
+      const { asks, ctx } = scriptedCtx(() => JSON.stringify({ ok: true, text: 'Done.' }));
+      const run = (params: Record<string, unknown>) => tool.execute!('c', params, undefined, undefined, ctx);
+      expect((await run({ action: 'screenshot', actions: [{ action: 'screenshot' }] })).content[0]!.text).toContain(
+        'not both'
+      );
+      expect((await run({})).content[0]!.text).toContain('`actions`');
+      const eleven = Array.from({ length: 11 }, () => ({ action: 'key', text: 'Down' }));
+      expect((await run({ actions: eleven })).content[0]!.text).toContain('at most 10');
+      expect(
+        (await run({ actions: [{ action: 'zoom', region: [0, 0, 5, 5] }, { action: 'key', text: 'a' }] })).content[0]!.text
+      ).toContain('zoom only as the last step');
+      const bad = await run({ actions: [{ action: 'key', text: 'Home' }, { action: 'left_click', coordinate: [1] }] });
+      expect(bad.isError).toBe(true);
+      expect(bad.content[0]!.text).toContain('Step 2 (left_click): coordinate must be [x, y].');
+      expect(asks).toHaveLength(0);
+      // A zoom as the last step is fine.
+      await run({ actions: [{ action: 'key', text: 'Home' }, { action: 'zoom', region: [0, 0, 5, 5] }] });
+      expect(asks).toHaveLength(2);
+    } finally {
+      rmSync(gatePath, { force: true });
+    }
+  });
+
   it('refuses up front when the gate says no computer pin — and when the gate is absent', async () => {
     gate(false);
     try {
@@ -364,6 +502,27 @@ describe('runtime side', () => {
     });
     expect(JSON.parse(sent[0]!.value)).toMatchObject({ ok: true });
     expect(sent[0]!.id).toBe('elicit-1');
+  });
+
+  it('forwards shot: false for a step in the middle of a batch, and only then', async () => {
+    const seen: ComputerRequest[] = [];
+    const { internal, worker, sent } = runtimeWithBridge({
+      handleComputerRequest: async (req) => {
+        seen.push(req);
+        return { ok: true, text: 'Done.' };
+      },
+      resolveNamedMac: async () => ({ ok: false, error: 'never' }),
+      endThread: () => {},
+      settleAll: () => {}
+    });
+    worker.currentTurn = newTurnContext('t', 'turn-1');
+    worker.currentTurn.computerGrant = { kind: 'pin', device: 'mac-1' };
+    internal.handleComputerBridgeRequest(worker, 'e1', JSON.stringify({ action: { kind: 'key', combo: 'a' }, shot: false }));
+    await settleSends(sent);
+    internal.handleComputerBridgeRequest(worker, 'e2', JSON.stringify({ action: { kind: 'key', combo: 'b' }, shot: 'no' }));
+    for (let i = 0; i < 20 && sent.length < 2; i++) await Promise.resolve();
+    expect(seen[0]).toEqual({ device: 'mac-1', threadId: 't', action: { kind: 'key', combo: 'a' }, shot: false });
+    expect(seen[1]).toEqual({ device: 'mac-1', threadId: 't', action: { kind: 'key', combo: 'b' } });
   });
 
   it('refuses a turn with no computer pin before the bridge, in any turn kind', async () => {

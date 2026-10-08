@@ -1538,6 +1538,12 @@ export interface DeviceComputerRequest {
   /** The turn's thread; the device keys its run (banner, helper, watchdog) off it. */
   threadId: string;
   action: ComputerAction;
+  /**
+   * False: skip the picture and answer with text alone — a step in the middle
+   * of a batch, whose frame nobody would look at. Absent = the usual frame. A
+   * Mac that predates the flag ignores it and answers with a frame anyway.
+   */
+  shot?: false;
 }
 
 /** A frame of the screen, as the device answers it. */
@@ -1553,7 +1559,7 @@ export interface ComputerScreenshot {
 export type DeviceComputerResult =
   | {
       ok: true;
-      /** Absent only on the text-only answers (list_windows). */
+      /** Absent only on the text-only answers (list_windows, and any action sent with `shot: false`). */
       screenshot?: ComputerScreenshot;
       cursor?: { x: number; y: number };
       /** The windows list or the accessibility snapshot. */

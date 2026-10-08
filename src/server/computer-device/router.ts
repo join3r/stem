@@ -60,8 +60,16 @@ export interface ComputerDeviceRouter {
   hosts(): Promise<Record<string, DeviceComputerHostEntry>>;
   hostFor(deviceId: string): Promise<DeviceComputerHostEntry | null>;
   isAvailable(deviceId: string): boolean;
-  /** Send one action to `deviceId` for `threadId`; resolves with the device's answer or a refusal. */
-  send(threadId: string, deviceId: string, action: ComputerAction): Promise<DeviceComputerResult>;
+  /**
+   * Send one action to `deviceId` for `threadId`; resolves with the device's
+   * answer or a refusal. `shot: false` asks for no picture back.
+   */
+  send(
+    threadId: string,
+    deviceId: string,
+    action: ComputerAction,
+    opts?: { shot?: false }
+  ): Promise<DeviceComputerResult>;
   /** Answer one held action — `computerHost:result`. False for an id that is not live. */
   settle(deviceId: string, requestId: string, result: unknown): boolean;
   /**
@@ -141,8 +149,9 @@ function asResult(raw: unknown): DeviceComputerResult {
           }
         : undefined;
     const text = typeof v.text === 'string' && v.text.trim() ? v.text : undefined;
-    // A frame or some text: the windows list answers with text alone; every
-    // other action carries a screenshot, the evidence of what it did.
+    // A frame or some text: the windows list (and an action asked for no
+    // picture) answers with text alone; every other action carries a
+    // screenshot, the evidence of what it did.
     if (!screenshot && !text) return { ok: false, error: 'The computer answered without a screenshot.' };
     const target = asTarget(v.target);
     return {
@@ -217,10 +226,15 @@ export function createComputerDeviceRouter(deps: ComputerDeviceRouterDeps): Comp
 
     isAvailable: (deviceId) => deps.connectedDevices().has(deviceId),
 
-    async send(threadId, deviceId, action) {
+    async send(threadId, deviceId, action, opts) {
       if (aborted.has(threadId)) return { ok: false, error: HUMAN_TOOK_OVER, aborted: true };
       const requestId = mintRequestId();
-      const frame: DeviceComputerRequest = { requestId, threadId, action };
+      const frame: DeviceComputerRequest = {
+        requestId,
+        threadId,
+        action,
+        ...(opts?.shot === false ? { shot: false } : {})
+      };
       const reached = deps.pushTo(deviceId, COMPUTER_REQUEST_FRAME, frame);
       if (reached === 0) {
         return {

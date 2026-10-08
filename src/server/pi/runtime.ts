@@ -3065,7 +3065,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
 
   /**
    * Handle the `computer` tool's ctx.ui.input round-trip (sentinel
-   * COMPUTER_BRIDGE_TITLE). The placeholder is a JSON { action, device? }
+   * COMPUTER_BRIDGE_TITLE). The placeholder is a JSON { action, device?, shot? }
    * payload; the Mac it runs on is the turn's computer grant — the persona's
    * pin or a chat's fixed Settings target, read off the live turn — and the
    * payload's `device` counts only in a model-chooses chat. Answers the
@@ -3084,11 +3084,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           'take it, or that chats can be allowed in Settings → Features → Computer control.',
       unavailable: 'Computer control is unavailable.',
       choices: computerChoicesText,
-      call: (bridge, device, action) =>
+      call: (bridge, device, action, req) =>
         bridge.handleComputerRequest({
           device,
           action: action as ComputerRequest['action'],
-          threadId: turn?.threadId ?? ''
+          threadId: turn?.threadId ?? '',
+          // A step in the middle of a batch: no picture back (an older Mac sends one anyway).
+          ...(req.shot === false ? { shot: false as const } : {})
         })
     });
   }
@@ -3131,7 +3133,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       refusal: string;
       unavailable: string;
       choices: () => Promise<string>;
-      call: (bridge: B, device: string, action: object) => Promise<unknown>;
+      call: (bridge: B, device: string, action: object, req: { shot?: unknown }) => Promise<unknown>;
     }
   ): void {
     const requestProcess = worker.proc;
@@ -3145,7 +3147,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         if (!bridge) return respond({ ok: false, error: spec.unavailable });
         const grant = spec.grant;
         if (!grant) return respond({ ok: false, error: spec.refusal });
-        const req = JSON.parse(payload ?? '{}') as { action?: unknown; device?: unknown };
+        const req = JSON.parse(payload ?? '{}') as { action?: unknown; device?: unknown; shot?: unknown };
         const action = req.action;
         if (!action || typeof action !== 'object' || typeof (action as { kind?: unknown }).kind !== 'string') {
           return respond({ ok: false, error: `The ${spec.tool} tool sent no action.` });
@@ -3162,7 +3164,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           if (!target.ok) return respond({ ok: false, error: `${target.error} ${choices}`.trim() });
           device = target.deviceId;
         }
-        respond(await spec.call(bridge, device, action));
+        respond(await spec.call(bridge, device, action, req));
       } catch (e) {
         respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
       }

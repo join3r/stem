@@ -845,7 +845,12 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     if (!action || typeof action !== 'object' || typeof action.kind !== 'string') return null;
     // The action's fields are validated where they land (the helper refuses
     // what it cannot do); the shape here is only what the host keys off.
-    return { requestId: frame.requestId, threadId: frame.threadId, action: frame.action! };
+    return {
+      requestId: frame.requestId,
+      threadId: frame.threadId,
+      action: frame.action!,
+      ...(frame.shot === false ? { shot: false as const } : {})
+    };
   }
 
   function asBrowserRequest(data: unknown): DeviceBrowserRequest | null {

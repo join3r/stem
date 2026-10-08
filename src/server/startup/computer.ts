@@ -12,7 +12,8 @@ import type { ChatBackend, ComputerBridge } from '../backend/types';
  */
 export function initComputerControl(deps: { runtime: ChatBackend }): ComputerBridge {
   const bridge: ComputerBridge = {
-    handleComputerRequest: (req) => computerDeviceRouter().send(req.threadId, req.device, req.action),
+    handleComputerRequest: (req) =>
+      computerDeviceRouter().send(req.threadId, req.device, req.action, req.shot === false ? { shot: false } : undefined),
     async resolveNamedMac(name) {
       const target = await resolveComputerTarget(name);
       if (!target.ok) return target;

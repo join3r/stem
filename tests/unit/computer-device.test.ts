@@ -145,6 +145,19 @@ describe('createComputerDeviceRouter', () => {
     expect((await blank).ok).toBe(false);
   });
 
+  it('carries shot: false on the frame only when asked, and accepts the text-only answer', async () => {
+    const step = router.send('t1', 'mac-1', { kind: 'key', combo: 'Home' }, { shot: false });
+    let frame = sent.at(-1)!.data as DeviceComputerRequest;
+    expect(frame.shot).toBe(false);
+    router.settle('mac-1', frame.requestId, { ok: true, text: 'Done.', target: null });
+    expect(await step).toEqual({ ok: true, text: 'Done.', target: null });
+    const plain = router.send('t1', 'mac-1', { kind: 'key', combo: 'F9' });
+    frame = sent.at(-1)!.data as DeviceComputerRequest;
+    expect('shot' in frame).toBe(false);
+    router.settle('mac-1', frame.requestId, { ok: true, screenshot: shot });
+    expect((await plain).ok).toBe(true);
+  });
+
   it('the person taking over fails the in-flight action, refuses the rest of the turn, and endThread clears it', async () => {
     const promise = router.send('t1', 'mac-1', { kind: 'type', text: 'hi' });
     // Another Mac cannot end a run it never had.

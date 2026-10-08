@@ -64,10 +64,21 @@ func targetField() -> Any {
   capture.target?.summary ?? NSNull()
 }
 
+/// False while serving a command sent with "shot": false — a step in the
+/// middle of a batch, whose frame nobody would look at.
+var wantShot = true
+
 /// Every input command settles for a beat and then answers with a fresh frame,
-/// so one round-trip carries both the effect and the evidence of it.
+/// so one round-trip carries both the effect and the evidence of it. Without a
+/// picture wanted it still settles (the next step expects the app to have
+/// reacted) and answers with its text, or "Done." — text is what the desktop
+/// app accepts in place of a frame.
 func answerWithScreenshot(_ id: Any, settleMs: Int = 300, text: String? = nil) {
   if settleMs > 0 { usleep(useconds_t(settleMs) * 1000) }
+  if !wantShot {
+    emit(["id": id, "ok": true, "text": text ?? "Done.", "target": targetField()])
+    return
+  }
   do {
     let shot = try capture.screenshot()
     var reply: [String: Any] = ["id": id, "ok": true, "screenshot": shot, "cursor": input.cursorInScreenshot(), "target": targetField()]
@@ -117,6 +128,7 @@ while let line = readLine(strippingNewline: true) {
   }
   let id: Any = obj["id"] ?? NSNull()
   let cmd = obj["cmd"] as? String ?? ""
+  wantShot = (obj["shot"] as? Bool) ?? true
   trace("cmd \(cmd)")
   do {
     switch cmd {
@@ -125,6 +137,7 @@ while let line = readLine(strippingNewline: true) {
     case "request-access":
       emit(["id": id, "ok": true, "status": Status.request()])
     case "screenshot":
+      wantShot = true
       answerWithScreenshot(id, settleMs: 0)
     case "cursor":
       if ax != nil { throw screenOnly("cursor_position") }
@@ -218,7 +231,13 @@ while let line = readLine(strippingNewline: true) {
       if ax.lastSnapshotCount < 12, let selected, selected.chromium, !Windows.isOnScreen(selected.id) {
         tree += "\n\n" + (Windows.chromiumOffScreenNote(selected) ?? "")
       }
-      emit(["id": id, "ok": true, "screenshot": shot, "cursor": input.cursorInScreenshot(), "text": tree, "target": targetField()])
+      // Without a picture wanted the frame above still set the geometry the ids' positions are in.
+      var reply: [String: Any] = ["id": id, "ok": true, "text": tree, "target": targetField()]
+      if wantShot {
+        reply["screenshot"] = shot
+        reply["cursor"] = input.cursorInScreenshot()
+      }
+      emit(reply)
     case "press":
       guard let ax else { throw HelperError("press acts on a snapshot id; select_window and snapshot first.") }
       try ax.press(id: Int(number(obj["element"]) ?? -1))

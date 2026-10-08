@@ -286,7 +286,10 @@ export function createComputerHost(deps: ComputerHostDeps): ComputerHost {
     }
   }
 
-  /** A reply is usable when it carries a frame or some text (the windows list); anything else is a failure. */
+  /**
+   * A reply is usable when it carries a frame or some text (the windows list,
+   * an action asked for no picture); anything else is a failure.
+   */
   function fromReply(reply: HelperReply): DeviceComputerResult {
     const text = typeof reply.text === 'string' && reply.text.trim() ? reply.text : undefined;
     if (!reply.ok || (!reply.screenshot && !text)) {
@@ -344,6 +347,9 @@ export function createComputerHost(deps: ComputerHostDeps): ComputerHost {
     }
     touch(r);
     const { cmd, fields } = helperCommand(request.action);
+    // A step in the middle of a batch: the helper answers with text alone. An
+    // older helper ignores the flag and sends its frame, which is merely wasted.
+    if (request.shot === false) fields.shot = false;
     const timeout = request.action.kind === 'wait' ? request.action.ms + 15_000 : undefined;
     return new Promise<DeviceComputerResult>((resolve) => {
       let settled = false;
