@@ -15,7 +15,11 @@ import { hostShellFromPlatform } from './host-shell';
 // Git's usr\bin when Git Bash is the host shell.
 
 export const DEFAULT_TIMEOUT_MS = 60_000;
-export const MAX_TIMEOUT_MS = 300_000;
+// An hour, not five minutes: unattended mail and scheduled runs install
+// toolchains, download models and run benchmarks, and a cap below that killed
+// them mid-step. Past an hour the agent backgrounds the job (see run_command's
+// description) and checks on it with later commands.
+export const MAX_TIMEOUT_MS = 3_600_000;
 /** Per-stream capture cap; past it the child keeps running but output is dropped. */
 export const OUTPUT_CAP_BYTES = 64 * 1024;
 

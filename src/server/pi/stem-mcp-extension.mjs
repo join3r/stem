@@ -2860,14 +2860,18 @@ function registerExecTool(pi) {
       'watching the run pauses until they answer — then end your turn). Always quote arguments containing ' +
       'special characters (&, ?, ;, spaces) — e.g. agent-browser open "https://example.com/watch?v=x&t=1" ' +
       '— an unquoted & or ; changes what the shell runs and forces the approval path. Output is captured ' +
-      'with the exit code and truncated past 64KB per stream; default timeout 60s (max 300s via ' +
-      '`timeout_ms`).',
+      'with the exit code and truncated past 64KB per stream; default timeout 60s (max 3600s via ' +
+      '`timeout_ms`). Set `timeout_ms` to fit slow steps — a large install, a model download, a long build or ' +
+      'benchmark — rather than letting them hit the default. For a job that may outlast an hour, start it in the ' +
+      'background with its output in a log file, e.g. `nohup python bench.py > bench.log 2>&1 & echo $!`, then ' +
+      'check it with later commands (`tail -n 50 bench.log`, `kill -0 <pid>`), waiting between checks with ' +
+      '`sleep` inside a command of its own.',
     parameters: {
       type: 'object',
       properties: {
         command: { type: 'string', description: 'The shell command to run, e.g. "agent-browser open https://example.com".' },
         cwd: { type: 'string', description: 'Optional absolute path of an existing directory to run in.' },
-        timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds (default 60000, max 300000).' },
+        timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds (default 60000, max 3600000).' },
         device: {
           type: 'string',
           description:
