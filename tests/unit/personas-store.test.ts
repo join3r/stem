@@ -42,7 +42,7 @@ describe('first read', () => {
     const personas = await listPersonas();
     expect(personas.map((p) => p.id)).toEqual(['normal', 'verifier', 'secretary', 'orchestrator', 'critic']);
     expect(personas.every((p) => p.builtin)).toBe(true);
-    expect(onDisk().version).toBe(3);
+    expect(onDisk().version).toBe(4);
   });
 
   it('degrades a corrupt file to the built-ins rather than throwing', async () => {
@@ -163,13 +163,34 @@ describe('save', () => {
     expect((await getPersona('critic'))?.recall).toBe(false);
     expect((await getPersona('verifier'))?.recall).toBeUndefined();
     // …and the read persists it: the file on disk now says so too.
-    expect(onDisk().version).toBe(3);
+    expect(onDisk().version).toBe(4);
     expect(onDisk().personas.find((p: Persona) => p.id === 'critic')?.recall).toBe(false);
     // The user turns it back on: written as v3, the choice survives the next read.
     const critic = (await getPersona('critic'))!;
     await savePersona({ ...critic, recall: true });
-    expect(onDisk().version).toBe(3);
+    expect(onDisk().version).toBe(4);
     expect((await getPersona('critic'))?.recall).toBeUndefined();
+  });
+
+  it('a v3 file refreshes an untouched legacy Secretary/Orchestrator prompt, never an edited one', async () => {
+    const seeded = await listPersonas();
+    const seedOf = (id: string) => seeded.find((p) => p.id === id)!.prompt;
+    const raw = onDisk();
+    raw.version = 3;
+    for (const p of raw.personas) {
+      // The phase-1 seed the deployed server still carried.
+      if (p.id === 'orchestrator') {
+        p.prompt =
+          'You are Orchestrator. Split large tasks into independent pieces, delegate each piece, and assemble ' +
+          'the results into one coherent answer. When a task cannot be split, or the delegation tools are not ' +
+          'available yet, do the work directly and say so.';
+      }
+      if (p.id === 'secretary') p.prompt = 'You are my own secretary.';
+    }
+    writeFileSync(path, JSON.stringify(raw), 'utf8');
+    expect((await getPersona('orchestrator'))?.prompt).toBe(seedOf('orchestrator'));
+    expect((await getPersona('secretary'))?.prompt).toBe('You are my own secretary.');
+    expect(onDisk().version).toBe(4);
   });
 
   it('migrates the pre-rename canAddPersonas flag on read', async () => {
@@ -197,7 +218,7 @@ describe('save', () => {
     // The user unticks it — the write lands as v2 and the choice sticks.
     const orchestrator = (await getPersona('orchestrator'))!;
     await savePersona({ ...orchestrator, canManagePersonas: undefined });
-    expect(onDisk().version).toBe(3);
+    expect(onDisk().version).toBe(4);
     expect((await getPersona('orchestrator'))?.canManagePersonas).toBeUndefined();
   });
 
@@ -326,6 +347,23 @@ describe('bridge mutators', () => {
     // The bridge edit path cannot touch the list.
     await updatePersonaFields(helper.id, { name: 'helper', prompt: '', mcpServers: ['logs'] } as never);
     expect((await getPersona(helper.id))?.mcpServers).toEqual(['notes']);
+  });
+
+  it('savePersonaFor can make a blind helper; a recall-off creator only makes blind ones', async () => {
+    const blind = await savePersonaFor('orchestrator', { name: 'judge', prompt: '', recall: false });
+    expect((await getPersona(blind.id))?.recall).toBe(false);
+    const open = await savePersonaFor('orchestrator', { name: 'open', prompt: '', recall: true });
+    expect((await getPersona(open.id))?.recall).toBeUndefined();
+    // Critic is recall-off: nothing it spawns reaches the user's history.
+    const fromCritic = await savePersonaFor('critic', { name: 'critic-helper', prompt: '' });
+    expect(fromCritic.recall).toBe(false);
+    await updatePersonaFields(fromCritic.id, { recall: true });
+    expect((await getPersona(fromCritic.id))?.recall).toBe(false);
+    // An ordinary creator may switch its helper back on.
+    await updatePersonaFields(blind.id, { recall: true });
+    expect((await getPersona(blind.id))?.recall).toBeUndefined();
+    await updatePersonaFields(blind.id, { recall: false });
+    expect((await getPersona(blind.id))?.recall).toBe(false);
   });
 
   it('savePersonaFor enforces name uniqueness', async () => {

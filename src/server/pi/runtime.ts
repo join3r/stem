@@ -3355,6 +3355,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           prompt?: string;
           model?: string;
           effort?: string;
+          recall?: unknown;
           title?: string;
           ids?: unknown;
         };
@@ -3393,7 +3394,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           case 'save_persona':
             return respond(
               await bridge.savePersona(
-                { id: req.id, name: req.name, prompt: req.prompt, model: req.model, effort: req.effort },
+                {
+                  id: req.id,
+                  name: req.name,
+                  prompt: req.prompt,
+                  model: req.model,
+                  effort: req.effort,
+                  ...(typeof req.recall === 'boolean' ? { recall: req.recall } : {})
+                },
                 ctx
               )
             );

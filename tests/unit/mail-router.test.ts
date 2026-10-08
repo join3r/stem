@@ -1147,6 +1147,71 @@ describe('fan-out joins', () => {
     expect(mail.items.filter((i) => i.from !== 'user' && i.to.includes('w2'))).toHaveLength(1);
   });
 
+  it('a consulted persona that can manage personas runs its own helpers as sub-agents', async () => {
+    const h1 = await savePersonaFor('orchestrator', { name: 'reviewer-a', prompt: '' });
+    const h2 = await savePersonaFor('orchestrator', { name: 'reviewer-b', prompt: '' });
+    const stranger = await savePersonaFor('secretary', { name: 'secretary-helper', prompt: '' });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.secretary = [
+      {
+        mode: 'ok',
+        reply: 'handing off',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['orchestrator'], body: 'run the reviews' }, ctx)).ok).toBe(true);
+        }
+      },
+      {
+        mode: 'ok',
+        reply: 'answered',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['user'], body: 'final answer for the user' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    fake.scriptsByPersona.orchestrator = [
+      {
+        mode: 'ok',
+        reply: 'staffing',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.addPersona(h1.id, ctx)).ok).toBe(true);
+          expect((await bridge.addPersona(h2.id, ctx)).ok).toBe(true);
+          expect((await bridge.addPersona(stranger.id, ctx)).ok).toBe(true);
+          // Another persona's helper stays out of reach: hub and spoke still holds.
+          const refused = await bridge.send({ to: [stranger.id], body: 'help' }, ctx);
+          expect(refused.ok).toBe(false);
+          if (!refused.ok) expect(refused.error).toContain('apart from helpers you created yourself');
+          expect((await bridge.send({ to: [h1.id, h2.id], body: 'review your half' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'assembled reviews' }
+    ];
+    fake.scriptsByPersona[h1.id] = [{ mode: 'ok', reply: 'a-done' }];
+    fake.scriptsByPersona[h2.id] = [{ mode: 'ok', reply: 'b-done' }];
+    await router.compose({ to: ['secretary', 'orchestrator'], subject: 'reviews', body: 'go' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'final answer for the user' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations[0].status).toBe('idle');
+    });
+    // The helpers' replies assembled back to Orchestrator, whose one answer
+    // went to the persona that consulted it — not to the user.
+    const assembly = fake.starts.find((s) => s.input.includes('Replies to your delegations'));
+    expect(assembly?.persona?.id).toBe('orchestrator');
+    expect(assembly?.input).toContain('a-done');
+    expect(assembly?.input).toContain('b-done');
+    const mail = await readMail();
+    expect(mail.items.find((i) => i.body === 'assembled reviews')?.to).toEqual(['secretary']);
+    // Each helper's delivery told it who it is, and Orchestrator's named its helpers.
+    const helperStart = fake.starts.find((s) => s.persona?.id === h2.id);
+    expect(helperStart?.mail?.names?.[h2.id]).toBe('reviewer-b');
+    const orchestratorStart = fake.starts.filter((s) => s.persona?.id === 'orchestrator').at(-1);
+    expect(orchestratorStart?.mail?.canStaff).toBe(true);
+    expect(orchestratorStart?.mail?.helpers).toEqual([h1.id, h2.id]);
+    // Secretary heard that Orchestrator can staff a multi-worker job itself.
+    expect(fake.starts.find((s) => s.persona?.id === 'secretary')?.mail?.staffers).toEqual(['orchestrator']);
+  });
+
   it('two fan-outs in one turn widen the same join into one assembly', async () => {
     await savePersona({ id: 'w1', name: 'w1', prompt: '' });
     await savePersona({ id: 'w2', name: 'w2', prompt: '' });

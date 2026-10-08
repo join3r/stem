@@ -92,7 +92,11 @@ import {
 // same thread later had two coordinators independently briefing one worker
 // with the same implementation task. Parallelism therefore only exists where
 // the driver deliberately fans out; a spoke needing another spoke's input says
-// so in its reply, and the driver arranges it.
+// so in its reply, and the driver arranges it. The exception is a spoke's own
+// helpers: a persona with the manage-personas capability may mail personas it
+// created, so a consulted Orchestrator runs its sub-agents itself and answers
+// whoever consulted it once (the embedding benchmark's driver otherwise briefed
+// the reviewers itself and ran out of exchanges before they finished).
 //
 // Stale replies: every delivery carries the userSentAt of the user mail its
 // wave answers (the epoch), inherited hop to hop. A reply landing on the user
@@ -752,15 +756,27 @@ export class MailRouter {
     // persona may reply to whoever mailed it — nothing else — so one job can
     // never be briefed twice by two coordinators, and parallel branches exist
     // only where the driver deliberately fanned out.
+    //
+    // The one exception is a spoke's OWN helpers: a persona with the
+    // manage-personas capability may mail personas it created (save_persona),
+    // so an Orchestrator consulted by the driver runs its sub-agents itself —
+    // their replies assemble back to it, and its one answer goes to whoever
+    // consulted it. Nobody else ever briefs those helpers, so the one-coordinator
+    // property still holds per job.
     const driverId = conversation.participants[0];
     const initiator = this.turnInitiators.get(ctx.turnId) ?? 'user';
+    const caller = await getPersona(ctx.personaId);
     if (ctx.personaId !== driverId) {
-      const disallowed = to.filter((t) => t !== 'user' && t !== initiator);
+      const ownHelpers = caller?.canManagePersonas
+        ? new Set((await listPersonas()).filter((p) => p.createdBy === ctx.personaId).map((p) => p.id))
+        : new Set<string>();
+      const disallowed = to.filter((t) => t !== 'user' && t !== initiator && !ownHelpers.has(t));
       if (disallowed.length) {
         return {
           ok: false,
           error:
-            `Only the driver (${driverId}) mails the personas in this conversation. You can reply to ` +
+            `Only the driver (${driverId}) mails the personas in this conversation` +
+            `${caller?.canManagePersonas ? ', apart from helpers you created yourself' : ''}. You can reply to ` +
             `${initiator === 'user' ? 'the user' : initiator} — send_mail, or just finish your turn — and if ` +
             `${disallowed.join(', ')} should be involved, say so in that reply so the driver can arrange it.`
         };
@@ -797,7 +813,6 @@ export class MailRouter {
     const budgetRefusal =
       'Your persona’s send budget for this wave is used up. Finish your assignment — your final ' +
       'reply goes to whoever mailed you — or send_mail to ["user"].';
-    const caller = await getPersona(ctx.personaId);
     if (personaTo.length) {
       const cap = await this.exchangeCap();
       if (conversation.exchangeCount + personaTo.length > cap) return { ok: false, error: capRefusal };
@@ -942,7 +957,8 @@ export class MailRouter {
       ...(typeof req.name === 'string' ? { name: req.name } : {}),
       ...(typeof req.prompt === 'string' ? { prompt: req.prompt } : {}),
       ...(typeof req.model === 'string' ? { model: req.model } : {}),
-      ...(typeof req.effort === 'string' ? { effort: req.effort } : {})
+      ...(typeof req.effort === 'string' ? { effort: req.effort } : {}),
+      ...(typeof req.recall === 'boolean' ? { recall: req.recall } : {})
     };
     try {
       if (!req.id?.trim()) {
@@ -1363,6 +1379,23 @@ export class MailRouter {
       // and a scheduled run of the same persona behave the same.
       const personaFields = await personaTurnFields(persona);
       const notes = personaFields.persona.notes;
+      // Participants by name, self included: the preamble tells the persona
+      // who it is ("You are embedding-reviewer-b") — a helper briefed by id
+      // with "558d… owns reviews/a/" otherwise cannot tell which one it is —
+      // and which helpers of its own it may mail as sub-agents.
+      const registry = await listPersonas();
+      const names: Record<string, string> = {};
+      for (const id of conversation.participants) {
+        const name = registry.find((p) => p.id === id)?.name;
+        if (name) names[id] = name;
+      }
+      names[personaId] = persona.name;
+      const staffers = conversation.participants.filter(
+        (id) => id !== personaId && registry.find((p) => p.id === id)?.canManagePersonas
+      );
+      const helpers = persona.canManagePersonas
+        ? conversation.participants.filter((id) => registry.find((p) => p.id === id)?.createdBy === personaId)
+        : [];
       const threadIdRef = { current: threadId ?? null };
       const settling = this.waitForSettle(turnId, threadIdRef);
       let started;
@@ -1383,6 +1416,9 @@ export class MailRouter {
             subject: conversation.subject,
             from,
             participants: conversation.participants,
+            names,
+            ...(staffers.length ? { staffers } : {}),
+            ...(persona.canManagePersonas ? { canStaff: true, helpers } : {}),
             ...(source ? { source } : {})
           }
         });

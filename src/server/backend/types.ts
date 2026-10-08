@@ -277,6 +277,8 @@ export interface SavePersonaRequest {
   prompt?: string;
   model?: string;
   effort?: string;
+  /** false = a blind helper: no recall injection, no recall search, blind preamble (see Persona.recall). */
+  recall?: boolean;
 }
 
 /**

@@ -2648,7 +2648,7 @@ function registerMailTools(pi) {
     label: 'Create or edit a persona',
     description:
       'Create a helper persona (omit id), or edit one YOU created (pass its id). Only these fields can be ' +
-      'set: name, prompt, model, effort - a persona created here has no coding-agent pin and no special ' +
+      'set: name, prompt, model, effort, recall - a persona created here has no coding-agent pin and no special ' +
       'capabilities; the user grants those in the Personas tab. Only personas whose configuration grants ' +
       'the manage-personas capability may call this. A new persona is registry-wide but NOT yet in this ' +
       'conversation - bring it in with add_persona before mailing it. Use copies of one role prompt ' +
@@ -2660,7 +2660,14 @@ function registerMailTools(pi) {
         name: { type: 'string', description: 'Unique display name - this is what the To: field addresses.' },
         prompt: { type: 'string', description: 'The persona\'s role prompt.' },
         model: { type: 'string', description: 'Optional model pin (provider/modelId). Omit for the app default.' },
-        effort: { type: 'string', description: 'Optional reasoning-effort pin.' }
+        effort: { type: 'string', description: 'Optional reasoning-effort pin.' },
+        recall: {
+          type: 'boolean',
+          description:
+            'Set false for a BLIND helper - a reviewer, judge or cold reader that must not see the user\'s ' +
+            'memory or past conversations (earlier results, who wrote what). Its mails also arrive without ' +
+            'naming the sender. Omit for an ordinary helper.'
+        }
       },
       required: []
     },
@@ -2671,7 +2678,8 @@ function registerMailTools(pi) {
         name: params?.name,
         prompt: params?.prompt,
         model: params?.model,
-        effort: params?.effort
+        effort: params?.effort,
+        ...(typeof params?.recall === 'boolean' ? { recall: params.recall } : {})
       });
       if (!res.ok) return taskErr(res.error || 'Could not save the persona.');
       return taskOk(res.text || 'Persona saved.');

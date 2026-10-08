@@ -579,6 +579,17 @@ export interface StartTurnInput {
     subject: string;
     from: string;
     participants: string[];
+    /** Display names by persona id (participants and the persona itself), for the preamble. */
+    names?: Record<string, string>;
+    /**
+     * The persona may create and run helper personas (canManagePersonas). A
+     * consulted persona with it may mail its own helpers — `helpers` lists the
+     * ones already in this conversation.
+     */
+    canStaff?: boolean;
+    helpers?: string[];
+    /** Other participants that can run helpers of their own — the driver may hand them a multi-worker job whole. */
+    staffers?: string[];
     /**
      * The user mail that began the current wave, riding non-driver deliveries
      * so a consulted persona reads the original request verbatim instead of a

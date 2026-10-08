@@ -58,6 +58,36 @@ describe('mail preamble source context', () => {
     expect(without).not.toContain('not forwarded here');
   });
 
+  it('tells the persona who it is and names its colleagues', () => {
+    const text = mailPreamble(
+      { subject: 's', from: 'driver', participants, names: { driver: 'Secretary', spoke: 'reviewer-b' } },
+      'spoke'
+    );
+    expect(text).toContain('You are reviewer-b (spoke).');
+    expect(text).toContain('from Secretary (driver)');
+    expect(text).toContain('the driver (Secretary (driver))');
+  });
+
+  it('a consulted persona that can staff hears it may run its own helpers; others do not', () => {
+    const staffing = mailPreamble(
+      { subject: 's', from: 'driver', participants: [...participants, 'h1'], canStaff: true, helpers: ['h1'], names: { h1: 'researcher-1' } },
+      'spoke'
+    );
+    expect(staffing).toContain('except your own helpers');
+    expect(staffing).toContain('save_persona');
+    expect(staffing).toContain('Your helpers already here: researcher-1 (h1)');
+    const plain = mailPreamble({ subject: 's', from: 'driver', participants }, 'spoke');
+    expect(plain).not.toContain('save_persona');
+  });
+
+  it('the driver hears which participant can take a multi-worker job whole', () => {
+    const text = mailPreamble(
+      { subject: 's', from: 'user', participants, staffers: ['spoke'], names: { spoke: 'Orchestrator' } },
+      'driver'
+    );
+    expect(text).toContain('Orchestrator (spoke) can run helper personas of its own');
+  });
+
   it('a persona without a memory store hears nothing about notes', () => {
     const text = mailPreamble({ subject: 's', from: 'user', participants }, 'driver');
     expect(text).not.toContain('remember_note');
