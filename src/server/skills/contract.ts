@@ -138,9 +138,12 @@ export function validateSkill(draft: SkillDraft): SkillViolation[] {
   } else {
     const bytes = Buffer.byteLength(body, 'utf8');
     if (bytes > SKILL_BODY_MAX_BYTES) {
+      // A concrete amount with headroom: told only the limit, a model trims a
+      // few words and lands over it again.
+      const cut = bytes - SKILL_BODY_MAX_BYTES + 300;
       violations.push({
         field: 'body',
-        message: `body is ${bytes} bytes; the limit is ${SKILL_BODY_MAX_BYTES}. Cut narration and keep the steps.`
+        message: `body is ${bytes} bytes; the limit is ${SKILL_BODY_MAX_BYTES}. Cut at least ${cut} bytes (about ${Math.ceil((cut / bytes) * 100)}%): drop narration and explanations, merge small steps, keep every action.`
       });
     }
     if (/^---\s*$/m.test(body.split('\n')[0] ?? '')) {

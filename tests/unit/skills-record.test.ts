@@ -125,12 +125,23 @@ describe('authorRecording', () => {
     expect(seen[0]).toHaveLength(1);
   });
 
-  it('retries once with the violations, then gives up', async () => {
+  it('retries with the violations, then gives up', async () => {
     let calls = 0;
     const llm: LlmClient = { complete: async () => (calls++, JSON.stringify({ skill: { ...skill, body: 'no sections' } })) };
     const out = await authorRecording(llm, { examples: [EXAMPLE], answers: [], previous: null });
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
     expect(out).toMatchObject({ ok: false, reason: 'invalid' });
+  });
+
+  it('tells an over-long body how much to cut', async () => {
+    const prompts: string[] = [];
+    const long = `${BODY}\n${'Narration that says nothing. '.repeat(160)}`;
+    const llm: LlmClient = {
+      complete: async (p) => (prompts.push(p), JSON.stringify({ skill: { ...skill, body: prompts.length === 1 ? long : BODY } }))
+    };
+    const out = await authorRecording(llm, { examples: [EXAMPLE], answers: [], previous: null });
+    expect(out.ok).toBe(true);
+    expect(prompts[1]).toMatch(/Cut at least \d+ bytes \(about \d+%\)/);
   });
 
   it('keeps the name on a rewrite', async () => {

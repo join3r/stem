@@ -186,7 +186,8 @@ export function parseRecordExtras(output: string): RecordExtras {
   };
 }
 
-const MAX_ATTEMPTS = 2;
+// Three: an over-long practice rewrite often needs two rounds of cutting.
+const MAX_ATTEMPTS = 3;
 
 export async function authorRecording(llm: LlmClient, input: RecordAuthorInput, images: LlmImage[] = []): Promise<RecordAuthorOutcome> {
   const base = buildRecordPrompt(input);
