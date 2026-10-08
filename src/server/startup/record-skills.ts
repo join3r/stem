@@ -19,6 +19,7 @@ import { findDuplicateSkill } from '../skills/dedup';
 import { listSkillRecords, readSkillRecord } from '../skills/store';
 import type { LlmClient, LlmImage } from '../recall/llm';
 import { userSkillWriter } from './skills';
+import { buildMcpCatalogContext } from '../pi/mcp-config';
 
 // The server half of the skill recorder (desktop/recorder/ is the Mac half):
 // a recording arrives as one example, becomes or extends a draft card in its
@@ -106,7 +107,15 @@ async function author(draft: RecordingDraft, images: LlmImage[], practice?: Reco
   const previous = draft.skill;
   const outcome = await authorRecording(
     await llm(),
-    { examples: draft.examples, answers: draft.answers, previous, machine: whereSkillsRun(), ...(practice ? { practice } : {}) },
+    {
+      examples: draft.examples,
+      answers: draft.answers,
+      previous,
+      machine: whereSkillsRun(),
+      // quiet: without the list the skill falls back to browser and computer steps, as before integrations were offered.
+      integrations: await buildMcpCatalogContext().catch(() => null),
+      ...(practice ? { practice } : {})
+    },
     images
     // quiet: a failed authoring is the card's message and the log line below.
   ).catch((error: unknown) => ({ ok: false as const, reason: 'error' as const, detail: error instanceof Error ? error.message : String(error) }));
@@ -128,6 +137,7 @@ async function author(draft: RecordingDraft, images: LlmImage[], practice?: Reco
       variables: outcome.variables,
       questions: outcome.questions,
       finalSteps: outcome.finalSteps,
+      tip: outcome.tip,
       // A practice rewrite says what it changed; the run it read is used up.
       changes: practice ? outcome.changes : undefined,
       practice: practice ? undefined : base.practice,

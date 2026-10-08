@@ -26,14 +26,17 @@ Your job:
 2. For every value that changes, say where the skill finds it next time, in terms that still hold for a different case: "the delivery date in the supplier's confirmation email", not "October 14". Use the traced sources for this; that link is the most valuable thing in the evidence. A value re-typed in another format (October 14 → 14.10.2026) means the skill must convert it: say into which format.
 3. If there is more than one example, or the user repeated the task within one recording, compare them: what differed between runs is a variable, what was the same is fixed.
 4. Drop the noise: misclicks, a detour that was immediately undone, scrolling around, windows passed through on the way.
-5. Write the steps for an assistant that has two tools on this Mac: \`browser\` for anything in a web page (it works in background tabs of the user's own browser, by URL, link text and field labels), and \`computer\` for other apps (it works by window, control names and keys). Name controls by their labels as recorded, and give the page address where one was recorded.
+5. Write the steps for an assistant with these tools on this Mac. First the integrations listed under "Integrations the assistant can call", when one covers the app: an MCP server reads and changes the app's data directly (a project, a timeline, a document), which is faster and more exact than driving its screen, so a step it covers says to use that server and what to achieve ("with the davinci-resolve MCP server, put Intro.mp4 on track V2 at the start"); do not invent tool names, the assistant looks them up. Then \`browser\` for anything in a web page (it works in background tabs of the user's own browser, by URL, link text and field labels), and \`computer\` for the rest (it works by window, control names and keys). Name controls by their labels as recorded, and give the page address where one was recorded.
+6. Write the procedure, not a report on the evidence. The skill never mentions the recording, the practice run, what the user clicked by mistake, values they typed and then changed, or controls not to click; it gives no reasons. One short line per step, merged where steps belong together. A short task makes a short skill: most fit in 1500 bytes, and none needs the full limit.
+
+If most steps drive one app's screen with \`computer\` and no integration is listed for that app, add a "tip": one sentence recommending an MCP server for it that you know exists, by name, and what it would make faster. No tip otherwise, and never a made-up server.
 
 Ask a question only for something the evidence cannot settle and a wrong guess would get wrong every run, such as where a value with no source comes from. At most three, short, answerable in a sentence of text: the user answers in a text box, so never ask for a screenshot, a file or a recording. Do not ask about anything the recording or the traced sources already answer, and do not ask the user to repeat what they did: they recorded it so that you would not have to ask. When an earlier answer says "same as I did" or the like, take the values from the recording; when the recording really lacks them, write the skill to read them off the screen at run time (the dialog's current values, the timeline's markers) rather than asking again.
 
 Also list the final steps: the ones that change something outside the screen and cannot simply be closed away — saving or submitting a form, sending a message, archiving, moving or deleting an item, paying. Name each the way the recording shows it and say what it does: 'Click "Uložiť" in agrisys (saves the delivery date)', 'Press "y" in Fastmail (archives the email)'. At most five, in the order they happen; none if nothing is changed. A practice run of this skill stops before each of them unless the user allows it.
 
 Reply with ONLY a JSON object, no prose and no markdown fences:
-{"skill": {"name": "...", "description": "...", "body": "..."}, "variables": [{"name": "<what changes>", "from": "<where the skill finds it>"}], "questions": ["..."], "finalSteps": ["..."], "changes": ["... only after a practice run"]}
+{"skill": {"name": "...", "description": "...", "body": "..."}, "variables": [{"name": "<what changes>", "from": "<where the skill finds it>"}], "questions": ["..."], "finalSteps": ["..."], "changes": ["... only after a practice run"], "tip": "... or omit"}
 or, only when the recording holds no task at all (nothing but window switching, say):
 {"skill": null, "reason": "<one short clause>"}`;
 
@@ -42,7 +45,8 @@ export const SKILL_PRACTICE_INSTRUCTIONS = `Since the draft was written, the ass
 - A step the assistant needed and the draft lacked is added; a step that turned out unnecessary is dropped.
 - The user's corrections in the chat outrank everything else, the recordings included. If they took over the mouse or pressed Stop, the run went wrong right there: work out from the last steps before it what the draft must say differently, and use what they said about it.
 - A final step the user told the assistant not to take this time is still part of the task — keep it; that was about the practice, not the skill.
-- Keep what worked, keep the name, and update finalSteps.
+- Where the assistant switched to an integration (an MCP server) and it worked, the step uses that integration from now on.
+- Keep what worked, keep the name, and update finalSteps. How the practice itself was run (pausing for permission, reporting skill issues) is not part of the skill.
 Also return "changes": a short list, in plain words, of what you changed and why (The save button is 'Uložiť', not 'Save'); an empty list if the run showed the draft was right.`;
 
 /** What one recording's step looks like to the author: one numbered line, plus its source. */
@@ -104,6 +108,8 @@ export interface RecordAuthorInput {
   previous: SkillDraft | null;
   /** Where the skill will run (whereSkillsRun()). */
   machine?: string;
+  /** The MCP servers the assistant can call, as its turns list them (buildMcpCatalogContext()). */
+  integrations?: string | null;
   /** A practice run of the draft: its turns in the chat, and the takeover if there was one. */
   practice?: { turns: LearnTurn[]; takeover?: RecordingPractice['takeover'] };
 }
@@ -124,6 +130,7 @@ function renderTakeover(t: NonNullable<RecordingPractice['takeover']>): string {
 export function buildRecordPrompt(input: RecordAuthorInput): string {
   const parts = [SKILL_RECORD_INSTRUCTIONS, SKILL_CONTRACT_TEXT, '---'];
   if (input.machine?.trim()) parts.push(`Where the skill will be followed:\n${input.machine.trim()}`);
+  if (input.integrations?.trim()) parts.push(`Integrations the assistant can call:\n${input.integrations.trim()}`);
   input.examples.forEach((ex, i) => {
     const mins = Math.max(1, Math.round(ex.durationMs / 60000));
     parts.push(`--- Recording ${i + 1} of ${input.examples.length} (${new Date(ex.recordedAt).toDateString()}, about ${mins} min) ---`, renderExample(ex));
@@ -148,6 +155,8 @@ export interface RecordExtras {
   variables: RecordingVariable[];
   questions: string[];
   finalSteps: string[];
+  /** A recommended MCP server for an app the skill drives by screen; absent when none fits. */
+  tip?: string;
   /** Only from a practice-run rewrite: what it changed, in plain words. */
   changes: string[];
 }
@@ -182,7 +191,8 @@ export function parseRecordExtras(output: string): RecordExtras {
     variables,
     questions: strings(parsed.questions, 300, 3),
     finalSteps: strings(parsed.finalSteps, 200, 5),
-    changes: strings(parsed.changes, 240, 8)
+    changes: strings(parsed.changes, 240, 8),
+    ...(typeof parsed.tip === 'string' && parsed.tip.trim() ? { tip: parsed.tip.trim().slice(0, 300) } : {})
   };
 }
 

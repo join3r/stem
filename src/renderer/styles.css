@@ -4205,6 +4205,7 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .record-practice-why { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
 .record-practice-why .push.active { border-color: var(--accent); color: var(--accent); }
 .record-changes ul { margin: var(--sp-2) 0 0; padding-left: 1.2em; }
+.record-tip { margin: var(--sp-2) 0 0; }
 .record-practice-chip { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 @keyframes record-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {

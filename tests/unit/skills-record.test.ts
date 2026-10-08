@@ -106,6 +106,20 @@ describe('renderExample', () => {
   });
 });
 
+describe('integrations and tips', () => {
+  it('lists the integrations the skill may use', () => {
+    const prompt = buildRecordPrompt({ examples: [EXAMPLE], answers: [], previous: null, integrations: '### davinci-resolve (36 tools) — runs on “mac”' });
+    expect(prompt).toContain('Integrations the assistant can call:\n### davinci-resolve');
+  });
+
+  it('reads a tip and drops an empty one', () => {
+    expect(parseRecordExtras(JSON.stringify({ tip: '  The davinci-resolve MCP server would edit the timeline directly. ' })).tip).toBe(
+      'The davinci-resolve MCP server would edit the timeline directly.'
+    );
+    expect(parseRecordExtras(JSON.stringify({ tip: ' ' }))).not.toHaveProperty('tip');
+  });
+});
+
 describe('authorRecording', () => {
   const skill = { name: 'set-delivery-date', description: 'Copy a confirmed delivery date from a supplier email into the agrisys order.', body: BODY };
 

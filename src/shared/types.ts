@@ -1723,6 +1723,8 @@ export interface RecordingDraft {
   finalSteps?: string[];
   /** What the last practice-run rewrite changed, in plain words. */
   changes?: string[];
+  /** An MCP server the author recommends for an app the skill drives by screen. */
+  tip?: string;
   /** A practice run in progress: the agent trying the draft in this chat. */
   practice?: RecordingPractice;
 }

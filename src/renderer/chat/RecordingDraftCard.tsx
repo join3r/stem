@@ -168,6 +168,13 @@ export function RecordingDraftCard({
         </div>
       )}
 
+      {draft.status === 'ready' && draft.tip && !editing && (
+        <div className="record-changes">
+          <div className="record-label">Could be faster</div>
+          <p className="record-tip">{draft.tip}</p>
+        </div>
+      )}
+
       {draft.status === 'ready' && draft.practice && !editing && (
         <div className="record-practice">
           {draft.practice.takeover ? (
