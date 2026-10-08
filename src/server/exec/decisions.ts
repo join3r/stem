@@ -33,6 +33,8 @@ export interface StageRecord {
   verdict: 'safe' | 'unsafe' | 'unsure' | 'failed';
   reason?: string;
   ms: number;
+  /** Stage 2's vote, in the order the samples answered. */
+  votes?: Array<'safe' | 'unsafe' | 'unsure' | 'failed'>;
 }
 
 export interface DecisionRecord {

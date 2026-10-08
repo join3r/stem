@@ -127,8 +127,8 @@ describe('ExecService judge', () => {
       currentModel: 'anthropic/claude-opus-4'
     });
     expect(result.ok).toBe(false);
-    // Stage 1, then stage 2 for what stage 1 did not call safe.
-    expect(completeOpts).toHaveLength(2);
+    // Stage 1, then stage 2's two agreeing votes for what stage 1 did not call safe.
+    expect(completeOpts).toHaveLength(3);
     expect(completeOpts[1]?.effort).toBe('high');
     expect(completeOpts[0]?.priority).toBe(true);
     expect(completeOpts[0]?.timeoutMs).toBe(JUDGE_TIMEOUT_MS);
@@ -162,6 +162,28 @@ describe('ExecService judge', () => {
     expect(prompts[0]).toContain('quit the app, reinstall it and start it');
     expect(prompts[0]).not.toContain('only this message');
     expect(prompts[0]).toContain('- kill -TERM 4020 && ./scripts/install.sh');
+  });
+
+  it('stage 2 is a vote: a split pair asks a third, and two safe votes run the command', async () => {
+    const stage2 = ['safe', 'unsafe — no', 'safe'];
+    completeImpl = async (p: string) => (p.includes('Think it through first') ? `why\n${stage2.shift()}` : 'unsure');
+    const result = await service.handleExecRequest({
+      command: 'echo hi',
+      cwd,
+      threadId: 't1',
+      isScheduled: false,
+      judgeContext: { userWords: ['say hi'], actions: [] }
+    });
+    expect(result.ok).toBe(true);
+    expect(completeOpts).toHaveLength(4);
+  });
+
+  it('one safe vote of three is not enough', async () => {
+    const stage2 = ['safe', 'unsafe — no', 'unsure'];
+    completeImpl = async (p: string) => (p.includes('Think it through first') ? `why\n${stage2.shift()}` : 'unsure');
+    await service.handleExecRequest({ command: 'echo hi', cwd, threadId: 't1', isScheduled: false });
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]?.judgeReason).toBe('no');
   });
 
   it('stage 2 can clear what stage 1 flagged, and the command runs', async () => {
@@ -304,8 +326,8 @@ describe('ExecService read confinement (H-01)', () => {
       currentModel: 'anthropic/claude-opus-4'
     });
     expect(result.ok).toBe(false);
-    // Both stages saw it; neither cleared it.
-    expect(judged).toHaveLength(2);
+    // Stage 1 and both stage-2 votes saw it; none cleared it.
+    expect(judged).toHaveLength(3);
     expect(approvals).toHaveLength(1);
   });
 
@@ -317,7 +339,7 @@ describe('ExecService read confinement (H-01)', () => {
       isScheduled: false,
       currentModel: 'anthropic/claude-opus-4'
     });
-    expect(judged).toHaveLength(2);
+    expect(judged).toHaveLength(3);
   });
 
   it('a read inside the chat\'s scratch runs without judge or card', async () => {
@@ -499,7 +521,7 @@ describe('ExecService device targeting', () => {
     expect(result.ok).toBe(true);
     // Locally `ls -la` is tier 1; on the device it went to the judge (who said
     // unsure) and then to a card.
-    expect(judgeCalls).toHaveLength(2);
+    expect(judgeCalls).toHaveLength(3);
     // The judge prompt names the machine that will run it, not this one.
     expect(judgeCalls[0]).toContain("Vlado's MacBook");
     expect(judgeCalls[0]).toContain('under zsh');

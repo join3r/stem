@@ -132,29 +132,43 @@ export class SafetyJudge {
     }
     if (stage1.verdict === 'safe') return { verdict: 'safe', reason: stage1.reason, prompt, stage1 };
 
+    // Stage 2 is a vote of up to three: one sample of a small model swung the
+    // same command between safe and unsafe across runs (2026-10-08 eval: 10 of
+    // 595 commands blocked in only one run of three). Two run at once; a third
+    // breaks a tie. Two safe votes run the command.
     const started2 = Date.now();
-    try {
-      const reply = await this.deps.runtime().complete(buildJudgePrompt(promptInput, 2), {
-        model,
-        effort: 'high',
-        timeoutMs: JUDGE_STAGE2_TIMEOUT_MS,
-        priority: true
-      });
-      const stage2: StageRecord = { ...parseJudgeVerdict(reply, 'last'), ms: Date.now() - started2 };
-      return { verdict: stage2.verdict, reason: stage2.reason, prompt, stage1, stage2 };
-    } catch (e) {
-      // quiet: logged below, and nothing degrades — stage 2 only ever widens
-      // what runs, so losing it keeps stage 1's answer and the user still decides.
-      const detail = (e instanceof Error ? e.message : String(e)).trim() || 'unknown error';
-      log('exec', 'judge stage 2 failed — keeping stage 1', { error: detail });
-      return {
-        verdict: stage1.verdict,
-        reason: stage1.reason,
-        prompt,
-        stage1,
-        stage2: { verdict: 'failed', ms: Date.now() - started2 }
-      };
-    }
+    const sample = async (): Promise<StageRecord> => {
+      const t = Date.now();
+      try {
+        const reply = await this.deps.runtime().complete(buildJudgePrompt(promptInput, 2), {
+          model,
+          effort: 'high',
+          timeoutMs: JUDGE_STAGE2_TIMEOUT_MS,
+          priority: true
+        });
+        return { ...parseJudgeVerdict(reply, 'last'), ms: Date.now() - t };
+      } catch (e) {
+        // quiet: logged here and counted as a vote that cleared nothing — stage 2
+        // only ever widens what runs, so a lost sample keeps the command with the user.
+        log('exec', 'judge stage 2 sample failed', { error: (e instanceof Error ? e.message : String(e)).trim() });
+        return { verdict: 'failed', ms: Date.now() - t };
+      }
+    };
+    const votes = await Promise.all([sample(), sample()]);
+    if ((votes[0]!.verdict === 'safe') !== (votes[1]!.verdict === 'safe')) votes.push(await sample());
+    const safe = votes.filter((v) => v.verdict === 'safe').length >= 2;
+    const answered = votes.filter((v) => v.verdict !== 'failed');
+    const stage2: StageRecord = {
+      ...(safe
+        ? votes.find((v) => v.verdict === 'safe')!
+        : (answered.find((v) => v.verdict !== 'safe') ?? { verdict: 'failed' as const })),
+      ms: Date.now() - started2,
+      votes: votes.map((v) => v.verdict)
+    };
+    if (safe) return { verdict: 'safe', reason: stage2.reason, prompt, stage1, stage2 };
+    // Every sample failed: stage 1's answer stands.
+    if (!answered.length) return { verdict: stage1.verdict, reason: stage1.reason, prompt, stage1, stage2 };
+    return { verdict: stage2.verdict, reason: stage2.reason, prompt, stage1, stage2 };
   }
 }
 
