@@ -43,14 +43,21 @@ final class Capture {
 
   private var displayID: CGDirectDisplayID { CGMainDisplayID() }
 
-  /// The area the frame covers, in global points — refreshed for a window, which may have moved.
-  private func currentBounds() throws -> CGRect {
+  /// The area the frame covers, in global points — refreshed for a window,
+  /// which may have moved. One read of the window server for bounds and title
+  /// (`records`, when the caller already has them).
+  private func currentBounds(_ records: [[String: Any]]?) throws -> CGRect {
     guard let t = target else { return CGDisplayBounds(displayID) }
-    guard let b = Windows.bounds(of: t.windowID) else {
-      throw HelperError("The selected window is gone. Run list_windows and select again.")
+    let all = records ?? Windows.records()
+    guard let record = Windows.record(of: t.windowID, in: all), let b = Windows.bounds(record) else {
+      // A dialog that closed on the action just taken is the usual case: name
+      // the app's windows left so the model can pick one without a full list.
+      let left = Windows.appWindows(pid: t.pid, in: all).map(Windows.brief)
+      let others = left.isEmpty ? "Run list_windows and select again." : "\(t.app)'s windows now: \(left.joined(separator: "; ")) — select_window one of them."
+      throw HelperError("The selected window has closed (an action that closed it went through). \(others)")
     }
     target?.bounds = b
-    if let title = Windows.title(of: t.windowID) { target?.title = title }
+    if let title = record[kCGWindowName as String] as? String { target?.title = title }
     return b
   }
 
@@ -65,8 +72,9 @@ final class Capture {
   }
 
   /// A frame of the whole main display or the selected window: {jpegBase64, width, height, scale}.
-  func screenshot() throws -> [String: Any] {
-    let bounds = try currentBounds()
+  /// `records`: the window server's list, when the caller has just read it.
+  func screenshot(records: [[String: Any]]? = nil) throws -> [String: Any] {
+    let bounds = try currentBounds(records)
     let image = try grab()
     let longest = Double(max(image.width, image.height))
     let factor = longest > MAX_SIDE ? MAX_SIDE / longest : 1.0

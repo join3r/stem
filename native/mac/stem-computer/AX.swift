@@ -22,9 +22,17 @@ struct AXNode {
 
 final class AX {
   let pid: pid_t
-  let windowID: CGWindowID
+  /// The selected window of this app; another window of the same app is a
+  /// retarget, not a new AX (the wake-up below is per app, and costly).
+  private(set) var windowID: CGWindowID
   let app: AXUIElement
+  /// The AX element for `windowID`, looked up on first need (a snapshot) — not
+  /// at selection, where a window whose element is slow to find (or absent)
+  /// would cost a second of retries before anything was asked of it.
   private(set) var window: AXUIElement?
+  /// When the app was asked to switch its accessibility on: hit-tests in the
+  /// moments after give a tree that is still being built a few more tries.
+  private let wokeAt = Date()
   /// Ids handed out by the last snapshot; replaced wholesale on the next one.
   private var nodes: [Int: AXNode] = [:]
   private var snapshotTaken = false
@@ -51,7 +59,17 @@ final class AX {
     let enhanced = AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
     wakeNote = "AXManualAccessibility set → \(manual.rawValue), reads \(AX.readBack(app, "AXManualAccessibility")); AXEnhancedUserInterface set → \(enhanced.rawValue), reads \(AX.readBack(app, "AXEnhancedUserInterface"))"
     trace("ax wake: \(wakeNote)")
-    window = lookUpWindow(tries: 5)
+  }
+
+  /// Another window of the same app: same wake-up, fresh window and ids.
+  func retarget(_ id: CGWindowID) {
+    guard id != windowID else { return }
+    windowID = id
+    window = nil
+    nodes = [:]
+    snapshotTaken = false
+    lastSnapshotCount = 0
+    lookupNote = ""
   }
 
   /// How the app took the wake-up above, quoted when a tree comes back bare.
@@ -234,7 +252,7 @@ final class AX {
   /// `toPixel` turns global points into pixels of the current window picture so
   /// the ids line up with what the model sees.
   func snapshot(depth maxDepth: Int, windowBounds: CGRect, toPixel: (CGPoint) -> (Int, Int), ppp: Double) throws -> String {
-    guard let root = window ?? lookUpWindow(tries: 3) else {
+    guard let root = window ?? lookUpWindow(tries: 5) else {
       let why = lookupNote.isEmpty ? "" : " (\(lookupNote))"
       throw HelperError("This app exposes no accessible window for the selected window\(why); Accessibility cannot drive it. Clear the window (select_window with no arguments) and use the screen.")
     }
@@ -393,9 +411,15 @@ final class AX {
   // MARK: acting at a point (window-mode clicks)
 
   func element(at point: CGPoint) -> AXUIElement? {
-    var out: AXUIElement?
-    guard AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &out) == .success else { return nil }
-    return out
+    // Right after the wake-up an Electron or Chromium app may still be
+    // building its tree; give it up to a second before calling the spot empty.
+    for attempt in 0..<5 {
+      if attempt > 0 { usleep(200_000) }
+      var out: AXUIElement?
+      if AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &out) == .success, let out { return out }
+      if Date().timeIntervalSince(wokeAt) > 2 { break }
+    }
+    return nil
   }
 
   /// A click in window mode: hit-test, then press (or open the context menu).

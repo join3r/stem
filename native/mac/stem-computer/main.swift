@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 // stem-computer — the Mac half of Stem's computer-control persona.
@@ -56,8 +57,14 @@ let capture = Capture()
 let input = Input(capture: capture)
 let watch = Watch()
 let recorder = Recorder()
-/// The accessibility side of the selected window; nil in screen mode.
-var ax: AX?
+/// The accessibility side of the selected app, made the first time a command
+/// needs it (windowAX) and kept for the run: selecting another window of the
+/// same app retargets it, leaving for the whole screen keeps it, and only
+/// another app (or the run's end) puts the app's accessibility back.
+var axCache: AX?
+
+/// True in window mode: a window is selected and the run works through it.
+var windowMode: Bool { capture.target != nil }
 
 /// What every reply says about the mode: the selected window, or null.
 func targetField() -> Any {
@@ -68,21 +75,41 @@ func targetField() -> Any {
 /// middle of a batch, whose frame nobody would look at.
 var wantShot = true
 
+/// The selected app's windows as last seen, to tell when an action made it
+/// open another (a dialog, Import Media…); nil until the first look.
+var knownWindows: (pid: pid_t, ids: Set<CGWindowID>)?
+
+/// A line for the model when the selected app has opened a window since the
+/// last look — it is a window of its own, which this window's picture will
+/// never show, and the model can select it instead of leaving window mode.
+func noteNewWindows(_ records: [[String: Any]]) -> String? {
+  guard let t = capture.target else { return nil }
+  let now = Windows.appWindows(pid: t.pid, in: records)
+  defer { knownWindows = (t.pid, Set(now.map(\.id))) }
+  guard let known = knownWindows, known.pid == t.pid else { return nil }
+  let fresh = now.filter { !known.ids.contains($0.id) && $0.id != t.windowID }
+  guard let first = fresh.first else { return nil }
+  return "\(t.app) opened a new window: \(fresh.map(Windows.brief).joined(separator: "; ")). It is a separate window, not in this one's picture: select_window window_id \(first.id) to work in it (staying in window mode), rather than switching to the whole screen."
+}
+
 /// Every input command settles for a beat and then answers with a fresh frame,
 /// so one round-trip carries both the effect and the evidence of it. Without a
 /// picture wanted it still settles (the next step expects the app to have
 /// reacted) and answers with its text, or "Done." — text is what the desktop
-/// app accepts in place of a frame.
+/// app accepts in place of a frame. In window mode one read of the window
+/// server serves both the new-window check and the capture's bounds.
 func answerWithScreenshot(_ id: Any, settleMs: Int = 300, text: String? = nil) {
   if settleMs > 0 { usleep(useconds_t(settleMs) * 1000) }
+  let records = windowMode ? Windows.records() : nil
+  let said = [text, records.flatMap(noteNewWindows)].compactMap { $0 }.joined(separator: "\n\n")
   if !wantShot {
-    emit(["id": id, "ok": true, "text": text ?? "Done.", "target": targetField()])
+    emit(["id": id, "ok": true, "text": said.isEmpty ? "Done." : said, "target": targetField()])
     return
   }
   do {
-    let shot = try capture.screenshot()
+    let shot = try capture.screenshot(records: records)
     var reply: [String: Any] = ["id": id, "ok": true, "screenshot": shot, "cursor": input.cursorInScreenshot(), "target": targetField()]
-    if let text { reply["text"] = text }
+    if !said.isEmpty { reply["text"] = said }
     emit(reply)
   } catch {
     fail(id, "\(error)")
@@ -92,21 +119,38 @@ func answerWithScreenshot(_ id: Any, settleMs: Int = 300, text: String? = nil) {
 /// The window selected for this run, as listed; nil in screen mode.
 var selected: WindowInfo?
 
-/// Enter window mode on `info`, or leave it (nil).
+/// Enter window mode on `info`, or leave it (nil). Cheap on purpose — the
+/// model switches often: no accessibility work happens here (see windowAX).
 func selectWindow(_ info: WindowInfo?) {
-  ax?.release()
   selected = info
+  knownWindows = nil
   if let info {
+    if let a = axCache, a.pid != info.pid {
+      a.release()
+      axCache = nil
+    }
     capture.target = Target(pid: info.pid, windowID: info.id, app: info.app, bundleId: info.bundleId, title: info.title, bounds: info.bounds)
-    ax = AX(pid: info.pid, windowID: info.id)
     input.keyboardPid = info.pid
     watch.disarm()
   } else {
     capture.target = nil
-    ax = nil
     input.keyboardPid = nil
     // Stays disarmed: the first screen-mode input action arms the watch.
   }
+}
+
+/// The selected window's accessibility, woken on first need: the app is asked
+/// to switch its tree on once per run, not on every select. Nil in screen mode.
+func windowAX() -> AX? {
+  guard let t = capture.target else { return nil }
+  if let a = axCache, a.pid == t.pid {
+    a.retarget(t.windowID)
+    return a
+  }
+  axCache?.release()
+  let a = AX(pid: t.pid, windowID: t.windowID)
+  axCache = a
+  return a
 }
 
 func screenOnly(_ what: String) -> HelperError {
@@ -140,17 +184,17 @@ while let line = readLine(strippingNewline: true) {
       wantShot = true
       answerWithScreenshot(id, settleMs: 0)
     case "cursor":
-      if ax != nil { throw screenOnly("cursor_position") }
+      if windowMode { throw screenOnly("cursor_position") }
       emit(["id": id, "ok": true, "cursor": input.cursorInScreenshot(), "target": targetField()])
     case "move":
-      if ax != nil { throw screenOnly("mouse_move") }
+      if windowMode { throw screenOnly("mouse_move") }
       watch.arm()
       try input.move(x: number(obj["x"]), y: number(obj["y"]))
       answerWithScreenshot(id)
     case "click":
       let button = obj["button"] as? String ?? "left"
       let count = Int(number(obj["count"]) ?? 1)
-      if let ax {
+      if let ax = windowAX() {
         try windowClick(ax, x: number(obj["x"]), y: number(obj["y"]), button: button, count: count)
       } else {
         watch.arm()
@@ -158,7 +202,7 @@ while let line = readLine(strippingNewline: true) {
       }
       answerWithScreenshot(id)
     case "drag":
-      if ax != nil { throw screenOnly("left_click_drag") }
+      if windowMode { throw screenOnly("left_click_drag") }
       watch.arm()
       let from = obj["from"] as? [String: Any] ?? [:]
       let to = obj["to"] as? [String: Any] ?? [:]
@@ -167,7 +211,7 @@ while let line = readLine(strippingNewline: true) {
     case "scroll":
       let dir = obj["dir"] as? String ?? "down"
       let amount = Int(number(obj["amount"]) ?? 3)
-      if let ax {
+      if let ax = windowAX() {
         guard let x = number(obj["x"]), let y = number(obj["y"]) else {
           throw HelperError("In window mode scroll needs a coordinate over the area to scroll.")
         }
@@ -178,18 +222,18 @@ while let line = readLine(strippingNewline: true) {
       }
       answerWithScreenshot(id)
     case "type":
-      if let ax, ax.focusedElement() == nil {
+      if let ax = windowAX(), ax.focusedElement() == nil {
         throw HelperError("Nothing in this window has keyboard focus. Click a field or `focus` its id first, then type.")
       }
-      if ax == nil { watch.arm() }
+      if !windowMode { watch.arm() }
       try input.type(text: obj["text"] as? String ?? "")
       answerWithScreenshot(id)
     case "key":
-      if ax == nil { watch.arm() }
+      if !windowMode { watch.arm() }
       try input.key(combo: obj["combo"] as? String ?? "")
       answerWithScreenshot(id)
     case "hold":
-      if ax == nil { watch.arm() }
+      if !windowMode { watch.arm() }
       try input.hold(combo: obj["combo"] as? String ?? "", ms: Int(number(obj["ms"]) ?? 0))
       answerWithScreenshot(id)
     case "wait":
@@ -211,17 +255,29 @@ while let line = readLine(strippingNewline: true) {
       } else {
         let info = try Windows.find(windowId: windowId, app: app, title: title)
         selectWindow(info)
-        // Prove the window can be captured before committing to it.
+        // Prove the window can be captured before committing to it — and that
+        // capture is the answer's picture; one read of the window server
+        // serves it and the first look at the app's windows.
+        let records = Windows.records()
+        _ = noteNewWindows(records)
+        let shot: [String: Any]
         do {
-          _ = try capture.screenshot()
+          shot = try capture.screenshot(records: records)
         } catch {
           selectWindow(nil)
           throw error
         }
-        answerWithScreenshot(id, settleMs: 0, text: Windows.chromiumOffScreenNote(info))
+        var reply: [String: Any] = ["id": id, "ok": true, "target": targetField()]
+        if wantShot {
+          reply["screenshot"] = shot
+          reply["cursor"] = input.cursorInScreenshot()
+        }
+        let note = Windows.chromiumOffScreenNote(info)
+        if let note { reply["text"] = note } else if !wantShot { reply["text"] = "Done." }
+        emit(reply)
       }
     case "snapshot":
-      guard let ax, let target = capture.target else {
+      guard let target = capture.target, let ax = windowAX() else {
         throw HelperError("snapshot lists the controls of a selected window; select_window first (or take a screenshot of the screen).")
       }
       // The picture first, so the ids' positions are in its pixels.
@@ -239,19 +295,19 @@ while let line = readLine(strippingNewline: true) {
       }
       emit(reply)
     case "press":
-      guard let ax else { throw HelperError("press acts on a snapshot id; select_window and snapshot first.") }
+      guard let ax = windowAX() else { throw HelperError("press acts on a snapshot id; select_window and snapshot first.") }
       try ax.press(id: Int(number(obj["element"]) ?? -1))
       answerWithScreenshot(id)
     case "focus":
-      guard let ax else { throw HelperError("focus acts on a snapshot id; select_window and snapshot first.") }
+      guard let ax = windowAX() else { throw HelperError("focus acts on a snapshot id; select_window and snapshot first.") }
       try ax.focus(id: Int(number(obj["element"]) ?? -1))
       answerWithScreenshot(id, settleMs: 100)
     case "menu":
-      guard let ax else { throw HelperError("menu acts on a snapshot id; select_window and snapshot first.") }
+      guard let ax = windowAX() else { throw HelperError("menu acts on a snapshot id; select_window and snapshot first.") }
       try ax.menu(id: Int(number(obj["element"]) ?? -1))
       answerWithScreenshot(id)
     case "set-value":
-      guard let ax else { throw HelperError("set_value acts on a snapshot id; select_window and snapshot first.") }
+      guard let ax = windowAX() else { throw HelperError("set_value acts on a snapshot id; select_window and snapshot first.") }
       try ax.setValue(id: Int(number(obj["element"]) ?? -1), text: obj["text"] as? String ?? "")
       answerWithScreenshot(id)
     case "watch":
@@ -272,7 +328,7 @@ while let line = readLine(strippingNewline: true) {
       recorder.end()
       emit(["id": id, "ok": true])
     case "stop":
-      ax?.release()
+      axCache?.release()
       watch.stop()
       recorder.end()
       emit(["id": id, "ok": true])
@@ -284,6 +340,6 @@ while let line = readLine(strippingNewline: true) {
     fail(id, "\(error)")
   }
 }
-ax?.release()
+axCache?.release()
 watch.stop()
 recorder.end()

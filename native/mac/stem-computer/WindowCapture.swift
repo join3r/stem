@@ -34,25 +34,53 @@ enum WindowCapture {
     }
   }
 
-  static func capture(windowID: CGWindowID, bounds: CGRect) throws -> CGImage {
-    let image: CGImage? = try wait {
+  /// The filter for the window last captured. Finding a window's SCWindow
+  /// means SCShareableContent over every window on every Space — an XPC trip
+  /// that enumerates the whole desktop and was the bulk of a window-mode
+  /// answer's time when done per frame. The filter keeps naming the same
+  /// window while it moves or resizes (the size is set per capture from its
+  /// current bounds), so it is looked up once per selected window and again
+  /// only when a capture through it fails.
+  private static var cached: (windowID: CGWindowID, filter: SCContentFilter)?
+
+  private static func filter(for windowID: CGWindowID) throws -> SCContentFilter {
+    try wait {
       let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
       guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
         throw HelperError("That window is gone. Run list_windows and select again.")
       }
-      let filter = SCContentFilter(desktopIndependentWindow: window)
-      let config = SCStreamConfiguration()
-      let scale = pixelScale(for: bounds)
-      config.width = max(1, Int((window.frame.width * scale).rounded()))
-      config.height = max(1, Int((window.frame.height * scale).rounded()))
-      config.showsCursor = false
-      config.ignoreShadowsSingleWindow = true
-      config.captureResolution = .best
-      return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+      return SCContentFilter(desktopIndependentWindow: window)
+    }
+  }
+
+  private static func shoot(_ filter: SCContentFilter, bounds: CGRect) throws -> CGImage {
+    let config = SCStreamConfiguration()
+    let scale = pixelScale(for: bounds)
+    config.width = max(1, Int((bounds.width * scale).rounded()))
+    config.height = max(1, Int((bounds.height * scale).rounded()))
+    config.showsCursor = false
+    config.ignoreShadowsSingleWindow = true
+    config.captureResolution = .best
+    let image: CGImage? = try wait {
+      try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
     guard let image else {
       throw HelperError("Could not capture the window. Stem needs Screen Recording access (System Settings → Privacy & Security → Screen Recording).")
     }
+    return image
+  }
+
+  /// `bounds`: the window's current frame in global points, refreshed by the caller.
+  static func capture(windowID: CGWindowID, bounds: CGRect) throws -> CGImage {
+    if let hit = cached, hit.windowID == windowID {
+      do { return try shoot(hit.filter, bounds: bounds) } catch {
+        trace("cached window filter failed (\(error)); looking the window up again")
+      }
+    }
+    cached = nil
+    let fresh = try filter(for: windowID)
+    let image = try shoot(fresh, bounds: bounds)
+    cached = (windowID, fresh)
     return image
   }
 }

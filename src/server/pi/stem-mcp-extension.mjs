@@ -3299,6 +3299,10 @@ function registerComputerTool(pi, turnContext) {
       '`screenshot`. Screen mode moves the real mouse, and from your first click or keystroke there ANY input ' +
       'of the user\'s own ends the run (looking never does) — when a result says they took over, stop for this ' +
       'turn and report; do not retry screen mode while they are working, switch to a window. If a window click finds nothing pressable, `snapshot` and act by id. ' +
+      'STAY IN ONE MODE for a task; do not bounce between them. When the app opens a dialog or another window ' +
+      '(Import Media, a sheet, a settings window), the result names it with its window id: `select_window` that ' +
+      'id and carry on in window mode, then select the main window again when the dialog is gone. If an app\'s ' +
+      'dialogs or canvas force you onto the whole screen, stay on the screen for the rest of that task. ' +
       'One limit: apps built on Chromium (Electron apps such as Discord, Slack, VS Code; Chrome-family browsers) keep ' +
       'a window\'s controls only while it is at least partly visible on the current Space — `list_windows` marks ' +
       'them. Off screen, their picture works but snapshot comes back bare: ask the user to bring the window onto ' +

@@ -41,7 +41,11 @@ struct WindowInfo {
 enum Windows {
   /// Every ordinary window (layer 0, a real size, not ours), whatever Space it
   /// is on. Titles need Screen Recording, which the helper has anyway.
-  static func list() -> [WindowInfo] {
+  ///
+  /// `minimized: false` skips telling minimized windows apart — one AX round
+  /// trip (up to 0.3 s) per app with an off-screen window, which only the
+  /// listing the model reads needs.
+  static func list(minimized wantMinimized: Bool = true) -> [WindowInfo] {
     guard let raw = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return [] }
     trace("window list: \(raw.count) entries")
     let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -76,7 +80,7 @@ enum Windows {
       let onScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
       let title = (w[kCGWindowName as String] as? String) ?? ""
       var minimized = false
-      if !onScreen && axTrusted {
+      if !onScreen && axTrusted && wantMinimized {
         if minimizedByPid[pid] == nil { minimizedByPid[pid] = AX.minimizedWindows(pid: pid) }
         minimized = minimizedByPid[pid]!.contains(id)
       }
@@ -133,7 +137,9 @@ enum Windows {
 
   /// Resolve a `select-window` request against the live list.
   static func find(windowId: Int?, app: String?, title: String?) throws -> WindowInfo {
-    let all = list()
+    // Selecting is the hot path of a mode switch: no minimized lookups across
+    // every app, only (below) for the one app being picked among.
+    let all = list(minimized: false)
     if let windowId {
       guard let w = all.first(where: { Int($0.id) == windowId }) else {
         throw HelperError("No window \(windowId) is open now. Run list_windows again.")
@@ -157,25 +163,57 @@ enum Windows {
       candidates = candidates.filter { $0.title.lowercased().contains(t) }
       if candidates.isEmpty { throw HelperError("\(app) has no window whose title contains \"\(title)\". Run list_windows to see its windows.") }
     }
-    // The app's front window: on screen first, then the largest.
+    // The app's front window: on screen first, then not minimized, then the largest.
+    var minimizedIds = Set<CGWindowID>()
+    if AXIsProcessTrusted(), candidates.count > 1 {
+      for pid in Set(candidates.filter { !$0.onScreen }.map(\.pid)) { minimizedIds.formUnion(AX.minimizedWindows(pid: pid)) }
+    }
     return candidates.sorted { a, b in
       if a.onScreen != b.onScreen { return a.onScreen }
-      if a.minimized != b.minimized { return !a.minimized }
+      let am = minimizedIds.contains(a.id), bm = minimizedIds.contains(b.id)
+      if am != bm { return !am }
       return a.bounds.width * a.bounds.height > b.bounds.width * b.bounds.height
     }.first!
   }
 
+  /// The window server's records of every window on every Space — one read,
+  /// shared by everything an answer needs to know about windows.
+  static func records() -> [[String: Any]] {
+    (CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]) ?? []
+  }
+
   /// The window server's current record of one window, on any Space, or nil once it is gone.
   /// (`optionIncludingWindow` alone answers only for on-screen windows, so scan the full list.)
-  static func record(of id: CGWindowID) -> [String: Any]? {
-    guard let raw = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return nil }
-    return raw.first { ($0[kCGWindowNumber as String] as? Int).map { CGWindowID($0) } == id }
+  static func record(of id: CGWindowID, in all: [[String: Any]]? = nil) -> [String: Any]? {
+    (all ?? records()).first { ($0[kCGWindowNumber as String] as? Int).map { CGWindowID($0) } == id }
+  }
+
+  static func bounds(_ record: [String: Any]) -> CGRect? {
+    guard let dict = record[kCGWindowBounds as String] as? NSDictionary else { return nil }
+    return CGRect(dictionaryRepresentation: dict)
   }
 
   /// A window's current bounds (it may have moved since selection), or nil once it is gone.
   static func bounds(of id: CGWindowID) -> CGRect? {
-    guard let w = record(of: id), let dict = w[kCGWindowBounds as String] as? NSDictionary else { return nil }
-    return CGRect(dictionaryRepresentation: dict)
+    record(of: id).flatMap { bounds($0) }
+  }
+
+  /// An app's ordinary windows (layer 0, a real size, not transparent), as the
+  /// window server lists them: what "the app opened a new window" is read from.
+  static func appWindows(pid: pid_t, in all: [[String: Any]]) -> [(id: CGWindowID, title: String, bounds: CGRect)] {
+    all.compactMap { w in
+      guard (w[kCGWindowOwnerPID as String] as? Int).map({ pid_t($0) }) == pid,
+            (w[kCGWindowLayer as String] as? Int) == 0,
+            let n = w[kCGWindowNumber as String] as? Int,
+            let b = bounds(w), b.width >= 50, b.height >= 50 else { return nil }
+      if let alpha = w[kCGWindowAlpha as String] as? Double, alpha == 0 { return nil }
+      return (CGWindowID(n), (w[kCGWindowName as String] as? String) ?? "", b)
+    }
+  }
+
+  /// One window as a line of a note: `4567 "Import Media" 900x600`.
+  static func brief(_ w: (id: CGWindowID, title: String, bounds: CGRect)) -> String {
+    "\(w.id) \(w.title.isEmpty ? "(untitled)" : "\"\(w.title)\"") \(Int(w.bounds.width))x\(Int(w.bounds.height))"
   }
 
   static func isOnScreen(_ id: CGWindowID) -> Bool {

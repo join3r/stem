@@ -180,6 +180,8 @@ describe('extension side', () => {
       expect(tool.parameters.properties.action.enum).toContain('left_click_drag');
       expect(tool.description).toContain('PIXELS OF THE LAST PICTURE');
       expect(tool.description).toContain('START WITH `list_windows`');
+      expect(tool.description).toContain('STAY IN ONE MODE');
+      expect(tool.description).toContain('`actions`');
       const { asks, ctx } = scriptedCtx(() =>
         JSON.stringify({
           ok: true,
