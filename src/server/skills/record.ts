@@ -53,9 +53,9 @@ function renderStep(step: RecordedStep, index: number, source: string | null, no
     case 'click': {
       const verb = step.button === 'right' ? 'right-clicked' : (step.count ?? 1) > 1 ? 'double-clicked' : 'clicked';
       what = `${verb} ${step.role ?? 'element'}${step.label ? ` "${step.label}"` : ''}${step.within ? ` in ${step.within}` : ''}`;
-      if (step.file) what += ` (file ${step.file})`;
+      if (step.file) what += ` (file ${JSON.stringify(step.file)})`;
       if (step.files) what += ` with ${step.files.split('\n').map((f) => JSON.stringify(f)).join(', ')} selected`;
-      if (step.folder) what += step.folder.startsWith('/') ? ` [folder ${step.folder}]` : ` [in a folder named "${step.folder}"]`;
+      if (step.folder) what += step.folder.startsWith('/') ? ` [folder ${JSON.stringify(step.folder)}]` : ` [in a folder named ${JSON.stringify(step.folder)}]`;
       break;
     }
     case 'type':

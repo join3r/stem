@@ -73,7 +73,7 @@ describe('renderExample', () => {
     })!;
     const text = renderExample(example);
     expect(text).toContain('clicked textfield "Intro.mp4" in outline "list view" [in a folder named "joinit stock"]');
-    expect(text).toContain('clicked button "Open" with "/Users/me/stock/Intro.mp4", "/Users/me/stock/Outro.mp4" selected [folder /Users/me/stock]');
+    expect(text).toContain('clicked button "Open" with "/Users/me/stock/Intro.mp4", "/Users/me/stock/Outro.mp4" selected [folder "/Users/me/stock"]');
   });
 
   it('frames every example and the earlier draft', () => {
