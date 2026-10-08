@@ -137,8 +137,8 @@ export class ExecService implements ExecBridge {
   private readonly safetyJudge: SafetyJudge;
   /** Per thread: judged commands refused in a row, and in all (Claude Code's 3 / 20). */
   private readonly blocks = new Map<string, { streak: number; total: number }>();
-  /** Per thread: exact commands the user allowed on a parked run, each good for one run. */
-  private readonly grants = new Map<string, string[]>();
+  /** Per thread: exactly what the user allowed on a parked run (command, folder, machine), each good for one run. */
+  private readonly grants = new Map<string, Grant[]>();
 
   constructor(deps: ExecServiceDeps) {
     this.deps = deps;
@@ -248,7 +248,7 @@ export class ExecService implements ExecBridge {
       cwd: p.cwdLabel,
       ...(p.device ? { device: p.device.id } : {})
     };
-    if (this.takeGrant(threadId, command)) {
+    if (this.takeGrant(threadId, { command, cwd: p.cwdLabel, deviceId: p.device?.id ?? null })) {
       recordDecision({ ...base, outcome: 'ran-granted' });
       return { run: true };
     }
@@ -350,24 +350,27 @@ export class ExecService implements ExecBridge {
 
   /**
    * Let exactly this command run once on this thread without the judge: the
-   * user allowed it on a parked run, and the resumed turn re-issues it. A
-   * different command, or the same one a second time, is judged as usual.
+   * user allowed it on a parked run, and the resumed turn re-issues it. Bound
+   * to the folder and machine the user saw on the approval, so the same text
+   * aimed elsewhere — or a second time — is judged as usual.
    */
-  grantOnce(threadId: string, command: string): void {
+  grantOnce(threadId: string, grant: Grant): void {
     const list = this.grants.get(threadId) ?? [];
-    list.push(command.trim());
+    list.push(normalizeGrant(grant));
     this.grants.set(threadId, list);
     this.blocks.delete(threadId);
   }
 
-  private takeGrant(threadId: string, command: string): boolean {
+  private takeGrant(threadId: string, wanted: Grant): boolean {
     const list = this.grants.get(threadId);
-    const at = list?.indexOf(command.trim()) ?? -1;
+    const w = normalizeGrant(wanted);
+    const at = list?.findIndex((g) => g.command === w.command && g.cwd === w.cwd && g.deviceId === w.deviceId) ?? -1;
     if (!list || at < 0) return false;
     list.splice(at, 1);
     if (!list.length) this.grants.delete(threadId);
     return true;
   }
+
 
   abortThread(threadId: string): void {
     for (const [id, approval] of this.pending) {
@@ -705,4 +708,15 @@ function judgeFields(judged: Awaited<ReturnType<SafetyJudge['judge']>>) {
     ...(judged.stage1 ? { stage1: judged.stage1 } : {}),
     ...(judged.stage2 ? { stage2: judged.stage2 } : {})
   };
+}
+
+/** What the user allowed on a parked run: the command, where, and on which machine (null = this server). */
+export interface Grant {
+  command: string;
+  cwd?: string | null;
+  deviceId?: string | null;
+}
+
+function normalizeGrant(g: Grant): Required<Grant> {
+  return { command: g.command.trim(), cwd: g.cwd?.trim() || null, deviceId: g.deviceId || null };
 }

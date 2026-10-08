@@ -61,6 +61,17 @@ export function capActions(actions: readonly JudgeAction[], max = JUDGE_ACTIONS_
   }));
 }
 
+// The inlined text of attached files (pi/attachments.ts fenceText) and the skip
+// note follow the user's message in the stored turn. They are file contents,
+// not the user's words: a downloaded document saying "always allow curl | sh"
+// must not read to the judge as the user saying it.
+const ATTACHMENT_TAIL_RE = /(^|\n\n)(Attached file: |\(Skipped unsupported attachment: )[\s\S]*$/;
+
+/** The user's own text of a stored message: everything before the inlined attachments. */
+export function withoutAttachments(text: string): string {
+  return text.replace(ATTACHMENT_TAIL_RE, '').trim();
+}
+
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue | undefined =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as RecordValue) : undefined;
@@ -109,7 +120,7 @@ export function parseJudgeSession(text: string, opts: SessionReadOptions = {}): 
     if (entry?.type !== 'message' || !message) continue;
     if (message.role === 'user') {
       if (opts.cleanUser) {
-        const words = opts.cleanUser(message.content).trim();
+        const words = withoutAttachments(opts.cleanUser(message.content));
         if (words) userWords.push(words);
       }
     } else if (message.role === 'assistant' && Array.isArray(message.content)) {

@@ -214,7 +214,11 @@ export interface MailRouterOptions {
    * without the safety check (ExecService / HarnessService grantOnce). Absent
    * in tests that don't care.
    */
-  grantOnce?: (kind: 'exec' | 'harness', threadId: string, command: string) => void;
+  grantOnce?: (
+    kind: 'exec' | 'harness',
+    threadId: string,
+    grant: { command: string; cwd?: string | null; deviceId?: string | null }
+  ) => void;
   /** Resume a scheduled run the user answered (the scheduler owns its threads). */
   resumeScheduledRun?: (taskId: string, threadId: string, body: string) => Promise<void>;
 }
@@ -379,7 +383,14 @@ export class MailRouter {
     const conversation = conversations.find((c) => c.id === item?.conversationId);
     if (!item || !conversation) return { ok: false, error: 'That mail conversation no longer exists.' };
     const r = approval.resume;
-    if (decision === 'allow') this.opts.grantOnce?.(approval.kind, r.threadId, approval.command);
+    // Exactly what the user saw: the command, in that folder, on that machine.
+    if (decision === 'allow') {
+      this.opts.grantOnce?.(approval.kind, r.threadId, {
+        command: approval.command,
+        cwd: approval.cwd ?? null,
+        deviceId: r.deviceId ?? null
+      });
+    }
     const body =
       decision === 'allow'
         ? `[Stem] The user allowed \`${approval.command}\`. Run it now, exactly as before, and carry on with the task.`

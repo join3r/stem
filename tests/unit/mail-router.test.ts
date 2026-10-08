@@ -2346,7 +2346,7 @@ describe('parked runs', () => {
     const router = new MailRouter({
       runtime: fake.backend,
       onChange: () => undefined,
-      grantOnce: (kind, threadId, command) => granted.push(`${kind}:${threadId}:${command}`)
+      grantOnce: (kind, threadId, grant) => granted.push(`${kind}:${threadId}:${grant.command}`)
     });
     fake.scripts = [{ mode: 'ok', parked }, { mode: 'ok', reply: 'benchmark done' }];
     await router.compose({ to: ['verifier'], subject: 'bench', body: 'benchmark the models' });
@@ -2374,7 +2374,7 @@ describe('parked runs', () => {
   it('a Deny resumes without a grant and says so', async () => {
     const fake = fakeBackend();
     const granted: string[] = [];
-    const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined, grantOnce: (...a) => granted.push(a.join(':')) });
+    const router = new MailRouter({ runtime: fake.backend, onChange: () => undefined, grantOnce: (kind, threadId, grant) => granted.push(`${kind}:${threadId}:${grant.command}`) });
     fake.scripts = [{ mode: 'ok', parked }, { mode: 'ok', reply: 'did it without' }];
     await router.compose({ to: ['verifier'], subject: 'bench', body: 'benchmark the models' });
     const item = (await parkedMail()).items.find((i) => i.approval)!;

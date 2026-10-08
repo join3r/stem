@@ -755,7 +755,10 @@ describe('approval tiers', () => {
       judge,
       blockStreak: 3
     });
-    service.grantOnce(REQ.threadId, 'npm publish');
+    // A grant for another machine does not cover this one…
+    service.grantOnce(REQ.threadId, { command: 'npm publish', cwd: scratch, deviceId: 'mac-1' });
+    // …only the folder and server the user saw.
+    service.grantOnce(REQ.threadId, { command: 'npm publish', cwd: scratch });
     await service.handleHarnessRequest(REQ);
     expect(decisions[0]).toEqual({ optionId: 'allow' });
     expect(judge).not.toHaveBeenCalled();

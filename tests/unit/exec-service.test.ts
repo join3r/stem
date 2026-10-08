@@ -923,13 +923,28 @@ describe('ExecService blocking and escalation', () => {
   });
 
   it('runs a command the user allowed on a parked run once, without the judge', async () => {
-    service.grantOnce('t1', 'echo granted');
+    service.grantOnce('t1', { command: 'echo granted', cwd });
     expect((await send('echo granted')).ok).toBe(true);
     // Once: the same command again is judged as usual.
     expect(await send('echo granted')).toMatchObject({ ok: false, blocked: true });
     // Exactly that command: another one never rides the grant.
-    service.grantOnce('t1', 'echo granted');
+    service.grantOnce('t1', { command: 'echo granted', cwd });
     expect(await send('echo other')).toMatchObject({ ok: false, blocked: true });
+  });
+
+  it('binds a grant to the folder and machine the user saw', async () => {
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'stem-exec-elsewhere-')));
+    try {
+      service.grantOnce('t1', { command: 'echo granted', cwd });
+      // The same text in another folder is judged as usual…
+      expect(await send('echo granted', { cwd: elsewhere })).toMatchObject({ ok: false, blocked: true });
+      // …and a grant for a paired computer never lets it run here.
+      service.grantOnce('t1', { command: 'echo granted', cwd, deviceId: 'mac-1' });
+      expect(await send('echo granted')).toMatchObject({ ok: true });
+      expect(await send('echo granted')).toMatchObject({ ok: false, blocked: true });
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 
   it('a Stop on the thread cancels its card — never reported as the user declining', async () => {

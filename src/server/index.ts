@@ -867,8 +867,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
     generatedImages: (threadId) => runtime!.takeGeneratedImages(threadId),
     // A parked command the user allowed runs once without the safety check.
     // Late bound like agentReplies: exec and harness are built after the router.
-    grantOnce: (kind, threadId, command) =>
-      kind === 'exec' ? execService?.grantOnce(threadId, command) : harness?.service.grantOnce(threadId, command),
+    grantOnce: (kind, threadId, grant) =>
+      kind === 'exec' ? execService?.grantOnce(threadId, grant) : harness?.service.grantOnce(threadId, grant),
     resumeScheduledRun: async (taskId, threadId, body) => {
       if (!scheduler) throw new Error('The scheduler is not running.');
       await scheduler.resumeParkedRun(taskId, threadId, body);

@@ -12,7 +12,7 @@ import type {
 import type { HarnessBridge, HarnessBridgeResult, HarnessRequest, ParkRequest } from '../backend/types';
 import { recordDecision } from '../exec/decisions';
 import type { JudgeContext } from '../exec/judge-context';
-import { BLOCK_STREAK, BLOCK_TOTAL, PARKED_ERROR } from '../exec/service';
+import { BLOCK_STREAK, BLOCK_TOTAL, PARKED_ERROR, type Grant } from '../exec/service';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { ensureThreadScratch } from '../exec/scratch';
@@ -146,8 +146,8 @@ export class HarnessService implements HarnessBridge {
   private readonly agentReplies = new Map<string, string[]>();
   /** Per thread: judged asks refused in a row, and in all (exec/service.ts BLOCK_STREAK). */
   private readonly blocks = new Map<string, { streak: number; total: number }>();
-  /** Per thread: exact commands the user allowed on a parked run, each good for one ask. */
-  private readonly grants = new Map<string, string[]>();
+  /** Per thread: exactly what the user allowed on a parked run (command, folder, machine), each good for one ask. */
+  private readonly grants = new Map<string, Grant[]>();
 
   constructor(deps: HarnessServiceDeps) {
     this.deps = deps;
@@ -603,7 +603,7 @@ export class HarnessService implements HarnessBridge {
         cwd: ctx.cwd,
         ...(ctx.deviceId ? { device: ctx.deviceId } : {})
       };
-      if (this.takeGrant(ctx.threadId, command)) {
+      if (this.takeGrant(ctx.threadId, { command, cwd: ctx.cwd, deviceId: ctx.deviceId ?? null })) {
         recordDecision({ ...base, outcome: 'ran-granted' });
         return allowVia('judge', command);
       }
@@ -686,17 +686,18 @@ export class HarnessService implements HarnessBridge {
     running.handle.cancel(running.cancelReason);
   }
 
-  /** The user allowed this exact command on a parked run: its next ask passes once. */
-  grantOnce(threadId: string, command: string): void {
+  /** The user allowed this exact command, in this folder on this machine, on a parked run: its next ask passes once. */
+  grantOnce(threadId: string, grant: Grant): void {
     const list = this.grants.get(threadId) ?? [];
-    list.push(command.trim());
+    list.push(sameGrantShape(grant));
     this.grants.set(threadId, list);
     this.blocks.delete(threadId);
   }
 
-  private takeGrant(threadId: string, command: string): boolean {
+  private takeGrant(threadId: string, wanted: Grant): boolean {
     const list = this.grants.get(threadId);
-    const at = list?.indexOf(command.trim()) ?? -1;
+    const w = sameGrantShape(wanted);
+    const at = list?.findIndex((g) => g.command === w.command && g.cwd === w.cwd && g.deviceId === w.deviceId) ?? -1;
     if (!list || at < 0) return false;
     list.splice(at, 1);
     if (!list.length) this.grants.delete(threadId);
@@ -800,4 +801,8 @@ export class HarnessService implements HarnessBridge {
     this.armHead();
     return true;
   }
+}
+
+function sameGrantShape(g: Grant): { command: string; cwd: string | null; deviceId: string | null } {
+  return { command: g.command.trim(), cwd: g.cwd?.trim() || null, deviceId: g.deviceId || null };
 }
