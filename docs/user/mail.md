@@ -16,7 +16,10 @@ their reports come back as one. An agent started blind judges without your
 memory and without knowing who wrote the work. Agents keep no memory, never
 answer you directly, and never appear in the Personas list: they belong to the
 conversation and go away with it. Their work shows under **Work** like any
-other persona's. A conversation can have at most six agents.
+other persona's. A conversation can have at most six agents. An agent never
+gets integrations its starter lacks, and a persona that works on your
+computer (a coding agent, screen or browser control) is started as an agent
+only in a conversation you added it to.
 
 ## Scheduled tasks
 

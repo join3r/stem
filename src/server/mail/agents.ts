@@ -48,12 +48,34 @@ export function agentSlug(raw: string): string {
 }
 
 /**
+ * Whether a persona reaches one of the user's computers (a coding-agent,
+ * computer or browser pin). Such a persona is started as an agent only where
+ * the user put it in the conversation themselves (see bridgeSpawn): the pin
+ * is the user's per-persona grant, and spawn_agent must not hand it to
+ * whatever persona can start agents.
+ */
+export function isPinned(persona: Pick<Persona, 'harness' | 'computer' | 'browser'>): boolean {
+  return !!(persona.harness || persona.computer || persona.browser);
+}
+
+/**
+ * The allowlist an agent runs with: its role's, narrowed by its starter's.
+ * Absent means "every server", so absent on one side is the other side.
+ */
+export function narrowMcpServers(role?: string[], starter?: string[]): string[] | undefined {
+  if (!starter) return role ? [...role] : undefined;
+  if (!role) return [...starter];
+  return role.filter((name) => starter.includes(name));
+}
+
+/**
  * The persona row an agent's turns run with: its role's prompt, model, pins
  * and allowlist, under the agent's own id and name. Never keeps memory, never
  * opens to client chats, and starts agents of its own only one level down —
  * an agent started by an agent cannot (the depth limit every sub-agent system
  * has, for the same runaway reason). Blind agents run without recall (a
- * recall-off spawner only ever starts blind ones, see bridgeSpawn).
+ * recall-off spawner only ever starts blind ones, see bridgeSpawn), and the
+ * MCP allowlist is the one fixed at spawn.
  */
 export function agentPersona(role: Persona, agent: MailAgent): Persona {
   const persona: Persona = { ...role, id: agent.id, name: agent.name, memory: false };
@@ -61,5 +83,6 @@ export function agentPersona(role: Persona, agent: MailAgent): Persona {
   delete persona.clients;
   if (!role.canSpawn || isAgentId(agent.spawnedBy)) delete persona.canSpawn;
   if (agent.blind) persona.recall = false;
+  if (agent.mcpServers) persona.mcpServers = [...agent.mcpServers];
   return persona;
 }

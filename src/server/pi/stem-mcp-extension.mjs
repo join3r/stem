@@ -2632,7 +2632,7 @@ function registerMailTools(pi) {
       'several agents in the same turn to work pieces in parallel - every reply comes back to you together ' +
       'as one mail, so start them all, then finish your turn. Two agents can share a role (reviewer-a and ' +
       'reviewer-b as Critic). Continue an agent later with send_mail to its id. Agents keep no memory and end ' +
-      'with the conversation. Only personas allowed to start agents may call this. Only works during a mail ' +
+      'with the conversation. Only personas allowed to start agents may call this. A persona pinned to the user\'s computer (coding agent, screen, browser) can be a role only in a conversation the user added it to. Only works during a mail ' +
       'delivery.',
     parameters: {
       type: 'object',
@@ -2887,8 +2887,8 @@ const COMPUTER_UNPINNED_REFUSAL =
   'Personas → "Computer this persona controls"), chats with no persona when Settings → Features → Computer ' +
   'control allows it. Do not retry, and do not work around ' +
   'it by scripting the GUI over run_command (osascript at System Events, cliclick) — that is refused too. ' +
-  'Hand the task to the pinned persona (spawn_agent with it as the role, in a mail thread), or tell the user which ' +
-  'persona should take it, or that one needs setting up.';
+  'Hand the task to the pinned persona (send_mail it, or spawn_agent with it as the role, in a mail thread the user ' +
+  'added it to), or tell the user which persona should take it, or that one needs setting up.';
 
 const COMPUTER_ACTIONS = [
   'screenshot',
@@ -3357,8 +3357,8 @@ const BROWSER_BRIDGE_TITLE = 'stem-browser-bridge';
 const BROWSER_UNPINNED_REFUSAL =
   'Browser control is not available in this conversation: personas get it from a browser pin (Manage → ' +
   'Personas → "Browser this persona controls"), chats with no persona when Settings → Features → Browser ' +
-  'control allows it. Do not retry. Hand the task to the pinned persona (spawn_agent with it as the role, in a mail ' +
-  'thread), or tell the user which persona should take it, or that one needs setting up.';
+  'control allows it. Do not retry. Hand the task to the pinned persona (send_mail it in a mail thread the user ' +
+  'added it to), or tell the user which persona should take it, or that one needs setting up.';
 
 const BROWSER_ACTIONS = [
   'tabs',

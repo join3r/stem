@@ -246,7 +246,11 @@ function coerce(parsed: unknown): PersonasFile {
     const critic = personas.find((p) => p.id === 'critic');
     if (critic) critic.recall = false;
   }
-  // v5 brings agents: Normal, the usual driver, may start them too.
+  // v5 brings agents: Normal, the usual driver, may start them too. The grant
+  // reaches nothing privileged: an agent never runs a persona pinned to the
+  // user's computer unless the user put that persona in the conversation, and
+  // never has wider integrations than its starter (mail/agents.ts). What it
+  // adds is turns; untick the box to take it back.
   if (version < 5) {
     const normal = personas.find((p) => p.id === 'normal');
     if (normal) normal.canSpawn = true;

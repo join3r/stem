@@ -2982,6 +2982,12 @@ export interface MailAgent {
   spawnedBy: string;
   /** Judges blind: no recall, and its mails never name the sender. */
   blind?: true;
+  /**
+   * The MCP allowlist it runs with, fixed at spawn: its role's list narrowed
+   * by its starter's (absent = the role's own). An agent never reaches an
+   * integration its starter could not.
+   */
+  mcpServers?: string[];
 }
 
 export interface MailConversation {

@@ -15,7 +15,7 @@ import * as activity from '../activity';
 import { degrade } from '../degrade';
 import { noteTurnStart } from '../live-turns';
 import { getPersona, listPersonas } from '../workspace/personas';
-import { agentId, agentName, agentPersona, agentSlug, isAgentId, MAX_AGENTS } from './agents';
+import { agentId, agentName, agentPersona, agentSlug, isAgentId, isPinned, MAX_AGENTS, narrowMcpServers } from './agents';
 import {
   listPersonaNotes,
   personaOwnsMemory,
@@ -951,6 +951,20 @@ export class MailRouter {
           `personas: ${personas.map((p) => `${p.name} (${p.id})`).join(', ')}.`
       };
     }
+    // A persona pinned to the user's computer (coding agent, screen, browser)
+    // carries a grant the user made for it alone. Starting it as an agent is
+    // allowed only in a conversation the user put it in — otherwise any
+    // persona that can start agents could run code or drive the screen on the
+    // user's Mac.
+    if (isPinned(role) && !conversation.participants.includes(role.id)) {
+      return {
+        ok: false,
+        error:
+          `${role.name} works on the user's computer, so only the user can bring it into a conversation, and it ` +
+          'is not in this one. Tell the user it should take this part (they can add it to the conversation or ' +
+          'mail it), or do the work without it.'
+      };
+    }
     const name = agentSlug(req.name ?? '');
     if (!name) return { ok: false, error: 'Give the agent a short name (letters, digits, dashes), like reviewer-a.' };
     const id = agentId(role.id, name);
@@ -977,8 +991,17 @@ export class MailRouter {
     // A recall-off caller (a blind reviewer that may spawn) only starts blind
     // agents: it must not reach the user's history through one.
     const blind = req.blind === true || caller.recall === false;
+    // Likewise its integrations: never wider than the starter's own.
+    const mcpServers = narrowMcpServers(role.mcpServers, caller.mcpServers);
     try {
-      await addAgent(conversation.id, { id, role: role.id, name, spawnedBy: ctx.personaId, ...(blind ? { blind: true } : {}) });
+      await addAgent(conversation.id, {
+        id,
+        role: role.id,
+        name,
+        spawnedBy: ctx.personaId,
+        ...(blind ? { blind: true } : {}),
+        ...(mcpServers ? { mcpServers } : {})
+      });
     } catch (error) {
       // quiet: the tool result IS the error channel (a racing spawn took the name).
       return { ok: false, error: error instanceof Error ? error.message : String(error) };

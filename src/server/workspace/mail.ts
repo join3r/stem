@@ -219,7 +219,10 @@ function coerceAgents(raw: unknown): MailAgent[] {
       role: a.role,
       name: a.name,
       spawnedBy: a.spawnedBy,
-      ...(a.blind === true ? { blind: true as const } : {})
+      ...(a.blind === true ? { blind: true as const } : {}),
+      ...(Array.isArray(a.mcpServers)
+        ? { mcpServers: a.mcpServers.filter((n): n is string => typeof n === 'string') }
+        : {})
     });
   }
   return agents;

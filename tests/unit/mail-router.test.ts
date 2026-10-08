@@ -1599,6 +1599,56 @@ describe('spawn_agent', () => {
     ]);
   });
 
+  it('starts a pinned persona only where the user added it, and narrows integrations to the starter’s', async () => {
+    await savePersona({ id: 'coder', name: 'Coder', prompt: 'c', harness: { agent: 'claude', cwd: '/repo' } });
+    await savePersona({ id: 'scout', name: 'Scout', prompt: 's', mcpServers: ['slack', 'jira'] });
+    await savePersona({ id: 'lead', name: 'Lead', prompt: 'l', canSpawn: true, mcpServers: ['jira'] });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.lead = [
+      {
+        mode: 'ok',
+        reply: 'staffing',
+        bridge: async (bridge, ctx) => {
+          const pinned = await bridge.spawnAgent({ role: 'coder', name: 'c1', brief: 'build it' }, ctx);
+          expect(pinned.ok).toBe(false);
+          if (!pinned.ok) expect(pinned.error).toContain('only the user can bring it');
+          expect((await bridge.spawnAgent({ role: 'scout', name: 's1', brief: 'look' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'done' }
+    ];
+    await router.compose({ to: ['lead'], subject: 'gate', body: 'go' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'done')).toBe(true);
+      expect(m.conversations[0].status).toBe('idle');
+    });
+    expect(fake.starts.find((s) => s.persona?.id === 'scout~s1')?.persona?.mcpServers).toEqual(['jira']);
+    expect((await readMail()).conversations[0].agents?.map((a) => a.id)).toEqual(['scout~s1']);
+
+    // The user put Coder in this one: now it may be started as an agent.
+    const fake2 = fakeBackend();
+    const router2 = makeRouter(fake2);
+    fake2.scriptsByPersona.lead = [
+      {
+        mode: 'ok',
+        reply: 'staffing',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.spawnAgent({ role: 'coder', name: 'c1', brief: 'build it' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'built' }
+    ];
+    await router2.compose({ to: ['lead', 'coder'], subject: 'allowed', body: 'go' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'built')).toBe(true);
+      expect(m.conversations.find((c) => c.subject === 'allowed')?.status).toBe('idle');
+    });
+    expect(fake2.starts.find((s) => s.persona?.id === 'coder~c1')?.persona?.harness).toEqual({ agent: 'claude', cwd: '/repo' });
+  });
+
   it('caps a conversation at six agents', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);

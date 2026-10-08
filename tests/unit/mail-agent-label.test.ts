@@ -2,7 +2,7 @@
 // persona list alone, and the router derives ids and names the same way.
 import { describe, expect, it } from 'vitest';
 import { personaName } from '../../src/renderer/mail/useMail';
-import { agentId, agentName, agentPersona, agentSlug, isAgentId } from '../../src/server/mail/agents';
+import { agentId, agentName, agentPersona, agentSlug, isAgentId, narrowMcpServers } from '../../src/server/mail/agents';
 import type { Persona } from '../../src/shared/types';
 
 const personas: Persona[] = [{ id: 'critic', name: 'Critic', prompt: 'You are Critic.' }];
@@ -36,5 +36,15 @@ describe('agent addresses', () => {
     const nested = agentPersona(role, { id: 'critic~b', role: 'critic', name: 'b', spawnedBy: 'orchestrator~x', blind: true });
     expect(nested.canSpawn).toBeUndefined();
     expect(nested.recall).toBe(false);
+    const narrowed = agentPersona({ ...role, mcpServers: ['a', 'b'] }, { id: 'critic~c', role: 'critic', name: 'c', spawnedBy: 'normal', mcpServers: ['a'] });
+    expect(narrowed.mcpServers).toEqual(['a']);
+  });
+
+  it('never gives an agent wider integrations than its starter', () => {
+    expect(narrowMcpServers(undefined, undefined)).toBeUndefined();
+    expect(narrowMcpServers(['a'], undefined)).toEqual(['a']);
+    expect(narrowMcpServers(undefined, ['b'])).toEqual(['b']);
+    expect(narrowMcpServers(['a', 'b'], ['b', 'c'])).toEqual(['b']);
+    expect(narrowMcpServers(['a'], [])).toEqual([]);
   });
 });
