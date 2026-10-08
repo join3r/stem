@@ -41,6 +41,7 @@ final class Recorder {
   private var editing: (element: AXUIElement, field: String, role: String, secure: Bool, before: String, app: Context)?
   private var lastSeenHash: [String: Int] = [:]
   private var lastShotAt = Date.distantPast
+  private var lastShot: (pid: pid_t, window: String, path: String)?
   private var lastSeenAt = Date.distantPast
   private var woken: [pid_t: AXUIElement] = [:]
   private var pasteboardCount = NSPasteboard.general.changeCount
@@ -181,6 +182,7 @@ final class Recorder {
       editing = nil
       lastFocus = nil
       lastSeenHash = [:]
+      lastShot = nil
     }
   }
 
@@ -252,6 +254,15 @@ final class Recorder {
       if let label = Recorder.describe(hit), !Recorder.looksLikeCard(label) { extra["label"] = label }
       if let within = Recorder.container(of: hit) { extra["within"] = within }
       for (k, v) in Recorder.fileContext(hit, role: role) where extra[k] == nil { extra[k] = v }
+      // A dialog's OK/Remove/Create: what it was set to is the step's real
+      // content (fields typed into custom controls never show as typing), so
+      // keep its text and a picture, taken while it is still on screen.
+      if role == "AXButton", extra["files"] == nil, let win = Recorder.ancestor(of: hit, role: "AXWindow"), Recorder.isPanel(win) {
+        let shown = Recorder.visibleText(win)
+        if !shown.isEmpty { extra["form"] = Recorder.clip(shown, 1500) }
+        let recent = lastShot.flatMap { $0.pid == pid && $0.window == ctx.window ? $0.path : nil }
+        if let path = takeShot(win, ctx, force: true) ?? recent { extra["shot"] = path }
+      }
     }
     if right { extra["button"] = "right" }
     if count > 1 { extra["count"] = count }
@@ -465,15 +476,17 @@ final class Recorder {
     if shot { takeShot(window, ctx) }
   }
 
-  /// A picture of the window, kept on the Mac; used only for a value no text explains.
-  private func takeShot(_ window: AXUIElement, _ ctx: Context) {
-    guard let dir = shotsDir, !shotsDenied, Date().timeIntervalSince(lastShotAt) >= 2 else { return }
-    guard let windowID = AX.cgWindowID(of: window), let bounds = Windows.bounds(of: windowID) else { return }
+  /// A picture of the window, kept on the Mac; used only for a value no text
+  /// explains and for a dialog's settings when its button is clicked.
+  @discardableResult
+  private func takeShot(_ window: AXUIElement, _ ctx: Context, force: Bool = false) -> String? {
+    guard let dir = shotsDir, !shotsDenied, force || Date().timeIntervalSince(lastShotAt) >= 2 else { return nil }
+    guard let windowID = AX.cgWindowID(of: window), let bounds = Windows.bounds(of: windowID) else { return nil }
     lastShotAt = Date()
     guard CGPreflightScreenCaptureAccess() else {
       shotsDenied = true
       emit(["event": "rec-note", "note": "Screen Recording is off, so no pictures are kept; values only an image shows cannot be traced."])
-      return
+      return nil
     }
     do {
       let image = try WindowCapture.capture(windowID: windowID, bounds: bounds)
@@ -484,8 +497,11 @@ final class Recorder {
       shot["t"] = t
       shot["path"] = url.path
       emit(["event": "rec-shot", "shot": shot])
+      lastShot = (ctx.pid, ctx.window, url.path)
+      return url.path
     } catch {
       trace("record shot failed: \(error)")
+      return nil
     }
   }
 
@@ -625,6 +641,13 @@ final class Recorder {
     let subrole = AX.string(w, kAXSubroleAttribute as String) ?? ""
     return subrole == "AXDialog" || subrole == "AXSystemDialog" || AX.string(w, kAXIdentifierAttribute as String) == "open-panel"
       || AX.string(w, kAXIdentifierAttribute as String) == "save-panel"
+  }
+
+  /// A window that holds settings for one action: a dialog, a sheet, or any
+  /// window that is not the app's main one (Resolve's Remove Silence).
+  static func isPanel(_ w: AXUIElement) -> Bool {
+    if isDialog(w) || (AX.attribute(w, kAXModalAttribute as String) as? Bool) == true { return true }
+    return (AX.attribute(w, kAXMainAttribute as String) as? Bool) == false
   }
 
   private static func ancestorView(of el: AXUIElement) -> AXUIElement? {

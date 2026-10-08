@@ -19,7 +19,7 @@ import type { LearnTurn } from './thread-evidence';
 
 export const SKILL_RECORD_INSTRUCTIONS = `The user recorded themselves doing a task on their Mac so that you can do it for them next time. Write it up as a skill.
 
-The evidence is what THEY did, not what an assistant did: every click named by the control's role and label, every value typed into a field, copies and pastes, keys, and switches between apps and windows, in order. Web pages carry their address. Clicks in an Open or Save dialog carry the files selected and the folder shown: a full path when one was recorded, else only names — then the skill says how to find the file on the Mac by its name (\`mdfind -name\` or \`find\` in the named folder) instead of asking the user for its path. Where a typed or pasted value could be traced to text that was on their screen just before, the source is quoted beside it ("← from: Mail · PO-4411: …delivery on October 14…"). A value marked "(no source found)" was not in any text they had in view; pictures of what was on screen just before it may follow. Notes are things the user wrote down while recording, and they outrank your guesses. "[password]" marks a secret that was not recorded: the skill must say the user's sign-in is needed there, never invent one.
+The evidence is what THEY did, not what an assistant did: every click named by the control's role and label, every value typed into a field, copies and pastes, keys, and switches between apps and windows, in order. Web pages carry their address. A click on a dialog's button (OK, Create, Remove) carries the text the dialog showed at that moment — its fields, values and labels in reading order — and a picture of it may follow: that is what the user set, so the skill states those settings by label and value instead of asking for them. Clicks in an Open or Save dialog carry the files selected and the folder shown: a full path when one was recorded, else only names — then the skill says how to find the file on the Mac by its name (\`mdfind -name\` or \`find\` in the named folder) instead of asking the user for its path. Where a typed or pasted value could be traced to text that was on their screen just before, the source is quoted beside it ("← from: Mail · PO-4411: …delivery on October 14…"). A value marked "(no source found)" was not in any text they had in view; pictures of what was on screen just before it may follow. Notes are things the user wrote down while recording, and they outrank your guesses. "[password]" marks a secret that was not recorded: the skill must say the user's sign-in is needed there, never invent one.
 
 Your job:
 1. Work out the procedure, and what stays the same from run to run (which app, which menu, which form, which button) versus what changes (a date, an order number, a quantity, which customer).
@@ -28,7 +28,7 @@ Your job:
 4. Drop the noise: misclicks, a detour that was immediately undone, scrolling around, windows passed through on the way.
 5. Write the steps for an assistant that has two tools on this Mac: \`browser\` for anything in a web page (it works in background tabs of the user's own browser, by URL, link text and field labels), and \`computer\` for other apps (it works by window, control names and keys). Name controls by their labels as recorded, and give the page address where one was recorded.
 
-Ask a question only for something the evidence cannot settle and a wrong guess would get wrong every run, such as where a value with no source comes from. At most three, short, answerable in a sentence. Do not ask about anything the traced sources already answer.
+Ask a question only for something the evidence cannot settle and a wrong guess would get wrong every run, such as where a value with no source comes from. At most three, short, answerable in a sentence of text: the user answers in a text box, so never ask for a screenshot, a file or a recording. Do not ask about anything the recording or the traced sources already answer, and do not ask the user to repeat what they did: they recorded it so that you would not have to ask. When an earlier answer says "same as I did" or the like, take the values from the recording; when the recording really lacks them, write the skill to read them off the screen at run time (the dialog's current values, the timeline's markers) rather than asking again.
 
 Also list the final steps: the ones that change something outside the screen and cannot simply be closed away — saving or submitting a form, sending a message, archiving, moving or deleting an item, paying. Name each the way the recording shows it and say what it does: 'Click "Uložiť" in agrisys (saves the delivery date)', 'Press "y" in Fastmail (archives the email)'. At most five, in the order they happen; none if nothing is changed. A practice run of this skill stops before each of them unless the user allows it.
 
@@ -56,6 +56,7 @@ function renderStep(step: RecordedStep, index: number, source: string | null, no
       if (step.file) what += ` (file ${JSON.stringify(step.file)})`;
       if (step.files) what += ` with ${step.files.split('\n').map((f) => JSON.stringify(f)).join(', ')} selected`;
       if (step.folder) what += step.folder.startsWith('/') ? ` [folder ${JSON.stringify(step.folder)}]` : ` [in a folder named ${JSON.stringify(step.folder)}]`;
+      if (step.form) what += `\n   the dialog showed: ${JSON.stringify(step.form.split('\n').join(' · '))}${step.shot ? ' (picture attached)' : ''}`;
       break;
     }
     case 'type':
@@ -217,7 +218,16 @@ export async function authorRecording(llm: LlmClient, input: RecordAuthorInput, 
 
 /** A draft's examples with picture references dropped: they were for one authoring pass. */
 export function withoutShots(examples: RecordingExample[]): RecordingExample[] {
-  return examples.map((ex) => ({ ...ex, unmatched: ex.unmatched.map((u) => ({ ...u, shots: [] })) }));
+  return examples.map((ex) => ({
+    ...ex,
+    steps: ex.steps.map(({ shot: _shot, ...step }) => step),
+    unmatched: ex.unmatched.map((u) => ({ ...u, shots: [] }))
+  }));
+}
+
+/** The pictures one recording brings: dialogs' settings first, then values no text explains. */
+export function examplePictures(example: RecordingExample): string[] {
+  return [...new Set([...example.steps.flatMap((s) => (s.shot ? [s.shot] : [])).slice(-4), ...example.unmatched.flatMap((u) => u.shots)])];
 }
 
 /** The fields of a draft a client may send back (an edited skill). */
@@ -275,7 +285,7 @@ export function cleanExample(raw: unknown): RecordingExample | null {
     if (typeof x.kind !== 'string' || !STEP_KINDS.has(x.kind)) continue;
     const step: RecordedStep = { kind: x.kind as RecordedStep['kind'], t: num(x.t), app: str(x.app, 120) ?? '', window: str(x.window, 200) ?? '' };
     const opt: [keyof RecordedStep, number][] = [
-      ['bundleId', 200], ['url', 600], ['role', 60], ['label', 200], ['within', 200], ['file', 600], ['files', 2000], ['folder', 600], ['field', 200],
+      ['bundleId', 200], ['url', 600], ['role', 60], ['label', 200], ['within', 200], ['file', 600], ['files', 2000], ['folder', 600], ['form', 1500], ['shot', 600], ['field', 200],
       ['value', 4000], ['before', 400], ['text', 2000], ['combo', 60]
     ];
     for (const [k, max] of opt) {

@@ -2,7 +2,7 @@
 // with where it was traced on screen), the reply it gives back (skill plus
 // variables and questions), and the shape a client's recording is cut to.
 import { describe, expect, it } from 'vitest';
-import { authorRecording, buildRecordPrompt, cleanExample, formatPracticeBlock, parseRecordExtras, renderExample, withoutShots } from '../../src/server/skills/record';
+import { authorRecording, buildRecordPrompt, cleanExample, examplePictures, formatPracticeBlock, parseRecordExtras, renderExample, withoutShots } from '../../src/server/skills/record';
 import type { RecordingExample } from '../../src/shared/types';
 import type { LlmClient } from '../../src/server/recall/llm';
 
@@ -74,6 +74,24 @@ describe('renderExample', () => {
     const text = renderExample(example);
     expect(text).toContain('clicked textfield "Intro.mp4" in outline "list view" [in a folder named "joinit stock"]');
     expect(text).toContain('clicked button "Open" with "/Users/me/stock/Intro.mp4", "/Users/me/stock/Outro.mp4" selected [folder "/Users/me/stock"]');
+  });
+
+  it('shows what a dialog was set to when its button was clicked, and drops the picture after', () => {
+    const example = cleanExample({
+      steps: [
+        {
+          kind: 'click', t: 0, app: 'DaVinci Resolve', window: 'Remove Silence', role: 'button', label: 'Remove',
+          form: 'Threshold\n-40 dB\nMin. duration\n0.2', shot: '/tmp/rec/shots/shot-80.jpg'
+        }
+      ],
+      links: [],
+      unmatched: [{ step: 0, value: 'x', shots: ['/tmp/rec/shots/shot-80.jpg', '/tmp/rec/shots/shot-70.jpg'] }]
+    })!;
+    expect(renderExample(example)).toContain('clicked button "Remove"\n   the dialog showed: "Threshold · -40 dB · Min. duration · 0.2" (picture attached)');
+    expect(examplePictures(example)).toEqual(['/tmp/rec/shots/shot-80.jpg', '/tmp/rec/shots/shot-70.jpg']);
+    const [kept] = withoutShots([example]);
+    expect(kept.steps[0]).not.toHaveProperty('shot');
+    expect(kept.steps[0].form).toContain('Threshold');
   });
 
   it('frames every example and the earlier draft', () => {

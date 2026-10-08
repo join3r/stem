@@ -1639,6 +1639,10 @@ export interface RecordedStep {
   files?: string;
   /** click in a file dialog: the folder it shows (a path, or only its name). */
   folder?: string;
+  /** click on a dialog's button: the text the dialog showed then — its settings. */
+  form?: string;
+  /** click on a dialog's button: a picture of the dialog (Mac path / upload handle), for one authoring pass. */
+  shot?: string;
   button?: 'right';
   count?: number;
   /** type/paste: the field and the value ("[password]" for secure fields). */

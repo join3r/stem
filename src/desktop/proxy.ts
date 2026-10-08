@@ -483,17 +483,18 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         return [text, await attachmentsForServer(list)];
       }
     },
-    // A recording's pictures (only those for values no text explains) are files
+    // A recording's pictures (dialogs' settings, values no text explains) are files
     // in this Mac's recordings folder; a remote server gets handles instead.
     'skills:record': {
       before: async ([threadId, example, draftId]) => {
         const ex = example as RecordingExample;
-        if (!ex?.unmatched?.some((u) => u.shots.length > 0)) return;
+        if (!ex?.unmatched?.some((u) => u.shots.length > 0) && !ex?.steps?.some((s) => s.shot)) return;
         const creds = { url: base, token: deps.token };
         const unmatched = await Promise.all(
           ex.unmatched.map(async (u) => ({ ...u, shots: await Promise.all(u.shots.map((path) => uploadFile(creds, path))) }))
         );
-        return [threadId, { ...ex, unmatched }, draftId];
+        const steps = await Promise.all(ex.steps.map(async (s) => (s.shot ? { ...s, shot: await uploadFile(creds, s.shot) } : s)));
+        return [threadId, { ...ex, steps, unmatched }, draftId];
       }
     },
     'mail:reply': {

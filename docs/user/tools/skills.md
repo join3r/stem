@@ -41,6 +41,16 @@ during upkeep. It may use provider quota.
 
 Keep skills narrow and verifiable. Disable an auto skill to stop Stem using it.
 
+## Recording a skill
+
+On the Mac app, press **Record** under the message box (or type `/record`, or
+⌃⌥R) and do the task in your own apps as usual; press **Stop** when done. Stem
+notes what you click, type and switch to, plus the settings of any dialog you
+confirm, and writes a draft skill card in the chat. It may ask up to three
+questions in the card; answer in a sentence. **Practice** lets Stem try the draft
+before you save it. Nothing is recorded inside password managers or password
+fields.
+
 ## Seeing a skill in use
 
 Above each reply is a **Used N tools** line. Skills are counted there separately — "Used 2 tools

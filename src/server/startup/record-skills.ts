@@ -11,7 +11,7 @@ import { mailSessionThreadIds } from '../workspace/mail';
 import { readSettings, skillsRunFor } from '../workspace/settings';
 import { whereSkillsRun } from '../workspace/bootstrap';
 import { isUploadHandle, resolveUploadHandle, transportedRawPath } from '../files/staging';
-import { authorRecording, cleanEdited, cleanExample, withoutShots, type RecordAuthorInput } from '../skills/record';
+import { authorRecording, cleanEdited, cleanExample, examplePictures, withoutShots, type RecordAuthorInput } from '../skills/record';
 import { pickLearnTurns } from '../skills/thread-evidence';
 import { getDraft, listDrafts, patchDraft, putDraft } from '../skills/record-drafts';
 import { validateSkill, formatViolations, type SkillDraft } from '../skills/contract';
@@ -62,7 +62,7 @@ const MAX_IMAGES = 6;
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 
 /**
- * The pictures for values no text explained. A remote client sends upload
+ * The pictures for dialogs' settings and values no text explained. A remote client sends upload
  * handles; the desktop sharing this disk sends paths, which are accepted only
  * inside its recordings folder (and only from a caller allowed raw paths at all).
  */
@@ -151,7 +151,7 @@ export async function recordSkill(caller: CallerContext, threadId: string, raw: 
   if (refused) throw new Error(refused);
   const example = cleanExample(raw);
   if (!example) throw new Error('The recording was empty.');
-  const images = await pictures(caller, example.unmatched.flatMap((u) => u.shots));
+  const images = await pictures(caller, examplePictures(example));
   const existing = draftId ? await getDraft(draftId) : null;
   if (draftId && (!existing || existing.threadId !== threadId)) throw new Error('That draft is gone.');
   const now = new Date().toISOString();
