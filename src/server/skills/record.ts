@@ -97,7 +97,10 @@ export function renderExample(example: RecordingExample): string {
     sources.set(link.step, `${at} (${how}): "${link.source.snippet}"`);
   }
   const unmatched = new Set(example.unmatched.map((u) => u.step));
-  return example.steps.map((s, i) => renderStep(s, i, sources.get(i) ?? null, unmatched.has(i))).join('\n');
+  const lines = example.steps.map((s, i) => renderStep(s, i, sources.get(i) ?? null, unmatched.has(i)));
+  if (example.cut) lines.splice(example.cut.at, 0, `   … ${example.cut.steps} steps of the middle were left out here (the recording was too long) …`);
+  if (example.notes?.length) lines.push('', ...example.notes.map((n) => `About this recording: ${n}`));
+  return lines.join('\n');
 }
 
 export interface RecordAuthorInput {
@@ -376,12 +379,17 @@ export function cleanExample(raw: unknown): RecordingExample | null {
     }))
     .filter((u) => u.step < steps.length)
     .slice(0, MAX_STEPS);
+  const c = r.cut && typeof r.cut === 'object' ? (r.cut as Record<string, unknown>) : null;
+  const cut = c && num(c.at) > 0 && num(c.at) <= steps.length && num(c.steps) > 0 ? { at: num(c.at), steps: num(c.steps) } : null;
+  const notes = (Array.isArray(r.notes) ? r.notes : []).map((n) => str(n, 300)).filter((n): n is string => !!n).slice(0, 5);
   return {
     id: str(r.id, 80) ?? `ex-${Date.now()}`,
     recordedAt: typeof r.recordedAt === 'string' && !Number.isNaN(Date.parse(r.recordedAt)) ? r.recordedAt : new Date().toISOString(),
     durationMs: num(r.durationMs),
     steps,
     links,
-    unmatched
+    unmatched,
+    ...(cut ? { cut } : {}),
+    ...(notes.length ? { notes } : {})
   };
 }

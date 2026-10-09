@@ -18,10 +18,14 @@ import ImageIO
 //                                                  macOS drops real clicks on the
 //                                                  never-key pill, so Stem presses
 //                                                  its buttons from here)
-// Passwords never leave this process: a secure field's value is "[password]".
+// Passwords never leave this process: a secure field's value is "[password]",
+// and anything shaped like a key or token (sk-…, ghp_…, a JWT) is "[secret]".
 
 final class Recorder {
   private let queue = DispatchQueue(label: "stem-computer-record")
+  /// What a click hit is read here, at once: a menu or dialog is gone a moment
+  /// later, and `queue` may be busy reading a long window's text.
+  private let hitQueue = DispatchQueue(label: "stem-computer-record-hit", qos: .userInteractive)
   private var tap: CFMachPort?
   private var tapLoop: CFRunLoop?
   private var timer: DispatchSourceTimer?
@@ -45,6 +49,7 @@ final class Recorder {
   private var lastSeenAt = Date.distantPast
   private var woken: [pid_t: AXUIElement] = [:]
   private var pasteboardCount = NSPasteboard.general.changeCount
+  /// Under `lock`: both queues take pictures.
   private var shotsDenied = false
 
   /// Password managers mark what they copy as concealed (nspasteboard.org); such text is never written down.
@@ -86,6 +91,45 @@ final class Recorder {
       sum += d
     }
     return sum % 10 == 0
+  }
+
+  /// Keys and tokens by their shape; the desktop app runs the same list again (recorder/secrets.ts).
+  private static let secretPatterns: [NSRegularExpression] = [
+    "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
+    "\\b(?:sk|rk|pk)-(?:[a-z]+-)?[A-Za-z0-9_-]{20,}",
+    "\\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})",
+    "\\bglpat-[A-Za-z0-9_-]{20,}",
+    "\\bxox[abprs]-[A-Za-z0-9-]{10,}",
+    "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b",
+    "\\bAIza[0-9A-Za-z_-]{35}",
+    "\\bnpm_[A-Za-z0-9]{36}\\b",
+    "\\bxai-[A-Za-z0-9]{20,}",
+    "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}",
+    "(?i)\\bBearer\\s+[A-Za-z0-9._~+/=-]{20,}"
+  ].map { try! NSRegularExpression(pattern: $0) }
+  private static let opaqueRun = try! NSRegularExpression(pattern: "[A-Za-z0-9_+/=-]{32,}")
+  private static let urlRun = try! NSRegularExpression(pattern: "\\bhttps?://\\S+")
+
+  /// The text with every key- or token-shaped run replaced by "[secret]". A
+  /// long run of upper, lower AND digits counts too, except inside a link
+  /// (a shared doc's id looks just like a key, and is the point of the link).
+  static func redactSecrets(_ text: String) -> String {
+    var out = text
+    for p in secretPatterns {
+      out = p.stringByReplacingMatches(in: out, range: NSRange(out.startIndex..., in: out), withTemplate: "[secret]")
+    }
+    let ns = out as NSString
+    let full = NSRange(location: 0, length: ns.length)
+    let links = urlRun.matches(in: out, range: full).map(\.range)
+    let hits = opaqueRun.matches(in: out, range: full).map(\.range).filter { r in
+      let run = ns.substring(with: r)
+      guard run.rangeOfCharacter(from: .uppercaseLetters) != nil, run.rangeOfCharacter(from: .lowercaseLetters) != nil,
+            run.rangeOfCharacter(from: .decimalDigits) != nil else { return false }
+      return !links.contains { NSIntersectionRange($0, r).length > 0 }
+    }
+    let result = NSMutableString(string: out)
+    for r in hits.reversed() { result.replaceCharacters(in: r, with: "[secret]") }
+    return result as String
   }
 
   private static func pasteboardIsConcealed(_ pb: NSPasteboard) -> Bool {
@@ -134,6 +178,9 @@ final class Recorder {
       throw HelperError("Stem needs Accessibility access to name what you click (System Settings → Privacy & Security → Accessibility).")
     }
     tap = port
+    // An app that hangs must not hold every later step up for the 6 s default:
+    // this sets the timeout for every element this process asks.
+    AXUIElementSetMessagingTimeout(systemWide, 0.5)
     shotsDir.map { self.shotsDir = URL(fileURLWithPath: $0) }
     lock.lock(); running = true; paused = false; start = Date(); lock.unlock()
     let t = Thread { [weak self] in
@@ -209,7 +256,10 @@ final class Recorder {
       let at = event.location
       let right = type == .rightMouseDown
       let count = Int(event.getIntegerValueField(.mouseEventClickState))
-      queue.async { self.clicked(at: at, right: right, count: count) }
+      // Read at once on hitQueue; written down in order on queue.
+      let read = Pending<Click?>()
+      hitQueue.async { read.fill(self.inspect(at: at, right: right, count: count)) }
+      queue.async { self.clicked(read.wait()) }
     case .keyDown:
       let code = Int(event.getIntegerValueField(.keyboardEventKeycode))
       let flags = event.flags
@@ -238,35 +288,69 @@ final class Recorder {
     emit(["event": "rec-step", "step": step])
   }
 
-  private func clicked(at point: CGPoint, right: Bool, count: Int) {
+  /// A click, read on hitQueue the moment it happened.
+  private struct Click {
+    let hit: AXUIElement
+    let ctx: Context
+    var extra: [String: Any]
+    /// A dialog's button: `shot` is its picture, if one could be taken.
+    let panel: Bool
+    let shot: [String: Any]?
+  }
+
+  /// One value handed from hitQueue to queue.
+  private final class Pending<T> {
+    private let done = DispatchSemaphore(value: 0)
+    private var value: T?
+    func fill(_ v: T) { value = v; done.signal() }
+    func wait() -> T { done.wait(); return value! }
+  }
+
+  /// What was clicked, named; nil for Stem's own windows or nothing at all.
+  /// Runs on hitQueue: touches no state of `queue`'s.
+  private func inspect(at point: CGPoint, right: Bool, count: Int) -> Click? {
     var hit: AXUIElement?
     AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &hit)
-    guard let hit else { return }
+    guard let hit else { return nil }
     var pid: pid_t = 0
     AXUIElementGetPid(hit, &pid)
-    if pid == stemPid || pid == getpid() { return }
-    // Leaving a field by clicking elsewhere: its value is final now.
-    if let editing, !CFEqual(editing.element, hit) { flushTyped() }
+    if pid == stemPid || pid == getpid() { return nil }
     let ctx = context(pid: pid, from: hit)
     let role = AX.string(hit, kAXRoleAttribute as String) ?? "AXUnknown"
     var extra: [String: Any] = ["role": Recorder.roleName(role), "x": Int(point.x), "y": Int(point.y)]
+    var panel = false
+    var shot: [String: Any]?
     if !Recorder.isSecretApp(ctx.bundleId) {
-      if let label = Recorder.describe(hit), !Recorder.looksLikeCard(label) { extra["label"] = label }
+      if let label = Recorder.describe(hit), !Recorder.looksLikeCard(label) { extra["label"] = Recorder.redactSecrets(label) }
       if let within = Recorder.container(of: hit) { extra["within"] = within }
       for (k, v) in Recorder.fileContext(hit, role: role) where extra[k] == nil { extra[k] = v }
       // A dialog's OK/Remove/Create: what it was set to is the step's real
       // content (fields typed into custom controls never show as typing), so
       // keep its text and a picture, taken while it is still on screen.
       if role == "AXButton", extra["files"] == nil, let win = Recorder.ancestor(of: hit, role: "AXWindow"), Recorder.isPanel(win) {
+        panel = true
         let shown = Recorder.visibleText(win)
         if !shown.isEmpty { extra["form"] = Recorder.clip(shown, 1500) }
-        let recent = lastShot.flatMap { $0.pid == pid && $0.window == ctx.window ? $0.path : nil }
-        if let path = takeShot(win, ctx, force: true) ?? recent { extra["shot"] = path }
+        shot = capture(win, ctx)
       }
     }
     if right { extra["button"] = "right" }
     if count > 1 { extra["count"] = count }
     if role == "AXSecureTextField" { extra["secure"] = true }
+    return Click(hit: hit, ctx: ctx, extra: extra, panel: panel, shot: shot)
+  }
+
+  private func clicked(_ click: Click?) {
+    guard let click, active else { return }
+    let ctx = click.ctx
+    // Leaving a field by clicking elsewhere: its value is final now.
+    if let editing, !CFEqual(editing.element, click.hit) { flushTyped() }
+    var extra = click.extra
+    if click.panel {
+      if let shot = click.shot { kept(shot, ctx) }
+      let recent = lastShot.flatMap { $0.pid == ctx.pid && $0.window == ctx.window ? $0.path : nil }
+      if let path = (click.shot?["path"] as? String) ?? recent { extra["shot"] = path }
+    }
     emitStep("click", ctx, extra)
     // What the click led to: a field taking focus, a page or message changing.
     queue.asyncAfter(deadline: .now() + 0.15) { self.trackFocusedField() }
@@ -283,7 +367,9 @@ final class Recorder {
     let ctrl = flags.contains(.maskControl)
     let special = Recorder.specialKeys[code]
     if cmd || ctrl {
-      let key = (special ?? text.lowercased())
+      // ⌃ and ⌥ change the character typed (⌃R is U+0012): name the key itself.
+      let plain = !ctrl && !flags.contains(.maskAlternate) && text.unicodeScalars.allSatisfy { $0.value >= 0x20 }
+      let key = special ?? (plain ? text : (KeyMap.usKey(code) ?? text)).lowercased()
       var combo = ""
       if ctrl { combo += "ctrl+" }
       if flags.contains(.maskAlternate) { combo += "alt+" }
@@ -301,7 +387,7 @@ final class Recorder {
         let pb = NSPasteboard.general
         let pasted = pb.string(forType: .string) ?? ""
         let hidden = Recorder.pasteboardIsConcealed(pb) || Recorder.isSecretApp(ctx.bundleId) || Recorder.looksLikeCard(pasted)
-        var extra: [String: Any] = ["text": hidden ? "[password]" : Recorder.clip(pasted, 2000)]
+        var extra: [String: Any] = ["text": hidden ? "[password]" : Recorder.clip(Recorder.redactSecrets(pasted), 2000)]
         if hidden { extra["secure"] = true }
         if let editing { extra["field"] = editing.field; if editing.secure { extra["text"] = "[password]"; extra["secure"] = true } }
         emitStep("paste", ctx, extra)
@@ -375,7 +461,7 @@ final class Recorder {
       emitStep(cut ? "cut" : "copy", ctx, ["text": "[password]", "secure": true])
       return
     }
-    emitStep(cut ? "cut" : "copy", ctx, ["text": Recorder.clip(text, 2000)])
+    emitStep(cut ? "cut" : "copy", ctx, ["text": Recorder.clip(Recorder.redactSecrets(text), 2000)])
   }
 
   private static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSecureTextField", "AXSearchField"]
@@ -413,8 +499,8 @@ final class Recorder {
       emitStep("type", e.app, ["field": e.field, "role": e.role, "value": "[password]", "secure": true])
       return
     }
-    var extra: [String: Any] = ["field": e.field, "role": e.role, "value": Recorder.clip(now, 4000)]
-    if !e.before.isEmpty, !Recorder.looksLikeCard(e.before) { extra["before"] = Recorder.clip(e.before, 400) }
+    var extra: [String: Any] = ["field": e.field, "role": e.role, "value": Recorder.clip(Recorder.redactSecrets(now), 4000)]
+    if !e.before.isEmpty, !Recorder.looksLikeCard(e.before) { extra["before"] = Recorder.clip(Recorder.redactSecrets(e.before), 400) }
     emitStep("type", e.app, extra)
   }
 
@@ -479,26 +565,42 @@ final class Recorder {
   /// A picture of the window, kept on the Mac; used only for a value no text
   /// explains and for a dialog's settings when its button is clicked.
   @discardableResult
-  private func takeShot(_ window: AXUIElement, _ ctx: Context, force: Bool = false) -> String? {
-    guard let dir = shotsDir, !shotsDenied, force || Date().timeIntervalSince(lastShotAt) >= 2 else { return nil }
-    guard let windowID = AX.cgWindowID(of: window), let bounds = Windows.bounds(of: windowID) else { return nil }
+  private func takeShot(_ window: AXUIElement, _ ctx: Context) -> String? {
+    guard shotsDir != nil, Date().timeIntervalSince(lastShotAt) >= 2 else { return nil }
+    guard let shot = capture(window, ctx) else { return nil }
+    kept(shot, ctx)
+    return shot["path"] as? String
+  }
+
+  /// A picture taken: the far end hears of it, and a dialog's click can fall back on it.
+  private func kept(_ shot: [String: Any], _ ctx: Context) {
+    guard let path = shot["path"] as? String else { return }
     lastShotAt = Date()
+    emit(["event": "rec-shot", "shot": shot])
+    lastShot = (ctx.pid, ctx.window, path)
+  }
+
+  /// The picture itself, written to the recording's folder. Safe on either queue.
+  private func capture(_ window: AXUIElement, _ ctx: Context) -> [String: Any]? {
+    lock.lock(); let denied = shotsDenied; lock.unlock()
+    guard let dir = shotsDir, !denied else { return nil }
+    guard let windowID = AX.cgWindowID(of: window), let bounds = Windows.bounds(of: windowID) else { return nil }
     guard CGPreflightScreenCaptureAccess() else {
-      shotsDenied = true
-      emit(["event": "rec-note", "note": "Screen Recording is off, so no pictures are kept; values only an image shows cannot be traced."])
+      lock.lock(); let first = !shotsDenied; shotsDenied = true; lock.unlock()
+      if first {
+        emit(["event": "rec-note", "code": "no-shots", "note": "Screen Recording is off, so no pictures are kept; values only an image shows cannot be traced."])
+      }
       return nil
     }
     do {
       let image = try WindowCapture.capture(windowID: windowID, bounds: bounds)
       let t = elapsedMs
-      let url = dir.appendingPathComponent("shot-\(t).jpg")
+      let url = dir.appendingPathComponent("shot-\(t)-\(UInt32.random(in: 0...UInt32.max)).jpg")
       try Recorder.writeJpeg(image, to: url, maxSide: 1400)
       var shot = ctx.fields
       shot["t"] = t
       shot["path"] = url.path
-      emit(["event": "rec-shot", "shot": shot])
-      lastShot = (ctx.pid, ctx.window, url.path)
-      return url.path
+      return shot
     } catch {
       trace("record shot failed: \(error)")
       return nil
@@ -555,8 +657,9 @@ final class Recorder {
     if ["AXStaticText", "AXHeading", "AXLink", "AXMenuItem", "AXCell", "AXPopUpButton", "AXRadioButton"].contains(role),
        let v = clean(AX.string(el, kAXValueAttribute as String)) { return v }
     var words: [String] = []
+    let deadline = Date().addingTimeInterval(0.3)
     func gather(_ e: AXUIElement, _ depth: Int) {
-      if words.joined(separator: " ").count > 120 || depth > 4 { return }
+      if words.joined(separator: " ").count > 120 || depth > 4 || Date() > deadline { return }
       for child in AX.children(e) {
         let r = AX.string(child, kAXRoleAttribute as String) ?? ""
         if r == "AXSecureTextField" { continue }
@@ -669,7 +772,8 @@ final class Recorder {
   private static func findView(in root: AXUIElement) -> AXUIElement? {
     var queue: [(AXUIElement, Int)] = [(root, 0)]
     var visited = 0
-    while !queue.isEmpty, visited < 800 {
+    let deadline = Date().addingTimeInterval(0.5)
+    while !queue.isEmpty, visited < 800, Date() < deadline {
       let (e, depth) = queue.removeFirst()
       visited += 1
       if isFileView(e) { return e }
@@ -721,7 +825,8 @@ final class Recorder {
     guard let top = AX.frame(view)?.minY else { return nil }
     var queue: [(AXUIElement, Int)] = [(dialog, 0)]
     var visited = 0
-    while !queue.isEmpty, visited < 600 {
+    let deadline = Date().addingTimeInterval(0.5)
+    while !queue.isEmpty, visited < 600, Date() < deadline {
       let (e, depth) = queue.removeFirst()
       visited += 1
       let r = AX.string(e, kAXRoleAttribute as String) ?? ""
@@ -749,7 +854,8 @@ final class Recorder {
     guard AX.string(el, kAXRoleAttribute as String) == "AXWindow" else { return nil }
     var queue: [(AXUIElement, Int)] = [(el, 0)]
     var visited = 0
-    while !queue.isEmpty, visited < 300 {
+    let deadline = Date().addingTimeInterval(0.3)
+    while !queue.isEmpty, visited < 300, Date() < deadline {
       let (e, depth) = queue.removeFirst()
       visited += 1
       if AX.string(e, kAXRoleAttribute as String) == "AXWebArea" { return AX.string(e, "AXURL") }
@@ -765,8 +871,12 @@ final class Recorder {
     var visited = 0
     let limit = 30_000
     let bounds = AX.frame(window)?.insetBy(dx: -2, dy: -2)
+    // A slow app answers each call in time but has thousands of them: stop reading after this.
+    let deadline = Date().addingTimeInterval(1.5)
+    var late = false
     func walk(_ el: AXUIElement, _ depth: Int) {
-      if size >= limit || visited > 6000 || depth > 40 { return }
+      if late || size >= limit || visited > 6000 || depth > 40 { return }
+      if visited % 50 == 0, Date() > deadline { late = true; return }
       visited += 1
       let role = AX.string(el, kAXRoleAttribute as String) ?? ""
       if role == "AXSecureTextField" || AX.string(el, kAXSubroleAttribute as String) == "AXSecureTextField" { return }
@@ -791,7 +901,7 @@ final class Recorder {
       for child in AX.children(el) { walk(child, depth + 1) }
     }
     walk(window, 0)
-    let joined = parts.joined(separator: "\n")
+    let joined = redactSecrets(parts.joined(separator: "\n"))
     return joined.count > limit ? String(joined.prefix(limit)) : joined
   }
 

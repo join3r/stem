@@ -92,6 +92,7 @@ export function RecordingDraftCard({
 
   const examples = draft.examples.length;
   const stepCount = draft.examples.reduce((n, ex) => n + ex.steps.length, 0);
+  const notes = [...new Set(draft.examples.flatMap((ex) => ex.notes ?? []))];
   const open = draft.status === 'ready' || draft.status === 'failed';
 
   if (draft.status === 'discarded') {
@@ -163,6 +164,17 @@ export function RecordingDraftCard({
           <ul>
             {draft.changes.map((c, i) => (
               <li key={i}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {draft.status !== 'saved' && notes.length > 0 && !editing && (
+        <div className="record-changes">
+          <div className="record-label">About the recording</div>
+          <ul>
+            {notes.map((n) => (
+              <li key={n}>{n}</li>
             ))}
           </ul>
         </div>

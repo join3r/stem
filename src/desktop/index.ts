@@ -572,6 +572,8 @@ app.whenReady().then(async () => {
       // And reconcile + rescan the mirrored folders: edits made while the
       // stream was down are exactly what a reconnect has to catch up on.
       if (reachable) void mirrorHost?.refresh();
+      // And write up a recording a quit or crash left behind on this Mac.
+      if (reachable) void recorder?.recover();
     }
   });
   // Subscribe before any window exists, so nothing the server pushes during
@@ -721,7 +723,7 @@ app.on('before-quit', (event) => {
   computerHost?.close();
   // And the browser host's socket: the extension's native host retries until Stem is back.
   browserHost?.close();
-  // And a recording in progress: its helper is a child too, and its raw folder goes.
+  // And a recording in progress: its helper is a child too; its folder stays for recover().
   recorder?.close();
   // Nothing to drain when the server is somebody else's process.
   if (!server) return;

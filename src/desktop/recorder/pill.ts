@@ -33,6 +33,8 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
   .txt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .tag{flex:none;padding:2px 7px;border-radius:9px;background:rgba(199,146,87,.25);color:#f1c48f;font-size:11px;font-weight:600}
   .tag:empty{display:none}
+  .warn{flex:none;padding:2px 7px;border-radius:9px;background:rgba(255,95,87,.22);color:#ffb3ae;font-size:11px;font-weight:600}
+  .warn:empty{display:none}
   button{flex:none;height:26px;padding:0 10px;border:0;border-radius:13px;background:rgba(255,255,255,.12);color:#fff;font:600 12px -apple-system,sans-serif;cursor:pointer}
   button.stop{background:#fff;color:#111}
   .list{margin:0 12px;padding:8px 12px;border-radius:12px;background:rgba(20,20,24,.94);display:none}
@@ -44,7 +46,7 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
   .note input{flex:1;height:26px;border:0;border-radius:8px;padding:0 9px;background:rgba(255,255,255,.12);color:#fff;font:13px -apple-system,sans-serif;outline:none}
 </style></head><body><div id="root">
 <div class="pill" id="pill"><span class="dot"></span><span class="time" id="time">0:00</span>
-<span class="txt" id="txt">Recording — do the task as usual</span><span class="tag" id="tag"></span>
+<span class="txt" id="txt">Recording — do the task as usual</span><span class="tag" id="tag"></span><span class="warn" id="warn"></span>
 <button id="noteBtn">Note</button><button id="pauseBtn">Pause</button><button class="stop" id="stopBtn">Stop</button></div>
 <div class="list" id="list"></div>
 <form class="note" id="noteForm"><input id="noteInput" placeholder="A note for Stem (optional)" maxlength="500"><button type="submit">Add</button></form>
@@ -79,6 +81,7 @@ const SCRIPT = `(() => {
     document.getElementById('time').textContent = s.time;
     document.getElementById('txt').textContent = s.text;
     document.getElementById('tag').textContent = s.tag || '';
+    document.getElementById('warn').textContent = s.warning || '';
     document.getElementById('pauseBtn').textContent = s.paused ? 'Resume' : 'Pause';
     const list = document.getElementById('list');
     list.replaceChildren(...(s.recent.length ? s.recent : ['Nothing yet']).map((t) => { const d = document.createElement('div'); d.textContent = t; return d; }));
@@ -94,6 +97,8 @@ export interface PillView {
   text: string;
   /** Where the last value was traced to ("← Mail"), if anywhere. */
   tag: string | null;
+  /** Something about the recording itself the person should know ("No pictures"). */
+  warning: string | null;
   /** The last few steps, newest last. */
   recent: string[];
 }

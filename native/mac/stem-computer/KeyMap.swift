@@ -32,6 +32,14 @@ enum KeyMap {
     "m": 0x2E, ".": 0x2F, "`": 0x32
   ]
 
+  private static let byCode: [CGKeyCode: Character] = Dictionary(uniqueKeysWithValues: chars.map { ($1, $0) })
+
+  /// The US-layout key a code stands for: a shortcut's key, when ⌃ or ⌥ turned
+  /// the character it typed into something else (⌃R types U+0012, ⌥R "®").
+  static func usKey(_ code: Int) -> String? {
+    byCode[CGKeyCode(code)].map(String.init)
+  }
+
   static func parse(_ combo: String) throws -> Parsed {
     let parts = combo.split(separator: "+", omittingEmptySubsequences: false).map {
       $0.trimmingCharacters(in: .whitespaces)

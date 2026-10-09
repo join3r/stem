@@ -1684,6 +1684,10 @@ export interface RecordingExample {
   links: RecordingLink[];
   /** Values no text explains; pictures of what was on screen just before (Mac paths / upload handles). */
   unmatched: { step: number; value: string; shots: string[] }[];
+  /** A long recording lost its middle: `steps` steps were dropped just before index `at`. */
+  cut?: { at: number; steps: number };
+  /** What the person and the author should know about how it was recorded ("Screen Recording was off…"). */
+  notes?: string[];
 }
 
 export type RecordingDraftStatus = 'drafting' | 'ready' | 'saved' | 'discarded' | 'failed';
