@@ -1071,6 +1071,12 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   display: flex; align-items: center; justify-content: center;
 }
 .composer-attach:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+/* Dictation (chat/dictation.tsx): red while the microphone is open. */
+.dictate .spin { animation: link-btn-spin 0.9s linear infinite; }
+.dictate.listening { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.dictate.listening:hover { background: color-mix(in srgb, var(--danger) 18%, transparent); }
+.dictate.failed { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) { .dictate .spin { animation: none; } }
 
 .icon-btn {
   position: relative;

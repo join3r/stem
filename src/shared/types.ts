@@ -1831,6 +1831,25 @@ export interface RecordingSaveResult {
   draft?: RecordingDraft;
 }
 
+/** What dictation on this Mac can take (client-owned; see desktop/dictation.ts). */
+export interface DictationLanguages {
+  available: boolean;
+  /** Why not, when unavailable (not a Mac, older than macOS 26). */
+  reason?: string;
+  languages: { id: string; name: string }[];
+  /** The Mac's own language, which "Automatic" uses. */
+  current: string;
+}
+
+/** Live dictation text: `final` is settled, `volatile` the tail still being guessed. */
+export interface DictationUpdate {
+  session: number;
+  final: string;
+  volatile: string;
+  /** The language's model is downloading (its first use on this Mac). */
+  downloading?: boolean;
+}
+
 /** The Mac recorder, as the chat sees it. */
 export interface RecorderState {
   phase: 'idle' | 'recording' | 'paused' | 'authoring';
@@ -4844,6 +4863,14 @@ export interface StemApi {
   onRecorderState(listener: (state: RecorderState) => void): () => void;
   /** ⌃⌥R with nothing recording: open the Record sheet in the current chat. */
   onRecorderOpenSheet(listener: () => void): () => void;
+  /** Dictation on this Mac's microphone (client-owned; see desktop/dictation.ts). */
+  dictationLanguages(): Promise<DictationLanguages>;
+  /** Starts listening (null locale = the Mac's language). Rejects with the reason. */
+  startDictation(locale: string | null): Promise<{ session: number; locale: string }>;
+  /** Stops and answers with everything heard. */
+  stopDictation(): Promise<string>;
+  cancelDictation(): Promise<void>;
+  onDictationUpdate(listener: (update: DictationUpdate) => void): () => void;
   /** The recording drafts of a chat, oldest first. */
   recordingDrafts(threadId: string): Promise<RecordingDraft[]>;
   /** Save a draft as a skill, optionally as edited on the card. */

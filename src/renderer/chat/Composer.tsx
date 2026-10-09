@@ -26,6 +26,7 @@ import { dismissLearnNotice, readLearn, startLearn, subscribeLearn } from './lea
 import { dismissCompactNotice, readCompact, startCompact, subscribeCompact } from './compact-store';
 import { consumePrefill, consumeSheet, dismissRecorderError, dropPractice, readRecorder, subscribeRecorder } from './recorder-store';
 import { RECORDER_ALPHA_TITLE, RecordSheet } from './RecordSheet';
+import { DictateButton, useDictation } from './dictation';
 
 const MAX_COMPOSER_HEIGHT = 180;
 
@@ -167,6 +168,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   onPinNote
 }: ComposerProps, ref) {
   const [draft, setDraft] = useState(() => (draftKey ? readDraft(draftKey).text : ''));
+  const dictation = useDictation(draft, setDraft);
   const [attachments, setAttachments] = useState<TurnAttachment[]>(
     () => (draftKey ? readDraft(draftKey).attachments : [])
   );
@@ -334,6 +336,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   function submit() {
     if (offline) return;
+    dictation.freeze();
     const text = draft.trim();
     if (noteMode) {
       // A note save never starts a turn, so it's allowed mid-turn. Attached
@@ -743,6 +746,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             value={draft}
             onChange={(e) => {
               const value = e.target.value;
+              dictation.freeze(); // a hand edit ends dictation; the next update would undo it
               // Typing `/note ` or `//` at the start flips into note mode; the
               // prefix is consumed (the chip replaces it in the UI). Strip
               // before setDraft so the fact preview never sees the prefix.
@@ -831,6 +835,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             aria-controls={slash ? 'composer-slash-menu' : undefined}
             aria-activedescendant={slash ? `composer-slash-${slash[slashActive].name}` : undefined}
           />
+          <DictateButton dictation={dictation} disabled={offline} />
           {running && !noteMode ? (
             <button
               type="button"

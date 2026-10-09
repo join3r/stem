@@ -71,6 +71,7 @@ import type {
   UpdateStatus,
   UpdatesSettings,
   RecorderState,
+  DictationUpdate,
   RecordingDraft
 } from '../shared/types';
 import { parseTimeLocaleArgs } from '../shared/time-locale';
@@ -226,6 +227,15 @@ const api: StemApi = {
     const handler = () => listener();
     ipcRenderer.on('recorder:openSheet', handler);
     return () => ipcRenderer.removeListener('recorder:openSheet', handler);
+  },
+  dictationLanguages: () => ipcRenderer.invoke('dictation:languages'),
+  startDictation: (locale: string | null) => ipcRenderer.invoke('dictation:start', locale),
+  stopDictation: () => ipcRenderer.invoke('dictation:stop'),
+  cancelDictation: () => ipcRenderer.invoke('dictation:cancel'),
+  onDictationUpdate: (listener: (update: DictationUpdate) => void) => {
+    const handler = (_e: unknown, update: DictationUpdate) => listener(update);
+    ipcRenderer.on('dictation:update', handler);
+    return () => ipcRenderer.removeListener('dictation:update', handler);
   },
   recordingDrafts: (threadId: string) => ipcRenderer.invoke('skills:recordDrafts', threadId),
   saveRecordingDraft: (draftId: string, edited?: { name: string; description: string; body: string } | null) =>

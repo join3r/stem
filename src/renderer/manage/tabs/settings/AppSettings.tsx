@@ -16,6 +16,7 @@ import { ReleaseNotesModal } from '../../../ReleaseNotesModal';
 import { InfoTip } from '../../../ui/InfoTip';
 import { RowSelect, ValueRow } from './rows';
 import { ConversationSections } from './ChatSettings';
+import { dictationLocale, loadDictationLanguages, setDictationLocale } from '../../../chat/dictation';
 
 /**
  * Settings → App: using Stem day to day — how it looks (first, as settings
@@ -33,6 +34,7 @@ export function AppSettings({ models }: { models: ModelSummary[] }) {
     <div>
       <AppearanceSection />
       <ConversationSections models={models} />
+      <DictationSection />
       <KeyboardSection />
       <NotificationsSection />
       <AboutSection />
@@ -212,6 +214,63 @@ function AppearanceSection() {
 }
 
 /** What the Escape key does mid-reply. One setting, but a loaded one. */
+/**
+ * The language the composer's mic listens in, on this Mac (a per-machine
+ * choice, kept in localStorage). Hidden where dictation is unavailable.
+ */
+function DictationSection() {
+  const [langs, setLangs] = useState<{ id: string; name: string }[] | null>(null);
+  const [current, setCurrent] = useState('');
+  const [locale, setLocale] = useState(() => dictationLocale() ?? '');
+
+  useEffect(() => {
+    let live = true;
+    void loadDictationLanguages().then((l) => {
+      if (!live || !l.available) return;
+      setLangs(l.languages);
+      setCurrent(l.current);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  if (!langs) return null;
+  const own = langs.find((l) => l.id === current || l.id.replace('_', '-') === current.replace('_', '-'));
+  return (
+    <>
+      <div className="grp-head">Dictation</div>
+      <div className="group">
+        <ValueRow
+          label={
+            <>
+              Language{' '}
+              <InfoTip label="About dictation">
+                The mic button in the composer turns speech into text with the Mac’s own on-device
+                model; the audio never leaves this computer. A language’s model downloads the first
+                time you use it.
+              </InfoTip>
+            </>
+          }
+        >
+          <RowSelect
+            ariaLabel="Dictation language"
+            value={locale}
+            options={[
+              { value: '', label: own ? `Automatic (${own.name})` : 'Automatic' },
+              ...langs.map((l) => ({ value: l.id, label: l.name }))
+            ]}
+            onChange={(v) => {
+              setLocale(v);
+              setDictationLocale(v || null);
+            }}
+          />
+        </ValueRow>
+      </div>
+    </>
+  );
+}
+
 function KeyboardSection() {
   const [escapeAction, setEscapeAction] = useState<EscapeAction>('off');
 

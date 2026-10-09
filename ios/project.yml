@@ -20,6 +20,8 @@ targets:
       # phone; needs `npm install` in the repo first, as the desktop does.
       - path: ../node_modules/mermaid/dist/mermaid.min.js
         buildPhase: resources
+      # The on-device speech-to-text core, shared with the Mac helper's dictation.
+      - path: ../native/mac/stem-computer/Transcriber.swift
     info:
       path: Stem/Info.plist
       properties:
@@ -33,6 +35,8 @@ targets:
         NSCameraUsageDescription: Stem uses the camera to read the pairing code your desktop shows, and to take photos you attach.
         NSPhotoLibraryUsageDescription: Stem accesses selected photos so you can attach them to chats and mail.
         NSPhotoLibraryAddUsageDescription: Stem saves generated images to your photo library when you ask it to.
+        NSMicrophoneUsageDescription: Stem listens to the microphone while you dictate a message.
+        NSSpeechRecognitionUsageDescription: Stem turns your dictation into text on your iPhone.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         CFBundleURLTypes:

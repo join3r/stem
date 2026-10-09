@@ -40,6 +40,7 @@ struct Composer: View {
     @State private var showFiles = false
     @State private var showCamera = false
     @State private var showModels = false
+    @State private var dictation = PhoneDictation()
     @FocusState private var focused: Bool
 
     private var trimmed: String { draft.text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -69,10 +70,17 @@ struct Composer: View {
                         .buttonStyle(.borderless)
                         .tint(.orange)
                     }
-                    TextField(noteMode ? "Note to memory" : placeholder, text: $draft.text, axis: .vertical)
-                        .lineLimit(1...8)
-                        .focused($focused)
-                        .onChange(of: draft.text) { _, new in applyNotePrefix(new) }
+                    HStack(alignment: .bottom, spacing: 6) {
+                        TextField(noteMode ? "Note to memory" : placeholder, text: $draft.text, axis: .vertical)
+                            .lineLimit(1...8)
+                            .focused($focused)
+                            .onChange(of: draft.text) { _, new in
+                                // A hand edit ends dictation; the next update would undo it.
+                                if dictation.active, new != dictation.lastWritten { dictation.freeze() }
+                                applyNotePrefix(new)
+                            }
+                        if PhoneDictation.supported { micButton }
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -235,6 +243,44 @@ struct Composer: View {
         }
     }
 
+    // MARK: Dictation
+
+    /// Tap to dictate, tap again to stop; hold for the language.
+    private var micButton: some View {
+        Menu {
+            Picker("Language", selection: Binding(
+                get: { PhoneDictation.locale ?? "" },
+                set: { PhoneDictation.locale = $0.isEmpty ? nil : $0 })
+            ) {
+                Text("Automatic").tag("")
+                ForEach(dictation.languages, id: \.id) { Text($0.name).tag($0.id) }
+            }
+        } label: {
+            Group {
+                switch dictation.phase {
+                case .idle: Image(systemName: "mic")
+                case .listening: Image(systemName: "stop.circle.fill").foregroundStyle(.red)
+                default: ProgressView().controlSize(.small)
+                }
+            }
+            .font(.system(size: 17))
+            .frame(width: 24, height: 22)
+            .contentShape(Rectangle())
+        } primaryAction: {
+            dictation.toggle(current: draft.text) { draft.text = $0 }
+        }
+        .foregroundStyle(.secondary)
+        .accessibilityLabel(dictation.phase == .listening ? "Stop dictating" : "Dictate")
+        .task { await dictation.loadLanguages() }
+        .onChange(of: dictation.phase) { _, phase in
+            if phase == .downloading { show("Downloading the speech model…", seconds: 6) }
+        }
+        .onChange(of: dictation.error) { _, error in
+            if let error { show(error, seconds: 6) }
+        }
+        .onDisappear { dictation.freeze() }
+    }
+
     // MARK: Send / stop
 
     private var sendButton: some View {
@@ -273,6 +319,7 @@ struct Composer: View {
 
     private func submit() async {
         guard canSend else { return }
+        dictation.freeze()
         let text = trimmed
         let files = draft.attachments
         sending = true

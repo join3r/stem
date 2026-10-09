@@ -74,6 +74,9 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   // ':pause' / ':cancel' take no arguments): the chat it records for, and the
   // draft a second example is added to.
   'recorder:start': [a.string, a.optional(a.nullish(a.string))],
+  // Dictation on this Mac ('dictation:languages' / ':stop' / ':cancel' take no
+  // arguments): the language to listen in, null for the Mac's own.
+  'dictation:start': [a.nullish(a.string)],
   'quickchat:run': [a.object],
   'quickchat:handoff': [a.object]
 };

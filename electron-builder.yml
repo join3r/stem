@@ -121,6 +121,8 @@ mac:
   notarize: true
   extendInfo:
     NSScreenCaptureUsageDescription: Stem captures the screen so a computer-control persona can see what it is doing.
+    NSMicrophoneUsageDescription: Stem listens to the microphone while you dictate a message.
+    NSSpeechRecognitionUsageDescription: Stem turns your dictation into text on this Mac.
   # The helper is a Mach-O under Resources; electron-builder signs every binary
   # it finds in the bundle, so it gets the same identity and hardened runtime.
   extraResources:

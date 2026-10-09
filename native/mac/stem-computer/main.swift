@@ -57,6 +57,7 @@ let capture = Capture()
 let input = Input(capture: capture)
 let watch = Watch()
 let recorder = Recorder()
+let dictation = Dictation()
 /// The accessibility side of the selected app, made the first time a command
 /// needs it (windowAX) and kept for the run: selecting another window of the
 /// same app retargets it, leaving for the whole screen keeps it, and only
@@ -327,10 +328,13 @@ while let line = readLine(strippingNewline: true) {
     case "record-stop":
       recorder.end()
       emit(["id": id, "ok": true])
+    case "dictate-languages", "dictate-start", "dictate-stop", "dictate-cancel", "dictate-file":
+      dictation.handle(cmd, id, obj)
     case "stop":
       axCache?.release()
       watch.stop()
       recorder.end()
+      dictation.end()
       emit(["id": id, "ok": true])
       exit(0)
     default:
@@ -343,3 +347,4 @@ while let line = readLine(strippingNewline: true) {
 axCache?.release()
 watch.stop()
 recorder.end()
+dictation.end()

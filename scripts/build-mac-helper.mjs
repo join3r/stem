@@ -17,8 +17,19 @@ export const SOURCE_DIR = resolve(here, '..', 'native', 'mac', 'stem-computer');
 export const OUTPUT = resolve(here, '..', 'build', 'native', 'stem-computer');
 
 // AppKit for the running-apps list, ScreenCaptureKit for per-window capture (the macOS 14 floor),
-// Carbon for the keyboard layout `type` takes key codes from.
-const FRAMEWORKS = ['CoreGraphics', 'ImageIO', 'ApplicationServices', 'Foundation', 'AppKit', 'ScreenCaptureKit', 'Carbon'];
+// Carbon for the keyboard layout `type` takes key codes from; Speech and
+// AVFoundation for dictation (weak-linked by availability, so macOS 14 still runs).
+const FRAMEWORKS = [
+  'CoreGraphics',
+  'ImageIO',
+  'ApplicationServices',
+  'Foundation',
+  'AppKit',
+  'ScreenCaptureKit',
+  'Carbon',
+  'Speech',
+  'AVFoundation'
+];
 
 export function sourceFiles() {
   return readdirSync(SOURCE_DIR)

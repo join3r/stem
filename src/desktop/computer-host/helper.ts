@@ -33,6 +33,11 @@ export interface HelperReply {
   text?: string;
   /** The run's window after a select-window (null = whole screen); echoed on later replies. */
   target?: ComputerTarget | null;
+  /** dictate-languages: what dictation takes, and the Mac's own language. */
+  languages?: { id: string; name: string }[];
+  current?: string;
+  /** dictate-start: the language the model settled on. */
+  locale?: string;
 }
 
 export type HelperEvent =
@@ -42,7 +47,10 @@ export type HelperEvent =
   | { event: 'rec-seen'; seen: { t: number; app: string; window: string; url?: string; text: string; hash?: string } }
   | { event: 'rec-shot'; shot: { t: number; app: string; window: string; path: string } }
   | { event: 'rec-note'; note: string; /** "no-shots": Screen Recording is off. */ code?: string }
-  | { event: 'rec-press'; x: number; y: number };
+  | { event: 'rec-press'; x: number; y: number }
+  // Dictation (see native/mac/stem-computer/Dictate.swift and desktop/dictation.ts).
+  | { event: 'dictate-update'; final: string; volatile: string }
+  | { event: 'dictate-downloading' };
 
 /** Where the helper binary is, building it first in development. Throws with a readable reason. */
 export async function resolveHelperPath(): Promise<string> {

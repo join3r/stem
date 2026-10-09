@@ -10,6 +10,7 @@ import { sampleFolder } from '../../server/connected-folders/sample';
 import { workspaceRoot } from '../../server/workspace/paths';
 import { exportState } from '../../server/workspace/state-transfer';
 import { readClientIdentity, storedServerUrl } from '../client-store';
+import { cancelDictation, dictationLanguages, startDictation, stopDictation } from '../dictation';
 import { downloadFile } from '../file-transfer';
 import { markReleaseNotesRead, releaseNotesSnapshot } from '../release-notes';
 import { downloadsDir, saveImageToDownloads } from '../save-image';
@@ -267,6 +268,12 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
   handleLocal('recorder:stop', () => deps.recorder.stop());
   handleLocal('recorder:pause', () => deps.recorder.togglePause());
   handleLocal('recorder:cancel', () => deps.recorder.cancel());
+  // Dictation: client-owned because the microphone is this machine's; the
+  // server only ever sees the text, once it is sent.
+  handleLocal('dictation:languages', () => dictationLanguages());
+  handleLocal('dictation:start', (_e, locale: string | null) => startDictation(locale ?? null));
+  handleLocal('dictation:stop', () => stopDictation());
+  handleLocal('dictation:cancel', () => cancelDictation());
   handleLocal('computerHost:requestAccess', (): Promise<ComputerHostLocalState> => deps.computerHost.requestAccess());
 
   // Whether THIS Mac lets Stem drive its browser, and which one. Client-owned

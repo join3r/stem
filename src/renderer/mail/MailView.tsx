@@ -56,6 +56,7 @@ import {
 import { useMailWork } from './useMailWork';
 import { MailWork } from './MailWork';
 import { GeneratedImages } from '../chat/GeneratedImage';
+import { DictateButton, useDictation } from '../chat/dictation';
 
 // The centre pane's mail surface: a conversation read like the Inbox (newest
 // on top, the reply box above the mail it answers, older mails folded to one
@@ -638,7 +639,12 @@ function ReplyBox({
 }) {
   const [focused, setFocused] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
+  const dictation = useDictation(draft, setDraft);
   const hasDraft = !!draft.trim() || files.attachments.length > 0;
+  const send = () => {
+    dictation.freeze();
+    onSend();
+  };
   const expanded = focused || hasDraft;
   return (
     <div
@@ -675,7 +681,10 @@ function ReplyBox({
       )}
       <textarea
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          dictation.freeze();
+          setDraft(e.target.value);
+        }}
         aria-label={`Reply to ${recipient}`}
         placeholder={parked ? `Or answer in words — ${recipient} gets this instead of Allow or Deny` : `Reply to ${recipient}`}
         rows={expanded ? 3 : 1}
@@ -683,7 +692,7 @@ function ReplyBox({
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
-            onSend();
+            send();
           }
         }}
       />
@@ -694,6 +703,7 @@ function ReplyBox({
             <button type="button" className="icon-action" title="Attach" aria-label="Attach" onClick={() => void files.pickFiles()}>
               <Paperclip size={14} />
             </button>
+            <DictateButton dictation={dictation} className="icon-action" size={14} />
             {hasDraft && (
               <span className="mail-draft-saved">
                 <Check size={12} /> Draft saved
@@ -701,7 +711,7 @@ function ReplyBox({
             )}
             <span className="mail-compose-spacer" />
             <span className="mail-kbd">⌘↵</span>
-            <button className="mail-send" onClick={onSend} disabled={!hasDraft} title="Send reply (⌘↵)">
+            <button className="mail-send" onClick={send} disabled={!hasDraft} title="Send reply (⌘↵)">
               <Send size={14} /> Send
             </button>
           </div>
@@ -810,6 +820,7 @@ export const MailComposeView = forwardRef<MailViewHandle, {
   const [to, setTo] = useState<string[]>(saved.to);
   const [subject, setSubject] = useState(forward?.subject ?? saved.subject);
   const [body, setBody] = useState(saved.body);
+  const dictation = useDictation(body, setBody);
   const [isPrivate, setIsPrivate] = useState(saved.private);
   const files = useAttachmentDraft(forward?.attachments ?? saved.attachments);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -830,6 +841,7 @@ export const MailComposeView = forwardRef<MailViewHandle, {
 
   const send = async () => {
     if (sending || empty || to.length === 0) return;
+    dictation.freeze();
     setSending(true);
     setError(null);
     try {
@@ -915,7 +927,10 @@ export const MailComposeView = forwardRef<MailViewHandle, {
         <textarea
           className="mail-compose-body"
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={(e) => {
+            dictation.freeze();
+            setBody(e.target.value);
+          }}
           aria-label="Mail"
           placeholder={
             forward
@@ -951,6 +966,7 @@ export const MailComposeView = forwardRef<MailViewHandle, {
           >
             <Paperclip size={15} />
           </button>
+          <DictateButton dictation={dictation} size={15} />
           {confirmDiscard ? (
             <span className="mail-discard-confirm" role="group" aria-label="Discard this draft?">
               Discard this draft?
