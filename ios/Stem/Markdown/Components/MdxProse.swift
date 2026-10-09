@@ -124,10 +124,12 @@ struct MdxCollapsible: View {
     }
 }
 
-/// Mermaid needs a web view the phone doesn't carry: the source, and where to see the picture.
+/// A Mermaid diagram, drawn by mermaid in a web view (MermaidView). Source it
+/// can't parse falls back to the source in a code block, as on the desktop.
 struct MdxDiagram: View {
     let title: String?
     let source: String
+    @State private var failed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -135,10 +137,17 @@ struct MdxDiagram: View {
                 Label(title, systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.subheadline.weight(.semibold))
             }
-            if !source.isEmpty { CodeBlock(lang: "mermaid", text: source) }
-            Text("Open on the desktop to see the diagram")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            let code = source.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !code.isEmpty {
+                if failed {
+                    CodeBlock(lang: "mermaid", text: source)
+                    Text("Couldn’t draw this diagram")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    MermaidView(source: code, onError: { failed = true })
+                }
+            }
         }
     }
 }

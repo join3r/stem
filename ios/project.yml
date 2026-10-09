@@ -16,6 +16,10 @@ targets:
     platform: iOS
     sources:
       - Stem
+      # The desktop's own mermaid build, so a <Diagram> draws the same on the
+      # phone; needs `npm install` in the repo first, as the desktop does.
+      - path: ../node_modules/mermaid/dist/mermaid.min.js
+        buildPhase: resources
     info:
       path: Stem/Info.plist
       properties:

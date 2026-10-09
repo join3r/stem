@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Every MDX fixture (tests/fixtures/mdx) drawn natively, for previews and
 /// for simulator screenshots: launch with `-mdxGallery` to open it instead of
-/// the app. Interactive components get a submit that only logs, never sends.
+/// the app (add `-mdxOnly <name>` for one sample). Interactive components get a submit that only logs, never sends.
 struct MdxGallery: View {
     static let samples: [(String, String)] = [
         ("callout", ##"""
@@ -235,7 +235,9 @@ sudo apt install ./stem.deb
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
-                    ForEach(Self.samples, id: \.0) { name, mdx in
+                    // `-mdxOnly <name>` (a launch argument, read through UserDefaults) shows one sample.
+                    let only = UserDefaults.standard.string(forKey: "mdxOnly")
+                    ForEach(Self.samples.filter { only == nil || $0.0 == only }, id: \.0) { name, mdx in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(name).font(.caption.monospaced()).foregroundStyle(.tertiary)
                             MarkdownView(mdx)
