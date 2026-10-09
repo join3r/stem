@@ -4,8 +4,9 @@ import WebKit
 /// Draws Mermaid source the way the desktop's <Diagram> does: mermaid itself,
 /// in a web view, with securityLevel "strict" so a diagram can only be a picture.
 /// mermaid.min.js ships in the app bundle (project.yml copies it from the repo's
-/// node_modules, the same version the desktop renders with), so nothing is
-/// fetched. The web view reports the drawing's height back and the cell sizes to
+/// node_modules, the same version the desktop renders with) and is injected as a
+/// user script; the page itself has no base URL, a CSP that allows no network
+/// at all, and may not navigate anywhere. The web view reports the drawing's height back and the cell sizes to
 /// it; a source mermaid can't parse reports an error, and the caller shows the
 /// source instead.
 struct MermaidView: View {
@@ -40,13 +41,19 @@ private struct MermaidWebView: UIViewRepresentable {
         config.websiteDataStore = .nonPersistent()
         // A weak hop: the controller retains its handlers, and the coordinator owns nothing of the view.
         config.userContentController.add(WeakHandler(context.coordinator), name: "mermaid")
+        if let script = Self.mermaidScript {
+            // User scripts are not subject to the page's CSP, so mermaid runs while the page may fetch nothing.
+            config.userContentController.addUserScript(
+                WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+            )
+        }
         let view = WKWebView(frame: .zero, configuration: config)
         view.isOpaque = false
         view.backgroundColor = .clear
         view.scrollView.isScrollEnabled = false
         view.scrollView.backgroundColor = .clear
         view.navigationDelegate = context.coordinator
-        view.loadHTMLString(Self.page(source: source, dark: dark), baseURL: Bundle.main.resourceURL)
+        view.loadHTMLString(Self.page(source: source, dark: dark), baseURL: nil)
         return view
     }
 
@@ -61,6 +68,7 @@ private struct MermaidWebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var parent: MermaidWebView
         private var failed = false
+        private var loaded = false
         init(_ parent: MermaidWebView) { self.parent = parent }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -73,13 +81,18 @@ private struct MermaidWebView: UIViewRepresentable {
             }
         }
 
-        // The page is the one we loaded; nothing in a diagram navigates anywhere.
+        // The one page we load, and nothing after it: a diagram never navigates anywhere.
         func webView(
             _ webView: WKWebView,
             decidePolicyFor action: WKNavigationAction,
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
-            decisionHandler(action.navigationType == .other ? .allow : .cancel)
+            if !loaded, action.targetFrame?.isMainFrame == true, action.request.url?.absoluteString == "about:blank" {
+                loaded = true
+                decisionHandler(.allow)
+            } else {
+                decisionHandler(.cancel)
+            }
         }
     }
 
@@ -113,6 +126,11 @@ private struct MermaidWebView: UIViewRepresentable {
         ]
     }
 
+    /// mermaid.min.js from the bundle, read once.
+    private static let mermaidScript: String? = Bundle.main
+        .url(forResource: "mermaid.min", withExtension: "js")
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+
     private static func json(_ value: Any) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]),
               let text = String(data: data, encoding: .utf8) else { return "null" }
@@ -124,13 +142,13 @@ private struct MermaidWebView: UIViewRepresentable {
         """
         <!doctype html>
         <html><head>
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
         <style>
           html, body { margin: 0; padding: 0; background: transparent; }
           #d { display: flex; justify-content: center; }
           #d svg { max-width: 100% !important; height: auto; }
         </style>
-        <script src="mermaid.min.js"></script>
         </head><body><div id="d"></div>
         <script>
         (async () => {
