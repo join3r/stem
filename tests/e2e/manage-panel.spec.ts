@@ -103,24 +103,21 @@ test('the Files sub-tab lists a seeded Files folder and deletes through to disk'
 test('the Personas editor round-trips the spawn flag, the send budget, and the clients flag', async ({ mainWindow }) => {
   await mainWindow.getByRole('button', { name: 'Personas', exact: true }).click();
 
-  // Secretary ships with the spawn capability on; expanding its row shows
-  // the checkbox already ticked.
+  // Secretary ships with the spawn capability on; its editor's Access tab
+  // shows the switch already on.
   await mainWindow.getByText('Secretary', { exact: true }).click();
-  const spawnBox = mainWindow.locator(
-    'label.persona-cap:has-text("Can start agents") input[type="checkbox"]'
-  );
-  await expect(spawnBox).toBeChecked();
+  await mainWindow.getByRole('tab', { name: 'Access' }).click();
+  const spawnSwitch = mainWindow.getByRole('switch', { name: 'Can start helpers' });
+  await expect(spawnSwitch).toBeChecked();
 
   // Chats-from-clients ships OFF for every persona — opening one up is the
-  // user's call, so the box starts unticked and the tick must land in the store.
-  const clientsBox = mainWindow.locator(
-    'label.persona-cap:has-text("Usable in chats") input[type="checkbox"]'
-  );
-  await expect(clientsBox).not.toBeChecked();
-  await clientsBox.check();
+  // user's call, so the switch starts off and the flip must land in the store.
+  const clientsSwitch = mainWindow.getByRole('switch', { name: 'Open to chats' });
+  await expect(clientsSwitch).not.toBeChecked();
+  await clientsSwitch.click();
 
   // Set a send budget and save — the values must land in the store.
-  const budget = mainWindow.locator('label.persona-cap input[type="number"]');
+  const budget = mainWindow.getByLabel('Send budget per wave');
   await budget.fill('5');
   await mainWindow.getByRole('button', { name: 'Save', exact: true }).click();
   await expect

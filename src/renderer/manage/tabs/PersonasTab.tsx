@@ -1,5 +1,19 @@
 import { useEffect, useState } from 'react';
-import { Copy, FolderSearch, Plus, Trash2, RefreshCw } from 'lucide-react';
+import {
+  Code,
+  Copy,
+  EyeOff,
+  FolderSearch,
+  MessageSquare,
+  Monitor,
+  Plug,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Smartphone,
+  Trash2,
+  Users
+} from 'lucide-react';
 import type {
   ClientInfo,
   DeviceInfo,
@@ -17,6 +31,23 @@ import { clampEffort, effortsOf, EffortSelect } from '../../ui/EffortSelect';
 import { EFFORT_LABELS } from '../../modelLabels';
 import { appDefaultModel } from '../../../shared/modelRoles';
 import { ServerFolderPicker } from '../ServerFolderPicker';
+import {
+  ConfirmDelete,
+  DetailFooter,
+  DetailHeader,
+  DetailIdent,
+  DetailTabs,
+  Field,
+  Flag,
+  Glyph,
+  ListGroup,
+  ListHeader,
+  ListRow,
+  ListSearch,
+  ToggleRow,
+  shortPath,
+  type GlyphTone
+} from '../ListDetail';
 
 // ---- Personas tab: the named agent configurations mail addresses ----
 //
@@ -29,47 +60,6 @@ import { ServerFolderPicker } from '../ServerFolderPicker';
 // cross-field validation (unique name, agent+cwd pairs) that made per-
 // keystroke saves fight the user mid-word.
 // Built-ins can be edited but not deleted; "duplicate" is how variants start.
-
-/** "Fable · High · claude on MacBook in ~/src/stem" — the collapsed face of a persona row. */
-function summaryLabel(
-  p: Persona,
-  models: ModelSummary[],
-  devices: DeviceInfo[]
-): string {
-  const parts: string[] = [];
-  if (p.model) {
-    const m = models.find((x) => x.id === p.model);
-    parts.push(m ? m.displayName : p.model.split('/').pop() ?? p.model);
-    if (p.effort) parts.push(EFFORT_LABELS[p.effort] ?? p.effort);
-  } else {
-    parts.push('App default model');
-  }
-  if (p.harness) {
-    const where = p.harness.device
-      ? ` on ${devices.find((d) => d.id === p.harness?.device)?.label ?? p.harness.device}`
-      : '';
-    const agent = p.harness.model ? `${p.harness.agent} (${p.harness.model})` : p.harness.agent;
-    parts.push(p.harness.cwd ? `${agent}${where} in ${p.harness.cwd}` : `${agent}${where}`);
-    if (p.harness.autoMode) parts.push('approves its own actions');
-  }
-  if (p.computer) {
-    parts.push(`controls ${devices.find((d) => d.id === p.computer?.device)?.label ?? p.computer.device}`);
-  }
-  if (p.browser) {
-    parts.push(`uses the browser on ${devices.find((d) => d.id === p.browser?.device)?.label ?? p.browser.device}`);
-  }
-  if (p.memory === false) parts.push(p.harness ? 'no standing answers' : 'no private memory');
-  if (p.recall === false) parts.push('no recall');
-  if (p.clients) parts.push('open to chats');
-  if (p.mcpServers) {
-    parts.push(
-      p.mcpServers.length === 0
-        ? 'no integrations'
-        : `${p.mcpServers.length} integration${p.mcpServers.length === 1 ? '' : 's'}`
-    );
-  }
-  return parts.join(' · ');
-}
 
 /** Same set of allowed servers, where "absent" (all) differs from every list. */
 function sameMcpServers(a: string[] | undefined, b: string[] | undefined): boolean {
@@ -406,12 +396,43 @@ function PersonaNotes({ personaId, kind }: { personaId: string; kind: keyof type
   );
 }
 
+/** What a persona runs as — derived from its pins, never stored. */
+type PersonaKind = 'assistant' | 'code' | 'computer';
+
+function personaKind(p: Persona): PersonaKind {
+  if (p.computer || p.browser) return 'computer';
+  if (p.harness) return 'code';
+  return 'assistant';
+}
+
+const KIND_GROUPS: { kind: PersonaKind; label: string }[] = [
+  { kind: 'assistant', label: 'Assistants' },
+  { kind: 'code', label: 'Coding agents' },
+  { kind: 'computer', label: 'Computer control' }
+];
+
+function KindIcon({ kind, size = 14 }: { kind: PersonaKind; size?: number }) {
+  if (kind === 'code') return <Code size={size} />;
+  if (kind === 'computer') return <Monitor size={size} />;
+  return <MessageSquare size={size} />;
+}
+
+const KIND_TONE: Record<PersonaKind, GlyphTone> = { assistant: 'plain', code: 'accent', computer: 'warn' };
+
+type EditorTab = 'role' | 'runs' | 'access';
+
 export function PersonasTab({ models }: { models: ModelSummary[] }) {
   const [personas, setPersonas] = useState<Persona[]>([]);
   // Unsaved edits, keyed by persona id. A draft whose id is not in `personas`
   // is a brand-new persona that exists nowhere but this screen until Save.
   const [drafts, setDrafts] = useState<Map<string, Persona>>(new Map());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // The persona whose editor replaces the list (null = the list).
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [tab, setTab] = useState<EditorTab>('role');
+  // "Runs as" picked in the editor before its pin is filled in: a Computer
+  // persona with no device chosen yet has nothing to derive the kind from.
+  const [kindPick, setKindPick] = useState<Map<string, PersonaKind>>(new Map());
+  const [query, setQuery] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Agent names the coding-agent select offers (acpx registry + custom entries
@@ -483,24 +504,25 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
       return next;
     });
 
-  const setRowExpanded = (id: string, on: boolean) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
+  const kindOf = (p: Persona): PersonaKind => kindPick.get(p.id) ?? personaKind(p);
 
-  /** Expand ↔ collapse. A dirty draft survives a collapse (marked "unsaved"). */
-  function toggleExpanded(p: Persona) {
-    const open = expanded.has(p.id);
-    if (!open && !drafts.has(p.id)) setDraft({ ...p });
-    if (open) {
-      const draft = drafts.get(p.id);
-      const stored = personas.find((x) => x.id === p.id);
-      if (draft && stored && sameEdit(draft, stored)) dropDraft(p.id);
+  /** Open a persona's editor, on the tab that matters most for its kind. */
+  function open(p: Persona, at?: EditorTab) {
+    if (!drafts.has(p.id)) setDraft({ ...p });
+    setTab(at ?? (personaKind(p) === 'assistant' ? 'role' : 'runs'));
+    setOpenId(p.id);
+    setError(null);
+  }
+
+  /** Back to the list. A dirty draft survives (its row says "unsaved"). */
+  function back() {
+    if (openId) {
+      const draft = drafts.get(openId);
+      const stored = personas.find((x) => x.id === openId);
+      if (draft && stored && sameEdit(draft, stored)) dropDraft(openId);
     }
-    setRowExpanded(p.id, !open);
+    setOpenId(null);
+    setError(null);
   }
 
   function save(draft: Persona) {
@@ -509,8 +531,14 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
       .savePersona(draft)
       .then((list) => {
         setPersonas(list);
-        dropDraft(draft.id);
-        setRowExpanded(draft.id, false);
+        // Keep the editor open on the saved values: the draft now matches the
+        // store, so the footer goes quiet without bouncing back to the list.
+        setDraft({ ...(list.find((x) => x.id === draft.id) ?? draft) });
+        setKindPick((cur) => {
+          const next = new Map(cur);
+          next.delete(draft.id);
+          return next;
+        });
         setError(null);
       })
       .catch((err: unknown) => {
@@ -521,14 +549,20 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
       .finally(() => setSavingId(null));
   }
 
-  /** Discard the draft; a never-saved persona disappears with it. */
+  /** Discard the draft and return to the list; a never-saved persona disappears with it. */
   function cancel(id: string) {
     dropDraft(id);
-    setRowExpanded(id, false);
+    setKindPick((cur) => {
+      const next = new Map(cur);
+      next.delete(id);
+      return next;
+    });
+    setOpenId(null);
+    setError(null);
   }
 
-  /** New persona (blank, or a copy) — a draft only, on the server after Save. */
-  function add(from?: Persona) {
+  /** New persona (blank, a starting point, or a copy) — a draft only, on the server after Save. */
+  function add(from?: Partial<Persona>, kind?: PersonaKind) {
     const taken = new Set([
       ...personas.map((p) => p.name.toLowerCase()),
       ...[...drafts.values()].map((p) => p.name.toLowerCase())
@@ -536,16 +570,19 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
     const draft: Persona = {
       ...from,
       id: crypto.randomUUID(),
-      name: uniqueName(from ? `${from.name} copy` : 'New persona', taken),
+      name: uniqueName(from?.name ? `${from.name} copy` : 'New persona', taken),
       prompt: from?.prompt ?? ''
     };
     delete draft.builtin;
     setDraft(draft);
-    setRowExpanded(draft.id, true);
+    if (kind) setKindPick((cur) => new Map(cur).set(draft.id, kind));
+    setTab(from?.name ? 'role' : kind && kind !== 'assistant' ? 'runs' : 'role');
+    setOpenId(draft.id);
   }
 
   function remove(persona: Persona) {
     dropDraft(persona.id);
+    setOpenId(null);
     if (!personas.some((p) => p.id === persona.id)) return; // draft-only row
     setPersonas((cur) => cur.filter((p) => p.id !== persona.id));
     window.stem
@@ -557,122 +594,223 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
       });
   }
 
+  /** Switch what the persona runs as: keeps the pins that kind uses, drops the rest. */
+  function setKind(p: Persona, kind: PersonaKind) {
+    setKindPick((cur) => new Map(cur).set(p.id, kind));
+    const next: Persona = { ...p };
+    if (kind !== 'code') delete next.harness;
+    if (kind !== 'computer') {
+      delete next.computer;
+      delete next.browser;
+    }
+    if (kind === 'code' && !next.harness) next.harness = { agent: agents.includes('claude') ? 'claude' : agents[0] ?? 'claude', cwd: '' };
+    setDraft(next);
+  }
+
+  const deviceLabel = (id: string) => devices.find((d) => d.id === id)?.label ?? id;
+
+  /** The row's one line: the pin that defines it, or the role prompt's first line. */
+  function rowLine(p: Persona): string {
+    const model = p.model
+      ? [models.find((x) => x.id === p.model)?.displayName ?? p.model.split('/').pop(), p.effort && (EFFORT_LABELS[p.effort] ?? p.effort)]
+          .filter(Boolean)
+          .join(' · ')
+      : '';
+    const kind = personaKind(p);
+    if (kind === 'code' && p.harness) {
+      const agent = p.harness.model ? `${p.harness.agent} · ${p.harness.model}` : p.harness.agent;
+      const where = p.harness.device && devices.length > 1 ? ` on ${deviceLabel(p.harness.device)}` : '';
+      // The folder first: it is what tells two code personas apart, and the
+      // line truncates from the right in a 300px rail.
+      return [p.harness.cwd && shortPath(p.harness.cwd), agent + where].filter(Boolean).join(' · ');
+    }
+    if (kind === 'computer') {
+      const parts = [
+        p.computer && `controls ${deviceLabel(p.computer.device)}`,
+        p.browser && (p.computer?.device === p.browser.device ? 'and its browser' : `browser on ${deviceLabel(p.browser.device)}`)
+      ];
+      return parts.filter(Boolean).join(' ');
+    }
+    return model || p.prompt.split('\n')[0] || 'No role prompt';
+  }
+
+  function rowFlags(p: Persona) {
+    return (
+      <>
+        {p.harness?.autoMode && <Flag icon={<ShieldCheck size={12} />} tone="warn" label="Approves its own actions" />}
+        {p.clients && <Flag icon={<Smartphone size={12} />} tone="ok" label="Open to chats from your other devices" />}
+        {p.canSpawn && <Flag icon={<Users size={12} />} label="Can start helpers" />}
+        {(p.memory === false || p.recall === false) && (
+          <Flag
+            icon={<EyeOff size={12} />}
+            label={[p.memory === false && 'No private memory', p.recall === false && 'no recall'].filter(Boolean).join(', ')}
+          />
+        )}
+        {p.mcpServers && (
+          <Flag
+            icon={<Plug size={12} />}
+            label={p.mcpServers.length === 0 ? 'No integrations' : `${p.mcpServers.length} integration${p.mcpServers.length === 1 ? '' : 's'}`}
+          />
+        )}
+      </>
+    );
+  }
+
   // Saved personas first, then never-saved drafts in creation order.
   const rows: Persona[] = [
-    ...personas,
+    ...personas.map((p) => drafts.get(p.id) ?? p),
     ...[...drafts.values()].filter((d) => !personas.some((p) => p.id === d.id))
   ];
 
-  return (
-    <div>
-      <div className="grp-head">
-        Personas
-        <span className="beta-pill" title={BETA_TITLE}>
-          Beta
-        </span>{' '}
-        <InfoTip label="About personas">
-          Named configurations you can address mail to: a role prompt, and optionally a pinned
-          model and a coding agent with its own working directory. Duplicate one to make a variant
-          — e.g. a “code — stem” persona is the coding pin pointed at the stem checkout.
-        </InfoTip>
-      </div>
-      {error && <p className="task-failed">{error}</p>}
-      <div className="group">
-        {rows.map((stored) => {
-          const draft = drafts.get(stored.id);
-          const saved = personas.find((x) => x.id === stored.id);
-          const dirty = !!draft && (!saved || !sameEdit(draft, saved));
-          const p = draft ?? stored;
-          return (
-            <div key={p.id} className="task-item">
-              <div className="task-head">
-                <span className="row-main">
-                  <strong
-                    className="task-title"
-                    onClick={() => toggleExpanded(stored)}
-                    title={expanded.has(p.id) ? 'Collapse' : 'Edit this persona'}
-                  >
-                    {p.name}
-                  </strong>
-                  <em>
-                    {summaryLabel(p, models, devices)}
-                    {dirty && !expanded.has(p.id) ? ' · unsaved' : ''}
-                  </em>
-                </span>
-                <button
-                  className="icon-action sm"
-                  onClick={() => add(p)}
-                  title="Duplicate this persona"
-                  aria-label="Duplicate persona"
-                >
-                  <Copy size={14} />
-                </button>
-                {!p.builtin && (
+  const opened = openId ? drafts.get(openId) : undefined;
+
+  const cwdPicker =
+    pickingCwdFor &&
+    (() => {
+      // The editor is open (the Browse button lives in it), so a draft with a
+      // harness exists; the guard covers a state race anyway.
+      const target = drafts.get(pickingCwdFor);
+      if (!target?.harness) return null;
+      const harness = target.harness;
+      return (
+        <ServerFolderPicker
+          title="Choose the agent’s working directory"
+          hint="The coding agent runs on Stem’s server, so this browses the server’s folders — pick where it should work, or paste a path the server knows."
+          confirmLabel="Use this folder"
+          onConnect={(path) => {
+            setDraft({ ...target, harness: { ...harness, cwd: path } });
+            setPickingCwdFor(null);
+          }}
+          onClose={() => setPickingCwdFor(null)}
+        />
+      );
+    })();
+
+  if (opened) {
+    const p = opened;
+    const saved = personas.find((x) => x.id === p.id);
+    const dirty = !saved || !sameEdit(p, saved);
+    const kind = kindOf(p);
+    return (
+      <div className="ld-detail">
+        <DetailHeader backLabel="Personas" onBack={back}>
+          <button
+            type="button"
+            className="icon-action sm"
+            onClick={() => add(p)}
+            title="Duplicate this persona"
+            aria-label="Duplicate persona"
+          >
+            <Copy size={14} />
+          </button>
+          {!p.builtin && (
+            <ConfirmDelete
+              label={saved ? 'Delete persona' : 'Discard this draft'}
+              icon={<Trash2 size={14} />}
+              onConfirm={() => remove(p)}
+            />
+          )}
+        </DetailHeader>
+        <DetailIdent
+          glyph={<Glyph icon={<KindIcon kind={kind} size={17} />} tone={KIND_TONE[kind]} size="lg" />}
+          name={
+            <input
+              className="ld-name-input"
+              aria-label="Persona name"
+              value={p.name}
+              onChange={(e) => setDraft({ ...p, name: e.target.value })}
+            />
+          }
+          caption={p.builtin ? 'Built-in · can be edited, not deleted' : saved ? `Mail it as “${saved.name}”` : 'Not saved yet'}
+        />
+        {error && <p className="task-failed">{error}</p>}
+        <DetailTabs
+          tabs={[
+            { key: 'role', label: 'Role' },
+            { key: 'runs', label: 'Runs as' },
+            { key: 'access', label: 'Access' }
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+        <div className="ld-body">
+          {tab === 'role' && (
+            <>
+              <Field label="Role prompt" htmlFor="persona-prompt">
+                <textarea
+                  id="persona-prompt"
+                  className="ci-textarea"
+                  aria-label="Role prompt"
+                  value={p.prompt}
+                  onChange={(e) => setDraft({ ...p, prompt: e.target.value })}
+                  rows={7}
+                  placeholder="What this persona is and how it should behave. Appended to the base system prompt."
+                />
+              </Field>
+              <Field label="Model">
+                <div className="task-model">
+                  <ModelPicker
+                    models={models}
+                    value={p.model ?? null}
+                    onChange={(id) =>
+                      setDraft({
+                        ...p,
+                        model: id ?? undefined,
+                        effort: clampEffort(models, id, p.effort ?? null) ?? undefined
+                      })
+                    }
+                    emptyLabel="App default"
+                    ariaLabel="Model this persona runs on"
+                    resolvedDefault={appDefaultModel(models)}
+                  />
+                  <EffortSelect
+                    label="Effort this persona runs at"
+                    value={p.effort ?? null}
+                    efforts={effortsOf(models, p.model ?? null)}
+                    emptyLabel="Default effort"
+                    onChange={(effort) => setDraft({ ...p, effort: effort ?? undefined })}
+                  />
+                </div>
+              </Field>
+              {p.computer && !modelSeesImages(p, models) && (
+                <div className="persona-warn" role="status">
+                  This persona’s model cannot see images. Computer control works from screenshots, so
+                  pick a model that accepts image input.
+                </div>
+              )}
+            </>
+          )}
+          {tab === 'runs' && (
+            <>
+              <div className="seg-ctl ld-kind" role="radiogroup" aria-label="What this persona runs as">
+                {KIND_GROUPS.map(({ kind: k }) => (
                   <button
-                    className="icon-action sm"
-                    onClick={() => remove(p)}
-                    title={saved ? 'Delete persona' : 'Discard this draft'}
-                    aria-label="Delete persona"
+                    key={k}
+                    type="button"
+                    role="radio"
+                    aria-checked={kind === k}
+                    className={kind === k ? 'active' : ''}
+                    onClick={() => setKind(p, k)}
                   >
-                    <Trash2 size={14} />
+                    <KindIcon kind={k} size={13} />
+                    {k === 'assistant' ? 'Assistant' : k === 'code' ? 'Coding agent' : 'Computer'}
                   </button>
-                )}
+                ))}
               </div>
-              {expanded.has(p.id) && (
-                <div className="persona-editor">
-                  <input
-                    className="vfield persona-name"
-                    aria-label="Persona name"
-                    value={p.name}
-                    onChange={(e) => setDraft({ ...p, name: e.target.value })}
-                  />
-                  <textarea
-                    className="ci-textarea"
-                    aria-label="Role prompt"
-                    value={p.prompt}
-                    onChange={(e) => setDraft({ ...p, prompt: e.target.value })}
-                    rows={5}
-                    placeholder="What this persona is and how it should behave. Appended to the base system prompt."
-                  />
-                  <div className="task-model">
-                    <ModelPicker
-                      models={models}
-                      value={p.model ?? null}
-                      onChange={(id) =>
-                        setDraft({
-                          ...p,
-                          model: id ?? undefined,
-                          effort: clampEffort(models, id, p.effort ?? null) ?? undefined
-                        })
-                      }
-                      emptyLabel="App default"
-                      ariaLabel="Model this persona runs on"
-                      resolvedDefault={appDefaultModel(models)}
-                    />
-                    <EffortSelect
-                      label="Effort this persona runs at"
-                      value={p.effort ?? null}
-                      efforts={effortsOf(models, p.model ?? null)}
-                      emptyLabel="Default effort"
-                      onChange={(effort) => setDraft({ ...p, effort: effort ?? undefined })}
-                    />
-                  </div>
-                  <div className="persona-harness">
+              {kind === 'assistant' && (
+                <p className="ld-hint">Answers with Stem’s own tools. Nothing else to set up.</p>
+              )}
+              {kind === 'code' && p.harness && (
+                <>
+                  <Field label="Agent">
                     {agents.length > 0 ? (
                       <select
                         className="vfield"
                         aria-label="Coding agent this persona drives"
-                        value={p.harness?.agent ?? ''}
-                        onChange={(e) => {
-                          const agent = e.target.value;
-                          setDraft({
-                            ...p,
-                            harness: agent ? { agent, cwd: p.harness?.cwd ?? '' } : undefined
-                          });
-                        }}
+                        value={p.harness.agent}
+                        onChange={(e) => setDraft({ ...p, harness: { ...p.harness!, agent: e.target.value } })}
                       >
-                        <option value="">No coding agent</option>
-                        {p.harness?.agent && !agents.includes(p.harness.agent) && (
+                        {!agents.includes(p.harness.agent) && (
                           <option value={p.harness.agent}>{p.harness.agent} (custom)</option>
                         )}
                         {agents.map((a) => (
@@ -685,79 +823,53 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       <input
                         className="vfield"
                         aria-label="Coding agent this persona drives"
-                        value={p.harness?.agent ?? ''}
-                        onChange={(e) => {
-                          const agent = e.target.value;
-                          setDraft({
-                            ...p,
-                            harness: agent.trim() ? { agent, cwd: p.harness?.cwd ?? '' } : undefined
-                          });
-                        }}
+                        value={p.harness.agent}
+                        onChange={(e) => setDraft({ ...p, harness: { ...p.harness!, agent: e.target.value } })}
                         placeholder="Coding agent (e.g. claude)"
                       />
                     )}
+                  </Field>
+                  <Field label="Runs on">
                     <select
                       className="vfield"
                       aria-label="Computer the coding agent runs on"
-                      value={p.harness?.device ?? ''}
-                      disabled={!p.harness}
+                      value={p.harness.device ?? ''}
                       onChange={(e) =>
-                        setDraft({
-                          ...p,
-                          harness: p.harness
-                            ? { ...p.harness, device: e.target.value || undefined }
-                            : undefined
-                        })
+                        setDraft({ ...p, harness: { ...p.harness!, device: e.target.value || undefined } })
                       }
                     >
-                      <option value="">On Stem’s server</option>
-                      {p.harness?.device &&
+                      <option value="">Stem’s server</option>
+                      {p.harness.device &&
                         !devices.some((d) => d.id === p.harness?.device && d.runsCodingAgents) && (
                           <option value={p.harness.device}>
-                            On {devices.find((d) => d.id === p.harness?.device)?.label ??
-                              p.harness.device}{' '}
-                            (not hosting coding agents)
+                            {deviceLabel(p.harness.device)} (not hosting coding agents)
                           </option>
                         )}
                       {devices
                         .filter((d) => d.runsCodingAgents)
                         .map((d) => (
                           <option key={d.id} value={d.id}>
-                            On {d.label}
+                            {d.label}
                           </option>
                         ))}
                     </select>
-                    <HarnessModelSelect
-                      pin={p.harness}
-                      onChange={(model) =>
-                        setDraft({
-                          ...p,
-                          harness: p.harness ? { ...p.harness, model } : undefined
-                        })
-                      }
-                    />
+                  </Field>
+                  <Field label="Folder">
                     <div className="persona-cwd-row">
                       <input
                         className="vfield persona-cwd"
                         aria-label="Working directory for the coding agent"
-                        value={p.harness?.cwd ?? ''}
-                        onChange={(e) =>
-                          setDraft({
-                            ...p,
-                            harness: p.harness ? { ...p.harness, cwd: e.target.value } : undefined
-                          })
-                        }
+                        value={p.harness.cwd}
+                        onChange={(e) => setDraft({ ...p, harness: { ...p.harness!, cwd: e.target.value } })}
                         placeholder="Its working directory (absolute path)"
-                        disabled={!p.harness}
                       />
                       <button
+                        type="button"
                         className="icon-action sm"
                         onClick={() => void browseCwd(p)}
-                        disabled={
-                          !p.harness || (!!p.harness.device && !nativeBrowse(p.harness))
-                        }
+                        disabled={!!p.harness.device && !nativeBrowse(p.harness)}
                         title={
-                          !p.harness || nativeBrowse(p.harness)
+                          nativeBrowse(p.harness)
                             ? 'Choose a folder on this computer'
                             : p.harness.device
                               ? 'Another computer’s folders can’t be browsed from here — type the path as that computer sees it.'
@@ -768,96 +880,89 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                         <FolderSearch size={14} />
                       </button>
                     </div>
-                    {p.harness?.agent.trim().toLowerCase() === 'claude' && (
-                      <label className="persona-cap">
-                        <input
-                          type="checkbox"
-                          checked={p.harness.autoMode === true}
-                          onChange={(e) => {
-                            const harness = { ...p.harness! };
-                            if (e.target.checked) harness.autoMode = true;
-                            else delete harness.autoMode;
-                            setDraft({ ...p, harness });
-                          }}
-                        />
-                        <span>
-                          Let Claude Code approve its own actions (Auto){' '}
-                          <InfoTip label="About Auto">
-                            Claude Code’s own classifier judges each step instead of Stem, so
-                            routine work never waits on an approval card. Stem is no longer the
-                            judge for this persona.
-                          </InfoTip>
-                        </span>
-                      </label>
-                    )}
-                  </div>
+                  </Field>
+                  <Field label="Agent model">
+                    <HarnessModelSelect
+                      pin={p.harness}
+                      onChange={(model) => setDraft({ ...p, harness: { ...p.harness!, model } })}
+                    />
+                  </Field>
+                  {p.harness.agent.trim().toLowerCase() === 'claude' && (
+                    <ToggleRow
+                      title="Approves its own actions"
+                      hint={
+                        <>
+                          Claude Code’s own classifier judges each step instead of Stem, so routine work never
+                          waits on an approval card.
+                        </>
+                      }
+                      on={p.harness.autoMode === true}
+                      tone="warn"
+                      onChange={(on) => {
+                        const harness = { ...p.harness! };
+                        if (on) harness.autoMode = true;
+                        else delete harness.autoMode;
+                        setDraft({ ...p, harness });
+                      }}
+                    />
+                  )}
+                </>
+              )}
+              {kind === 'computer' && (
+                <>
                   {/* Computer control: the Mac whose screen this persona drives. The
                       pin is the capability — no pin, no `computer` tool — and only a Mac
                       that switched on "Let Stem control this Mac" is offered. */}
-                  <div className="persona-harness">
-                    <div className="persona-pin-row">
-                      <select
-                        className="vfield"
-                        aria-label="Computer this persona controls"
-                        value={p.computer?.device ?? ''}
-                        onChange={(e) =>
-                          setDraft({
-                            ...p,
-                            computer: e.target.value ? { device: e.target.value } : undefined
-                          })
-                        }
-                      >
-                        <option value="">Controls no computer</option>
-                        {p.computer?.device &&
-                          !devices.some((d) => d.id === p.computer?.device && d.runsComputer) && (
-                            <option value={p.computer.device}>
-                              Controls {devices.find((d) => d.id === p.computer?.device)?.label ??
-                                p.computer.device}{' '}
-                              (not letting Stem control it)
-                            </option>
-                          )}
-                        {devices
-                          .filter((d) => d.runsComputer)
-                          .map((d) => (
-                            <option key={d.id} value={d.id}>
-                              Controls {d.label}
-                            </option>
-                          ))}
-                      </select>
-                      <span className="beta-pill alpha-pill" title={COMPUTER_ALPHA_TITLE}>
-                        Alpha
-                      </span>
-                    </div>
-                    {p.computer && !modelSeesImages(p, models) && (
-                      <div className="persona-warn" role="status">
-                        This persona’s model cannot see images. Computer control works from screenshots,
-                        so pick a model that accepts image input.
-                      </div>
-                    )}
-                  </div>
-                  {/* Browser control: the Mac whose browser this persona drives through
-                      the Stem extension. Same rule as the computer pin, and its own pin:
-                      a persona can have the browser without the screen. Page outlines
-                      are text, so no image-model warning here. */}
-                  <div className="persona-harness">
+                  <Field
+                    label={
+                      <>
+                        Screen and apps
+                        <span className="beta-pill alpha-pill" title={COMPUTER_ALPHA_TITLE}>
+                          Alpha
+                        </span>
+                      </>
+                    }
+                  >
+                    <select
+                      className="vfield"
+                      aria-label="Computer this persona controls"
+                      value={p.computer?.device ?? ''}
+                      onChange={(e) =>
+                        setDraft({ ...p, computer: e.target.value ? { device: e.target.value } : undefined })
+                      }
+                    >
+                      <option value="">Controls no computer</option>
+                      {p.computer?.device &&
+                        !devices.some((d) => d.id === p.computer?.device && d.runsComputer) && (
+                          <option value={p.computer.device}>
+                            Controls {deviceLabel(p.computer.device)} (not letting Stem control it)
+                          </option>
+                        )}
+                      {devices
+                        .filter((d) => d.runsComputer)
+                        .map((d) => (
+                          <option key={d.id} value={d.id}>
+                            Controls {d.label}
+                          </option>
+                        ))}
+                    </select>
+                  </Field>
+                  {/* Browser control: its own pin, so a persona can have the browser
+                      without the screen. Page outlines are text — no image warning. */}
+                  <Field label="Browser">
                     <select
                       className="vfield"
                       aria-label="Browser this persona controls"
                       value={p.browser?.device ?? ''}
                       onChange={(e) =>
-                        setDraft({
-                          ...p,
-                          browser: e.target.value ? { device: e.target.value } : undefined
-                        })
+                        setDraft({ ...p, browser: e.target.value ? { device: e.target.value } : undefined })
                       }
                     >
                       <option value="">Uses no browser</option>
                       {p.browser?.device &&
                         !devices.some((d) => d.id === p.browser?.device && d.runsBrowser) && (
                           <option value={p.browser.device}>
-                            Uses the browser on {devices.find((d) => d.id === p.browser?.device)?.label ??
-                              p.browser.device}{' '}
-                            (not letting Stem drive it)
+                            Uses the browser on {deviceLabel(p.browser.device)} (not letting Stem drive it)
                           </option>
                         )}
                       {devices
@@ -868,221 +973,219 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                           </option>
                         ))}
                     </select>
-                  </div>
-                  <label className="persona-cap">
-                    <input
-                      type="checkbox"
-                      checked={p.canSpawn === true}
-                      onChange={(e) => setDraft({ ...p, canSpawn: e.target.checked || undefined })}
-                    />
-                    <span>
-                      Can start agents{' '}
-                      <InfoTip label="About agents">
-                        Lets this persona start agents in a mail conversation: named copies of
-                        your other personas that each work one piece of a job and report back to
-                        it. Agents keep no memory and disappear with the conversation; they never
-                        appear in this list.
-                      </InfoTip>
-                    </span>
-                  </label>
-                  <label className="persona-cap">
-                    <input
-                      type="checkbox"
-                      checked={p.memory !== false}
-                      onChange={(e) => setDraft({ ...p, memory: e.target.checked ? undefined : false })}
-                    />
-                    <span>
-                      {p.harness ? 'Keeps standing answers' : 'Keeps private memory'}{' '}
-                      {p.harness ? (
-                        <InfoTip label="About standing answers">
-                          Your answers to the coding agent’s recurring questions, kept per persona
-                          so it can answer them for you next time instead of mailing you. A code
-                          persona keeps no expertise notes: it only relays to its coding agent,
-                          which carries its own memory.
-                        </InfoTip>
-                      ) : (
-                        <InfoTip label="About private memory">
-                          Expertise notes this persona saves from its work and reads on every mail.
-                          Turn it off for personas whose value is a fresh outside view (the built-in
-                          Critic ships without one).
-                        </InfoTip>
-                      )}
-                    </span>
-                  </label>
-                  <label className="persona-cap">
-                    <input
-                      type="checkbox"
-                      checked={p.recall !== false}
-                      onChange={(e) => setDraft({ ...p, recall: e.target.checked ? undefined : false })}
-                    />
-                    <span>
-                      Sees your memory{' '}
-                      <InfoTip label="About recall for this persona">
-                        Injects Stem Recall — your facts, past conversations, indexed folders —
-                        into this persona’s turns, as in your own chats. Turn it off for a persona
-                        that should judge material cold: a reviewer handed the author’s facts
-                        alongside the draft stops being an outside reader, and asking it to ignore
-                        who wrote it works less well than never showing it. (Critic ships with this
-                        off.)
-                      </InfoTip>
-                    </span>
-                  </label>
-                  <label className="persona-cap">
-                    <input
-                      type="checkbox"
-                      checked={p.clients === true}
-                      onChange={(e) => setDraft({ ...p, clients: e.target.checked || undefined })}
-                    />
-                    <span>
-                      Usable in chats from other devices{' '}
-                      <InfoTip label="About chats as this persona">
-                        Offers this persona in the chat composer on your other devices (the phone
-                        app). A chat sent as it runs with its role prompt, pinned model, and coding
-                        setup — off, it stays a mail-and-tasks persona only.
-                      </InfoTip>
-                    </span>
-                  </label>
-                  <label className="persona-cap">
-                    <input
-                      type="checkbox"
-                      checked={p.mcpServers === undefined}
-                      onChange={(e) => setDraft({ ...p, mcpServers: e.target.checked ? undefined : [] })}
-                    />
-                    <span>
-                      Uses every MCP server{' '}
-                      <InfoTip label="About MCP servers for this persona">
-                        Which of your MCP servers this persona may use, in chats, mail and
-                        scheduled runs alike. With this on it gets every server you configure,
-                        including ones you add later. Turn it off to pick a subset: the rest are
-                        hidden from the persona entirely — not listed, not searchable, refused if
-                        it guesses a name. Stem’s own memory tools are separate (see “Sees your
-                        memory”). Helper personas this one creates inherit the same list.
-                      </InfoTip>
-                    </span>
-                  </label>
-                  {p.mcpServers !== undefined && (
-                    <div className="persona-mcp">
-                      {groupMcpServers(mcpServers, client).map((group) => (
-                        <div key={group.head} className="persona-mcp-group">
-                          <div className="persona-mcp-head">{group.head}</div>
-                          {group.items.map((s) => (
-                            <label key={s.name} className="persona-cap">
-                              <input
-                                type="checkbox"
-                                checked={p.mcpServers?.includes(s.name) ?? false}
-                                onChange={(e) => {
-                                  const rest = (p.mcpServers ?? []).filter((n) => n !== s.name);
-                                  setDraft({ ...p, mcpServers: e.target.checked ? [...rest, s.name] : rest });
-                                }}
-                              />
-                              <span>
-                                {s.name}
-                                {!s.enabled && <span className="persona-mcp-note"> · switched off</span>}
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      ))}
-                      {/* Names the list carries that no configured server answers to any
-                          more (removed, or renamed by re-adding). They do nothing at run
-                          time; shown so they can be cleared rather than silently kept. */}
-                      {(p.mcpServers ?? [])
-                        .filter((n) => !mcpServers.some((s) => s.name === n))
-                        .map((n) => (
-                          <label key={`stale-${n}`} className="persona-cap persona-mcp-stale">
-                            <input
-                              type="checkbox"
-                              checked
-                              onChange={() =>
-                                setDraft({ ...p, mcpServers: (p.mcpServers ?? []).filter((x) => x !== n) })
-                              }
-                            />
-                            <span>
-                              {n} <span className="persona-mcp-note">· no longer configured</span>
-                            </span>
-                          </label>
-                        ))}
-                      {mcpServers.length === 0 && (p.mcpServers ?? []).length === 0 && (
-                        <div className="persona-mcp-note">No MCP servers are configured yet.</div>
-                      )}
+                  </Field>
+                  {!p.computer && !p.browser && (
+                    <p className="ld-hint">Pick a computer or a browser. With neither, it saves as an assistant.</p>
+                  )}
+                  {p.computer && !modelSeesImages(p, models) && (
+                    <div className="persona-warn" role="status">
+                      This persona’s model cannot see images. Computer control works from screenshots,
+                      so pick a model that accepts image input (Role tab).
                     </div>
                   )}
-                  <label className="persona-cap">
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      value={p.sendBudget ?? ''}
-                      placeholder="∞"
-                      style={{ width: '4.5em' }}
-                      onChange={(e) => {
-                        const n = Number.parseInt(e.target.value, 10);
-                        setDraft({
-                          ...p,
-                          sendBudget: Number.isFinite(n)
-                            ? Math.min(100, Math.max(1, n))
-                            : undefined
-                        });
-                      }}
-                    />
-                    <span>
-                      Send budget per wave{' '}
-                      <InfoTip label="About the send budget">
-                        The most mails this persona may start between your sends in one
-                        conversation. Its reply to whoever mailed it is always allowed. Blank =
-                        unlimited (the global exchange cap still applies).
-                      </InfoTip>
-                    </span>
-                  </label>
-                  <div className="push-row">
-                    <button className="link-btn" onClick={() => cancel(p.id)}>
-                      Cancel
-                    </button>
-                    <button
-                      className="primary"
-                      onClick={() => save(p)}
-                      disabled={!dirty || savingId === p.id}
-                    >
-                      {savingId === p.id ? 'Saving…' : 'Save'}
-                    </button>
-                  </div>
-                  {/* Only SAVED personas with a store: memory-off personas keep
-                      none, and a never-saved draft has no id on the server yet. */}
-                  {saved && p.memory !== false && (
-                    <PersonaNotes personaId={p.id} kind={p.harness ? 'answers' : 'memory'} />
+                </>
+              )}
+            </>
+          )}
+          {tab === 'access' && (
+            <div className="ld-toggles">
+              <ToggleRow
+                title={p.harness ? 'Standing answers' : 'Private memory'}
+                hint={
+                  p.harness
+                    ? 'Your answers to the coding agent’s recurring questions, so it can answer them for you next time.'
+                    : 'Notes it saves from its work and reads on every mail. Off for a fresh outside view.'
+                }
+                on={p.memory !== false}
+                onChange={(on) => setDraft({ ...p, memory: on ? undefined : false })}
+              />
+              {/* Only SAVED personas with a store: memory-off personas keep
+                  none, and a never-saved draft has no id on the server yet. */}
+              {saved && p.memory !== false && saved.memory !== false && (
+                <PersonaNotes personaId={p.id} kind={p.harness ? 'answers' : 'memory'} />
+              )}
+              <ToggleRow
+                title="Sees your memory"
+                hint="Your facts, past chats and indexed folders. Off for a reviewer that should read cold."
+                on={p.recall !== false}
+                onChange={(on) => setDraft({ ...p, recall: on ? undefined : false })}
+              />
+              <ToggleRow
+                title="Open to chats"
+                hint="Offered in the chat composer on your other devices (the phone app)."
+                on={p.clients === true}
+                onChange={(on) => setDraft({ ...p, clients: on || undefined })}
+              />
+              <ToggleRow
+                title="Can start helpers"
+                hint="Starts named copies of your other personas for parts of a job. They keep no memory."
+                on={p.canSpawn === true}
+                onChange={(on) => setDraft({ ...p, canSpawn: on || undefined })}
+              />
+              <ToggleRow
+                title="Uses every MCP server"
+                hint="Off: pick which ones. The rest are hidden from it entirely. Helpers inherit the list."
+                on={p.mcpServers === undefined}
+                onChange={(on) => setDraft({ ...p, mcpServers: on ? undefined : [] })}
+              />
+              {p.mcpServers !== undefined && (
+                <div className="persona-mcp">
+                  {groupMcpServers(mcpServers, client).map((group) => (
+                    <div key={group.head} className="persona-mcp-group">
+                      <div className="persona-mcp-head">{group.head}</div>
+                      {group.items.map((s) => (
+                        <label key={s.name} className="persona-cap">
+                          <input
+                            type="checkbox"
+                            checked={p.mcpServers?.includes(s.name) ?? false}
+                            onChange={(e) => {
+                              const rest = (p.mcpServers ?? []).filter((n) => n !== s.name);
+                              setDraft({ ...p, mcpServers: e.target.checked ? [...rest, s.name] : rest });
+                            }}
+                          />
+                          <span>
+                            {s.name}
+                            {!s.enabled && <span className="persona-mcp-note"> · switched off</span>}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                  {/* Names the list carries that no configured server answers to any
+                      more (removed, or renamed by re-adding). They do nothing at run
+                      time; shown so they can be cleared rather than silently kept. */}
+                  {(p.mcpServers ?? [])
+                    .filter((n) => !mcpServers.some((s) => s.name === n))
+                    .map((n) => (
+                      <label key={`stale-${n}`} className="persona-cap persona-mcp-stale">
+                        <input
+                          type="checkbox"
+                          checked
+                          onChange={() => setDraft({ ...p, mcpServers: (p.mcpServers ?? []).filter((x) => x !== n) })}
+                        />
+                        <span>
+                          {n} <span className="persona-mcp-note">· no longer configured</span>
+                        </span>
+                      </label>
+                    ))}
+                  {mcpServers.length === 0 && (p.mcpServers ?? []).length === 0 && (
+                    <div className="persona-mcp-note">No MCP servers are configured yet.</div>
                   )}
                 </div>
               )}
+              <div className="ld-toggle">
+                <span>
+                  <strong>Send budget</strong>
+                  <em>
+                    Mails it may start between your sends. Its reply to whoever mailed it is always allowed.
+                    Blank = unlimited.
+                  </em>
+                </span>
+                <input
+                  type="number"
+                  className="vfield ld-num"
+                  aria-label="Send budget per wave"
+                  min={1}
+                  max={100}
+                  value={p.sendBudget ?? ''}
+                  placeholder="∞"
+                  onChange={(e) => {
+                    const n = Number.parseInt(e.target.value, 10);
+                    setDraft({ ...p, sendBudget: Number.isFinite(n) ? Math.min(100, Math.max(1, n)) : undefined });
+                  }}
+                />
+              </div>
             </div>
-          );
-        })}
+          )}
+        </div>
+        <DetailFooter
+          dirty={dirty}
+          saving={savingId === p.id}
+          onCancel={() => cancel(p.id)}
+          onSave={() => save(p)}
+        />
+        {cwdPicker}
       </div>
-      <button className="link-btn" onClick={() => add()}>
-        <Plus size={14} /> New persona
-      </button>
-      {pickingCwdFor &&
-        (() => {
-          // The row is expanded (the Browse button lives in the editor), so a
-          // draft with a harness exists; the guard covers a state race anyway.
-          const target = drafts.get(pickingCwdFor);
-          if (!target?.harness) return null;
-          const harness = target.harness;
-          return (
-            <ServerFolderPicker
-              title="Choose the agent’s working directory"
-              hint="The coding agent runs on Stem’s server, so this browses the server’s folders — pick where it should work, or paste a path the server knows."
-              confirmLabel="Use this folder"
-              onConnect={(path) => {
-                setDraft({ ...target, harness: { ...harness, cwd: path } });
-                setPickingCwdFor(null);
-              }}
-              onClose={() => setPickingCwdFor(null)}
-            />
-          );
-        })()}
+    );
+  }
+
+  const q = query.trim().toLowerCase();
+  const shown = q ? rows.filter((p) => p.name.toLowerCase().includes(q) || rowLine(p).toLowerCase().includes(q)) : rows;
+
+  return (
+    <div className="ld-list">
+      <ListHeader
+        title="Personas"
+        extra={
+          <>
+            <span className="beta-pill" title={BETA_TITLE}>
+              Beta
+            </span>{' '}
+            <InfoTip label="About personas">
+              Named configurations you can address mail to: a role prompt, and optionally a pinned model,
+              a coding agent with its own working directory, or a computer to control. Duplicate one to
+              make a variant.
+            </InfoTip>
+          </>
+        }
+        templates={[
+          {
+            key: 'assistant',
+            icon: <MessageSquare size={12} />,
+            label: 'Assistant',
+            hint: 'A role prompt and, if you want, a model',
+            onPick: () => add(undefined, 'assistant')
+          },
+          {
+            key: 'code',
+            icon: <Code size={12} />,
+            tone: 'accent',
+            label: 'Coding agent',
+            hint: 'Claude or Codex working in one folder',
+            onPick: () =>
+              add({ harness: { agent: agents.includes('claude') ? 'claude' : agents[0] ?? 'claude', cwd: '' } }, 'code')
+          },
+          {
+            key: 'computer',
+            icon: <Monitor size={12} />,
+            tone: 'warn',
+            label: 'Computer control',
+            hint: 'Uses the screen or the browser on a Mac',
+            onPick: () => add(undefined, 'computer')
+          }
+        ]}
+      />
+      <ListSearch value={query} onChange={setQuery} placeholder="Find a persona" />
+      {error && <p className="task-failed">{error}</p>}
+      {KIND_GROUPS.map(({ kind, label }) => {
+        const items = shown.filter((p) => kindOf(p) === kind);
+        if (items.length === 0) return null;
+        return (
+          <ListGroup key={kind} label={label} count={items.length}>
+            {items.map((p) => {
+              const saved = personas.find((x) => x.id === p.id);
+              const dirty = !saved || !sameEdit(p, saved);
+              return (
+                <ListRow
+                  key={p.id}
+                  glyph={<Glyph icon={<KindIcon kind={kind} />} tone={KIND_TONE[kind]} />}
+                  name={p.name}
+                  locked={p.builtin ? 'Built-in: can be edited, not deleted' : undefined}
+                  sub={`${rowLine(p)}${dirty ? ' · unsaved' : ''}`}
+                  right={rowFlags(p)}
+                  onOpen={() => open(saved ?? p)}
+                />
+              );
+            })}
+          </ListGroup>
+        );
+      })}
+      {shown.length === 0 && <p className="muted ld-empty">{q ? 'No persona matches.' : 'No personas yet.'}</p>}
+      {cwdPicker}
     </div>
   );
 }
+
 
 // One listing per (agent, host) for the life of this window: a probe may
 // cold-start the agent on that machine, so rows sharing a pin share the answer
