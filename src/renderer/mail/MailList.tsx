@@ -20,9 +20,9 @@ import { hasMailWaiting, personaName } from './useMail';
 import { readComposeDraft, subscribeMailDrafts } from './mail-drafts';
 
 // The Inbox tab's list: mail conversations, email-style. An unsent New mail
-// draft sits first, then Working (mail you sent that personas are still on —
-// visible, but never unread or "waiting on you"), then the mail waiting on you
-// (unread bold), with what you've dealt with collapsed underneath — Snoozed,
+// draft sits first, then the mail waiting on you (unread bold), then Working
+// (mail you sent that personas are still on — visible, but never unread or
+// "waiting on you"), with what you've dealt with collapsed underneath — Snoozed,
 // Archived, and Sent (every conversation, newest send first; the sent "copy" of
 // a mail is its conversation). Placement and unread reuse the shared inbox
 // derivations, fed each conversation's userUpdatedAt, so persona-internal
@@ -295,8 +295,6 @@ export function MailList(props: MailListProps) {
   return (
     <>
       {draftRow}
-      {grouped && <div className="mail-list-group">Working ({sections.working.length})</div>}
-      {sections.working.map((c) => renderRow(c, 'working'))}
       {grouped && sections.inbox.length > 0 && (
         <div className="mail-list-group">Waiting on you ({sections.inbox.length})</div>
       )}
@@ -312,6 +310,8 @@ export function MailList(props: MailListProps) {
         </div>
       )}
       {sections.inbox.map((c) => renderRow(c, 'inbox'))}
+      {grouped && <div className="mail-list-group">Working ({sections.working.length})</div>}
+      {sections.working.map((c) => renderRow(c, 'working'))}
       {section('Snoozed', null, sections.snoozed, snoozedOpen, () => setSnoozedOpen((v) => !v), 'snoozed')}
       {section('Archived', null, sections.archived, archivedOpen, () => setArchivedOpen((v) => !v), 'archived')}
       {section(

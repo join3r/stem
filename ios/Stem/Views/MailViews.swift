@@ -17,14 +17,6 @@ struct MailListView: View {
                     .pickerStyle(.segmented)
                     .listRowSeparator(.hidden)
                 }
-                if folder == .inbox, !working.isEmpty {
-                    // Sent and still being worked: visible here, never unread or "waiting on you".
-                    Section("Working") {
-                        ForEach(working) { c in
-                            NavigationLink(value: Route.mail(c.id)) { MailRow(conversation: c) }
-                        }
-                    }
-                }
                 Section {
                     ForEach(rows) { c in
                         NavigationLink(value: Route.mail(c.id)) { MailRow(conversation: c) }
@@ -44,6 +36,16 @@ struct MailListView: View {
                                     Label("Delete", systemImage: "trash")
                                 }
                             }
+                    }
+                } header: {
+                    if folder == .inbox, !working.isEmpty, !rows.isEmpty { Text("Waiting on you") }
+                }
+                if folder == .inbox, !working.isEmpty {
+                    // Sent and still being worked: visible here, never unread or "waiting on you".
+                    Section("Working") {
+                        ForEach(working) { c in
+                            NavigationLink(value: Route.mail(c.id)) { MailRow(conversation: c) }
+                        }
                     }
                 }
             }
