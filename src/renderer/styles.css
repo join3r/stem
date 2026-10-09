@@ -3239,6 +3239,25 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .cfolder-add-option:hover:not(:disabled) { border-color: var(--accent); }
 .cfolder-add-option:disabled { opacity: 0.5; cursor: default; }
 .cfolder-add-option .muted { font-size: var(--fs-12); }
+/* The connect wizard (ConnectFolderWizard): numbered steps, chosen option ringed. */
+.cfolder-wizard { width: min(480px, calc(100vw - 48px)); outline: none; }
+.wizard-steps { display: flex; gap: var(--sp-6); margin: 0 0 var(--sp-7); padding: 0; list-style: none; font-size: var(--fs-12); color: var(--muted); }
+.wizard-steps li { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.wizard-steps li.active { color: var(--ink); font-weight: 600; }
+.wizard-step-num {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 999px;
+  font-size: var(--fs-11); border: 1px solid var(--line); background: var(--field);
+}
+.wizard-steps li.active .wizard-step-num { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.wizard-steps li.done .wizard-step-num { border-color: var(--accent); color: var(--accent); }
+.wizard-option strong { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.wizard-option.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--field)); }
+.wizard-path { display: flex; align-items: center; gap: var(--sp-3); }
+.wizard-path input { flex: 1; min-width: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-12); }
+.wizard-learn .ifield { width: auto; align-self: flex-start; }
+.cfolder-wizard .set-check { margin-top: var(--sp-2); }
+.cfolder-note { display: flex; flex-direction: column; gap: var(--sp-2); }
+.cfolder-note .ifield { width: 100%; }
 .cfolder-item { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-5) var(--sp-6); }
 .cfolder-item + .cfolder-item { border-top: 0.5px solid var(--hair); }
 .cfolder-head { display: flex; align-items: center; gap: var(--sp-3); }

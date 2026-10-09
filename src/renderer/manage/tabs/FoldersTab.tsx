@@ -7,7 +7,7 @@ import type {
 } from '../../../shared/types';
 import { resolveMemoryModel } from '../../../shared/modelRoles';
 import { useClientDeviceId, useRemoteServer } from '../../hooks/useRemoteServer';
-import { ServerFolderPicker } from '../ServerFolderPicker';
+import { ConnectFolderWizard } from '../ConnectFolderWizard';
 import { InfoTip } from '../../ui/InfoTip';
 import { ModelPicker } from '../../ui/ModelPicker';
 import { FilesTab } from './FilesTab';
@@ -211,7 +211,6 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
   // THIS machine's mirror engine, by folder id — the only place a failed sync
   // round is visible (the server just never hears from a client that errors).
   const [localSync, setLocalSync] = useState<Record<string, { phase: string; lastError?: string }>>({});
-  const [busy, setBusy] = useState(false);
   // Folder ids with an unconfirmed "Full history" selection (cost confirm shown).
   const [confirmAll, setConfirmAll] = useState<Record<string, boolean>>({});
   // Expanded cards (settings visible). Collapsed cards show a summary line instead.
@@ -223,10 +222,8 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
   // so a remote server gets the server-side picker dialog instead.
   const remote = useRemoteServer();
   const deviceId = useClientDeviceId();
-  const [picking, setPicking] = useState(false);
-  // Remote only: the "+" offers two places a folder can live (the server's own
-  // disk via the server-side picker, or THIS computer via the native one and a
-  // mirror), and this holds that choice open.
+  // The "+" opens the connect wizard: which folder (and, remote, on which
+  // machine), then its access and memory settings, asked before it connects.
   const [adding, setAdding] = useState(false);
   // What "Memory default" on a folder's model picker actually means today: the
   // memory model if one is set, else whatever the backend defaults to. Read here
@@ -286,58 +283,20 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
     return () => clearInterval(timer);
   }, [hasClientFolders]);
 
-  function adopt(before: Set<string>, next: ConnectedFolder[]) {
-    setFolders(next);
-    // A just-connected folder is about to be configured — open its card.
-    setExpanded((s) => new Set([...s, ...next.filter((x) => !before.has(x.id)).map((x) => x.id)]));
-  }
-
-  async function connect(paths: string[]) {
-    if (!paths.length) return;
-    adopt(new Set(folders.map((x) => x.id)), await window.stem.addConnectedFolders(paths));
-  }
-
-  /** Connect folders that live on THIS computer, mirrored up to the server. */
-  async function connectClient() {
+  /** The wizard connected a folder: show it, with its card open. */
+  function adopt(next: ConnectedFolder[], id: string) {
     setAdding(false);
-    setBusy(true);
-    try {
-      const paths = await window.stem.pickDirectory();
-      if (!paths.length) return;
-      adopt(new Set(folders.map((x) => x.id)), await window.stem.addClientFolders(paths));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function add() {
-    // The native dialog picks from THIS machine's disk — the right disk only
-    // when the server shares it. Remote, the user chooses which machine the
-    // folder lives on: the server (its picker) or this computer (a mirror).
-    if (remote) {
-      setAdding((v) => !v);
-      return;
-    }
-    setBusy(true);
-    try {
-      await connect(await window.stem.pickDirectory());
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function connectPicked(path: string) {
-    setPicking(false);
-    setBusy(true);
-    try {
-      await connect([path]);
-    } finally {
-      setBusy(false);
-    }
+    setFolders(next);
+    setExpanded((s) => new Set([...s, id]));
+    setTimeout(refreshStatus, 1_500); // An indexed folder's first scan starts ~0.5s later.
   }
 
   const setMode = async (id: string, writable: boolean) =>
     setFolders(await window.stem.updateConnectedFolder(id, { mode: writable ? 'readwrite' : 'read' }));
+  const setNote = async (id: string, note: string) => {
+    if ((folders.find((x) => x.id === id)?.note ?? '') === note) return;
+    setFolders(await window.stem.updateConnectedFolder(id, { note }));
+  };
   const setMemorize = async (id: string, memorize: boolean) =>
     setFolders(await window.stem.updateConnectedFolder(id, { memorize }));
   const setIndex = async (id: string, index: boolean) => {
@@ -431,8 +390,8 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
 
   return (
     <div>
-      {picking && (
-        <ServerFolderPicker onConnect={(path) => void connectPicked(path)} onClose={() => setPicking(false)} />
+      {adding && (
+        <ConnectFolderWizard remote={remote} existing={folders} onDone={adopt} onCancel={() => setAdding(false)} />
       )}
       <div className="grp-head cfolders-head">
         Connected folders
@@ -442,33 +401,11 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
               <FolderOpen size={14} />
             </button>
           )}
-          <button className="grp-head-add" onClick={add} disabled={busy} title="Connect an external folder Stem can read" aria-label="Add folder">
+          <button className="grp-head-add" onClick={() => setAdding(true)} title="Connect an external folder Stem can read" aria-label="Add folder">
             <Plus size={14} />
           </button>
         </span>
       </div>
-
-      {adding && (
-        <div className="cfolder-add-choice">
-          <span className="muted">Where does the folder live?</span>
-          <button
-            type="button"
-            className="cfolder-add-option"
-            disabled={busy}
-            onClick={() => {
-              setAdding(false);
-              setPicking(true);
-            }}
-          >
-            <strong>On the server…</strong>
-            <span className="muted">Browse the server's own disk. Files are read in place.</span>
-          </button>
-          <button type="button" className="cfolder-add-option" disabled={busy} onClick={() => void connectClient()}>
-            <strong>On this computer…</strong>
-            <span className="muted">Pick a folder here; it mirrors one way up to the server.</span>
-          </button>
-        </div>
-      )}
 
       {folders.length === 0 ? (
         <p className="muted">
@@ -562,6 +499,21 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
                       )}
                     </div>
                   )}
+                  <label className="cfolder-note">
+                    <span className="cfolder-opt-label">What’s in it</span>
+                    <input
+                      // Keyed on the stored note, so a save elsewhere resets the draft.
+                      key={f.note ?? ''}
+                      className="ifield"
+                      aria-label="What the folder holds"
+                      placeholder="Tell Stem what this folder holds"
+                      defaultValue={f.note ?? ''}
+                      onBlur={(e) => void setNote(f.id, e.target.value.trim())}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur();
+                      }}
+                    />
+                  </label>
                   <div className="cfolder-opt">
                     <span className="cfolder-opt-label">Writable</span>
                     <button
