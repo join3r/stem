@@ -351,18 +351,25 @@ export function ChatList(props: ChatListProps) {
 
   // Unread rolled up per folder (ancestors included), so a bold row can't hide
   // inside a collapsed folder. Same predicate as the tree rows.
-  const folderUnread = useMemo(() => {
+  // The ids are what a folder's "Mark all as read" clears.
+  const folderUnreadIds = useMemo(() => {
     const parents = new Map(data.folders.map((f) => [f.id, f.parentId]));
-    const counts = new Map<string, number>();
+    const ids = new Map<string, string[]>();
     for (const chat of data.chats) {
       if (!chat.folderId) continue;
       if (!isUnread(chat, data.inbox, props.statuses[chat.threadId] === 'running')) continue;
       for (let id: string | null = chat.folderId; id != null; id = parents.get(id) ?? null) {
-        counts.set(id, (counts.get(id) ?? 0) + 1);
+        const list = ids.get(id);
+        if (list) list.push(chat.threadId);
+        else ids.set(id, [chat.threadId]);
       }
     }
-    return counts;
+    return ids;
   }, [data.chats, data.folders, data.inbox, props.statuses]);
+  const folderUnread = useMemo(
+    () => new Map([...folderUnreadIds].map(([id, list]) => [id, list.length])),
+    [folderUnreadIds]
+  );
 
   // ---- drag + drop ----
   const onDrop = (target: string | null) => (e: React.DragEvent) => {
@@ -835,6 +842,22 @@ export function ChatList(props: ChatListProps) {
               Settings…
             </button>
           )}
+          {menu.kind === 'folder' &&
+            (() => {
+              // Every unread chat in the folder and its subfolders, in one write.
+              const unreadIds = folderUnreadIds.get(menu.id) ?? [];
+              return (
+                <button
+                  disabled={unreadIds.length === 0}
+                  onClick={() => {
+                    props.onSetRead(unreadIds, true);
+                    closeMenu();
+                  }}
+                >
+                  <CheckCheck size={13} /> Mark all as read
+                </button>
+              );
+            })()}
           {menu.kind === 'chat' &&
             (() => {
               const chat = data.chats.find((c) => c.threadId === menu.id);

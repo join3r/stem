@@ -2367,6 +2367,8 @@ button.inbox-return-main:focus-visible { outline: none; box-shadow: var(--shadow
 }
 .ctx-menu button:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .ctx-menu button.danger { color: var(--danger); }
+.ctx-menu button:disabled { opacity: 0.45; cursor: default; }
+.ctx-menu button:disabled:hover { background: none; }
 /* Accelerator column: the keycap for rows whose action also has a shortcut, in
    the dimmed right-hand column a native menu puts it in. Plain dim text rather
    than a .kbd badge — that badge is a spotlight built for hint mode, and four of
