@@ -33,7 +33,10 @@ export function buildExample(input: {
     cut = { at: KEEP_HEAD, steps: all.length - MAX_STEPS };
   }
   const traced = linkValues(steps, input.seen, input.shots, input.startedAt);
-  const links = traced.links.map((l) => ({ ...l, source: { ...l.source, snippet: redactSecrets(l.source.snippet) } }));
+  const links = traced.links.map((l) => ({
+    ...l,
+    source: { ...l.source, snippet: redactSecrets(l.source.snippet), ...(l.source.url ? { url: redactSecrets(l.source.url) } : {}) }
+  }));
   const notes = [...(input.notes ?? [])];
   if (cut) notes.push(`The recording was long, so ${cut.steps} steps from its middle were left out.`);
   return {
@@ -51,7 +54,7 @@ export function buildExample(input: {
 /** The helper redacts by field and app; this catches keys and tokens by their shape in what is left. */
 function redactStep(step: RecordedStep): RecordedStep {
   const out = { ...step };
-  for (const k of ['label', 'value', 'before', 'text', 'form'] as const) {
+  for (const k of ['label', 'value', 'before', 'text', 'form', 'url'] as const) {
     if (out[k]) out[k] = redactSecrets(out[k]);
   }
   return out;

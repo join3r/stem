@@ -242,6 +242,8 @@ describe('bundle', () => {
     expect(redactSecrets('token Xk9pQ2mZ7vL4nR8tY1wB6cH3jF5gD0sA here')).toBe('token [secret] here');
     const doc = 'https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit';
     expect(redactSecrets(doc)).toBe(doc);
+    expect(redactSecrets('https://app.example.com/reset?token=Xk9pQ2mZ7vL4nR8tY1wB6cH3jF5gD0sA&u=1')).toBe('https://app.example.com/reset?token=[secret]&u=1');
+    expect(redactSecrets('https://app.example.com/cb#access_token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefghijklmnop')).toBe('https://app.example.com/cb#access_token=[secret]');
     expect(redactSecrets('PO-4411 · 14.10.2026 · 0123456789abcdef0123456789abcdef01234567')).toBe('PO-4411 · 14.10.2026 · 0123456789abcdef0123456789abcdef01234567');
     const ex = buildExample({ steps: [{ kind: 'paste', t: 1, app: 'Arc', window: 'w', field: 'API key', text: 'sk-ant-abcdefghijklmnopqrstuvwxyz12' }], seen: [], shots: [], startedAt: new Date(), durationMs: 1 });
     expect(ex.steps[0].text).toBe('[secret]');

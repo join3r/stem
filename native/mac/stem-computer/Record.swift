@@ -107,12 +107,13 @@ final class Recorder {
     "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}",
     "(?i)\\bBearer\\s+[A-Za-z0-9._~+/=-]{20,}"
   ].map { try! NSRegularExpression(pattern: $0) }
-  private static let opaqueRun = try! NSRegularExpression(pattern: "[A-Za-z0-9_+/=-]{32,}")
-  private static let urlRun = try! NSRegularExpression(pattern: "\\bhttps?://\\S+")
+  private static let opaqueRun = try! NSRegularExpression(pattern: "[A-Za-z0-9_+/-]{32,}={0,2}")
+  private static let urlRun = try! NSRegularExpression(pattern: "\\bhttps?://[^\\s?#]+")
 
   /// The text with every key- or token-shaped run replaced by "[secret]". A
-  /// long run of upper, lower AND digits counts too, except inside a link
-  /// (a shared doc's id looks just like a key, and is the point of the link).
+  /// long run of upper, lower AND digits counts too, except in a link's
+  /// address (a shared doc's id looks just like a key, and is the point of the
+  /// link); its query and fragment are checked, since tokens ride there.
   static func redactSecrets(_ text: String) -> String {
     var out = text
     for p in secretPatterns {
@@ -631,7 +632,7 @@ final class Recorder {
       app: running?.localizedName ?? "pid \(pid)",
       bundleId: bundleId,
       window: Recorder.clip(AX.string(window, kAXTitleAttribute as String) ?? "", 160),
-      url: Recorder.pageURL(near: element)
+      url: Recorder.pageURL(near: element).map(Recorder.redactSecrets)
     )
   }
 

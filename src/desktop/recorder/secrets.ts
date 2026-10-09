@@ -20,10 +20,14 @@ const PATTERNS: RegExp[] = [
 ];
 
 /** A long run of letters, digits and token punctuation with upper, lower AND digits: a key, not a word or a hash. */
-const OPAQUE = /[A-Za-z0-9_+/=-]{32,}/g;
+const OPAQUE = /[A-Za-z0-9_+/-]{32,}={0,2}/g;
 
-/** Links are left to the named patterns: a shared doc's id looks just like a key and is the point of the link. */
-const URL_RUN = /\bhttps?:\/\/\S+/g;
+/**
+ * A link's address is left to the named patterns (a shared doc's id looks just
+ * like a key and is the point of the link); its query and fragment are not:
+ * that is where reset links, magic links and OAuth redirects carry tokens.
+ */
+const URL_RUN = /\bhttps?:\/\/[^\s?#]+/g;
 
 function looksOpaque(run: string): boolean {
   return /[A-Z]/.test(run) && /[a-z]/.test(run) && /[0-9]/.test(run);
