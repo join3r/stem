@@ -869,6 +869,13 @@ export interface ConnectedFolder {
   /** Model for 'new'/'all' distillation; absent = the Settings → Memory model. */
   learnModel?: string;
   /**
+   * What the person said the folder is when connecting it (the wizard's kinds).
+   * A label only — it picks the folder's icon and changes no behaviour; the
+   * settings it suggested are stored in their own fields. Absent on folders
+   * connected before it existed.
+   */
+  kind?: ConnectedFolderKind;
+  /**
    * Present on a folder that lives on a paired desktop, not on this machine.
    * `path` is then the server-side mirror the client syncs one-way into (see
    * docs: client-connected folders); `clientPath` is where the folder really
@@ -897,10 +904,15 @@ export interface ConnectedFolder {
   skippedCount?: number;
 }
 
-/** The mutable fields of a connected folder (label/mode/memorize/note/index/learn*). */
+export type ConnectedFolderKind = 'notes' | 'code' | 'docs' | 'private';
+
+/** The mutable fields of a connected folder (label, mode, memorize, note, index, learning, kind). */
 export type ConnectedFolderPatch = Partial<
   Pick<ConnectedFolder, 'label' | 'mode' | 'memorize' | 'note' | 'index' | 'learnMode' | 'learnModel'>
->;
+> & {
+  /** A kind, or null to clear it. */
+  kind?: ConnectedFolderKind | null;
+};
 
 // ---- Client-folder mirror sync (one-way, client → server) ----
 //

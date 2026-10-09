@@ -162,3 +162,32 @@ test('an MCP server pasted as JSON fills a draft, saves, reopens and is removed'
     .poll(() => mainWindow.evaluate(() => (window as any).stem.listMcpServers().then((l: any[]) => l.map((s) => s.name))))
     .not.toContain('fsdemo');
 });
+
+test('a connected folder saves its edits on Save, and New opens the wizard with the kind picked', async ({ mainWindow }) => {
+  const dir = mkdtempSync(join(tmpdir(), 'stem-e2e-vault-'));
+  try {
+    await mainWindow.evaluate((p) => (window as any).stem.addConnectedFolders([p]), dir);
+    await mainWindow.getByRole('button', { name: 'Sources — files & connected folders' }).click();
+    await mainWindow.getByRole('button', { name: 'Connected folders', exact: true }).click();
+
+    const label = dir.split('/').pop()!;
+    await mainWindow.getByText(label, { exact: true }).click();
+    await mainWindow.getByLabel('Kind').selectOption('notes');
+    await mainWindow.getByRole('tab', { name: 'Access' }).click();
+    await mainWindow.getByRole('switch', { name: 'Writable' }).click();
+    // Nothing is written before Save.
+    const stored = () =>
+      mainWindow.evaluate(() => (window as any).stem.listConnectedFolders().then((l: any[]) => l[0]));
+    expect(await stored()).toMatchObject({ mode: 'read' });
+    await mainWindow.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect.poll(stored).toMatchObject({ mode: 'readwrite', kind: 'notes' });
+
+    await mainWindow.getByRole('button', { name: 'Back to Connected folders' }).click();
+    await mainWindow.getByRole('button', { name: 'Add folder' }).click();
+    await mainWindow.getByRole('menuitem', { name: /Documents/ }).click();
+    const wizard = mainWindow.getByRole('dialog', { name: 'Connect a folder' });
+    await expect(wizard.getByRole('button', { name: /Documents/ })).toHaveAttribute('aria-pressed', 'true');
+  } finally {
+    removeUserData(dir);
+  }
+});

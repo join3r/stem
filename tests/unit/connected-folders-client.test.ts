@@ -176,3 +176,15 @@ describe('enrichment and injection', () => {
     expect((await readStore()).folders).toHaveLength(1);
   });
 });
+
+describe('the folder kind', () => {
+  it('stores a known kind, clears it on null, and ignores anything else', async () => {
+    const folders = await addClientFolder({ deviceId: macId, clientPath: '/a/vault' });
+    const id = folders[0]!.id;
+    expect((await updateConnectedFolder(id, { kind: 'notes' }))[0]!.kind).toBe('notes');
+    // An unknown value (an older or newer client) leaves the stored kind alone.
+    expect((await updateConnectedFolder(id, { kind: 'bogus' as never }))[0]!.kind).toBe('notes');
+    expect((await readStore()).folders[0]!.kind).toBe('notes');
+    expect((await updateConnectedFolder(id, { kind: null }))[0]!.kind).toBeUndefined();
+  });
+});

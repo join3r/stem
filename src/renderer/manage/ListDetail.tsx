@@ -26,12 +26,15 @@ export function ListHeader({
   title,
   extra,
   newLabel = 'New',
+  newAriaLabel,
   templates,
   onNew
 }: {
   title: string;
   extra?: ReactNode;
   newLabel?: string;
+  /** The New button's accessible name when it should differ from its text. */
+  newAriaLabel?: string;
   /** Starting points the New button offers; absent → New acts at once. */
   templates?: { key: string; icon: ReactNode; tone?: GlyphTone; label: string; hint: string; onPick: () => void }[];
   onNew?: () => void;
@@ -60,6 +63,7 @@ export function ListHeader({
         <button
           type="button"
           className="ld-new"
+          aria-label={newAriaLabel}
           aria-expanded={templates ? open : undefined}
           onClick={() => (templates ? setOpen((v) => !v) : onNew?.())}
         >
@@ -137,6 +141,7 @@ export function ListRow({
   name,
   locked,
   sub,
+  subTail,
   right,
   dim,
   selected,
@@ -146,6 +151,8 @@ export function ListRow({
   name: string;
   locked?: string;
   sub?: string;
+  /** Truncate the line from the left, keeping its end — for paths, whose last segment is the name. */
+  subTail?: boolean;
   right?: ReactNode;
   dim?: boolean;
   selected?: boolean;
@@ -163,7 +170,12 @@ export function ListRow({
             </span>
           )}
         </span>
-        {sub && <em title={sub}>{sub}</em>}
+        {/* LRM guards stop the RTL truncation from moving a path's leading slash to the end. */}
+        {sub && (
+          <em title={sub} className={subTail ? 'tail' : undefined}>
+            {subTail ? `\u200e${sub}\u200e` : sub}
+          </em>
+        )}
       </span>
       {right && <span className="ld-flags">{right}</span>}
     </button>

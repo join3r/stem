@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
-import type { ConnectedFolder, ConnectedFolderPatch } from '../../shared/types';
+import type { ConnectedFolder, ConnectedFolderKind, ConnectedFolderPatch } from '../../shared/types';
 import { degrade } from '../degrade';
 import { deviceKind, readDevices } from '../transport/auth';
 import { connectedFoldersStorePath, execWorkspaceDir, mirrorManifestPath, mirrorRoot, piHome, protectedRootsPath } from './paths';
@@ -20,6 +20,10 @@ interface ConnectedFoldersStore {
 
 function emptyStore(): ConnectedFoldersStore {
   return { version: 1, folders: [] };
+}
+
+function isFolderKind(v: unknown): v is ConnectedFolderKind {
+  return v === 'notes' || v === 'code' || v === 'docs' || v === 'private';
 }
 
 /** Coerce one parsed entry into a valid ConnectedFolder, or null to drop it. */
@@ -44,6 +48,7 @@ function coerce(raw: unknown): ConnectedFolder | null {
     // Only non-default modes are persisted; absent = 'use' (learn on use).
     ...(r.learnMode === 'off' || r.learnMode === 'new' || r.learnMode === 'all' ? { learnMode: r.learnMode } : {}),
     ...(typeof r.learnModel === 'string' && r.learnModel ? { learnModel: r.learnModel } : {}),
+    ...(isFolderKind(r.kind) ? { kind: r.kind } : {}),
     ...(origin ? { origin } : {}),
     ...(typeof r.lastSyncedAt === 'string' && r.lastSyncedAt ? { lastSyncedAt: r.lastSyncedAt } : {}),
     ...(r.rootMissing === true ? { rootMissing: true } : {})
@@ -302,6 +307,8 @@ export function updateConnectedFolder(id: string, patch: ConnectedFolderPatch): 
         if (model) f.learnModel = model;
         else delete f.learnModel; // empty = back to the memory default
       }
+      if (isFolderKind(patch.kind)) f.kind = patch.kind;
+      else if (patch.kind === null) delete f.kind;
     }
     return store.folders;
   });

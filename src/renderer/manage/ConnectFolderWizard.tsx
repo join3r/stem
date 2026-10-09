@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Code2, FileText, FolderPlus, FolderSearch, Laptop, Lock, NotebookPen, Server } from 'lucide-react';
-import type { ConnectedFolder, ConnectedFolderPatch } from '../../shared/types';
+import type { ConnectedFolder, ConnectedFolderKind, ConnectedFolderPatch } from '../../shared/types';
 import { ServerFolderPicker } from './ServerFolderPicker';
 
 // Connecting a folder, as a short walk instead of a "+" that drops the folder in
@@ -19,8 +19,8 @@ import { ServerFolderPicker } from './ServerFolderPicker';
 type Place = 'server' | 'client';
 type LearnMode = NonNullable<ConnectedFolder['learnMode']>;
 
-interface Kind {
-  value: string;
+export interface Kind {
+  value: ConnectedFolderKind;
   label: string;
   /** "Suggested for …" on the later steps. */
   noun: string;
@@ -30,7 +30,7 @@ interface Kind {
   settings: { writable: boolean; memorize: boolean; index: boolean; learnMode: LearnMode };
 }
 
-const KINDS: Kind[] = [
+export const KINDS: Kind[] = [
   {
     value: 'notes',
     label: 'Notes vault',
@@ -94,6 +94,7 @@ function baseName(path: string): string {
 export function ConnectFolderWizard({
   remote,
   existing,
+  initialKind,
   onDone,
   onCancel
 }: {
@@ -101,20 +102,23 @@ export function ConnectFolderWizard({
   remote: boolean;
   /** Already connected folders, for the duplicate and name checks. */
   existing: ConnectedFolder[];
+  /** A kind picked before the wizard opened (the tab's New menu): preselected, settings filled in. */
+  initialKind?: ConnectedFolderKind;
   /** The fresh folder list and the new folder's id. */
   onDone: (folders: ConnectedFolder[], id: string) => void;
   onCancel: () => void;
 }) {
+  const preset = KINDS.find((k) => k.value === initialKind) ?? null;
   const [step, setStep] = useState(0);
   const [place, setPlace] = useState<Place>(remote ? 'client' : 'server');
   const [path, setPath] = useState('');
   const [label, setLabel] = useState('');
   const [note, setNote] = useState('');
-  const [writable, setWritable] = useState(false);
-  const [memorize, setMemorize] = useState(true);
-  const [index, setIndex] = useState(true);
-  const [learnMode, setLearnMode] = useState<LearnMode>('use');
-  const [kind, setKind] = useState<Kind | null>(null);
+  const [writable, setWritable] = useState(preset?.settings.writable ?? false);
+  const [memorize, setMemorize] = useState(preset?.settings.memorize ?? true);
+  const [index, setIndex] = useState(preset?.settings.index ?? true);
+  const [learnMode, setLearnMode] = useState<LearnMode>(preset?.settings.learnMode ?? 'use');
+  const [kind, setKind] = useState<Kind | null>(preset);
   const [serverPicker, setServerPicker] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -184,7 +188,8 @@ export function ConnectFolderWizard({
         index,
         ...(index && memorize ? { learnMode } : {}),
         ...(name !== fresh.label ? { label: name } : {}),
-        ...(note.trim() ? { note: note.trim() } : {})
+        ...(note.trim() ? { note: note.trim() } : {}),
+        ...(kind ? { kind: kind.value } : {})
       };
       onDone(await window.stem.updateConnectedFolder(fresh.id, patch), fresh.id);
     } catch (e) {

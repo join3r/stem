@@ -4529,3 +4529,12 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .mcp-state-acts { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
 .ld-list > .mcp-approval .ci-textarea { width: 100%; }
 .seg-ctl + .ld-list, .seg-ctl + .ld-detail { margin-top: var(--sp-5); }
+.ld-path { font-family: var(--font-mono); font-size: var(--fs-12); color: var(--ink); overflow-wrap: anywhere; }
+.ld-radio { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ld-radio label { display: flex; align-items: flex-start; gap: var(--sp-4); padding: var(--sp-3) var(--sp-4); border: 0.5px solid var(--line); border-radius: var(--radius); background: var(--surface); cursor: pointer; }
+.ld-radio label.on { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: var(--sel); }
+.ld-radio input { margin-top: 2px; accent-color: var(--accent); }
+.ld-radio strong { display: block; font-size: var(--fs-12); font-weight: 600; color: var(--ink); }
+.ld-radio em { display: block; font-style: normal; font-size: var(--fs-11); color: var(--muted); line-height: 1.4; }
+.ld-title .grp-head-add { vertical-align: -2px; margin-left: var(--sp-2); }
+.ld-row-main em.tail { direction: rtl; text-align: left; }

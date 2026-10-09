@@ -1,13 +1,46 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Plus, FolderOpen, Trash2, ChevronRight } from 'lucide-react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import {
+  AlertTriangle,
+  Code2,
+  EyeOff,
+  FileText,
+  Folder,
+  FolderOpen,
+  Lock,
+  NotebookPen,
+  Pencil,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Unplug
+} from 'lucide-react';
 import type {
   ConnectedFolder,
+  ConnectedFolderKind,
+  ConnectedFolderPatch,
   FolderIndexStatus,
   ModelSummary
 } from '../../../shared/types';
 import { resolveMemoryModel } from '../../../shared/modelRoles';
 import { useClientDeviceId, useRemoteServer } from '../../hooks/useRemoteServer';
-import { ConnectFolderWizard } from '../ConnectFolderWizard';
+import { ConnectFolderWizard, KINDS } from '../ConnectFolderWizard';
+import {
+  ConfirmDelete,
+  DetailFooter,
+  DetailHeader,
+  DetailIdent,
+  DetailTabs,
+  Field,
+  Flag,
+  Glyph,
+  ListGroup,
+  ListHeader,
+  ListRow,
+  ListSearch,
+  ToggleRow,
+  shortPath,
+  type GlyphTone
+} from '../ListDetail';
 import { InfoTip } from '../../ui/InfoTip';
 import { ModelPicker } from '../../ui/ModelPicker';
 import { FilesTab } from './FilesTab';
@@ -49,9 +82,10 @@ export function SourcesTab({ models }: { models: ModelSummary[] }) {
 // when indexed and memorized — a "Learn facts" mode governing whether Stem
 // distills durable facts from the folder's files.
 //
-// Cards are collapsed by default: name, path, and a one-line state summary.
-// The settings list only renders for expanded cards, so the folder list stays
-// scannable no matter how many per-folder settings accrue.
+// The list is one line per folder (its kind's icon, name, path, state icons);
+// opening one replaces the list with its editor — About / Access / Search &
+// learning — and nothing reaches the server until Save. A state summary on
+// every row used to be a sentence; the icons say the same at a glance.
 
 type LearnMode = NonNullable<ConnectedFolder['learnMode']>;
 
@@ -67,7 +101,7 @@ const LEARN_HINTS: Record<LearnMode, string> = {
   off: 'Stem never learns facts from this folder. Search and recall still work.',
   use: 'Learns only from excerpts that come up in your chats. No extra model calls.',
   new: 'Also reads files added or edited from now on, in the background. Existing files are left alone.',
-  all: 'Reads every file already in the folder once (you confirm the cost), then keeps up with new and edited files.'
+  all: 'Reads every file already in the folder once (Save shows the cost first), then keeps up with new and edited files.'
 };
 
 /** Average prompt chars one learning call consumes (MAX_TRANSCRIPT_CHARS-ish). */
@@ -75,45 +109,6 @@ const LEARN_CHARS_PER_CALL = 14_000;
 
 /** Below this many indexed files, dropping the index is cheap enough to skip the confirm. */
 const CONFIRM_DROP_INDEX_MIN_DOCS = 100;
-
-/**
- * Collapsed-card state summary: "Read-only · Indexed 3,412 · Learned 38 facts".
- * State of the index, never its progress — a scan or learn drain in flight is
- * reported by the toolbar activity indicator, not by every folder card.
- */
-function cardSummary(f: ConnectedFolder, status: FolderIndexStatus | undefined): string {
-  const parts = [f.mode === 'readwrite' ? 'Writable' : 'Read-only'];
-  if (f.origin) {
-    // The mirror's state leads for a client folder: it decides whether what the
-    // assistant reads is current, stale, or not there yet.
-    if (f.orphaned) parts.unshift('Computer unpaired');
-    else if (f.syncState === 'root-missing') parts.unshift('Sync frozen — folder unreachable on its computer');
-    else if (f.syncState === 'awaiting-sync') parts.unshift('Waiting for first sync');
-    else if (f.lastSyncedAt) parts.unshift(`Synced ${new Date(f.lastSyncedAt).toLocaleString()}`);
-    if (f.skippedCount) parts.push(`${f.skippedCount.toLocaleString()} not mirrored`);
-  }
-  if (!f.memorize) parts.push('Private');
-  if (f.index) {
-    parts.push(
-      !status || status.lastScanTs === null
-        ? 'Not indexed yet'
-        : `Indexed ${status.indexedCount.toLocaleString()}`
-    );
-  }
-  if (f.index && f.memorize) {
-    const mode = f.learnMode ?? 'use';
-    if (mode === 'use') parts.push('Learns on use');
-    else if (mode !== 'off') {
-      const facts = status?.learn.facts ?? 0;
-      parts.push(
-        facts > 0
-          ? `Learned ${facts.toLocaleString()} fact${facts === 1 ? '' : 's'}`
-          : `Learns ${LEARN_LABELS[mode].toLowerCase()}`
-      );
-    }
-  }
-  return parts.join(' · ');
-}
 
 /**
  * "Indexed 3,412 · 214 skipped" with the skip breakdown in an InfoTip. Inventory
@@ -205,16 +200,76 @@ function LearnStatusLine({ status }: { status: FolderIndexStatus }) {
   return null;
 }
 
+/** Everything the editor can change about a folder, as the form holds it. */
+interface FolderDraft {
+  label: string;
+  note: string;
+  kind: ConnectedFolderKind | null;
+  writable: boolean;
+  memorize: boolean;
+  index: boolean;
+  learnMode: LearnMode;
+  learnModel: string | null;
+}
+
+function draftOf(f: ConnectedFolder): FolderDraft {
+  return {
+    label: f.label,
+    note: f.note ?? '',
+    kind: f.kind ?? null,
+    writable: f.mode === 'readwrite',
+    memorize: f.memorize,
+    index: !!f.index,
+    learnMode: f.learnMode ?? 'use',
+    learnModel: f.learnModel ?? null
+  };
+}
+
+/** Only what changed, so a save never rewrites a field someone else just set. */
+function patchOf(f: ConnectedFolder, d: FolderDraft): ConnectedFolderPatch {
+  const base = draftOf(f);
+  const patch: ConnectedFolderPatch = {};
+  if (d.label.trim() !== base.label) patch.label = d.label.trim();
+  if (d.note.trim() !== base.note) patch.note = d.note.trim();
+  if (d.kind !== base.kind) patch.kind = d.kind;
+  if (d.writable !== base.writable) patch.mode = d.writable ? 'readwrite' : 'read';
+  if (d.memorize !== base.memorize) patch.memorize = d.memorize;
+  if (d.index !== base.index) patch.index = d.index;
+  if (d.learnMode !== base.learnMode) patch.learnMode = d.learnMode;
+  if (d.learnModel !== base.learnModel) patch.learnModel = d.learnModel ?? '';
+  return patch;
+}
+
+const KIND_ICON: Record<ConnectedFolderKind, (size: number) => ReactNode> = {
+  notes: (n) => <NotebookPen size={n} />,
+  code: (n) => <Code2 size={n} />,
+  docs: (n) => <FileText size={n} />,
+  private: (n) => <Lock size={n} />
+};
+
+function FolderGlyph({ kind, size = 'md', tone = 'plain' }: { kind?: ConnectedFolderKind | null; size?: 'sm' | 'md' | 'lg'; tone?: GlyphTone }) {
+  const n = size === 'lg' ? 17 : size === 'sm' ? 12 : 14;
+  return <Glyph icon={kind ? KIND_ICON[kind](n) : <Folder size={n} />} tone={kind === 'code' ? 'accent' : tone} size={size} />;
+}
+
+type FolderTab = 'about' | 'access' | 'search';
+
 function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
   const [folders, setFolders] = useState<ConnectedFolder[]>([]);
   const [indexStatus, setIndexStatus] = useState<Record<string, FolderIndexStatus>>({});
   // THIS machine's mirror engine, by folder id — the only place a failed sync
   // round is visible (the server just never hears from a client that errors).
   const [localSync, setLocalSync] = useState<Record<string, { phase: string; lastError?: string }>>({});
-  // Folder ids with an unconfirmed "Full history" selection (cost confirm shown).
-  const [confirmAll, setConfirmAll] = useState<Record<string, boolean>>({});
-  // Expanded cards (settings visible). Collapsed cards show a summary line instead.
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // The folder whose editor replaces the list (null = the list), its tab, and
+  // the unsaved form. Changes reach the server on Save, like every other tab.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [tab, setTab] = useState<FolderTab>('about');
+  const [draft, setDraft] = useState<FolderDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  // After a disconnect that leaves learned facts behind: offer to forget them.
+  const [forgetOffer, setForgetOffer] = useState<{ id: string; label: string; facts: number } | null>(null);
   // A connected folder is a path on the SERVER's disk. When that isn't this
   // machine, revealing it here would open whatever happens to sit at the same
   // path locally — so the buttons that do it are not offered at all. Adding is
@@ -222,9 +277,8 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
   // so a remote server gets the server-side picker dialog instead.
   const remote = useRemoteServer();
   const deviceId = useClientDeviceId();
-  // The "+" opens the connect wizard: which folder (and, remote, on which
-  // machine), then its access and memory settings, asked before it connects.
-  const [adding, setAdding] = useState(false);
+  // New opens the connect wizard (false = closed; a kind = preselected there).
+  const [adding, setAdding] = useState<false | { kind?: ConnectedFolderKind }>(false);
   // What "Memory default" on a folder's model picker actually means today: the
   // memory model if one is set, else whatever the backend defaults to. Read here
   // rather than passed in, because Sources knows nothing about Memory's settings.
@@ -235,14 +289,6 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
       .getSettings()
       .then((s) => setMemoryModel(resolveMemoryModel(s.memory.model, s.defaults.model)));
   }, []);
-
-  const toggleOpen = (id: string) =>
-    setExpanded((s) => {
-      const next = new Set(s);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
 
   const refreshStatus = useCallback(() => {
     window.stem.folderIndexStatus().then(setIndexStatus).catch(() => undefined);
@@ -261,11 +307,11 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
     return () => clearInterval(timer);
   }, [folders, refreshStatus]);
 
-  // A client folder's card is driven by state that changes without user action —
-  // the first sync landing, the root vanishing, its device reconnecting — so the
-  // list itself is polled while one is on screen (else "Waiting for first sync"
-  // outlives the sync it waits for), and the local mirror engine is asked for
-  // the error a failed round leaves behind.
+  // A client folder's state changes without user action — the first sync
+  // landing, the root vanishing, its device reconnecting — so the list itself is
+  // polled while one is on screen (else "Waiting for first sync" outlives the
+  // sync it waits for), and the local mirror engine is asked for the error a
+  // failed round leaves behind.
   const hasClientFolders = folders.some((f) => f.origin);
   useEffect(() => {
     if (!hasClientFolders) return;
@@ -283,82 +329,78 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
     return () => clearInterval(timer);
   }, [hasClientFolders]);
 
-  /** The wizard connected a folder: show it, with its card open. */
+  function open(f: ConnectedFolder, at: FolderTab = 'about') {
+    setDraft(draftOf(f));
+    setTab(at);
+    setOpenId(f.id);
+    setError(null);
+    setForgetOffer(null);
+  }
+
+  function back() {
+    setOpenId(null);
+    setDraft(null);
+    setError(null);
+  }
+
+  /** The wizard connected a folder: open it. */
   function adopt(next: ConnectedFolder[], id: string) {
     setAdding(false);
     setFolders(next);
-    setExpanded((s) => new Set([...s, id]));
+    const f = next.find((x) => x.id === id);
+    if (f) open(f);
     setTimeout(refreshStatus, 1_500); // An indexed folder's first scan starts ~0.5s later.
   }
 
-  const setMode = async (id: string, writable: boolean) =>
-    setFolders(await window.stem.updateConnectedFolder(id, { mode: writable ? 'readwrite' : 'read' }));
-  const setNote = async (id: string, note: string) => {
-    if ((folders.find((x) => x.id === id)?.note ?? '') === note) return;
-    setFolders(await window.stem.updateConnectedFolder(id, { note }));
-  };
-  const setMemorize = async (id: string, memorize: boolean) =>
-    setFolders(await window.stem.updateConnectedFolder(id, { memorize }));
-  const setIndex = async (id: string, index: boolean) => {
-    // Turning Index off deletes the folder's index DB outright — for a big
-    // folder that throws away a long scan/extract/embed run (and the per-doc
-    // learn marks live in the same DB), so confirm before dropping it.
-    if (!index) {
-      const f = folders.find((x) => x.id === id);
-      const docs = indexStatus[id]?.indexedCount ?? 0;
-      if (docs >= CONFIRM_DROP_INDEX_MIN_DOCS) {
-        const mode = f?.learnMode ?? 'use';
-        const learnNote =
-          mode === 'new' || mode === 'all'
-            ? '\n\nFact-learning progress is kept in the index, so turning it back on would also send every file through the learning model again.'
-            : '';
-        const ok = window.confirm(
-          `Turn off indexing for “${f?.label ?? 'this folder'}”?\n\nIts search index (${docs.toLocaleString()} files) is deleted; turning indexing back on later re-scans and re-embeds everything from scratch.${learnNote}`
-        );
-        if (!ok) return;
-      }
+  async function save(f: ConnectedFolder, d: FolderDraft) {
+    const patch = patchOf(f, d);
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await window.stem.updateConnectedFolder(f.id, patch);
+      setFolders(next);
+      const saved = next.find((x) => x.id === f.id);
+      if (saved) setDraft(draftOf(saved));
+      // Index and learning work starts a moment after the write.
+      if (patch.index !== undefined || patch.learnMode !== undefined) setTimeout(refreshStatus, 2_000);
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e).replace(/^(Error:\s*)?(Error invoking remote method '[^']+':\s*)?(Error:\s*)?/, ''));
+    } finally {
+      setSaving(false);
     }
-    setFolders(await window.stem.updateConnectedFolder(id, { index }));
-    setTimeout(refreshStatus, 1_500); // The toggle-on scan starts ~0.5s later.
-  };
-  const setLearnMode = async (id: string, learnMode: LearnMode) => {
-    setConfirmAll((c) => ({ ...c, [id]: false }));
-    setFolders(await window.stem.updateConnectedFolder(id, { learnMode }));
-    setTimeout(refreshStatus, 2_000); // The learn drain kicks ~1s later.
-  };
-  const setLearnModel = async (id: string, model: string | null) =>
-    setFolders(await window.stem.updateConnectedFolder(id, { learnModel: model ?? '' }));
-  const remove = async (id: string) => {
-    const f = folders.find((x) => x.id === id);
-    const facts = indexStatus[id]?.learn.facts ?? 0;
-    setFolders(await window.stem.removeConnectedFolder(id));
+  }
+
+  async function remove(f: ConnectedFolder) {
+    const facts = indexStatus[f.id]?.learn.facts ?? 0;
+    setFolders(await window.stem.removeConnectedFolder(f.id));
+    back();
     // Facts are memories, not an index — keeping them is the default. Offer the
     // cleanup, since the folder tag now points at a disconnected source.
-    if (
-      facts > 0 &&
-      window.confirm(
-        `Also forget the ${facts.toLocaleString()} fact${facts === 1 ? '' : 's'} Stem learned from “${f?.label ?? 'this folder'}”?\n\nOK forgets them; Cancel keeps them in memory (pinned facts are always kept).`
-      )
-    ) {
-      await window.stem.forgetConnectedFolderFacts(id).catch(() => undefined);
-    }
-  };
-
-  /** The mode to render for a folder: an unconfirmed 'all' keeps showing 'all' in the select. */
-  const shownLearnMode = (f: ConnectedFolder): LearnMode =>
-    confirmAll[f.id] ? 'all' : f.learnMode ?? 'use';
+    if (facts > 0) setForgetOffer({ id: f.id, label: f.label, facts });
+  }
 
   const learnCalls = (status: FolderIndexStatus | undefined): number | null =>
     status ? Math.max(1, Math.ceil(status.totalTextChars / LEARN_CHARS_PER_CALL)) : null;
 
+  /** The mirror's state for a client folder, in a few words; null for a server folder. */
+  function syncLine(f: ConnectedFolder): string | null {
+    if (!f.origin) return null;
+    if (f.orphaned) return 'Its computer is no longer paired — the mirror is frozen as it last synced.';
+    if (localSync[f.id]?.phase === 'syncing') return 'Syncing now…';
+    if (f.syncState === 'root-missing') return 'Sync frozen — the folder is unreachable on its computer.';
+    if (f.syncState === 'awaiting-sync') return 'Waiting for the first sync.';
+    if (f.lastSyncedAt) return `Synced ${new Date(f.lastSyncedAt).toLocaleString()}.`;
+    return null;
+  }
+
   /**
    * Folders grouped by the machine they live on — the McpTab placeGroups shape:
-   * headers only when a client folder exists (one header over one list
-   * distinguishes nothing), one group per owning device, orphans last.
+   * one group per owning device, orphans last; a single "Folders" group when
+   * nothing lives on another computer.
    */
-  const groups = ((): { key: string; head: string | null; items: ConnectedFolder[] }[] => {
-    if (!folders.some((f) => f.origin)) return [{ key: 'all', head: null, items: folders }];
-    const out: { key: string; head: string | null; items: ConnectedFolder[] }[] = [];
+  const groups = ((): { key: string; head: string; offline?: boolean; items: ConnectedFolder[] }[] => {
+    if (!folders.some((f) => f.origin)) return [{ key: 'all', head: 'Folders', items: folders }];
+    const out: { key: string; head: string; offline?: boolean; items: ConnectedFolder[] }[] = [];
     const server = folders.filter((f) => !f.origin);
     if (server.length) {
       out.push({ key: 'server', head: remote ? 'On your Stem server' : 'On this computer', items: server });
@@ -375,291 +417,372 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
     }
     out.push(
       ...[...byDevice.entries()]
-        .map(([id, items]) => ({
-          key: id,
-          head:
-            (id === deviceId ? 'On this computer' : `On ${items[0]!.deviceLabel ?? 'another computer'}`) +
-            (items[0]!.deviceConnected === false ? ' — offline' : ''),
-          items
-        }))
+        .map(([id, items]) => {
+          const offline = items[0]!.deviceConnected === false;
+          return {
+            key: id,
+            head:
+              (id === deviceId ? 'On this computer' : `On ${items[0]!.deviceLabel ?? 'another computer'}`) +
+              (offline ? ' · offline' : ''),
+            offline,
+            items
+          };
+        })
         .sort((a, b) => a.head.localeCompare(b.head))
     );
-    if (orphans.length) out.push({ key: 'orphans', head: 'Nowhere — that computer is gone', items: orphans });
+    if (orphans.length) out.push({ key: 'orphans', head: 'Nowhere — that computer is gone', offline: true, items: orphans });
     return out;
   })();
 
-  return (
-    <div>
-      {adding && (
-        <ConnectFolderWizard remote={remote} existing={folders} onDone={adopt} onCancel={() => setAdding(false)} />
-      )}
-      <div className="grp-head cfolders-head">
-        Connected folders
-        <span className="grp-head-actions">
-          {!remote && (
-            <button className="grp-head-add" onClick={() => window.stem.openWorkspaceFolder()} title="Open Stem's own folder in Finder" aria-label="Open Stem's folder">
+  const wizard = adding && (
+    <ConnectFolderWizard
+      remote={remote}
+      existing={folders}
+      initialKind={adding.kind}
+      onDone={adopt}
+      onCancel={() => setAdding(false)}
+    />
+  );
+
+  const opened = openId ? folders.find((x) => x.id === openId) : undefined;
+  if (opened && draft) {
+    const f = opened;
+    const d = draft;
+    const status = indexStatus[f.id];
+    const dirty = Object.keys(patchOf(f, d)).length > 0;
+    const learnRows = d.index && d.memorize;
+    const docs = status?.indexedCount ?? 0;
+    const dropsIndex = !!f.index && !d.index && docs >= CONFIRM_DROP_INDEX_MIN_DOCS;
+    const startsSweep = learnRows && d.learnMode === 'all' && (f.learnMode ?? 'use') !== 'all';
+    const calls = learnCalls(status);
+    const sync = syncLine(f);
+    const where = f.origin ? `on ${f.deviceLabel ?? 'its computer'}` : remote ? 'on your Stem server' : 'on this computer';
+    const kindLabel = KINDS.find((k) => k.value === d.kind)?.label;
+    return (
+      <div className="ld-detail">
+        <DetailHeader backLabel="Connected folders" onBack={back}>
+          {(!remote || f.origin?.deviceId === deviceId) && (
+            <button
+              type="button"
+              className="icon-action sm"
+              onClick={() => window.stem.revealConnectedFolder(f.id)}
+              title="Reveal in Finder"
+              aria-label="Reveal in Finder"
+            >
               <FolderOpen size={14} />
             </button>
           )}
-          <button className="grp-head-add" onClick={() => setAdding(true)} title="Connect an external folder Stem can read" aria-label="Add folder">
-            <Plus size={14} />
-          </button>
-        </span>
+          <ConfirmDelete label="Disconnect folder" icon={<Unplug size={14} />} onConfirm={() => void remove(f)} />
+        </DetailHeader>
+        <DetailIdent
+          glyph={<FolderGlyph kind={d.kind} size="lg" />}
+          name={
+            <input
+              className="ld-name-input"
+              aria-label="Folder name"
+              value={d.label}
+              onChange={(e) => setDraft({ ...d, label: e.target.value })}
+            />
+          }
+          caption={`${kindLabel ? `${kindLabel} · ` : ''}${f.origin ? 'mirrored from' : ''} ${where}`.replace(/^\s+/, '')}
+        />
+        {error && <p className="task-failed">{error}</p>}
+        <DetailTabs
+          tabs={[
+            { key: 'about', label: 'About' },
+            { key: 'access', label: 'Access' },
+            { key: 'search', label: 'Search & learning' }
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+        <div className="ld-body">
+          {tab === 'about' && (
+            <>
+              <Field label="Folder">
+                <span className="ld-path" title={f.origin?.clientPath ?? f.path}>
+                  {f.origin?.clientPath ?? f.path}
+                  {f.missing && <span className="error"> · missing</span>}
+                </span>
+              </Field>
+              <Field label="What’s in it" htmlFor="cfolder-note">
+                <textarea
+                  id="cfolder-note"
+                  className="ci-textarea"
+                  aria-label="What the folder holds"
+                  placeholder="Tell Stem what this folder holds"
+                  rows={2}
+                  value={d.note}
+                  onChange={(e) => setDraft({ ...d, note: e.target.value })}
+                />
+              </Field>
+              <p className="ld-hint">Stem is told this, so it knows when the folder is worth a look.</p>
+              <Field label="Kind" htmlFor="cfolder-kind">
+                <select
+                  id="cfolder-kind"
+                  className="vfield"
+                  value={d.kind ?? ''}
+                  onChange={(e) => setDraft({ ...d, kind: (e.target.value || null) as ConnectedFolderKind | null })}
+                >
+                  <option value="">Not set</option>
+                  {KINDS.map((k) => (
+                    <option key={k.value} value={k.value}>
+                      {k.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <p className="ld-hint">Sets the folder’s icon. It changes nothing else.</p>
+              {f.origin && (
+                <div className="ld-stat">
+                  <RefreshCw size={13} />
+                  <span>
+                    Mirrored one way from {f.deviceLabel ?? 'its computer'}. {sync}
+                    {!!f.skippedCount && <MirrorSkippedNote folderId={f.id} count={f.skippedCount} />}
+                    {localSync[f.id]?.lastError && (
+                      <span className="error"> Last sync failed: {localSync[f.id]!.lastError}</span>
+                    )}
+                  </span>
+                </div>
+              )}
+            </>
+          )}
+          {tab === 'access' && (
+            <div className="ld-toggles">
+              <ToggleRow
+                title="Writable"
+                hint={
+                  f.origin
+                    ? `Stem may modify this folder by running commands on ${f.deviceLabel ?? 'its computer'}. The server’s mirror is never written.`
+                    : 'Stem may create, edit and delete files here. Off = read-only, enforced by Stem.'
+                }
+                on={d.writable}
+                tone="warn"
+                onChange={(on) => setDraft({ ...d, writable: on })}
+              />
+              <ToggleRow
+                title="Remember what it reads"
+                hint="What Stem reads here can come back in later chats. Off keeps the folder private."
+                on={d.memorize}
+                onChange={(on) => setDraft({ ...d, memorize: on })}
+              />
+            </div>
+          )}
+          {tab === 'search' && (
+            <>
+              <div className="ld-toggles">
+                <ToggleRow
+                  title={
+                    <>
+                      Search index{' '}
+                      <InfoTip label="What indexing does">
+                        A private local search index (keyword + semantic) over this folder’s .md, .txt, .pdf and
+                        Word files, so relevant notes surface in conversations and the assistant can search them.
+                        The folder itself is never modified, and turning this off deletes the index. Folders kept
+                        in sync by an external tool re-index automatically as files change.
+                      </InfoTip>
+                    </>
+                  }
+                  hint="Lets Stem search the folder and bring up relevant notes on its own."
+                  on={d.index}
+                  onChange={(on) => setDraft({ ...d, index: on })}
+                />
+              </div>
+              {f.index && d.index && status && <IndexStatusLine status={status} />}
+              {dropsIndex && (
+                <p className="persona-warn" role="status">
+                  Saving deletes its search index ({docs.toLocaleString()} files). Turning it back on later
+                  re-scans and re-embeds everything
+                  {(f.learnMode === 'new' || f.learnMode === 'all') && ', and sends every file through the learning model again'}
+                  .
+                </p>
+              )}
+              {learnRows ? (
+                <Field
+                  label={
+                    <>
+                      Learn facts{' '}
+                      <InfoTip label="How fact learning works">
+                        Whether Stem distills durable facts (amounts, dates, clients, plans) from this folder into
+                        its memory. Learned facts appear in the Memory tab attributed to this folder and are kept
+                        even if a file is later deleted.
+                      </InfoTip>
+                    </>
+                  }
+                >
+                  <div className="ld-radio" role="radiogroup" aria-label="Learn facts mode">
+                    {(['off', 'use', 'new', 'all'] as LearnMode[]).map((m) => (
+                      <label key={m} className={d.learnMode === m ? 'on' : ''}>
+                        <input
+                          type="radio"
+                          name="cfolder-learn"
+                          checked={d.learnMode === m}
+                          onChange={() => setDraft({ ...d, learnMode: m })}
+                        />
+                        <span>
+                          <strong>{LEARN_LABELS[m]}</strong>
+                          <em>{LEARN_HINTS[m]}</em>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </Field>
+              ) : (
+                <p className="ld-hint">
+                  {!d.memorize
+                    ? 'Learning facts needs “Remember what it reads” (Access tab).'
+                    : 'Learning facts needs the search index.'}
+                </p>
+              )}
+              {learnRows && (d.learnMode === 'new' || d.learnMode === 'all') && (
+                <Field label="Model">
+                  <ModelPicker
+                    models={models}
+                    value={d.learnModel}
+                    onChange={(id) => setDraft({ ...d, learnModel: id })}
+                    emptyLabel="Memory default"
+                    ariaLabel="Fact-learning model"
+                    resolvedDefault={memoryModel}
+                  />
+                </Field>
+              )}
+              {startsSweep && (
+                <p className="persona-warn" role="status">
+                  Saving starts a sweep of {status ? status.indexedCount.toLocaleString() : 'all'} files
+                  {calls != null && ` (≈${calls.toLocaleString()} model calls)`}.
+                </p>
+              )}
+              {learnRows && (f.learnMode === 'new' || f.learnMode === 'all') && status && (
+                <LearnStatusLine status={status} />
+              )}
+            </>
+          )}
+        </div>
+        <DetailFooter
+          dirty={dirty}
+          saving={saving}
+          canSave={!!d.label.trim()}
+          saveLabel={startsSweep ? 'Save and start' : 'Save'}
+          onCancel={back}
+          onSave={() => void save(f, d)}
+        />
+        {wizard}
       </div>
+    );
+  }
 
+  const q = query.trim().toLowerCase();
+  const matches = (f: ConnectedFolder) =>
+    !q || f.label.toLowerCase().includes(q) || (f.origin?.clientPath ?? f.path).toLowerCase().includes(q) || (f.note ?? '').toLowerCase().includes(q);
+
+  function flags(f: ConnectedFolder) {
+    const mode = f.learnMode ?? 'use';
+    const failed = localSync[f.id]?.lastError;
+    return (
+      <>
+        {(f.missing || failed) && <Flag icon={<AlertTriangle size={12} />} tone="danger" label={failed ? `Last sync failed: ${failed}` : 'The folder is missing'} />}
+        {f.syncState === 'root-missing' && <Flag icon={<AlertTriangle size={12} />} tone="warn" label="Sync frozen — unreachable on its computer" />}
+        {f.syncState === 'awaiting-sync' && <Flag icon={<RefreshCw size={12} />} label="Waiting for the first sync" />}
+        {f.mode === 'readwrite' && <Flag icon={<Pencil size={12} />} tone="warn" label="Writable" />}
+        {!f.memorize && <Flag icon={<EyeOff size={12} />} label="Private: nothing remembered" />}
+        {f.index && (
+          <Flag
+            icon={<Search size={12} />}
+            label={
+              indexStatus[f.id]?.lastScanTs != null
+                ? `Indexed ${indexStatus[f.id]!.indexedCount.toLocaleString()} files`
+                : 'Search index (not built yet)'
+            }
+          />
+        )}
+        {f.index && f.memorize && (mode === 'new' || mode === 'all') && (
+          <Flag icon={<Sparkles size={12} />} tone="ok" label={`Learns facts: ${LEARN_LABELS[mode]}`} />
+        )}
+      </>
+    );
+  }
+
+  return (
+    <div className="ld-list">
+      {wizard}
+      <ListHeader
+        title="Connected folders"
+        newAriaLabel="Add folder"
+        extra={
+          !remote && (
+            <button
+              className="grp-head-add"
+              onClick={() => window.stem.openWorkspaceFolder()}
+              title="Open Stem's own folder in Finder"
+              aria-label="Open Stem's folder"
+            >
+              <FolderOpen size={13} />
+            </button>
+          )
+        }
+        templates={[
+          ...KINDS.map((k) => ({
+            key: k.value,
+            icon: KIND_ICON[k.value](12),
+            tone: (k.value === 'code' ? 'accent' : 'plain') as GlyphTone,
+            label: k.label,
+            hint: k.body,
+            onPick: () => setAdding({ kind: k.value })
+          })),
+          { key: 'other', icon: <Folder size={12} />, label: 'Something else', hint: 'Answer each setting yourself', onPick: () => setAdding({}) }
+        ]}
+      />
+      <ListSearch value={query} onChange={setQuery} placeholder="Find a folder" />
+      {forgetOffer && (
+        <div className="mcp-approval">
+          <span className="set-sub">Also forget what Stem learned from “{forgetOffer.label}”?</span>
+          <p className="muted">
+            {forgetOffer.facts.toLocaleString()} fact{forgetOffer.facts === 1 ? '' : 's'} came from it. Keeping them is
+            the default; pinned facts are always kept.
+          </p>
+          <div className="push-row">
+            <button type="button" className="link-btn" onClick={() => setForgetOffer(null)}>
+              Keep them
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                void window.stem.forgetConnectedFolderFacts(forgetOffer.id).catch(() => undefined);
+                setForgetOffer(null);
+              }}
+            >
+              Forget them
+            </button>
+          </div>
+        </div>
+      )}
       {folders.length === 0 ? (
-        <p className="muted">
-          Connect a folder — an Obsidian vault, a project folder — and Stem can read its files in
-          place (never copied). Read-only by default; turn off Memorize to keep a private folder's
-          contents out of Stem's memory.
+        <p className="muted ld-empty">
+          Connect a folder — an Obsidian vault, a project folder — and Stem can read its files in place (never
+          copied). Read-only by default; turn off Memorize to keep a private folder's contents out of Stem's memory.
         </p>
       ) : (
-        groups.map((group) => (
-        <div key={group.key}>
-        {group.head && <div className="grp-head">{group.head}</div>}
-        <div className="group">
-          {group.items.map((f) => {
-            const status = indexStatus[f.id];
-            const mode = shownLearnMode(f);
-            const learnRows = !!f.index && f.memorize;
-            const calls = learnCalls(status);
-            const open = expanded.has(f.id);
-            return (
-              <div key={f.id} className="cfolder-item">
-                <div className="cfolder-head cfolder-head-toggle" onClick={() => toggleOpen(f.id)}>
-                  <button
-                    className="cfolder-chev"
-                    aria-expanded={open}
-                    aria-label={open ? 'Collapse folder settings' : 'Expand folder settings'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleOpen(f.id);
-                    }}
-                  >
-                    <ChevronRight size={13} className={open ? 'open' : ''} />
-                  </button>
-                  <span className="row-main">
-                    <strong>
-                      {f.label}
-                      {f.missing && <span className="muted cfolder-missing"> · missing</span>}
-                    </strong>
-                    {/* LRM guards stop the RTL truncation trick (styles.css) from
-                        visually relocating the path's leading slash to the end.
-                        A client folder shows the path on ITS computer — the
-                        server-side mirror path is plumbing, not an address the
-                        user ever picked. */}
-                    <em title={f.origin?.clientPath ?? f.path}>{`‎${f.origin?.clientPath ?? f.path}‎`}</em>
-                  </span>
-                  {(!remote || f.origin?.deviceId === deviceId) && (
-                    <button
-                      className="icon-action sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        window.stem.revealConnectedFolder(f.id);
-                      }}
-                      title="Reveal in Finder"
-                      aria-label="Reveal in Finder"
-                    >
-                      <FolderOpen size={14} />
-                    </button>
-                  )}
-                  <button
-                    className="icon-action sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void remove(f.id);
-                    }}
-                    title="Disconnect (does not delete the folder)"
-                    aria-label="Disconnect folder"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-                {!open && <div className="muted cfolder-summary">{cardSummary(f, status)}</div>}
-                {open && (
-                <div className="cfolder-opts">
-                  {f.origin && (
-                    <div className="muted cfolder-index-status">
-                      {f.orphaned
-                        ? 'Its computer is no longer paired — the mirror is frozen as it last synced.'
-                        : (
-                            <>
-                              {`Mirrored one-way from ${f.deviceLabel ?? 'its computer'} · ${
-                                localSync[f.id]?.phase === 'syncing'
-                                  ? 'Syncing now…'
-                                  : cardSummary(f, undefined).split(' · ')[0]
-                              }`}
-                              {!!f.skippedCount && (
-                                <MirrorSkippedNote folderId={f.id} count={f.skippedCount} />
-                              )}
-                            </>
-                          )}
-                      {localSync[f.id]?.lastError && (
-                        <span className="error"> · Last sync failed: {localSync[f.id]!.lastError}</span>
-                      )}
-                    </div>
-                  )}
-                  <label className="cfolder-note">
-                    <span className="cfolder-opt-label">What’s in it</span>
-                    <input
-                      // Keyed on the stored note, so a save elsewhere resets the draft.
-                      key={f.note ?? ''}
-                      className="ifield"
-                      aria-label="What the folder holds"
-                      placeholder="Tell Stem what this folder holds"
-                      defaultValue={f.note ?? ''}
-                      onBlur={(e) => void setNote(f.id, e.target.value.trim())}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') e.currentTarget.blur();
-                      }}
-                    />
-                  </label>
-                  <div className="cfolder-opt">
-                    <span className="cfolder-opt-label">Writable</span>
-                    <button
-                      className={`switch${f.mode === 'readwrite' ? ' on' : ''}`}
-                      role="switch"
-                      aria-checked={f.mode === 'readwrite'}
-                      aria-label="Writable"
-                      title={
-                        f.origin
-                          ? `Allow Stem to modify this folder by running commands on ${f.deviceLabel ?? 'its computer'} (the server-side mirror is never written)`
-                          : 'Allow Stem to edit files in this folder (off = read-only, enforced by Stem)'
-                      }
-                      onClick={() => setMode(f.id, f.mode !== 'readwrite')}
-                    />
-                  </div>
-                  <div className="cfolder-opt">
-                    <span className="cfolder-opt-label">Memorize</span>
-                    <button
-                      className={`switch${f.memorize ? ' on' : ''}`}
-                      role="switch"
-                      aria-checked={f.memorize}
-                      aria-label="Memorize"
-                      title="Let Stem remember this folder's contents across chats (off = private)"
-                      onClick={() => setMemorize(f.id, !f.memorize)}
-                    />
-                  </div>
-                  <div className="cfolder-opt">
-                    <span className="cfolder-opt-label">
-                      Index
-                      <InfoTip label="What indexing does">
-                        Indexing builds a private local search index (keyword + semantic) over this
-                        folder's .md, .txt and .pdf files, so relevant notes surface automatically in
-                        conversations and the assistant can search them. The folder itself is never
-                        modified, and turning this off deletes the index. Folders kept in sync by an
-                        external tool (e.g. a mail or cloud mirror) re-index automatically as files
-                        change.
-                      </InfoTip>
-                    </span>
-                    <button
-                      className={`switch${f.index ? ' on' : ''}`}
-                      role="switch"
-                      aria-checked={!!f.index}
-                      aria-label="Index"
-                      title="Build a local search index over this folder's text files"
-                      onClick={() => setIndex(f.id, !f.index)}
-                    />
-                  </div>
-                  {f.index && status && <IndexStatusLine status={status} />}
-                  {learnRows && (
-                    <div className="cfolder-opt">
-                      <span className="cfolder-opt-label">
-                        Learn facts
-                        <InfoTip label="How fact learning works">
-                          Whether Stem distills durable facts (amounts, dates, clients, plans) from
-                          this folder into its memory.
-                          <ul className="cfolder-learn-tip">
-                            {(Object.keys(LEARN_LABELS) as LearnMode[]).map((m) => (
-                              <li key={m}>
-                                <b>{LEARN_LABELS[m]}:</b> {LEARN_HINTS[m]}
-                              </li>
-                            ))}
-                          </ul>
-                          Learned facts appear in the Memory tab attributed to this folder and are
-                          kept even if a file is later deleted.
-                        </InfoTip>
-                      </span>
-                      <select
-                        className="ifield cfolder-learn-select"
-                        aria-label="Learn facts mode"
-                        value={mode}
-                        onChange={(e) => {
-                          const next = e.target.value as LearnMode;
-                          if (next === 'all' && (f.learnMode ?? 'use') !== 'all') {
-                            // Full history sweeps the whole folder — confirm the cost first.
-                            setConfirmAll((c) => ({ ...c, [f.id]: true }));
-                            return;
-                          }
-                          void setLearnMode(f.id, next);
-                        }}
-                      >
-                        {(Object.keys(LEARN_LABELS) as LearnMode[]).map((m) => (
-                          <option key={m} value={m}>
-                            {LEARN_LABELS[m]}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  {learnRows && <div className="muted cfolder-learn-hint">{LEARN_HINTS[mode]}</div>}
-                  {learnRows && confirmAll[f.id] && (
-                    <div className="cfolder-learn-confirm">
-                      <span className="muted">
-                        Sweep {status ? status.indexedCount.toLocaleString() : 'all'} files
-                        {calls != null && ` (≈${calls.toLocaleString()} model calls)`}
-                      </span>
-                      {/* The model is part of the commit decision — pick it right
-                          beside the cost estimate it determines. */}
-                      <div className="cfolder-opt">
-                        <span className="cfolder-opt-label">Model</span>
-                        <span className="cfolder-learn-model">
-                          <ModelPicker
-                            models={models}
-                            value={f.learnModel ?? null}
-                            onChange={(id) => void setLearnModel(f.id, id)}
-                            emptyLabel="Memory default"
-                            ariaLabel="Fact-learning model"
-                            resolvedDefault={memoryModel}
-                          />
-                        </span>
-                      </div>
-                      <span className="push-row">
-                        <button type="button" className="push" onClick={() => setConfirmAll((c) => ({ ...c, [f.id]: false }))}>
-                          Cancel
-                        </button>
-                        <button type="button" className="push default" onClick={() => void setLearnMode(f.id, 'all')}>
-                          Start
-                        </button>
-                      </span>
-                    </div>
-                  )}
-                  {learnRows && (mode === 'new' || mode === 'all') && !confirmAll[f.id] && (
-                    <div className="cfolder-opt">
-                      <span className="cfolder-opt-label">Model</span>
-                      <span className="cfolder-learn-model">
-                        <ModelPicker
-                          models={models}
-                          value={f.learnModel ?? null}
-                          onChange={(id) => void setLearnModel(f.id, id)}
-                          emptyLabel="Memory default"
-                          ariaLabel="Fact-learning model"
-                          resolvedDefault={memoryModel}
-                        />
-                      </span>
-                    </div>
-                  )}
-                  {learnRows && (mode === 'new' || mode === 'all') && !confirmAll[f.id] && status && (
-                    <LearnStatusLine status={status} />
-                  )}
-                </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        </div>
-        ))
+        groups.map((group) => {
+          const items = group.items.filter(matches);
+          if (items.length === 0) return null;
+          return (
+            <ListGroup key={group.key} label={group.head} count={items.length}>
+              {items.map((f) => (
+                <ListRow
+                  key={f.id}
+                  glyph={<FolderGlyph kind={f.kind} tone={f.missing ? 'danger' : 'plain'} />}
+                  name={f.label}
+                  sub={shortPath(f.origin?.clientPath ?? f.path)}
+                  subTail
+                  right={flags(f)}
+                  dim={group.offline}
+                  onOpen={() => open(f)}
+                />
+              ))}
+            </ListGroup>
+          );
+        })
       )}
     </div>
   );
