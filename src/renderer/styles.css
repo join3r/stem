@@ -3196,6 +3196,15 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
    delete (hover/focus only) so it is never the obvious thing to click. */
 .files-group-head .grp-head-add { opacity: 0; transition: opacity var(--motion-fast) ease; }
 .files-group-head:hover .grp-head-add, .files-group-head .grp-head-add:focus-visible { opacity: 1; }
+/* The group name is the fold toggle; the count shows only while folded. */
+.files-group-toggle {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  min-width: 0; padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; cursor: pointer; text-align: left;
+}
+.files-group-toggle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-group-count { font-style: normal; color: var(--muted); }
+.files-group-actions { display: inline-flex; align-items: center; gap: var(--sp-1); }
 /* Inline "new subfolder" row: name field + commit, error below the pair. */
 .files-newdir { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin: 0 var(--sp-2) var(--sp-5); }
 .files-newdir .ifield { flex: 1; min-width: 120px; width: auto; }

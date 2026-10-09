@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Plus, Download, FolderOpen, FolderPlus, Trash2, File as FileIcon } from 'lucide-react';
+import {
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Plus,
+  Download,
+  FolderOpen,
+  FolderPlus,
+  Trash2,
+  File as FileIcon
+} from 'lucide-react';
 import { FILES_CONTEXT_LIMIT, type FileEntry, type FilesListing } from '../../../shared/types';
 import { useRemoteServer } from '../../hooks/useRemoteServer';
 import { InfoTip } from '../../ui/InfoTip';
@@ -55,6 +65,16 @@ export function FilesTab() {
   // file manager here cannot open it — so Download replaces "reveal" rather than
   // sitting beside a button that could only ever fail.
   const remote = useRemoteServer();
+  // Subfolder groups folded shut. Every group starts open; the header's
+  // chevrons fold or unfold them all at once.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleGroup = (dir: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(dir)) next.delete(dir);
+      else next.add(dir);
+      return next;
+    });
 
   const refresh = useCallback(() => {
     window.stem.listFiles().then(setListing).catch(() => undefined);
@@ -138,12 +158,30 @@ export function FilesTab() {
   const files = listing?.files ?? [];
   const groups = buildGroups(listing);
   const empty = files.length === 0 && (listing?.dirs.length ?? 0) === 0;
+  // Groups only get a foldable head when there is more than the top level.
+  const headed = groups.some((g) => g.dir !== '') || groups.length > 1;
+  const allCollapsed = headed && groups.every((g) => collapsed.has(g.dir));
+  /** Show a file or subfolder in Finder (only when the Files folder is on this disk). */
+  const reveal = (rel: string) => {
+    setError(null);
+    window.stem.revealFiles(rel).catch((e: unknown) => setError(String((e as Error)?.message ?? e).replace(/^Error:\s*/, '')));
+  };
 
   return (
     <div>
       <div className="grp-head cfolders-head">
         Files
         <span className="grp-head-actions">
+          {headed && (
+            <button
+              className="grp-head-add"
+              onClick={() => setCollapsed(allCollapsed ? new Set() : new Set(groups.map((g) => g.dir)))}
+              title={allCollapsed ? 'Expand all folders' : 'Collapse all folders'}
+              aria-label={allCollapsed ? 'Expand all folders' : 'Collapse all folders'}
+            >
+              {allCollapsed ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
+            </button>
+          )}
           {!remote && (
             <button
               className="grp-head-add"
@@ -216,57 +254,89 @@ export function FilesTab() {
         <>
           {groups.map(({ dir, files: entries }) => (
             <div key={dir || '__root__'}>
-              {(dir !== '' || groups.length > 1) && (
+              {headed && (
                 <div className="grp-head files-group-head">
-                  <span>{dir === '' ? 'Top level' : dir}</span>
+                  <button
+                    className="files-group-toggle"
+                    onClick={() => toggleGroup(dir)}
+                    aria-expanded={!collapsed.has(dir)}
+                  >
+                    <ChevronRight size={12} className={`chat-caret${collapsed.has(dir) ? '' : ' open'}`} />
+                    <span>{dir === '' ? 'Top level' : dir}</span>
+                    {collapsed.has(dir) && <em className="files-group-count">{entries.length}</em>}
+                  </button>
                   {dir !== '' && (
-                    <button
-                      className="grp-head-add"
-                      onClick={() => void removeDir(dir, entries.length)}
-                      title={`Delete the ${dir} subfolder`}
-                      aria-label={`Delete subfolder ${dir}`}
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    <span className="files-group-actions">
+                      {!remote && (
+                        <button
+                          className="grp-head-add"
+                          onClick={() => reveal(dir)}
+                          title="Open in Finder"
+                          aria-label={`Open subfolder ${dir} in Finder`}
+                        >
+                          <FolderOpen size={13} />
+                        </button>
+                      )}
+                      <button
+                        className="grp-head-add"
+                        onClick={() => void removeDir(dir, entries.length)}
+                        title={`Delete the ${dir} subfolder`}
+                        aria-label={`Delete subfolder ${dir}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </span>
                   )}
                 </div>
               )}
-              <div className="group">
-                {entries.length === 0 ? (
-                  <div className="group-row files-row">
-                    <span className="muted">Empty — drop files here to fill it.</span>
-                  </div>
-                ) : (
-                  entries.map((f) => (
-                    <div key={f.rel} className="group-row files-row">
-                      <span className="row-icon">
-                        <FileIcon size={14} />
-                      </span>
-                      <span className="row-main">
-                        <strong title={f.rel}>{f.name}</strong>
-                        <em>{formatSize(f.size)}</em>
-                      </span>
-                      <button
-                        className="icon-action sm row-action"
-                        onClick={() => void download(f)}
-                        disabled={busy}
-                        title="Save a copy to your Downloads folder"
-                        aria-label={`Download ${f.name}`}
-                      >
-                        <Download size={14} />
-                      </button>
-                      <button
-                        className="icon-action sm row-action"
-                        onClick={() => void remove(f)}
-                        title="Delete from Files"
-                        aria-label={`Delete ${f.name}`}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+              {!(headed && collapsed.has(dir)) && (
+                <div className="group">
+                  {entries.length === 0 ? (
+                    <div className="group-row files-row">
+                      <span className="muted">Empty — drop files here to fill it.</span>
                     </div>
-                  ))
-                )}
-              </div>
+                  ) : (
+                    entries.map((f) => (
+                      <div key={f.rel} className="group-row files-row">
+                        <span className="row-icon">
+                          <FileIcon size={14} />
+                        </span>
+                        <span className="row-main">
+                          <strong title={f.rel}>{f.name}</strong>
+                          <em>{formatSize(f.size)}</em>
+                        </span>
+                        {!remote && (
+                          <button
+                            className="icon-action sm row-action"
+                            onClick={() => reveal(f.rel)}
+                            title="Show in Finder"
+                            aria-label={`Show ${f.name} in Finder`}
+                          >
+                            <FolderOpen size={14} />
+                          </button>
+                        )}
+                        <button
+                          className="icon-action sm row-action"
+                          onClick={() => void download(f)}
+                          disabled={busy}
+                          title="Save a copy to your Downloads folder"
+                          aria-label={`Download ${f.name}`}
+                        >
+                          <Download size={14} />
+                        </button>
+                        <button
+                          className="icon-action sm row-action"
+                          onClick={() => void remove(f)}
+                          title="Delete from Files"
+                          aria-label={`Delete ${f.name}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           ))}
           <p className="muted files-foot">

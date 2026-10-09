@@ -31,6 +31,7 @@ import { log } from '../server/log';
  * no arguments at all.
  */
 const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
+  'files:reveal': [a.optional(a.nullish(a.string))],
   'files:preview': [a.string],
   'files:previewData': [a.string, a.optional(a.nullish(a.string)), a.optional(a.nullish(a.string))],
   'files:download': [a.string],

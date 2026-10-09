@@ -1,8 +1,9 @@
 import { clipboard, dialog, nativeImage, shell, type BrowserWindow } from 'electron';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { handleLocal } from '../ipc-bridge';
 import { openLink } from '../open-link';
-import { ensureFilesRoot } from '../../server/files/store';
+import { ensureFilesRoot, filePathWithin } from '../../server/files/store';
 import { imagePreviewDataUrl, imagePreviewFromBytes } from '../../server/pi/attachments';
 import { connectedFolderPath } from '../../server/workspace/connected-folders';
 import { workspaceRoot } from '../../server/workspace/paths';
@@ -324,10 +325,22 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     throw new Error(`${what} is on Stem's server, which is not this computer — there is nothing to open here.`);
   }
 
-  /** Open the Files folder in Finder/Explorer. */
-  handleLocal('files:reveal', async () => {
+  /**
+   * Open the Files folder in Finder/Explorer — or, given a path inside it, open
+   * that subfolder, or show that file selected in its folder.
+   */
+  handleLocal('files:reveal', async (_e, rel?: string) => {
     revealable('Your Files folder');
-    await shell.openPath(await ensureFilesRoot());
+    const root = await ensureFilesRoot();
+    if (!rel) {
+      await shell.openPath(root);
+      return;
+    }
+    const abs = filePathWithin(rel);
+    if (!abs) throw new Error('That path is not inside your Files folder.');
+    const isDir = await stat(abs).then((s) => s.isDirectory(), () => false);
+    if (isDir) await shell.openPath(abs);
+    else shell.showItemInFolder(abs);
   });
   // Read-only, and reached from renderer/attachments.ts: a path for images the
   // user picked or dropped (on this disk), or pasted bytes for HEIC that
