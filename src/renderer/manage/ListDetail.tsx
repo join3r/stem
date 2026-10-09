@@ -329,3 +329,13 @@ export function ConfirmDelete({ label, icon, onConfirm }: { label: string; icon:
 export function shortPath(path: string): string {
   return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
 }
+
+/** A status word on a row (MCP state, task state): a pill with an optional icon. */
+export function Chip({ tone, icon, children, title }: { tone: 'ok' | 'warn' | 'danger' | 'off'; icon?: ReactNode; children: ReactNode; title?: string }) {
+  return (
+    <span className={`ld-chip ${tone}`} title={title}>
+      {icon ?? <span className="ld-chip-dot" aria-hidden="true" />}
+      {children}
+    </span>
+  );
+}

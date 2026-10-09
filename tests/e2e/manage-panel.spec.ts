@@ -130,3 +130,35 @@ test('the Personas editor round-trips the spawn flag, the send budget, and the c
     )
     .toMatchObject({ sendBudget: 5, canSpawn: true, clients: true });
 });
+
+test('an MCP server pasted as JSON fills a draft, saves, reopens and is removed', async ({ mainWindow }) => {
+  await mainWindow.getByRole('button', { name: 'Tools — MCP & skills', exact: true }).click();
+
+  await mainWindow.getByRole('button', { name: 'New', exact: true }).click();
+  await mainWindow.getByRole('menuitem', { name: /Paste JSON/ }).click();
+  await mainWindow
+    .getByLabel('Server JSON')
+    .fill('"fsdemo": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"], "env": { "DEBUG": "1" } },');
+  await mainWindow.getByRole('button', { name: 'Fill in', exact: true }).click();
+
+  // The draft opens in the editor with every field filled from the paste.
+  await expect(mainWindow.getByLabel('Server name')).toHaveValue('fsdemo');
+  await expect(mainWindow.getByLabel('Command', { exact: true })).toHaveValue('npx');
+  await expect(mainWindow.getByLabel('Arguments')).toHaveValue('-y @modelcontextprotocol/server-filesystem /tmp');
+  await expect(mainWindow.getByLabel('Environment variables')).toHaveValue('DEBUG=1');
+  await mainWindow.getByRole('button', { name: 'Add server', exact: true }).click();
+
+  await expect
+    .poll(() => mainWindow.evaluate(() => (window as any).stem.listMcpServers().then((l: any[]) => l.map((s) => s.name))))
+    .toContain('fsdemo');
+  // Saving keeps the editor on the server, now under its fixed name.
+  await expect(mainWindow.locator('.ld-name-static')).toHaveText('fsdemo');
+
+  await mainWindow.getByRole('button', { name: 'Back to MCP servers' }).click();
+  await mainWindow.getByText('fsdemo', { exact: true }).click();
+  await mainWindow.getByRole('button', { name: 'Remove server' }).click();
+  await mainWindow.getByRole('button', { name: 'Remove server?' }).click();
+  await expect
+    .poll(() => mainWindow.evaluate(() => (window as any).stem.listMcpServers().then((l: any[]) => l.map((s) => s.name))))
+    .not.toContain('fsdemo');
+});

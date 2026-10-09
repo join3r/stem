@@ -4507,3 +4507,25 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .ld-num { width: 4.5em !important; flex: none; }
 .ld-foot { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-4); padding-top: var(--sp-5); border-top: 0.5px solid var(--hair); }
 .ld-dirty { margin-right: auto; font-size: var(--fs-11); color: var(--warn); }
+.ld-chip { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-10); font-weight: 600; padding: 2px var(--sp-3); border-radius: var(--radius-pill); white-space: nowrap; }
+.ld-chip.ok { color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); }
+.ld-chip.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.ld-chip.danger { color: var(--danger); background: color-mix(in srgb, var(--danger) 15%, transparent); }
+.ld-chip.off { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+.ld-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.ld-chip .spin { animation: link-btn-spin 0.9s linear infinite; }
+.ld-row-main em.failed { color: var(--danger); }
+.ld-body .ci-textarea.mono { font-family: var(--font-mono); font-size: var(--fs-12); padding: 5px var(--sp-4); }
+.ld-body .mcp-approval, .ld-detail > .mcp-approval { margin: 0; }
+.ld-stat { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-12); color: var(--muted); }
+.ld-stat strong { color: var(--ink); font-weight: 600; }
+.ld-detail-acts .switch { margin-right: var(--sp-2); }
+.ld-btn { display: inline-flex; align-items: center; gap: var(--sp-2); font: inherit; font-size: var(--fs-12); color: var(--ink); background: var(--surface); border: 0.5px solid var(--line); border-radius: var(--radius); padding: var(--sp-2) var(--sp-5); cursor: pointer; }
+.ld-btn:hover:not(:disabled) { background: var(--sel); }
+.ld-btn:disabled { opacity: 0.55; cursor: default; }
+.ld-btn .spin { animation: link-btn-spin 0.9s linear infinite; }
+.ld-body .vfield.mono { font-family: var(--font-mono); font-size: var(--fs-12); }
+.ld-name-static { font-size: var(--fs-16); font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 0; }
+.mcp-state-acts { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.ld-list > .mcp-approval .ci-textarea { width: 100%; }
+.seg-ctl + .ld-list, .seg-ctl + .ld-detail { margin-top: var(--sp-5); }
