@@ -97,8 +97,11 @@ describe('GTE fact pilot eligibility', () => {
     expect(await getFactRerankStatus()).toEqual({ installed: false, status: { model: GTE_FACT_PILOT_ID, state: 'idle' } });
   });
 
-  it('requires both exact measured Qwen models in local mode', () => {
+  it('requires a built-in GTE embedder and the Qwen3 reranker in local mode', () => {
     expect(gteFactPilotEligible(settings())).toBe(true);
+    const gemma = settings();
+    gemma.embeddings.localModel = 'embeddinggemma-2';
+    expect(gteFactPilotEligible(gemma)).toBe(true);
     for (const stage of ['embeddings', 'reranker'] as const) {
       for (const mode of ['off', 'remote'] as const) {
         const config = settings();
@@ -119,7 +122,7 @@ describe('GTE fact pilot eligibility', () => {
     expect(h.verify).toHaveBeenCalledOnce();
     expect(h.fake.ensureRerank).not.toHaveBeenCalled();
     expect(await h.pilot.resolve()).toBeNull();
-    h.current.embeddings.localModel = 'qwen3-embedding-0.6b';
+    h.current.embeddings.localModel = 'embeddinggemma-2';
     expect(await h.pilot.resolve()).not.toBeNull();
     expect(h.fake.ensureRerank).toHaveBeenCalledOnce();
     h.current.reranker.mode = 'off';

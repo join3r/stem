@@ -3,7 +3,7 @@
 //
 // onnxruntime-node ships one package covering every platform/arch it supports
 // (~200MB of binaries) and electron-builder copies all of it. The loader only
-// ever resolves bin/napi-v3/${process.platform}/${process.arch}, so everything
+// ever resolves bin/napi-v6/${process.platform}/${process.arch}, so everything
 // else is dead weight in every artifact — 30-40MB per unreachable dir.
 //
 // This used to be done with per-platform `files` patterns in
@@ -24,7 +24,7 @@ export default async function afterPack(context) {
   const platform = context.electronPlatformName; // darwin | linux | win32
   const arch = Arch[context.arch]; // x64 | arm64 | …
   const resources = context.packager.getResourcesDir(context.appOutDir);
-  const napi = path.join(resources, 'app', 'node_modules', 'onnxruntime-node', 'bin', 'napi-v3');
+  const napi = path.join(resources, 'app', 'node_modules', 'onnxruntime-node', 'bin', 'napi-v6');
 
   let platforms;
   try {

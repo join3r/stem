@@ -36,7 +36,7 @@ describe('recall recommendation', () => {
     expect(recommendedRetrievalPatch(retrieval({}))).toBeNull();
   });
 
-  it('the Qwen3 pair without Stem GTE Memory (a 0.5.0 install) is offered GTE on the reranker stage alone', () => {
+  it('the recommended embedder without Stem GTE Memory is offered GTE on the reranker stage alone', () => {
     const r = retrieval({ reranker: { factModel: undefined } });
     expect(recallSetupStatus(r)).toMatchObject({ embedOk: true, rerankOk: true, factOk: false });
     expect(recommendedRetrievalPatch(r)).toEqual({
@@ -50,9 +50,17 @@ describe('recall recommendation', () => {
     expect(RECALL_DEFAULTS_RELEASE).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it('a Qwen3 embedder on the user\'s own endpoint is offered the built-in one, flagged as same-quality', () => {
+  it('the 0.5.2 setup (built-in Qwen3 + GTE) is offered EmbeddingGemma 2 on the embeddings stage alone', () => {
+    const r = retrieval({ embeddings: { localModel: 'qwen3-embedding-0.6b' } });
+    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: true, factOk: true });
+    expect(recommendedRetrievalPatch(r)).toEqual({
+      embeddings: { mode: 'local', localModel: 'embeddinggemma-2' }
+    });
+  });
+
+  it('a Qwen3 embedder on the user\'s own endpoint is offered the built-in one', () => {
     const r = retrieval({ embeddings: { mode: 'remote', model: 'qwen3-embedding:4b' } });
-    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: true, factOk: true, embedRemoteQwen3: true });
+    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: true, factOk: true });
     expect(recommendedRetrievalPatch(r)).toEqual({
       embeddings: { mode: 'local', localModel: RECOMMENDED_EMBED_MODEL }
     });
@@ -81,7 +89,7 @@ describe('recall recommendation', () => {
     });
 
     const off = retrieval({ embeddings: { mode: 'off' }, reranker: { mode: 'off' } });
-    expect(recallSetupStatus(off)).toEqual({ embedOk: false, rerankOk: false, factOk: false, embedRemoteQwen3: false });
+    expect(recallSetupStatus(off)).toEqual({ embedOk: false, rerankOk: false, factOk: false });
     expect(recommendedRetrievalPatch(off)?.embeddings?.mode).toBe('local');
   });
 
@@ -90,6 +98,6 @@ describe('recall recommendation', () => {
       embeddings: { mode: 'remote', model: 'nomic-embed-text' },
       reranker: { mode: 'remote', model: 'bge-reranker-v2-m3' }
     });
-    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: false, factOk: false, embedRemoteQwen3: false });
+    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: false, factOk: false });
   });
 });

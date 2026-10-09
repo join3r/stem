@@ -16,8 +16,21 @@ import type { PartialRetrievalSettings, RetrievalSettings } from './types';
 // same benches (docs/gte-memory-pilot.md). It needs the two Qwen3 models under
 // it, so the recommendation is now all three, and the popup for 0.5.2 offers it
 // to everyone whose reranker section predates the field.
+//
+// 0.6.0 swaps the embedder under it for EmbeddingGemma 2: on the same two real
+// corpora, both ONNX q8 on transformers.js 4.3.1, it put 68–73% of the
+// relevant facts into the reranker's top-24 pool against Qwen3's 38–39%, at
+// about half the RAM (Stem mail "Gemma 2 vs Qwen3 Embedding Benchmark",
+// 2026-10-09). GTE scores (query, fact) pairs on its own absolute floor, so it
+// runs on either built-in embedder; a better pool is more for it to pick from.
+// Any Qwen3 embedder — built-in or on the user's endpoint — now gets the offer.
 
-export const RECOMMENDED_EMBED_MODEL = 'qwen3-embedding-0.6b';
+export const RECOMMENDED_EMBED_MODEL = 'embeddinggemma-2';
+/**
+ * Built-in embedders Stem GTE Memory runs on: the recommendation, plus the
+ * Qwen3 it was measured on, which keeps working for installs that stay on it.
+ */
+export const GTE_EMBED_MODELS: readonly string[] = [RECOMMENDED_EMBED_MODEL, 'qwen3-embedding-0.6b'];
 export const RECOMMENDED_RERANK_MODEL = 'qwen3-reranker-0.6b';
 export const RECOMMENDED_FACT_MODEL = 'gte-memory-20260905-epoch2';
 
@@ -27,21 +40,15 @@ export const RECOMMENDED_FACT_MODEL = 'gte-memory-20260905-epoch2';
  * upgrades across it sees the offer exactly once, and one that declined is
  * not asked again by the next release.
  */
-export const RECALL_DEFAULTS_RELEASE = '0.5.2';
+export const RECALL_DEFAULTS_RELEASE = '0.6.0';
 
 export interface RecallSetupStatus {
-  /** The bundled Qwen3 Embedding 0.6B. */
+  /** The bundled EmbeddingGemma 2. */
   embedOk: boolean;
   /** The bundled Qwen3 Reranker 0.6B. */
   rerankOk: boolean;
   /** Stem GTE Memory selected for facts and skills (only meaningful with rerankOk). */
   factOk: boolean;
-  /**
-   * A qwen3-embedding model on the user's own endpoint. Not the recommendation
-   * (it needs a server the built-in one does not), but it measured the same, so
-   * the offer and the row say "same quality", not "better".
-   */
-  embedRemoteQwen3: boolean;
 }
 
 export function recallSetupStatus(retrieval: RetrievalSettings): RecallSetupStatus {
@@ -50,8 +57,7 @@ export function recallSetupStatus(retrieval: RetrievalSettings): RecallSetupStat
   return {
     embedOk: e.mode === 'local' && e.localModel === RECOMMENDED_EMBED_MODEL,
     rerankOk: r.mode === 'local' && r.localModel === RECOMMENDED_RERANK_MODEL,
-    factOk: r.mode === 'local' && r.factModel === RECOMMENDED_FACT_MODEL,
-    embedRemoteQwen3: e.mode === 'remote' && /qwen3-embedding/i.test(e.model ?? '')
+    factOk: r.mode === 'local' && r.factModel === RECOMMENDED_FACT_MODEL
   };
 }
 

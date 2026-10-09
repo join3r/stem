@@ -128,7 +128,7 @@ export const RERANK_CATALOG: Record<
   // that the XLM-R classifier above cannot — best F1 0.26 vs 0.19, recall
   // reach 0.45 vs 0.27. The price is speed: ~80 ms/pair vs ~22, and ONE PAIR
   // PER FORWARD PASS is mandatory (see embed-worker.ts — this v4-targeted GQA
-  // export mis-attends across padding on the bundled transformers.js 3.8.1,
+  // export mis-attended across padding on transformers.js 3.8.1 (kept on 4.3.1),
   // shifting every row in a mixed-length batch by whole logit units).
   'qwen3-reranker-0.6b': {
     id: 'qwen3-reranker-0.6b',

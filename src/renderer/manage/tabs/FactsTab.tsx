@@ -27,7 +27,7 @@ import type {
   CustomImportCandidate,
   CustomRerankModel
 } from '../../../shared/types';
-import { RECOMMENDED_FACT_MODEL, recallSetupStatus } from '../../../shared/recall-recommended';
+import { GTE_EMBED_MODELS, RECOMMENDED_FACT_MODEL, recallSetupStatus } from '../../../shared/recall-recommended';
 import { resolveMemoryModel } from '../../../shared/modelRoles';
 import { clampEffort, EffortSelect, effortsOf } from '../../ui/EffortSelect';
 import { MdxView } from '../../chat/MdxView';
@@ -64,7 +64,8 @@ const FACT_INJECT_PRESETS: { label: string; value: number }[] = [
 // The curated local models, mirrored from server/recall/embed-catalog.ts (labels +
 // sizes only — the specs live in main; the id is the contract).
 const LOCAL_EMBED_MODELS: { id: LocalEmbedModelId; label: string; detail: string }[] = [
-  { id: 'qwen3-embedding-0.6b', label: 'Qwen3 Embedding 0.6B', detail: '~640 MB · recommended · best measured' },
+  { id: 'embeddinggemma-2', label: 'EmbeddingGemma 2', detail: '~315 MB · recommended · best measured' },
+  { id: 'qwen3-embedding-0.6b', label: 'Qwen3 Embedding 0.6B', detail: '~640 MB · previous default' },
   { id: 'multilingual-e5-small', label: 'Multilingual E5 Small', detail: '~120 MB · smallest' },
   { id: 'multilingual-e5-base', label: 'Multilingual E5 Base', detail: '~280 MB · higher quality' },
   { id: 'embeddinggemma-300m', label: 'EmbeddingGemma 300M', detail: '~330 MB · largest' }
@@ -389,9 +390,9 @@ function EmbeddingsFields({
             onBlur={() => onPatch({ model: local.model })}
           />
           <p className="muted">
-            For an endpoint you already run. The built-in Qwen3 Embedding 0.6B measured the same as a
-            4B Qwen3 served this way, so a server buys no quality — a Qwen3 embedding model here keeps
-            the recommended setup, anything else ranks worse.
+            For an endpoint you already run. The built-in EmbeddingGemma 2 found more of the memories
+            that matter than any Qwen3 embedding model in Stem's benchmarks, so a server buys no
+            quality.
           </p>
           <input
             className="ifield"
@@ -491,7 +492,7 @@ function RerankerFields({
 
   const mode = value.mode;
   const gteSelected = value.factModel === GTE_FACT_MODEL;
-  const gteEmbedding = embeddings.mode === 'local' && embeddings.localModel === 'qwen3-embedding-0.6b';
+  const gteEmbedding = embeddings.mode === 'local' && GTE_EMBED_MODELS.includes(embeddings.localModel);
   const gteAvailable = (factStatus?.installed === true || factStatus?.downloadable === true) && gteEmbedding;
 
   return (
@@ -556,7 +557,7 @@ function RerankerFields({
               </p>
               {!factStatus ? <p className="muted">Checking GTE availability…</p>
                 : !factStatus.installed && !factStatus.downloadable ? <p className="retrieval-status-error">Stem GTE Memory is unavailable on the connected host. Update Stem to download this model.</p>
-                  : !gteEmbedding ? <p className="retrieval-status-error">Stem GTE Memory requires built-in Qwen3 Embedding 0.6B. Choose that embedding model to use GTE.</p>
+                  : !gteEmbedding ? <p className="retrieval-status-error">Stem GTE Memory requires built-in EmbeddingGemma 2 or Qwen3 Embedding 0.6B. Choose one of those embedding models to use GTE.</p>
                     : factStatus.status.state === 'idle' ? <p className="muted">Starting Stem GTE Memory…</p>
                       : <LocalStatusLine status={factStatus.status} />}
             </>
@@ -564,7 +565,7 @@ function RerankerFields({
           {!gteSelected && !gteAvailable && (
             <p className="muted">{!factStatus ? 'Checking GTE availability…' : !factStatus.installed && !factStatus.downloadable
               ? 'Update the connected Stem host to download Stem GTE Memory.'
-              : 'To try Stem GTE Memory, select built-in Qwen3 Embedding 0.6B above.'}</p>
+              : 'To try Stem GTE Memory, select built-in EmbeddingGemma 2 above.'}</p>
           )}
           <ImportedModels stage="rerank" models={custom} onRetrieval={onRetrieval} />
         </>
@@ -630,7 +631,7 @@ function RerankerFields({
 /**
  * Nudge toward the recommended recall setup, outside the collapsed advanced
  * section. Rendered only while the configured models differ from the
- * recommendation (Stem GTE Memory on top of the Qwen3 pair): a setup that
+ * recommendation (EmbeddingGemma 2 → Qwen3 reranker → Stem GTE Memory): a setup that
  * already matches has nothing to review, so the row is gone rather than
  * confirming the default back to the user.
  */
@@ -641,7 +642,7 @@ function RecallQualityRow({
   retrieval: RetrievalSettings;
   onReview: () => void;
 }) {
-  const { embedOk: embedBest, rerankOk: rerankBest, factOk, embedRemoteQwen3 } = recallSetupStatus(retrieval);
+  const { embedOk: embedBest, rerankOk: rerankBest, factOk } = recallSetupStatus(retrieval);
   if (embedBest && rerankBest && factOk) return null;
   const rerankOn = retrieval.reranker.mode !== 'off';
   const hint = embedBest && rerankBest
@@ -650,13 +651,9 @@ function RecallQualityRow({
       ? 'Reranker is off'
       : embedBest
         ? 'Compare reranker models for your conversations'
-        : embedRemoteQwen3
-          ? rerankBest
-            ? 'Qwen3 embeddings from your endpoint with the Qwen3 reranker'
-            : 'Qwen3 embeddings from your endpoint; compare reranker models below'
-          : rerankOn
-            ? 'Compare embedding models for your conversations'
-            : 'Compare embedding and reranker models for your conversations';
+        : rerankOn
+          ? 'EmbeddingGemma 2 is recommended — finds more of the memories that matter'
+          : 'Compare embedding and reranker models for your conversations';
   return (
     <div className="group-row">
       <span className="row-main">

@@ -49,6 +49,12 @@ Maintainer notes:
 - **Wider chats on big screens.** Settings → App → Appearance → **Chat width** lets the
   conversation use the room a large monitor has: *Comfortable* (as before), *Wide*, *Wider* or
   *Full*. It's set per computer.
+- **Memory finds more of what matters.** A new built-in embedding model, EmbeddingGemma 2, picks
+  the memories worth checking for each message. In Stem's benchmarks it found about 70% of the
+  relevant memories where Qwen3 found under 40%, in English, Slovak, Czech and German, with half
+  the RAM. It is the default for new installs, and Stem GTE Memory picks from what it finds. If
+  you're upgrading, Stem offers the switch once. Switching re-indexes your memory in the background,
+  and Manage → Memory switches back.
 - **Commands at a slash.** Type `/` at the start of a message to see what the box can do —
   `/pin`, `/note` and `/learn` — narrow it by typing, and pick one with Enter, Tab or a click.
 

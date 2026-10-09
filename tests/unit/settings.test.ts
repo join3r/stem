@@ -531,10 +531,10 @@ describe('local provider settings', () => {
 });
 
 describe('embeddings settings migration + coercion', () => {
-  it('defaults to local / qwen3-embedding-0.6b when no file exists', async () => {
+  it('defaults to local / embeddinggemma-2 when no file exists', async () => {
     const emb = (await readSettings()).retrieval.embeddings;
     expect(emb.mode).toBe('local');
-    expect(emb.localModel).toBe('qwen3-embedding-0.6b');
+    expect(emb.localModel).toBe('embeddinggemma-2');
   });
 
   it('migrates a legacy enabled:true endpoint to remote, keeping its fields', async () => {
@@ -571,7 +571,7 @@ describe('embeddings settings migration + coercion', () => {
     writeFileSync(path, JSON.stringify({ retrieval: { embeddings: { mode: 'bogus', localModel: 'bogus' } } }));
     const emb = (await readSettings()).retrieval.embeddings;
     expect(emb.mode).toBe('local');
-    expect(emb.localModel).toBe('qwen3-embedding-0.6b');
+    expect(emb.localModel).toBe('embeddinggemma-2');
   });
 
   it('round-trips mode and localModel through updateRetrievalSettings', async () => {
@@ -713,7 +713,7 @@ describe('imported (non-catalog) models', () => {
 
   it('rejects an id that names neither a catalog model nor an imported one', async () => {
     await updateRetrievalSettings({ embeddings: { mode: 'local', localModel: 'custom:nobody/nothing' } });
-    expect((await readSettings()).retrieval.embeddings.localModel).toBe('qwen3-embedding-0.6b');
+    expect((await readSettings()).retrieval.embeddings.localModel).toBe('embeddinggemma-2');
     await updateRetrievalSettings({ reranker: { mode: 'local', localModel: 'custom:nobody/nothing' } });
     expect((await readSettings()).retrieval.reranker.localModel).toBe('qwen3-reranker-0.6b');
   });
@@ -785,7 +785,7 @@ describe('imported (non-catalog) models', () => {
     );
     const r = (await readSettings()).retrieval;
     expect(r.customEmbedModels).toEqual([]);
-    expect(r.embeddings.localModel).toBe('qwen3-embedding-0.6b');
+    expect(r.embeddings.localModel).toBe('embeddinggemma-2');
   });
 });
 

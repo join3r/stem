@@ -57,10 +57,78 @@ const PROGRESS_THROTTLE_MS = 250;
 // model at a time.
 const SESSION_OPTIONS = { enableCpuMemArena: false } as const;
 
-type Extractor = (
+type Extractor = ((
   texts: string[],
   opts: { pooling: 'mean' | 'last_token'; normalize: boolean }
-) => Promise<{ dims: number[]; data: Float32Array }>;
+) => Promise<{ dims: number[]; data: Float32Array }>) & { dispose?: () => Promise<void> };
+
+/**
+ * Token cap for self-pooling models. The tokenizer's own limit is effectively
+ * none, and attention grows with the square of the length: one 16,000-char
+ * pasted message peaked at 5 GB in the utility process. Stored passages are
+ * bounded far below this (episodic chunks 1,500 chars, summaries 2,000), so
+ * only an outsized query is ever cut, and its first 2,048 tokens say what it
+ * is about.
+ */
+const POOLED_MAX_TOKENS = 2048;
+
+interface PooledTensor {
+  dims: number[];
+  data: Float32Array;
+}
+
+/**
+ * An Extractor over a model that pools inside its own graph (spec pooling
+ * 'sentence_embedding', EmbeddingGemma 2). The pipeline cannot load it the way
+ * we need: the checkpoint's config also names vision and audio encoders, which
+ * transformers.js loads whenever the config has them — twice the memory for
+ * text vectors that measured bit-identical — so the config is fetched first and
+ * stripped of both. The graph's output is mean-pooled and normalized already;
+ * normalizing again is the cheap guard for a re-export that stops doing it.
+ */
+async function loadPooledExtractor(
+  repo: string,
+  opts: { dtype: LocalEmbedModelSpec['dtype']; progress_callback: ReturnType<typeof progressAggregator> }
+): Promise<Extractor> {
+  const { AutoConfig, AutoTokenizer, AutoModel } = await import('@huggingface/transformers');
+  const config = (await AutoConfig.from_pretrained(repo, { progress_callback: opts.progress_callback })) as unknown as {
+    vision_config?: unknown;
+    audio_config?: unknown;
+  };
+  config.vision_config = null;
+  config.audio_config = null;
+  const tokenizer = (await AutoTokenizer.from_pretrained(repo, {
+    progress_callback: opts.progress_callback
+  })) as unknown as (
+    texts: string[],
+    o: { padding: boolean; truncation: boolean; max_length: number }
+  ) => Record<string, unknown>;
+  const model = (await AutoModel.from_pretrained(repo, {
+    config: config as never,
+    dtype: opts.dtype,
+    session_options: SESSION_OPTIONS,
+    progress_callback: opts.progress_callback
+  })) as unknown as ((inputs: Record<string, unknown>) => Promise<{ sentence_embedding?: PooledTensor }>) & {
+    dispose?: () => Promise<void>;
+  };
+  const extract = (async (texts: string[]) => {
+    const { sentence_embedding: e } = await model(
+      tokenizer(texts, { padding: true, truncation: true, max_length: POOLED_MAX_TOKENS })
+    );
+    if (!e) throw new Error(`${repo} returned no sentence_embedding`);
+    const d = e.dims[e.dims.length - 1];
+    const data = new Float32Array(e.data.length);
+    for (let row = 0; row * d < data.length; row++) {
+      let norm = 0;
+      for (let i = row * d; i < (row + 1) * d; i++) norm += e.data[i] * e.data[i];
+      norm = Math.sqrt(norm) || 1;
+      for (let i = row * d; i < (row + 1) * d; i++) data[i] = e.data[i] / norm;
+    }
+    return { dims: e.dims, data };
+  }) as Extractor;
+  extract.dispose = () => model.dispose?.() ?? Promise.resolve();
+  return extract;
+}
 
 interface RerankTokenizerOutput extends Record<string, unknown> {
   input_ids: { dims: number[]; data: ArrayLike<number | bigint> };
@@ -210,7 +278,7 @@ function purgeIfCorrupt(message: string, repo: string, cacheDir: string): boolea
  * progress events read as loading rather than downloading.
  */
 function applyHubAccess(
-  env: { cacheDir: string; allowRemoteModels?: boolean },
+  env: { cacheDir: string | null; allowRemoteModels?: boolean },
   cacheDir: string,
   repo: string,
   dtype: LocalEmbedModelSpec['dtype']
@@ -221,21 +289,30 @@ function applyHubAccess(
   return present;
 }
 
+/** The pipeline's pooling option; a self-pooling model ignores it. */
+function pipelinePooling(s: LocalEmbedModelSpec): 'mean' | 'last_token' {
+  return s.pooling === 'last_token' ? 'last_token' : 'mean';
+}
+
 async function load(nextSpec: LocalEmbedModelSpec, cacheDir: string): Promise<void> {
   spec = nextSpec;
   postStatus({ state: 'loading' });
   try {
     const { pipeline, env } = await import('@huggingface/transformers');
     const cached = applyHubAccess(env, cacheDir, nextSpec.repo, nextSpec.dtype);
-    const pipe = (await pipeline('feature-extraction', nextSpec.repo, {
-      dtype: nextSpec.dtype,
-      session_options: SESSION_OPTIONS,
-      progress_callback: progressAggregator(cached, postStatus)
-    })) as unknown as Extractor;
+    const progress_callback = progressAggregator(cached, postStatus);
+    const pipe =
+      nextSpec.pooling === 'sentence_embedding'
+        ? await loadPooledExtractor(nextSpec.repo, { dtype: nextSpec.dtype, progress_callback })
+        : ((await pipeline('feature-extraction', nextSpec.repo, {
+            dtype: nextSpec.dtype,
+            session_options: SESSION_OPTIONS,
+            progress_callback
+          })) as unknown as Extractor);
     // Probe with a tiny input: verifies the model produces vectors, reports the
     // real dimension (not just the catalog's claim), and warms the session so the
     // first user-facing embed doesn't pay first-run graph-optimization cost.
-    const probe = await pipe(['ping'], { pooling: nextSpec.pooling ?? 'mean', normalize: true });
+    const probe = await pipe(['ping'], { pooling: pipelinePooling(nextSpec), normalize: true });
     dim = probe.dims[probe.dims.length - 1];
     extractor = pipe;
     postStatus({ state: 'ready', dim });
@@ -341,16 +418,47 @@ async function loadRerank(nextSpec: LocalRerankModelSpec, cacheDir: string): Pro
   }
 }
 
-/** One ONNX run over already-prefixed texts; one independent buffer per row. */
+/**
+ * Split a step so no ONNX run pads past this many characters in total (rows ×
+ * longest row). A batch pads every row to its longest, so one long passage
+ * among short ones multiplies the attention working set by the batch size. e5
+ * truncates at 512 tokens and never gets near it, but EmbeddingGemma 2 reads up
+ * to POOLED_MAX_TOKENS: eight rows padded to one long message would allocate
+ * gigabytes (measured in the utility process: 8 × 2,000 chars peaks at 1.9 GB).
+ * A text over the budget runs alone. Splitting costs no accuracy for the models
+ * that batch at all (Gemma 2 batched = single, cosine 1.0).
+ */
+const PADDED_RUN_MAX_CHARS = 8_000;
+
+function padBoundedRuns(texts: string[]): string[][] {
+  const runs: string[][] = [];
+  let run: string[] = [];
+  let longest = 0;
+  for (const t of texts) {
+    const next = Math.max(longest, t.length);
+    if (run.length > 0 && next * (run.length + 1) > PADDED_RUN_MAX_CHARS) {
+      runs.push(run);
+      run = [];
+      longest = 0;
+    }
+    run.push(t);
+    longest = Math.max(longest, t.length);
+  }
+  if (run.length > 0) runs.push(run);
+  return runs;
+}
+
+/** ONNX runs over already-prefixed texts; one independent buffer per row. */
 async function runEmbedStep(texts: string[]): Promise<Float32Array[]> {
   if (!extractor || !spec) throw new Error('model not loaded');
-  const pooling = spec.pooling ?? 'mean';
-  const out = await extractor(texts, { pooling, normalize: true });
-  const d = out.dims[out.dims.length - 1];
   const vectors: Float32Array[] = [];
-  for (let row = 0; row < texts.length; row++) {
-    // Copy each row out of the batch tensor so rows are independent buffers.
-    vectors.push(out.data.slice(row * d, (row + 1) * d));
+  for (const run of padBoundedRuns(texts)) {
+    const out = await extractor(run, { pooling: pipelinePooling(spec), normalize: true });
+    const d = out.dims[out.dims.length - 1];
+    for (let row = 0; row < run.length; row++) {
+      // Copy each row out of the batch tensor so rows are independent buffers.
+      vectors.push(out.data.slice(row * d, (row + 1) * d));
+    }
   }
   return vectors;
 }
@@ -391,10 +499,11 @@ async function rerank(id: number, query: string, docs: string[], topN: number): 
         for (const doc of batch) scores.push(await scoreGtePair(reranker, query, doc));
       } else if (reranker.scoring === 'causal-yes-no') {
         // ONE PAIR PER FORWARD PASS, not an oversight: this ONNX export (GQA
-        // fused for transformers.js v4) mis-attends across padding on the
-        // bundled 3.8.1 runtime — a mixed-length batch shifts EVERY row's
-        // logits by whole logit units (measured: identical-length batches
-        // reproduce single-pair scores exactly, mixed-length batches do not).
+        // fused) mis-attended across padding on transformers.js 3.8.1 — a
+        // mixed-length batch shifted EVERY row's logits by whole logit units
+        // (identical-length batches reproduced single-pair scores exactly).
+        // Not re-measured on 4.3.1, where the sibling Qwen3 embedder still
+        // drifts batched (min cosine 0.86, 2026-10-09), so it stays unbatched.
         // Unbatched scoring is also what makes the catalog floors stable
         // numbers at all; the bge notes document the same padding-drift class.
         const instruct = rerankSpec?.instruct ?? '';
@@ -453,7 +562,7 @@ async function dispose(): Promise<void> {
 // Model loads run ONE AT A TIME. Not just politeness: concurrent
 // InferenceSession creations in onnxruntime-node cross-contaminate — with a
 // corrupt e5-base cache, a simultaneous bge reranker load rejects with the E5
-// file's "Protobuf parsing failed" error (reproduced on the bundled 3.8.1),
+// file's "Protobuf parsing failed" error (reproduced on transformers.js 3.8.1),
 // which both takes down a healthy model and defeats purgeIfCorrupt's own-path
 // check. Serialized, the corrupt model fails alone with its own file named.
 // load()/loadRerank() never reject, so the chain can't wedge.

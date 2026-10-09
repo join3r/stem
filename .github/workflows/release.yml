@@ -33,7 +33,7 @@ jobs:
           for stray in src tests ios docs scripts Dockerfile; do
             if [ -e "$app/$stray" ]; then echo "::error::$stray/ leaked into the packaged app"; exit 1; fi
           done
-          ls "$app/node_modules/onnxruntime-node/bin/napi-v3"
+          ls "$app/node_modules/onnxruntime-node/bin/napi-v6"
       # latest-linux.yml is the AppImage's update feed: a running Stem polls it
       # on this release to learn a newer one exists (src/desktop/updates.ts).
       - uses: actions/upload-artifact@v4
@@ -68,7 +68,7 @@ jobs:
           for stray in src tests ios docs scripts Dockerfile; do
             if [ -e "$app/$stray" ]; then echo "::error::$stray/ leaked into the packaged app"; exit 1; fi
           done
-          ls "$app/node_modules/onnxruntime-node/bin/napi-v3"
+          ls "$app/node_modules/onnxruntime-node/bin/napi-v6"
       # An arm64 build writes latest-linux-arm64.yml — same feed, per-arch name,
       # so the two lanes never collide on one file.
       - uses: actions/upload-artifact@v4

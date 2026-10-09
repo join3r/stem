@@ -65,6 +65,15 @@ describe('embed catalog', () => {
     expect(EMBED_CATALOG['multilingual-e5-small'].unbatched).toBeUndefined();
   });
 
+  it('runs EmbeddingGemma 2 on its own pooled output, batched, with the model-card prompts', () => {
+    const spec = EMBED_CATALOG['embeddinggemma-2'];
+    expect(spec.pooling).toBe('sentence_embedding');
+    expect(spec.unbatched).toBeUndefined();
+    expect(spec.dtype).toBe('q8');
+    expect(applyPrefixes(spec, 'query', ['x'])).toEqual(['task: search result | query: x']);
+    expect(applyPrefixes(spec, 'passage', ['x'])).toEqual(['title: none | text: x']);
+  });
+
   it('namespaces local cache keys so they can never collide with remote model ids', () => {
     for (const spec of Object.values(EMBED_CATALOG)) {
       expect(localModelCacheKey(spec)).toBe(`local:${spec.repo}`);

@@ -53,11 +53,11 @@ export function RecallRecommendation({
   const [error, setError] = useState<string | null>(null);
   const patch = recommendedRetrievalPatch(retrieval);
   if (!patch) return null;
-  const { embedRemoteQwen3, rerankOk } = recallSetupStatus(retrieval);
-  // Only a reranker still to download counts as a second model: GTE alone on
-  // top of the Qwen3 pair is one ~340 MB download and no re-indexing.
+  const { rerankOk, factOk } = recallSetupStatus(retrieval);
+  // One download per stage the patch moves: the embedder (and a re-index), the
+  // Qwen3 reranker, and GTE on top of it.
   const embedChanges = Boolean(patch.embeddings);
-  const downloads = 1 + (embedChanges ? 1 : 0) + (!rerankOk ? 1 : 0);
+  const downloads = (embedChanges ? 1 : 0) + (!rerankOk ? 1 : 0) + (!factOk ? 1 : 0);
 
   async function apply() {
     if (!patch) return;
@@ -95,18 +95,13 @@ export function RecallRecommendation({
   return (
     <div className="callout callout-info release-notes-recommend" role="note" aria-label="Recommended memory setup">
       <p>
-        <strong>Memory search has a new recommended setup.</strong> This version ships Stem GTE Memory, a
-        model trained for Czech, Slovak, German and English that picks memories and skills on top of the
-        built-in Qwen3 models. It scored the best recall and the fastest ranking in Stem's benchmarks and
-        is the default for new installs. Your Stem still uses {describe(retrieval)}, because an update
-        never changes a setting you made.
-        {embedRemoteQwen3 && (
-          <>
-            {' '}
-            Stem GTE Memory needs the built-in Qwen3 embeddings, so this also moves embeddings off your
-            endpoint. It stops memory search depending on that server, and re-indexes your memory once.
-          </>
-        )}
+        <strong>Memory search has a new recommended setup.</strong> This version ships EmbeddingGemma 2,
+        a built-in embedding model that finds the candidate memories for each message. In Stem's
+        benchmarks it found about 70% of the memories that mattered where Qwen3 found under 40%, using
+        about half the memory. With Stem GTE Memory picking from what it finds, it is the default for new
+        installs. Your Stem still uses {describe(retrieval)}, because an update never changes a setting
+        you made.
+        {embedChanges && ' Switching re-indexes your memory once, in the background.'}
       </p>
       {state === 'error' && (
         <p className="retrieval-status-error">

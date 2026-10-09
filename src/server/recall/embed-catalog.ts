@@ -32,9 +32,12 @@ export interface LocalEmbedModelSpec {
   /**
    * How token states become one vector. Encoder models (e5, Gemma) mean-pool;
    * decoder-style embedders (Qwen3) read the last token, and mean-pooling them
-   * yields vectors that load fine and rank wrong. Absent means 'mean'.
+   * yields vectors that load fine and rank wrong. 'sentence_embedding' is a
+   * model that pools inside its own graph (EmbeddingGemma 2): the worker loads
+   * it text-only and reads that output instead of running a pipeline.
+   * Absent means 'mean'.
    */
-  pooling?: 'mean' | 'last_token';
+  pooling?: 'mean' | 'last_token' | 'sentence_embedding';
   /**
    * Embed one text per forward pass. Set for exports whose fused attention
    * mis-attends across padding on the bundled runtime: a mixed-length batch of
@@ -46,7 +49,28 @@ export interface LocalEmbedModelSpec {
 }
 
 export const EMBED_CATALOG: Record<LocalEmbedModelId, LocalEmbedModelSpec> = {
-  // Default since 2026-09-03. Measured on both recall benches (recall-bench/
+  // Default since 2026-10-09 (0.6.0). Measured 2026-10-09 against Qwen3 0.6B,
+  // both ONNX q8 on transformers.js 4.3.1, same Mac and threads (Stem mail
+  // "Gemma 2 vs Qwen3 Embedding Benchmark", report in the task's
+  // files/embedding-onnx-q8-20261009/): relevant facts in the top-24 pool
+  // 67.8% vs 39.0% on bench #1 and 73.5% vs 38.3% on bench #2, about half the
+  // peak RAM (1.27 vs 2.81 GB), and batched vectors identical to single ones,
+  // so it batches where Qwen3 cannot. Text-only: the same checkpoint carries
+  // vision/audio encoders that produced bit-identical text vectors and twice
+  // the memory, so the worker drops them. Its cosines sit on their own scale
+  // (embed-scale.ts). Needs transformers.js 4.3+ (EmbeddingGemma2Model).
+  'embeddinggemma-2': {
+    id: 'embeddinggemma-2',
+    repo: 'onnx-community/embeddinggemma-2-ONNX',
+    dim: 768,
+    dtype: 'q8',
+    approxSizeMB: 315,
+    label: 'EmbeddingGemma 2',
+    // Model card's retrieval prompts, the ones the benchmark used.
+    prefixes: { query: 'task: search result | query: ', passage: 'title: none | text: ' },
+    pooling: 'sentence_embedding'
+  },
+  // Default 2026-09-03 → 2026-10-09. Measured on both recall benches (recall-bench/
   // README + bench2/README): tied or edged the qwen3-embedding:4b Ollama
   // sidecar end-to-end with either reranker (bench #1 F1 0.26 vs 0.26, bench #2
   // 0.23 vs 0.21) at a quarter of the weights, and beat every e5/Gemma bundled
@@ -104,7 +128,7 @@ export const EMBED_CATALOG: Record<LocalEmbedModelId, LocalEmbedModelSpec> = {
   }
 };
 
-export const DEFAULT_LOCAL_EMBED_MODEL: LocalEmbedModelId = 'qwen3-embedding-0.6b';
+export const DEFAULT_LOCAL_EMBED_MODEL: LocalEmbedModelId = 'embeddinggemma-2';
 
 /**
  * The spec for whichever local embedder the settings select — a curated entry or

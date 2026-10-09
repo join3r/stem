@@ -25,6 +25,17 @@ describe('cosine floors per embedder scale', () => {
       expect(cosineScaleFor(key)).toBe('e5');
   });
 
+  it('gives EmbeddingGemma 2 its own measured scale, never the 300M model', () => {
+    expect(cosineScaleFor(localModelCacheKey(EMBED_CATALOG['embeddinggemma-2']))).toBe('gemma2');
+    expect(cosineScaleFor(localModelCacheKey(EMBED_CATALOG['embeddinggemma-300m']))).toBe('e5');
+    expect(cosineFloorsFor('local:onnx-community/embeddinggemma-2-ONNX')).toEqual(COSINE_FLOORS.gemma2);
+    const e5 = COSINE_FLOORS.e5;
+    const g = COSINE_FLOORS.gemma2;
+    for (const k of Object.keys(e5) as (keyof typeof e5)[]) expect(g[k]).toBeLessThan(e5[k]);
+    expect(g.strongRaw).toBeGreaterThan(g.message);
+    expect(g.message).toBeGreaterThan(g.summary);
+  });
+
   it('translates every floor downwards for Qwen3, in the same order as e5', () => {
     const e5 = COSINE_FLOORS.e5;
     const q = cosineFloorsFor('qwen3-embedding:4b');

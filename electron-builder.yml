@@ -91,7 +91,7 @@ files:
   # dlopen'd. libonnxruntime_providers_cuda.so exists for linux/x64 alone and is
   # 327MB — the whole reason the v0.2.0 x64 AppImage came out at twice the size
   # of the arm64 one (433MB vs 216MB).
-  - '!node_modules/onnxruntime-node/bin/napi-v3/*/*/libonnxruntime_providers_*'
+  - '!node_modules/onnxruntime-node/bin/napi-v6/*/*/libonnxruntime_providers_*'
 
 # NEVER add a platform-specific `files:` list under mac:/linux:. Top-level
 # `files` is normalised into one filter object; a platform list stays a plain
