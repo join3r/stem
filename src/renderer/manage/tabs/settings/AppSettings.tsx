@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { FolderOpen } from 'lucide-react';
 import type {
   ChatLayout,
   ChatWidth,
@@ -195,13 +196,14 @@ function AppearanceSection() {
             />
           </ValueRow>
         )}
-        <ValueRow label={<span />}>
+        <ValueRow label="Themes folder">
           <button
-            className="link-btn"
+            className="icon-action sm"
             onClick={() => void window.stem.revealThemesFolder()}
             title="Open the themes folder in the file manager"
+            aria-label="Open the themes folder"
           >
-            Open themes folder
+            <FolderOpen size={14} />
           </button>
         </ValueRow>
       </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { Check, Copy } from 'lucide-react';
 import type {
   AuthProviderId,
   ApiKeyProviderId,
@@ -383,8 +384,14 @@ export function OnboardingGate({
             </p>
             <code className="pair-cmd gate-cmd">{waylandShortcut.summonCommand}</code>
             <div className="gate-form-actions">
-              <button type="button" className="push" onClick={copySummonCommand}>
-                {copiedSummon ? 'Copied' : 'Copy command'}
+              <button
+                type="button"
+                className="icon-action"
+                onClick={copySummonCommand}
+                title={copiedSummon ? 'Copied' : 'Copy command'}
+                aria-label={copiedSummon ? 'Copied' : 'Copy command'}
+              >
+                {copiedSummon ? <Check size={14} /> : <Copy size={14} />}
               </button>
               <button type="button" className="primary" onClick={() => void leaveQuickChatSetup()}>
                 Start using Stem

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { Trash2, RefreshCw } from 'lucide-react';
 import { useOffline } from '../../hooks/useServerReachable';
 import { InfoTip } from '../../ui/InfoTip';
 import type {
@@ -159,7 +159,9 @@ export function EpisodicTab() {
             </InfoTip>
           </strong>
           <span className="memory-view-actions">
-            <button className="link-btn" onClick={load}>Refresh</button>
+            <button className="link-btn icon-only" data-label="Refresh" aria-label="Refresh" onClick={load}>
+              <RefreshCw size={13} />
+            </button>
           </span>
         </div>
         {resetMsg && <p className="muted">{resetMsg}</p>}
@@ -212,7 +214,9 @@ export function EpisodicTab() {
             </InfoTip>
           </strong>
           <span className="memory-view-actions">
-            <button className="link-btn" onClick={load}>Refresh</button>
+            <button className="link-btn icon-only" data-label="Refresh" aria-label="Refresh" onClick={load}>
+              <RefreshCw size={13} />
+            </button>
           </span>
         </div>
         {!summaries && <p className="muted">{offline ? unavailable : 'Loading…'}</p>}

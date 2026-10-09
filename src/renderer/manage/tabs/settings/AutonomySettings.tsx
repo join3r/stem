@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, ExternalLink, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, X, FolderOpen, Trash2 } from 'lucide-react';
 import type {
   BrowserHostLocalState,
   SetupBrowser,
@@ -557,11 +557,12 @@ export function AutonomySections() {
                           </>
                         ) : (
                           <button
-                            className="link-btn"
-                            title="Delete this folder's files — the chat itself stays"
+                            className="link-btn icon-only"
+                            data-label="Delete files (the chat stays)"
+                            aria-label="Delete this folder's files"
                             onClick={() => setConfirmClear(row.key)}
                           >
-                            Clear
+                            <Trash2 size={13} />
                           </button>
                         )}
                       </div>
@@ -872,8 +873,13 @@ function BrowserExtensionRow({
         }
       >
         {waiting ? (
-          <button className="btn sm" onClick={() => void window.stem.openBrowserExtensionsPage()}>
-            Show folder
+          <button
+            className="icon-action sm"
+            onClick={() => void window.stem.openBrowserExtensionsPage()}
+            title="Show folder"
+            aria-label="Show the extension folder"
+          >
+            <FolderOpen size={14} />
           </button>
         ) : (
           <button className="btn sm" disabled={busy} onClick={onSetUp}>

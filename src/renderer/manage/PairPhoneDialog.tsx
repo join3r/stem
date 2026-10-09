@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Smartphone } from 'lucide-react';
+import { Smartphone, Check, Copy } from 'lucide-react';
 import type { PairingCodeInfo } from '../../shared/types';
 import { pairingLink } from '../../shared/pair-link';
 import { tryQrPath } from '../../shared/qr';
@@ -184,8 +184,14 @@ export function PairPhoneDialog({
             </button>
           ) : (
             link && (
-              <button type="button" className="push" onClick={copyLink}>
-                {copied ? 'Copied' : 'Copy link'}
+              <button
+                type="button"
+                className="icon-action"
+                onClick={copyLink}
+                title={copied ? 'Copied' : 'Copy link'}
+                aria-label={copied ? 'Copied' : 'Copy link'}
+              >
+                {copied ? <Check size={14} /> : <Copy size={14} />}
               </button>
             )
           )}

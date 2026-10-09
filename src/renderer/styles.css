@@ -1295,9 +1295,9 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   position: absolute;
   top: 7px;
   right: 7px;
-  padding: 3px 9px;
-  font-size: var(--fs-11);
-  font-family: inherit;
+  display: grid;
+  place-items: center;
+  padding: 4px;
   color: var(--code-ink);
   background: color-mix(in srgb, var(--code-ink) 12%, transparent);
   border: 0.5px solid color-mix(in srgb, var(--code-ink) 22%, transparent);
@@ -3254,6 +3254,8 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 }
 .cfolder-missing { font-weight: 400; }
 .icon-action.sm { width: 26px; height: 26px; }
+/* In a line of text (an error note's Retry). */
+.icon-action.inline { display: inline-grid; vertical-align: middle; width: 22px; height: 22px; }
 /* Cards collapse to head + a one-line state summary; the whole head toggles.
    The chevron is the keyboard-reachable control (aria-expanded lives there). */
 .cfolder-head-toggle { cursor: pointer; }

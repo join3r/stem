@@ -22,7 +22,9 @@ import {
   Send,
   ShieldAlert,
   Square,
-  X
+  X,
+  Pencil,
+  Trash2
 } from 'lucide-react';
 import { MAIL_BETA_TITLE } from '../chats/ChatList';
 import type {
@@ -323,14 +325,26 @@ export const MailConversationView = forwardRef<MailViewHandle, {
         <>
           <p className="mail-pending-error">{p.error || 'The server didn’t answer.'} Your text is safe.</p>
           <div className="mail-pending-actions">
-            <button type="button" className="push default" onClick={() => onRetrySend(p.id)}>
-              <RotateCcw size={12} /> Retry
+            <button
+              type="button"
+              className="icon-action sm"
+              onClick={() => onRetrySend(p.id)}
+              title="Retry"
+              aria-label="Retry sending"
+            >
+              <RotateCcw size={13} />
             </button>
-            <button type="button" className="push" onClick={() => editSend(p)}>
-              Edit
+            <button type="button" className="icon-action sm" onClick={() => editSend(p)} title="Edit" aria-label="Edit">
+              <Pencil size={13} />
             </button>
-            <button type="button" className="push" onClick={() => onDropSend(p.id)}>
-              Delete
+            <button
+              type="button"
+              className="icon-action sm"
+              onClick={() => onDropSend(p.id)}
+              title="Delete"
+              aria-label="Delete"
+            >
+              <Trash2 size={13} />
             </button>
           </div>
         </>
@@ -576,7 +590,10 @@ export const MailConversationView = forwardRef<MailViewHandle, {
         )}
         {work.error && (
           <p className="mail-work-note">
-            {work.error} <button type="button" onClick={work.refresh}>Retry</button>
+            {work.error}{' '}
+            <button type="button" className="icon-action sm inline" onClick={work.refresh} title="Retry" aria-label="Retry">
+              <RotateCcw size={12} />
+            </button>
           </p>
         )}
         {layout.entries.map((entry) => (isOpen(entry.item.id) ? card(entry) : folded(entry)))}

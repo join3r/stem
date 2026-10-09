@@ -1,4 +1,5 @@
 import type { ReactElement, ReactNode } from 'react';
+import { Check, Copy } from 'lucide-react';
 import { Children, Fragment, isValidElement, useMemo, useState } from 'react';
 import { useMdxActions } from './ActionContext';
 import { parseTable } from './data';
@@ -87,8 +88,9 @@ export function CodeBlock({ lang, value }: { lang?: string; value: string }) {
         className="code-copy"
         onClick={copy}
         aria-label={copied ? 'Copied' : 'Copy code'}
+        title={copied ? 'Copied' : 'Copy code'}
       >
-        {copied ? 'Copied' : 'Copy'}
+        {copied ? <Check size={13} /> : <Copy size={13} />}
       </button>
       <pre className="code-block" data-lang={lang ?? ''}>
         <code>{colored ?? value}</code>

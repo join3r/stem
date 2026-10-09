@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Copy, FolderSearch, Plus, Trash2 } from 'lucide-react';
+import { Copy, FolderSearch, Plus, Trash2, RefreshCw } from 'lucide-react';
 import type {
   ClientInfo,
   DeviceInfo,
@@ -1152,8 +1152,14 @@ function HarnessModelSelect({
           {listed && (
             <>
               Models offered by {listed.agent} on {listed.hostLabel}.{' '}
-              <button type="button" className="link-btn" onClick={probe}>
-                Refresh
+              <button
+                type="button"
+                className="link-btn icon-only"
+                data-label="Refresh"
+                aria-label="Refresh the model list"
+                onClick={probe}
+              >
+                <RefreshCw size={12} />
               </button>
             </>
           )}

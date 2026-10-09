@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plug, ChevronRight, X, Check, Trash2, Wand2, Eye, RefreshCw, Pin, RotateCcw, ShieldCheck, Lock, Send, TriangleAlert, FolderInput, Image } from 'lucide-react';
+import { Plug, ChevronRight, X, Check, Trash2, Wand2, Eye, RefreshCw, Pin, RotateCcw, ShieldCheck, Lock, Send, TriangleAlert, FolderInput, Image, Pencil, Pause, Play } from 'lucide-react';
 import type {
   DefaultsSettings,
   MemoryContents,
@@ -229,11 +229,16 @@ function ImportedModels({
           {models.map((m) => (
             <div key={m.id} className="custom-model-row">
               <span className="muted">{m.label}</span>
-              <button className="link-btn" onClick={() => setEditing(m)}>
-                Edit
+              <button className="link-btn icon-only" data-label="Edit" aria-label="Edit" onClick={() => setEditing(m)}>
+                <Pencil size={13} />
               </button>
-              <button className="link-btn danger" onClick={() => void drop(m)}>
-                Remove
+              <button
+                className="link-btn icon-only danger"
+                data-label="Remove"
+                aria-label="Remove"
+                onClick={() => void drop(m)}
+              >
+                <Trash2 size={13} />
               </button>
             </div>
           ))}
@@ -1241,13 +1246,23 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
                 </button>
               )}
               {rebuild.state === 'running' && (
-                <button className="link-btn" onClick={() => window.stem.pauseMemoryRebuild().then(setRebuild)}>
-                  Pause
+                <button
+                  className="link-btn icon-only"
+                  data-label="Pause"
+                  aria-label="Pause rebuild"
+                  onClick={() => window.stem.pauseMemoryRebuild().then(setRebuild)}
+                >
+                  <Pause size={13} />
                 </button>
               )}
               {(rebuild.state === 'paused' || rebuild.state === 'failed') && (
-                <button className="link-btn" onClick={() => window.stem.resumeMemoryRebuild().then(setRebuild)}>
-                  {rebuild.state === 'failed' ? 'Retry' : 'Resume'}
+                <button
+                  className="link-btn icon-only"
+                  data-label={rebuild.state === 'failed' ? 'Retry' : 'Resume'}
+                  aria-label={rebuild.state === 'failed' ? 'Retry rebuild' : 'Resume rebuild'}
+                  onClick={() => window.stem.resumeMemoryRebuild().then(setRebuild)}
+                >
+                  {rebuild.state === 'failed' ? <RotateCcw size={13} /> : <Play size={13} />}
                 </button>
               )}
             </div>
