@@ -1908,6 +1908,7 @@ export default function App() {
               activeMailId={mailView?.kind === 'conversation' ? mailView.id : null}
               onOpenMail={openMail}
               onComposeMail={composeMail}
+              composeMailOpen={mailView?.kind === 'compose' && !mailView.forward}
               onMailArchive={mailApi.archive}
               onMailSnooze={mailApi.snooze}
               onMailSetRead={mailApi.setRead}

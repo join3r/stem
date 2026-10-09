@@ -8,7 +8,22 @@ import {
   useRef,
   useState
 } from 'react';
-import { File, Forward, Paperclip, Plus, RotateCcw, Send, ShieldAlert, Square, X } from 'lucide-react';
+import {
+  Check,
+  ChevronUp,
+  Clock,
+  CornerDownRight,
+  File,
+  Forward,
+  Lock,
+  Paperclip,
+  Plus,
+  RotateCcw,
+  Send,
+  ShieldAlert,
+  Square,
+  X
+} from 'lucide-react';
 import { MAIL_BETA_TITLE } from '../chats/ChatList';
 import type {
   MailApproval,
@@ -23,7 +38,9 @@ import type {
 import { MdxView } from '../chat/MdxView';
 import { formatSystemVersion, sameSystem } from '../../shared/sys-version';
 import { forwardAttachments, forwardCompose, forwardQuote, forwardSubject } from '../../shared/mail-forward';
-import { groupMailTimeline } from './grouping';
+import { mailPreviewText } from '../../shared/mail-subject';
+import { exchangeLabel, layoutThread, type ThreadEntry } from './thread';
+import { MailToField } from './MailToField';
 import { personaName, type PendingSend } from './useMail';
 import {
   EMPTY_COMPOSE,
@@ -36,10 +53,10 @@ import { useMailWork } from './useMailWork';
 import { MailWork } from './MailWork';
 import { GeneratedImages } from '../chat/GeneratedImage';
 
-// The centre pane's mail surface: a conversation read like email (discrete
-// mails, newest last, a reply box underneath), or the compose form for a new
-// one. Replies stay discrete while the Work disclosure below their originating
-// mail preserves the live activity of every participating persona.
+// The centre pane's mail surface: a conversation read like the Inbox (newest
+// on top, the reply box above the mail it answers, older mails folded to one
+// line), or the compose form for a new one. The personas' consulting folds onto
+// the reply it produced, and their live work shows on a card at the top.
 
 /** Path-less bytes (a pasted screenshot) become base64, same as the chat composer. */
 function fileToAttachment(file: globalThis.File): Promise<TurnAttachment> {
@@ -197,41 +214,27 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   }));
   const [addingTo, setAddingTo] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
-  // Expanded exchange groups, keyed by their oldest item's id (stable across refreshes).
+  // Mails the user opened or folded, flipping their default (see layoutThread).
+  const [flipped, setFlipped] = useState<Set<string>>(new Set());
+  // Mails whose folded-in persona exchange is shown.
   const [openExchanges, setOpenExchanges] = useState<Set<string>>(new Set());
   const now = Date.now();
   const scrollRef = useRef<HTMLDivElement>(null);
   const mails = useMemo(
-    () => items.filter((i) => i.conversationId === conversation.id).sort((a, b) => a.at - b.at),
+    () => items.filter((i) => i.conversationId === conversation.id),
     [items, conversation.id]
   );
-  // Fold in time order, then show newest first — mail reads top-down, not like a chat.
-  const groups = useMemo(
-    () =>
-      groupMailTimeline(mails)
-        .map((g) => (g.kind === 'exchange' ? { ...g, items: [...g.items].reverse() } : g))
-        .reverse(),
-    [mails]
-  );
   const work = useMailWork(conversation.id);
-  const workGroups = work.groups;
-  const workByMail = useMemo(() => {
-    const mapped = new Map<string, MailWorkGroup[]>();
-    for (const group of workGroups) {
-      const anchor = group.notificationItemId ?? group.sourceItemId;
-      if (!anchor) continue;
-      mapped.set(anchor, [...(mapped.get(anchor) ?? []), group]);
-    }
-    return mapped;
-  }, [workGroups]);
-  const unlinkedWork = workGroups.filter((group) => {
-    const anchor = group.notificationItemId ?? group.sourceItemId;
-    return !anchor || !mails.some((mail) => mail.id === anchor);
-  });
+  const layout = useMemo(() => layoutThread(mails, work.groups), [mails, work.groups]);
   const addable = useMemo(
     () => personas.filter((p) => !conversation.participants.includes(p.id)),
     [personas, conversation.participants]
   );
+  const name = (id: string) => (id === 'user' ? 'You' : personaName(personas, id));
+  const lead = conversation.participants[0];
+  // A run parked on the user's Allow/Deny takes the next mail instead of the lead.
+  const parkedBy = layout.entries.find((e) => e.item.approval?.status === 'pending')?.item.from;
+  const recipient = parkedBy ?? lead;
   // Land at the newest mail (the top) on open and when one arrives.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
@@ -244,6 +247,38 @@ export const MailConversationView = forwardRef<MailViewHandle, {
     setDraft('');
     files.clear();
   };
+
+  const forward = (m: MailItem) => {
+    // The quote is read by a persona: "User", not the renderer's "You".
+    const who = (id: string) => (id === 'user' ? 'User' : personaName(personas, id));
+    onForward({
+      key: m.id,
+      subject: forwardSubject(conversation.subject),
+      quote: forwardQuote(
+        {
+          from: who(m.from),
+          to: m.to.map(who),
+          at: m.at,
+          subject: m.subject ?? conversation.subject,
+          // A scheduled run's report is part of the mail as the user reads it.
+          body: m.result ? `${m.body}\n\n${m.result}` : m.body,
+          attachments: m.attachments
+        },
+        (at) => new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+      ),
+      attachments: forwardAttachments(m.attachments).attachments
+    });
+  };
+
+  const toggle = (set: React.Dispatch<React.SetStateAction<Set<string>>>, key: string) => {
+    set((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const isOpen = (id: string) => layout.defaultOpen.has(id) !== flipped.has(id);
 
   /** A failed send goes back into the box for another try; it leaves the thread. */
   const editSend = (p: PendingSend) => {
@@ -260,7 +295,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
     >
       <div className="mail-item-head">
         <strong>You</strong>
-        <span className="mail-item-to">to {personaName(personas, conversation.participants[0])}</span>
+        <span className="mail-item-to">to {name(recipient)}</span>
         <span className="mail-pending-state">
           {p.status === 'sending' ? (
             <>
@@ -301,150 +336,193 @@ export const MailConversationView = forwardRef<MailViewHandle, {
     </article>
   );
 
-  const forward = (m: MailItem) => {
-    // The quote is read by a persona: "User", not the renderer's "You".
-    const who = (id: string) => (id === 'user' ? 'User' : personaName(personas, id));
-    onForward({
-      key: m.id,
-      subject: forwardSubject(conversation.subject),
-      quote: forwardQuote(
-        {
-          from: who(m.from),
-          to: m.to.map(who),
-          at: m.at,
-          subject: m.subject ?? conversation.subject,
-          // A scheduled run's report is part of the mail as the user reads it.
-          body: m.result ? `${m.body}\n\n${m.result}` : m.body,
-          attachments: m.attachments
-        },
-        (at) => new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-      ),
-      attachments: forwardAttachments(m.attachments).attachments
-    });
-  };
-
-  const toggleExchange = (key: string) => {
-    setOpenExchanges((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const mailCard = (m: MailItem, exchange: boolean) => (
-    <Fragment key={m.id}>
-    <article className={`mail-item${m.from === 'user' ? ' from-user' : ''}${exchange ? ' exchange' : ''}`}>
-      <div className="mail-item-head">
-        <strong title={m.sys ? `Made by system: ${formatSystemVersion(m.sys)}` : undefined}>
-          {m.from === 'user' ? 'You' : personaName(personas, m.from)}
-        </strong>
-        {m.sys && currentSys && !sameSystem(m.sys, currentSys) && (
-          <span
-            className="mail-item-sys"
-            title={`Made by an older version of the persona system (${formatSystemVersion(m.sys)}); now ${formatSystemVersion(currentSys)}`}
-          >
-            older system
-          </span>
-        )}
-        {exchange && <span className="mail-item-to">→ {m.to.map((t) => (t === 'user' ? 'You' : personaName(personas, t))).join(', ')}</span>}
-        {m.stale && (
-          <span
-            className="mail-item-stale"
-            title="This landed after you had already sent a newer mail — it answers an earlier one"
-          >
-            ↩ answers your earlier mail
-          </span>
-        )}
-        <span className="mail-item-at">{formatAt(m.at, now)}</span>
-        <button
-          type="button"
-          className="icon-action sm mail-item-forward"
-          onClick={() => forward(m)}
-          title="Forward — send this mail on to personas in a new conversation"
-          aria-label="Forward this mail"
-        >
-          <Forward size={13} />
-        </button>
+  const exchangeMails = (key: string, exchange: MailItem[]) =>
+    openExchanges.has(key) && (
+      <div className="mail-exchange">
+        {exchange.map((m) => (
+          <article key={m.id} className="mail-item exchange">
+            <div className="mail-item-head">
+              <strong>{name(m.from)}</strong>
+              <span className="mail-item-to">→ {m.to.map(name).join(', ')}</span>
+              <span className="mail-item-at">{formatAt(m.at, now)}</span>
+            </div>
+            <MdxView text={m.body} />
+          </article>
+        ))}
       </div>
-      {m.subject && <h2 className="mail-item-subject">{m.subject}</h2>}
-      {m.from === 'user' ? <p className="mail-item-body-plain">{m.body}</p> : <MdxView text={m.body} />}
-      {m.result && (
-        <section className="mail-item-result" aria-label="The run’s reply">
-          <MdxView text={m.result} />
-        </section>
-      )}
-      {m.agentReplies && m.agentReplies.length > 0 && (
-        <details className="mail-item-agent">
-          <summary className="mail-item-agent-summary">
-            <strong>Coding agent’s reply</strong>
-            <span>{m.agentReplies.length === 1 ? 'as received' : `${m.agentReplies.length} exchanges, as received`}</span>
-          </summary>
-          <div className="mail-item-agent-content">
-            {m.agentReplies.map((text, i) => (
-              <section key={i} className="mail-item-agent-reply">
-                <MdxView text={text} />
-              </section>
-            ))}
-          </div>
-        </details>
-      )}
-      {m.approval && <MailApprovalBlock itemId={m.id} approval={m.approval} />}
-      {m.images && m.images.length > 0 && <GeneratedImages images={m.images} live={false} />}
-      {m.attachments && m.attachments.length > 0 && (
-        <div className="message-attachments">
-          {m.attachments.map((att, i) =>
-            att.kind === 'image' && att.dataUrl ? (
-              <img key={i} className="message-image" src={att.dataUrl} alt={att.name ?? 'attachment'} />
-            ) : (
-              <span className="attachment-chip" key={i}>
-                <File size={13} />
-                <span className="attachment-name">{att.name ?? 'file'}</span>
+    );
+
+  const exchangeChip = (key: string, exchange: MailItem[], author: string) =>
+    exchange.length > 0 && (
+      <button
+        type="button"
+        className="mail-chip"
+        aria-expanded={openExchanges.has(key)}
+        onClick={(e) => {
+          e.stopPropagation();
+          toggle(setOpenExchanges, key);
+        }}
+        title="The mail the personas sent each other before this reply"
+      >
+        <CornerDownRight size={12} />
+        {exchangeLabel(exchange, author, name)}
+      </button>
+    );
+
+  const folded = (entry: ThreadEntry) => {
+    const m = entry.item;
+    return (
+      <Fragment key={m.id}>
+        <button type="button" className="mail-fold" onClick={() => toggle(setFlipped, m.id)} aria-expanded={false}>
+          <span className="mail-fold-who">{name(m.from)}</span>
+          <span className="mail-fold-gist">{mailPreviewText(m.body) || (m.attachments?.length ? 'Attachments' : '')}</span>
+          {exchangeChip(m.id, entry.exchange, m.from)}
+          {m.stale && <span className="mail-item-stale">↩ earlier mail</span>}
+          <span className="mail-fold-at">{formatAt(m.at, now)}</span>
+        </button>
+        {exchangeMails(m.id, entry.exchange)}
+      </Fragment>
+    );
+  };
+
+  const card = (entry: ThreadEntry) => {
+    const m = entry.item;
+    return (
+      <Fragment key={m.id}>
+        <article className={`mail-item${m.from === 'user' ? ' from-user' : ''}`}>
+          <div className="mail-item-head">
+            <strong title={m.sys ? `Made by system: ${formatSystemVersion(m.sys)}` : undefined}>{name(m.from)}</strong>
+            <span className="mail-item-to">to {m.to.map((t) => (t === 'user' ? 'you' : name(t))).join(', ')}</span>
+            {m.sys && currentSys && !sameSystem(m.sys, currentSys) && (
+              <span
+                className="mail-item-sys"
+                title={`Made by an older version of the persona system (${formatSystemVersion(m.sys)}); now ${formatSystemVersion(currentSys)}`}
+              >
+                older system
               </span>
-            )
+            )}
+            {m.stale && (
+              <span
+                className="mail-item-stale"
+                title="This landed after you had already sent a newer mail — it answers an earlier one"
+              >
+                ↩ answers your earlier mail
+              </span>
+            )}
+            <span className="mail-item-at">{formatAt(m.at, now)}</span>
+            <button
+              type="button"
+              className="icon-action sm mail-item-btn"
+              onClick={() => forward(m)}
+              title="Forward — send this mail on to personas in a new conversation"
+              aria-label="Forward this mail"
+            >
+              <Forward size={13} />
+            </button>
+            {m.approval?.status !== 'pending' && (
+              <button
+                type="button"
+                className="icon-action sm mail-item-btn"
+                onClick={() => toggle(setFlipped, m.id)}
+                title="Fold this mail to one line"
+                aria-label="Fold this mail"
+              >
+                <ChevronUp size={13} />
+              </button>
+            )}
+          </div>
+          {m.subject && <h2 className="mail-item-subject">{m.subject}</h2>}
+          {m.from === 'user' ? <p className="mail-item-body-plain">{m.body}</p> : <MdxView text={m.body} />}
+          {m.result && (
+            <section className="mail-item-result" aria-label="The run’s reply">
+              <MdxView text={m.result} />
+            </section>
           )}
-        </div>
-      )}
-    </article>
-    {workByMail.get(m.id)?.map((group) => <MailWork key={group.id} group={group} personas={personas} />)}
-    </Fragment>
-  );
+          {m.agentReplies && m.agentReplies.length > 0 && (
+            <details className="mail-item-agent">
+              <summary className="mail-item-agent-summary">
+                <strong>Coding agent’s reply</strong>
+                <span>{m.agentReplies.length === 1 ? 'as received' : `${m.agentReplies.length} exchanges, as received`}</span>
+              </summary>
+              <div className="mail-item-agent-content">
+                {m.agentReplies.map((text, i) => (
+                  <section key={i} className="mail-item-agent-reply">
+                    <MdxView text={text} />
+                  </section>
+                ))}
+              </div>
+            </details>
+          )}
+          {m.approval && <MailApprovalBlock itemId={m.id} approval={m.approval} />}
+          {m.images && m.images.length > 0 && <GeneratedImages images={m.images} live={false} />}
+          {m.attachments && m.attachments.length > 0 && (
+            <div className="message-attachments">
+              {m.attachments.map((att, i) =>
+                att.kind === 'image' && att.dataUrl ? (
+                  <img key={i} className="message-image" src={att.dataUrl} alt={att.name ?? 'attachment'} />
+                ) : (
+                  <span className="attachment-chip" key={i}>
+                    <File size={13} />
+                    <span className="attachment-name">{att.name ?? 'file'}</span>
+                  </span>
+                )
+              )}
+            </div>
+          )}
+          {(entry.exchange.length > 0 || entry.work.length > 0) && (
+            <div className="mail-item-foot">
+              {exchangeChip(m.id, entry.exchange, m.from)}
+              {entry.work.map((group) => (
+                <MailWork key={group.id} group={group} personas={personas} />
+              ))}
+            </div>
+          )}
+        </article>
+        {exchangeMails(m.id, entry.exchange)}
+      </Fragment>
+    );
+  };
+
+  const working = conversation.status === 'working';
+  const showOthers = conversation.participants.filter((p) => p !== recipient);
 
   return (
     <div className="mail-view">
       <header className="mail-head">
-        <h1 title={conversation.subject}>{conversation.subject}</h1>
-        <span className="mail-head-to">
-          To: {conversation.participants.map((p) => personaName(personas, p)).join(', ')}
-          {addable.length > 0 && (
-            <button
-              className="icon-action sm mail-add-toggle"
-              onClick={() => setAddingTo((v) => !v)}
-              title="Add a persona to this conversation"
-              aria-label="Add a persona to this conversation"
-              aria-expanded={addingTo}
-            >
-              <Plus size={12} />
-            </button>
-          )}
-          {conversation.status === 'working' && (
-            <>
-              <em> · working…</em>
-              <button
-                className="icon-action sm mail-stop"
-                onClick={onStop}
-                title="Stop — drop queued deliveries and interrupt the running personas"
-                aria-label="Stop the personas working this conversation"
-              >
-                <Square size={11} />
-              </button>
-            </>
-          )}
-          {conversation.status === 'awaiting-user' && <em> · waiting on your reply</em>}
-          {conversation.status === 'failed' && <em> · failed — the last mail says why; reply to try again</em>}
-          {conversation.status === 'aborted' && <em> · stopped — reply to pick it back up</em>}
-        </span>
-        {addingTo && addable.length > 0 && (
+        <div className="mail-head-main">
+          <h1 title={conversation.subject}>{conversation.subject}</h1>
+          <div className="mail-head-to">
+            <span>
+              <strong>{name(lead)}</strong>
+              {conversation.participants.length > 1 && ' leads'}
+              {conversation.participants.slice(1).map((p) => ` · ${name(p)}`)}
+            </span>
+            {working && (
+              <span className="mail-status working">
+                <span className="mail-spin" aria-hidden="true" /> Working
+              </span>
+            )}
+            {conversation.status === 'awaiting-user' && <span className="mail-status waiting">Waiting on you</span>}
+            {conversation.status === 'failed' && (
+              <span className="mail-status failed">Failed — the latest mail says why; reply to try again</span>
+            )}
+            {conversation.status === 'aborted' && <span className="mail-status">Stopped — reply to pick it back up</span>}
+          </div>
+        </div>
+        {addable.length > 0 && (
+          <button
+            className="icon-action mail-add-toggle"
+            onClick={() => setAddingTo((v) => !v)}
+            title="Add a persona to this conversation"
+            aria-label="Add a persona to this conversation"
+            aria-expanded={addingTo}
+          >
+            <Plus size={14} />
+          </button>
+        )}
+      </header>
+      {addingTo && addable.length > 0 && (
+        <div className="mail-add-row">
           <div className="mail-to-chips mail-add-chips" role="group" aria-label="Personas to add">
             {addable.map((p) => (
               <button
@@ -462,69 +540,234 @@ export const MailConversationView = forwardRef<MailViewHandle, {
               </button>
             ))}
           </div>
-        )}
-        {addingTo && addError && <p className="task-failed">{addError}</p>}
-      </header>
-      <div className="mail-items" ref={scrollRef}>
-        {[...pending].reverse().map(pendingCard)}
-        {unlinkedWork.map((group) => <MailWork key={group.id} group={group} personas={personas} unlinked />)}
-        {work.error && <p className="mail-work-note">{work.error} <button type="button" onClick={work.refresh}>Retry</button></p>}
-        {groups.map((group) => {
-          if (group.kind === 'mail') return mailCard(group.item, false);
-          // The exchange's oldest item (last after the flip) — stable as new mail lands.
-          const key = group.items[group.items.length - 1].id;
-          const open = openExchanges.has(key);
-          const n = group.items.length;
-          return (
-            <div key={key} className="mail-exchange">
-              <button className="mail-exchange-toggle" onClick={() => toggleExchange(key)}>
-                {n} {n === 1 ? 'mail' : 'mails'} exchanged · {open ? 'hide' : 'show'}
-              </button>
-              {open && group.items.map((m) => mailCard(m, true))}
-            </div>
-          );
-        })}
-        {mails.length === 0 && (
-          <p className="muted">This conversation has no mail yet.</p>
-        )}
-      </div>
-      <div className="mail-reply" onDragOver={(e) => e.preventDefault()} onDrop={files.onDrop}>
-        <AttachmentChips attachments={files.attachments} onRemove={files.remove} />
-        <div className="mail-reply-row">
-          <button
-            type="button"
-            className="composer-attach"
-            title="Attach"
-            onClick={() => void files.pickFiles()}
-          >
-            <Paperclip size={15} />
-          </button>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={`Reply to ${conversation.participants.map((p) => personaName(personas, p)).join(', ')}…`}
-            rows={3}
-            onPaste={(e) => void files.onPaste(e)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                send();
-              }
-            }}
-          />
-          <button
-            className="mail-send"
-            onClick={send}
-            disabled={!draft.trim() && !files.attachments.length}
-            title="Send reply (⌘↵)"
-          >
-            <Send size={14} /> Send
-          </button>
+          {addError && <p className="task-failed">{addError}</p>}
         </div>
+      )}
+      <div className="mail-items" ref={scrollRef}>
+        <ReplyBox
+          key={conversation.id}
+          draft={draft}
+          setDraft={setDraft}
+          files={files}
+          recipient={name(recipient)}
+          others={showOthers.map(name)}
+          parked={!!parkedBy}
+          working={working}
+          onSend={send}
+        />
+        {[...pending].reverse().map(pendingCard)}
+        {working && (
+          <LiveCard
+            groups={layout.liveWork}
+            lead={name(lead)}
+            personas={personas}
+            onStop={onStop}
+          />
+        )}
+        {layout.trailingExchange.length > 0 && (
+          <>
+            <div className="mail-fold-row">
+              {exchangeChip('trailing', layout.trailingExchange, lead)}
+            </div>
+            {exchangeMails('trailing', layout.trailingExchange)}
+          </>
+        )}
+        {work.error && (
+          <p className="mail-work-note">
+            {work.error} <button type="button" onClick={work.refresh}>Retry</button>
+          </p>
+        )}
+        {layout.entries.map((entry) => (isOpen(entry.item.id) ? card(entry) : folded(entry)))}
+        {layout.unlinkedWork.length > 0 && (
+          <details className="mail-earlier-work">
+            <summary>
+              Earlier work · {layout.unlinkedWork.length} {layout.unlinkedWork.length === 1 ? 'record' : 'records'} not tied to a mail
+            </summary>
+            {layout.unlinkedWork.map((group) => (
+              <MailWork key={group.id} group={group} personas={personas} unlinked />
+            ))}
+          </details>
+        )}
+        {mails.length === 0 && pending.length === 0 && <p className="muted">This conversation has no mail yet.</p>}
       </div>
     </div>
   );
 });
+
+/**
+ * The reply box, on top under the header like an email client's: one line
+ * until you click into it or have a draft, then it says who gets the reply.
+ */
+function ReplyBox({
+  draft,
+  setDraft,
+  files,
+  recipient,
+  others,
+  parked,
+  working,
+  onSend
+}: {
+  draft: string;
+  setDraft: (text: string) => void;
+  files: ReturnType<typeof useAttachmentDraft>;
+  recipient: string;
+  others: string[];
+  parked: boolean;
+  working: boolean;
+  onSend: () => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const hasDraft = !!draft.trim() || files.attachments.length > 0;
+  const expanded = focused || hasDraft;
+  return (
+    <div
+      ref={boxRef}
+      className={`mail-reply${expanded ? ' expanded' : ''}`}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={files.onDrop}
+      onFocus={() => setFocused(true)}
+      onBlur={(e) => {
+        // Moving to the box's own buttons keeps it open; leaving it collapses an empty one.
+        if (!boxRef.current?.contains(e.relatedTarget as Node | null)) setFocused(false);
+      }}
+    >
+      {expanded && (
+        <div className="mail-reply-to">
+          <span>To</span>
+          <span className="mail-reply-recipient">{recipient}</span>
+          {parked ? (
+            <span>instead of answering its Allow or Deny.</span>
+          ) : (
+            others.length > 0 && (
+              <span>
+                {others.join(', ')} {others.length === 1 ? 'hears' : 'hear'} this only if {recipient} asks.
+              </span>
+            )
+          )}
+        </div>
+      )}
+      {expanded && working && (
+        <p className="mail-reply-note">
+          <Clock size={13} />
+          {recipient} reads this when its current run ends. If that run answers your earlier mail, it’s marked so.
+        </p>
+      )}
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        aria-label={`Reply to ${recipient}`}
+        placeholder={parked ? `Or answer in words — ${recipient} gets this instead of Allow or Deny` : `Reply to ${recipient}`}
+        rows={expanded ? 3 : 1}
+        onPaste={(e) => void files.onPaste(e)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            onSend();
+          }
+        }}
+      />
+      {expanded && (
+        <>
+          <AttachmentChips attachments={files.attachments} onRemove={files.remove} />
+          <div className="mail-reply-actions">
+            <button type="button" className="icon-action" title="Attach" aria-label="Attach" onClick={() => void files.pickFiles()}>
+              <Paperclip size={14} />
+            </button>
+            {hasDraft && (
+              <span className="mail-draft-saved">
+                <Check size={12} /> Draft saved
+              </span>
+            )}
+            <span className="mail-compose-spacer" />
+            <span className="mail-kbd">⌘↵</span>
+            <button className="mail-send" onClick={onSend} disabled={!hasDraft} title="Send reply (⌘↵)">
+              <Send size={14} /> Send
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** While personas work: who is on it, the latest steps, and Stop — at the top, where you look. */
+function LiveCard({
+  groups,
+  lead,
+  personas,
+  onStop
+}: {
+  groups: MailWorkGroup[];
+  lead: string;
+  personas: Persona[];
+  onStop: () => void;
+}) {
+  const [now, setNow] = useState(Date.now);
+  const [showWork, setShowWork] = useState(false);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const runs = groups.flatMap((g) => g.runs).filter((r) => r.status === 'running');
+  const names = [...new Set(runs.map((r) => personaName(personas, r.personaId)))];
+  const who = names.length ? names : [lead];
+  const started = runs.length ? Math.min(...runs.map((r) => r.startedAt)) : null;
+  const steps = runs
+    .flatMap((r) => r.activities)
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 3);
+  const elapsed = started ? Math.max(0, Math.floor((now - started) / 1000)) : null;
+  return (
+    <section className="mail-live" aria-label="Live progress" aria-live="polite">
+      <div className="mail-live-head">
+        <span className="mail-spin" aria-hidden="true" />
+        <strong>
+          {who.join(' and ')} {who.length > 1 ? 'are' : 'is'} on it
+        </strong>
+        {elapsed !== null && (
+          <span className="mail-live-time">
+            {elapsed < 60 ? `${elapsed} s` : `${Math.floor(elapsed / 60)} min ${elapsed % 60} s`}
+          </span>
+        )}
+        <span className="mail-compose-spacer" />
+        {groups.length > 0 && (
+          <button type="button" className="mail-chip" aria-expanded={showWork} onClick={() => setShowWork((v) => !v)}>
+            {showWork ? 'Hide work' : 'Show work'}
+          </button>
+        )}
+        <button
+          type="button"
+          className="mail-chip danger"
+          onClick={onStop}
+          title="Stop — drop queued deliveries and interrupt the running personas"
+        >
+          <Square size={10} /> Stop
+        </button>
+      </div>
+      {steps.length ? (
+        <ul className="mail-live-steps">
+          {steps.map((s) => (
+            <li key={s.id} className={s.status}>
+              {s.status === 'running' ? (
+                <span className="mail-spin" aria-hidden="true" />
+              ) : s.status === 'ok' ? (
+                <Check size={12} />
+              ) : (
+                <X size={12} />
+              )}
+              {s.label}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mail-live-idle">Starting…</p>
+      )}
+      {showWork && groups.map((group) => <MailWork key={group.id} group={group} personas={personas} />)}
+    </section>
+  );
+}
 
 export const MailComposeView = forwardRef<MailViewHandle, {
   personas: Persona[];
@@ -534,12 +777,12 @@ export const MailComposeView = forwardRef<MailViewHandle, {
   /** Open as a forward: the subject prefilled, the original quoted under the note. */
   forward?: MailForwardDraft;
 }>(function MailComposeView({ personas, onCompose, onCancel, forward }, ref) {
-  // The To: list in SELECTION ORDER — the first-picked persona is the driver
-  // (it receives the mail and owns returning to the user); the rest are
-  // participants the driver can consult with send_mail.
   // A plain New mail resumes the saved draft; a forward starts from its quote
   // and is never saved (it is one click away on the original mail).
   const [saved] = useState(() => (forward ? EMPTY_COMPOSE : readComposeDraft() ?? EMPTY_COMPOSE));
+  // The To: list in SELECTION ORDER — the first persona leads (it receives the
+  // mail and owns returning to the user); the rest are participants the lead
+  // can consult with send_mail.
   const [to, setTo] = useState<string[]>(saved.to);
   const [subject, setSubject] = useState(forward?.subject ?? saved.subject);
   const [body, setBody] = useState(saved.body);
@@ -553,18 +796,16 @@ export const MailComposeView = forwardRef<MailViewHandle, {
   }, [forward, to, subject, body, isPrivate, files.attachments]);
   // A forward always has something to send — the quote — even with no note.
   const empty = !forward && !body.trim() && !files.attachments.length;
+  const hasDraft = !forward && (!!body.trim() || !!subject.trim() || files.attachments.length > 0);
   useImperativeHandle(ref, () => ({
     addAttachments: (dropped) => void files.addFiles(dropped)
   }));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const toggleTo = (id: string) => {
-    setTo((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
-  };
+  const leadName = to[0] ? personaName(personas, to[0]) : null;
 
   const send = async () => {
-    if (sending || empty) return;
+    if (sending || empty || to.length === 0) return;
     setSending(true);
     setError(null);
     try {
@@ -604,6 +845,21 @@ export const MailComposeView = forwardRef<MailViewHandle, {
             Beta
           </span>
         </h1>
+        <span className="mail-compose-spacer" />
+        {hasDraft && (
+          <span className="mail-draft-saved">
+            <Check size={12} /> Draft saved
+          </span>
+        )}
+        <button
+          type="button"
+          className={`mail-private-switch${isPrivate ? ' on' : ''}`}
+          aria-pressed={isPrivate}
+          onClick={() => setIsPrivate((v) => !v)}
+          title="Private: nothing in this conversation is saved to memory or read from it, and the personas keep no notes of it. Fixed once sent."
+        >
+          <Lock size={12} /> Private
+        </button>
         <button
           className="icon-action sm"
           onClick={forward ? discard : onCancel}
@@ -613,47 +869,29 @@ export const MailComposeView = forwardRef<MailViewHandle, {
           <X size={14} />
         </button>
       </header>
+      {isPrivate && (
+        <p className="mail-private-note">
+          <Lock size={12} /> Private: nothing here is saved to memory or read from it. Fixed once sent.
+        </p>
+      )}
       <div className="mail-compose-form">
-        <div className="mail-field">
+        <div className="mail-field mail-field-to">
           <span>To</span>
-          <div className="mail-to-chips" role="group" aria-label="Personas this mail goes to">
-            {personas.map((p) => {
-              const at = to.indexOf(p.id);
-              return (
-                <button
-                  key={p.id}
-                  className={`mail-to-chip${at >= 0 ? ' on' : ''}`}
-                  aria-pressed={at >= 0}
-                  onClick={() => toggleTo(p.id)}
-                  title={at === 0 ? `${p.name} drives the conversation` : p.name}
-                >
-                  {p.name}
-                  {at === 0 && to.length > 1 && <em className="mail-to-driver">driver</em>}
-                </button>
-              );
-            })}
-          </div>
-          {to.length === 0 && <p className="muted mail-to-hint">Pick at least one persona — the first picked drives.</p>}
+          <MailToField personas={personas} to={to} onChange={setTo} />
         </div>
         <label className="mail-field">
           <span>Subject</span>
           <input
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
-            placeholder="What this is about"
+            placeholder="Optional — Stem names it after the first reply"
           />
-        </label>
-        <label className="mail-field mail-private-toggle">
-          <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} />
-          <span>
-            Private — nothing in this conversation is saved to memory or read from it, and the personas keep no
-            notes of it. Fixed once sent.
-          </span>
         </label>
         <textarea
           className="mail-compose-body"
           value={body}
           onChange={(e) => setBody(e.target.value)}
+          aria-label="Mail"
           placeholder={
             forward
               ? 'Add a note for the personas (optional) — the forwarded mail follows below.'
@@ -683,6 +921,7 @@ export const MailComposeView = forwardRef<MailViewHandle, {
             type="button"
             className="composer-attach"
             title="Attach"
+            aria-label="Attach"
             onClick={() => void files.pickFiles()}
           >
             <Paperclip size={15} />
@@ -699,18 +938,19 @@ export const MailComposeView = forwardRef<MailViewHandle, {
             </span>
           ) : (
             !forward && (
-              <button type="button" className="mail-discard" onClick={() => setConfirmDiscard(true)} disabled={!body.trim() && !subject.trim() && !files.attachments.length}>
+              <button type="button" className="mail-discard" onClick={() => setConfirmDiscard(true)} disabled={!hasDraft}>
                 Discard…
               </button>
             )
           )}
           <span className="mail-compose-spacer" />
+          <span className="mail-kbd">⌘↵</span>
           <button
             className="mail-send"
             onClick={() => void send()}
             disabled={sending || empty || to.length === 0}
           >
-            <Send size={14} /> {sending ? 'Sending…' : 'Send'}
+            <Send size={14} /> {sending ? 'Sending…' : leadName ? `Send to ${leadName}` : 'Send'}
           </button>
         </div>
       </div>

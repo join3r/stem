@@ -75,6 +75,8 @@ export interface ChatListProps {
   activeMailId: string | null;
   onOpenMail: (conversationId: string) => void;
   onComposeMail: () => void;
+  /** New mail is open in the centre pane. */
+  composeMailOpen: boolean;
   onMailArchive: (ids: string[], archived: boolean) => void;
   onMailSnooze: (ids: string[], until: number | null) => void;
   onMailSetRead: (ids: string[], read: boolean) => void;
@@ -800,6 +802,8 @@ export function ChatList(props: ChatListProps) {
             onSnooze={props.onMailSnooze}
             onSetRead={props.onMailSetRead}
             onDelete={props.onMailDelete}
+            onOpenDraft={props.onComposeMail}
+            composeOpen={props.composeMailOpen}
           />
         )}
       </div>

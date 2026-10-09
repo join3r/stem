@@ -16,15 +16,15 @@ const snoozePreset = (win: Page) => win.locator('.snooze-menu .snooze-preset').f
 async function compose(win: Page, subject: string, body: string): Promise<void> {
   await tab(win, 'Inbox').click();
   await win.getByTitle('New mail', { exact: true }).click(); // the rail pen, not the titlebar button
-  await win.getByPlaceholder('What this is about').fill(subject);
+  await win.getByPlaceholder(/Stem names it/).fill(subject);
   await win.getByPlaceholder(/Write the task/).fill(body);
-  await win.getByRole('button', { name: 'Send' }).click();
-  // Sending closes the pane (email semantics — the copy is under Sent); the
-  // conversation surfaces in the Inbox when the persona's reply (the fake's
-  // echo) lands. Open it so callers find the conversation view up, as before.
-  await expect(mailRow(win, subject)).toBeVisible({ timeout: 15_000 });
-  await mailRow(win, subject).click();
-  await expect(win.locator('.mail-view .mail-item').filter({ hasText: `Echo: ${body}` })).toBeVisible();
+  await win.getByRole('button', { name: /^Send/ }).click();
+  // Sending opens the new conversation; the persona's reply (the fake's echo)
+  // lands in it, and the row sits in the Inbox.
+  await expect(win.locator('.mail-view .mail-item').filter({ hasText: `Echo: ${body}` })).toBeVisible({
+    timeout: 15_000
+  });
+  await expect(mailRow(win, subject)).toBeVisible();
 }
 
 async function sendChat(win: Page, text: string): Promise<void> {
@@ -40,11 +40,13 @@ async function sendChat(win: Page, text: string): Promise<void> {
 test('composing a mail delivers it and the reply lands as one conversation', async ({ mainWindow }) => {
   await compose(mainWindow, 'First errand', 'fetch the thing');
 
-  // The conversation view reads newest first: the persona's reply above your mail.
+  // The conversation reads newest first: the persona's reply open on top, your
+  // older mail folded to one line beneath it, the reply box above both.
+  await expect(mainWindow.locator('.mail-view .mail-items > :first-child')).toHaveClass(/mail-reply/);
   const items = mainWindow.locator('.mail-view .mail-item');
-  await expect(items).toHaveCount(2);
+  await expect(items).toHaveCount(1);
   await expect(items.first()).toContainText('Normal');
-  await expect(items.last()).toContainText('You');
+  await expect(mainWindow.locator('.mail-view .mail-fold')).toContainText('You');
 
   // One row in the Inbox; opening it marked it read, so it is not bold.
   await expect(mainWindow.locator('.mail-row')).toHaveCount(1);
@@ -53,24 +55,22 @@ test('composing a mail delivers it and the reply lands as one conversation', asy
   await group(mainWindow, /Sent \(1\)/).click();
 });
 
-test('the To: chips build a multi-persona conversation with the first pick driving', async ({ mainWindow }) => {
+test('the To: field builds a multi-persona conversation with the first name leading', async ({ mainWindow }) => {
   await tab(mainWindow, 'Inbox').click();
   await mainWindow.getByTitle('New mail', { exact: true }).click();
-  // Normal is pre-selected as the default driver; adding Verifier keeps it first.
-  const verifierChip = mainWindow.locator('.mail-to-chip', { hasText: 'Verifier' });
-  await verifierChip.click();
-  await expect(verifierChip).toHaveClass(/on/);
-  await expect(
-    mainWindow.locator('.mail-to-chip', { hasText: 'Normal' }).locator('.mail-to-driver')
-  ).toBeVisible();
-  await mainWindow.getByPlaceholder('What this is about').fill('Team errand');
+  // Normal is pre-filled as the lead; typing adds Verifier after it.
+  const to = mainWindow.getByRole('combobox', { name: 'Add a persona' });
+  await to.fill('Veri');
+  await to.press('Enter');
+  await expect(mainWindow.locator('.mail-to-token', { hasText: 'Verifier' })).toBeVisible();
+  await expect(mainWindow.locator('.mail-to-token.lead')).toContainText('Normal');
+  await expect(mainWindow.locator('.mail-to-token.lead .mail-to-lead')).toBeVisible();
+  await mainWindow.getByPlaceholder(/Stem names it/).fill('Team errand');
   await mainWindow.getByPlaceholder(/Write the task/).fill('check it twice');
-  await mainWindow.getByRole('button', { name: 'Send' }).click();
-  // Sending closes the pane; the reply surfaces the row. The conversation lists
-  // BOTH participants; only the driver replied (the fake echo).
-  await expect(mailRow(mainWindow, 'Team errand')).toBeVisible({ timeout: 15_000 });
-  await mailRow(mainWindow, 'Team errand').click();
-  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal, Verifier');
+  await mainWindow.getByRole('button', { name: 'Send to Normal' }).click();
+  // Sending opens the conversation. It lists BOTH participants; only the lead
+  // replied (the fake echo).
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Verifier');
   await expect(
     mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: check it twice' })
   ).toBeVisible();
@@ -85,7 +85,8 @@ test('replying resumes the same conversation and the exchange stays threaded', a
   await expect(
     mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: follow-up ask' })
   ).toBeVisible({ timeout: 15_000 });
-  await expect(mainWindow.locator('.mail-view .mail-item')).toHaveCount(4);
+  // Four mails: the newest open, the rest folded to one line each.
+  await expect(mainWindow.locator('.mail-view .mail-item, .mail-view .mail-fold')).toHaveCount(4);
   // Still ONE conversation in the list.
   await expect(mainWindow.locator('.mail-row')).toHaveCount(1);
 });
@@ -184,12 +185,12 @@ test('the New conversation button stays enabled over a mail view and dismisses i
 test('the titlebar New mail button and its shortcut open the compose view', async ({ mainWindow }) => {
   // The titlebar button (title carries the keycap, unlike the rail's pen).
   await mainWindow.getByTitle(/New mail \(/).click();
-  await expect(mainWindow.getByPlaceholder('What this is about')).toBeVisible();
+  await expect(mainWindow.getByPlaceholder(/Stem names it/)).toBeVisible();
   // Back to a blank chat, then the shortcut route.
   await mainWindow.getByTitle(/New conversation/).click();
-  await expect(mainWindow.getByPlaceholder('What this is about')).toHaveCount(0);
+  await expect(mainWindow.getByPlaceholder(/Stem names it/)).toHaveCount(0);
   await mainWindow.keyboard.press('ControlOrMeta+Shift+N');
-  await expect(mainWindow.getByPlaceholder('What this is about')).toBeVisible();
+  await expect(mainWindow.getByPlaceholder(/Stem names it/)).toBeVisible();
 });
 
 test('an unread reply bolds the row and badges the rail until read', async ({ mainWindow }) => {

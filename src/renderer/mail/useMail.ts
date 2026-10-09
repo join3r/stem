@@ -277,5 +277,7 @@ export function personaName(personas: Persona[], id: string): string {
     const role = personas.find((p) => p.id === id.slice(0, at))?.name;
     return role ? `${id.slice(at + 1)} (${role})` : id.slice(at + 1);
   }
-  return personas.find((p) => p.id === id)?.name ?? id;
+  // Once the list has loaded, an id it lacks is a persona that was deleted;
+  // its raw id (a UUID) means nothing to the reader.
+  return personas.find((p) => p.id === id)?.name ?? (personas.length ? 'Deleted persona' : id);
 }
