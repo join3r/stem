@@ -5,6 +5,35 @@ The first recipient coordinates the conversation and can consult the other
 personas. Replies arrive in your Inbox. A persona that makes pictures while answering
 (see [image generation](settings.md#image-generation)) attaches them to its reply.
 
+## Built-in personas
+
+Stem ships with four personas. You can edit each one, but you cannot delete
+it.
+
+| Persona | What it does | Starts agents | Your memory |
+| --- | --- | --- | --- |
+| Normal | Answers on its own and brings in agents when a job needs them | yes | yes |
+| Secretary | Delegates the work instead of doing it, schedules follow-ups, and mails you only decisions and results | yes | yes |
+| Verifier | Checks the factual claims in the work it is sent and lists what is wrong | no | yes |
+| Critic | Reads what it is sent as its recipient would, without knowing who wrote it | no | no |
+
+Personas that work on your computer (a coding agent, screen control or browser
+control) are not built in. You make them in the Personas tab.
+
+## Who to mail first
+
+Mail **Normal** when you are not sure. It answers simple requests itself and
+starts agents when a job needs checking or several hands.
+
+Mail **Secretary** for errands you want handled without the details, especially
+ones that need a follow-up later. It always hands the work to someone else, so
+it adds a step that a direct question does not need.
+
+Mail **Verifier** or **Critic** directly when that is the whole job: check
+these claims, or read this draft cold. Mail a coding, screen or browser persona
+directly when the request is that work. To let Normal or Secretary use one of
+those, add it to the conversation yourself.
+
 ## Agents
 
 A persona allowed to start agents (the "Can start agents" box in its editor;

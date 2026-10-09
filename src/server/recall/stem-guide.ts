@@ -25,6 +25,7 @@
 import guideMd from '../../../docs/README.md?raw';
 import chatsMd from '../../../docs/user/chats.md?raw';
 import quickChatMd from '../../../docs/user/quick-chat.md?raw';
+import mailMd from '../../../docs/user/mail.md?raw';
 import memoryMd from '../../../docs/user/memory/README.md?raw';
 import memoryFactsMd from '../../../docs/user/memory/facts.md?raw';
 import memoryRecallMd from '../../../docs/user/memory/recall.md?raw';
@@ -89,6 +90,7 @@ export const STEM_GUIDE_PAGES: readonly StemGuidePage[] = [
   page('guide', 'docs/README.md', 'index of every page below, plus the demo profile the screenshots use', guideMd),
   page('chats', 'docs/user/chats.md', 'asking, attaching files, organizing chats into folders, retry/edit/fork', chatsMd),
   page('quick-chat', 'docs/user/quick-chat.md', 'the shortcut-summoned overlay for asking from any app, and Note mode', quickChatMd),
+  page('mail', 'docs/user/mail.md', 'mailing personas: the built-in personas and who to mail first, agents they start, scheduled-task mail, Work history', mailMd),
   page('memory', 'docs/user/memory/README.md', 'what Memory learns on its own, and where Facts and Recall live', memoryMd),
   page('memory-facts', 'docs/user/memory/facts.md', 'durable facts: how they arrive, reviewing them, conflicts, erasing them', memoryFactsMd),
   page('memory-recall', 'docs/user/memory/recall.md', 'searchable chat history and summaries, its storage limit, deleting it', memoryRecallMd),

@@ -6,6 +6,7 @@ Pick the feature you see in Stem.
 | --- | --- |
 | [Chats](user/chats.md) | Ask, attach files, organize conversations |
 | [Quick Chat](user/quick-chat.md) | Ask from any app |
+| [Mail](user/mail.md) | Send requests to personas and get replies in your Inbox |
 | [Memory](user/memory/README.md) | Learn useful context and recall earlier chats |
 | └ [Facts](user/memory/facts.md) | Durable details: preferences, people, projects |
 | └ [Recall](user/memory/recall.md) | Find relevant parts of past conversations |
