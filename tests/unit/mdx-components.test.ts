@@ -96,3 +96,11 @@ describe('hostile nesting', () => {
     expect(() => html(quotes)).not.toThrow();
   });
 });
+
+describe('phone numbers', () => {
+  it('render as tel: links, but never inside an existing link or code', () => {
+    expect(html('Call **+421 905 123 456** now')).toContain('<a href="tel:+421905123456">+421 905 123 456</a>');
+    expect(html('[+421 905 123 456](https://example.com)')).not.toContain('tel:');
+    expect(html('`+421 905 123 456`')).not.toContain('tel:');
+  });
+});

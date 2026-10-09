@@ -5,6 +5,7 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkMdx from 'remark-mdx';
 import { stripCiteMarkers } from '../../shared/citations';
+import { findPhoneNumbers } from '../../shared/phone-links';
 import { CodeBlock, TaskItem, componentMap } from './components';
 
 // A minimal structural type for the mdast/mdx nodes we walk.
@@ -71,6 +72,33 @@ function plainText(node: MdNode): string {
   return out;
 }
 
+/** Inside a link, text stays text: an <a> must not nest another. */
+let linkDepth = 0;
+
+function linkChildren(node: MdNode, key: string): ReactNode[] {
+  linkDepth += 1;
+  try {
+    return renderChildren(node, key);
+  } finally {
+    linkDepth -= 1;
+  }
+}
+
+/** Plain text with any phone numbers in it as tel: links (shared/phone-links.ts). */
+function renderText(value: string, key: string): ReactNode {
+  const phones = linkDepth ? [] : findPhoneNumbers(value);
+  if (!phones.length) return value;
+  const out: ReactNode[] = [];
+  let at = 0;
+  phones.forEach((p, i) => {
+    if (p.start > at) out.push(value.slice(at, p.start));
+    out.push(<a key={`${key}-tel${i}`} href={p.href}>{value.slice(p.start, p.end)}</a>);
+    at = p.end;
+  });
+  if (at < value.length) out.push(value.slice(at));
+  return <Fragment key={key}>{out}</Fragment>;
+}
+
 function renderChildren(node: MdNode, keyPrefix: string): ReactNode[] {
   if (renderDepth >= MAX_RENDER_DEPTH) return [plainText(node)];
   renderDepth += 1;
@@ -96,7 +124,7 @@ function renderNode(node: MdNode, key: string): ReactNode {
       return <p key={key}>{renderChildren(node, key)}</p>;
     }
     case 'text':
-      return node.value ?? '';
+      return renderText(node.value ?? '', key);
     case 'heading': {
       const tag = `h${Math.min(Math.max(node.depth ?? 1, 1), 6)}`;
       return createElement(tag, { key }, renderChildren(node, key));
@@ -131,10 +159,10 @@ function renderNode(node: MdNode, key: string): ReactNode {
           e.preventDefault();
           void window.stem.openLink(href);
         };
-        return <a key={key} href={href} title={href} onClick={open}>{renderChildren(node, key)}</a>;
+        return <a key={key} href={href} title={href} onClick={open}>{linkChildren(node, key)}</a>;
       }
       return href
-        ? <a key={key} href={href} target="_blank" rel="noreferrer">{renderChildren(node, key)}</a>
+        ? <a key={key} href={href} target="_blank" rel="noreferrer">{linkChildren(node, key)}</a>
         : <Fragment key={key}>{renderChildren(node, key)}</Fragment>;
     }
     case 'image': {

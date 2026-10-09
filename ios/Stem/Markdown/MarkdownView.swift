@@ -70,7 +70,7 @@ private struct BlockView: View {
     }
 }
 
-/// One run of inline markdown: bold, italics, code spans, links.
+/// One run of inline markdown: bold, italics, code spans, links, phone numbers.
 struct Inline: View {
     let text: String
     init(_ text: String) { self.text = text }
@@ -101,6 +101,7 @@ struct Inline: View {
             a[run.range].font = .system(.body, design: .monospaced)
             a[run.range].backgroundColor = Color.secondary.opacity(0.15)
         }
+        PhoneLinks.link(&a)
         return a
     }
 }

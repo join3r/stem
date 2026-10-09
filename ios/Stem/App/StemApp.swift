@@ -11,10 +11,11 @@ struct StemApp: App {
         WindowGroup {
             RootView()
                 .environment(app)
-                // Links inside replies and mail are model-written: only web and
-                // mail links open; app schemes (stem://, tel:, …) are dropped.
+                // Links inside replies and mail are model-written: only web,
+                // mail and phone links open (iOS asks before it dials); app
+                // schemes (stem://, …) are dropped.
                 .environment(\.openURL, OpenURLAction { url in
-                    ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
+                    ["http", "https", "mailto", "tel"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
                 })
                 .onAppear { delegate.app = app }
                 .onOpenURL { app.handle(url: $0) }

@@ -2,8 +2,8 @@ import { fileURLToPath } from 'node:url';
 import { extname } from 'node:path';
 import type { Shell } from 'electron';
 
-// How a link clicked in the renderer leaves the app. Web and mail links go to
-// the browser / mail client. file:// links (an agent pointing at a CSV it just
+// How a link clicked in the renderer leaves the app. Web, mail and phone links
+// go to the browser / mail client / FaceTime. file:// links (an agent pointing at a CSV it just
 // wrote to ~/Downloads) open with the default app only when they are a known
 // document type; anything else (folders, extensionless files, apps, scripts,
 // installers, macro-enabled Office files, ...) is only revealed in
@@ -16,7 +16,7 @@ export type LinkAction =
   | { kind: 'reveal'; path: string }
   | { kind: 'ignore' };
 
-const EXTERNAL_URL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+const EXTERNAL_URL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:']);
 
 const DOCUMENT_EXTENSIONS = new Set([
   '.csv', '.tsv', '.txt', '.md', '.json', '.log', '.xml', '.yaml', '.yml',

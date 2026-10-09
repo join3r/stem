@@ -118,3 +118,30 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(MdxText.preview("```js\nlet x\n```\nafter"), "let x after")
     }
 }
+
+/// Mirrors tests/unit/phone-links.test.ts.
+final class PhoneLinksTests: XCTestCase {
+    private func urls(_ t: String) -> [String] { PhoneLinks.find(in: t).map(\.url.absoluteString) }
+
+    func testFindsNumbers() {
+        XCTAssertEqual(urls("Call +421 905 123 456 today"), ["tel:+421905123456"])
+        XCTAssertEqual(urls("Mobil: 0905 123 456."), ["tel:0905123456"])
+        XCTAssertEqual(urls("Office (02) 1234 5678"), ["tel:0212345678"])
+        XCTAssertEqual(urls("+1 (415) 555-2671 or 415-555-2671 or (415) 555-2671"),
+                       ["tel:+14155552671", "tel:4155552671", "tel:4155552671"])
+    }
+
+    func testLeavesOtherDigitsAlone() {
+        for t in ["2026-10-09", "version 0.6.0 and 1.2.3.4", "order 1234567890", "192.168.1.10",
+                  "costs 1 250 000 €", "10:30-11:45", "ISBN 978-3-16-148410-0",
+                  "https://example.com/+421905123456", "commit 0a48815 and 0905", "id=+421905123456", "+12 3"] {
+            XCTAssertEqual(urls(t), [], t)
+        }
+    }
+
+    func testLinksOnlyPlainRuns() {
+        let a = Inline.attributed("Call **+421 905 123 456** or `0905 123 456` or [0905 123 456](https://x.sk)")
+        let links = a.runs.compactMap(\.link).map(\.absoluteString)
+        XCTAssertEqual(Set(links), ["tel:+421905123456", "https://x.sk"])
+    }
+}
