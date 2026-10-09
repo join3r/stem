@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FolderPlus, FolderSearch, Laptop, Server } from 'lucide-react';
+import { Code2, FileText, FolderPlus, FolderSearch, Laptop, Lock, NotebookPen, Server } from 'lucide-react';
 import type { ConnectedFolder, ConnectedFolderPatch } from '../../shared/types';
 import { ServerFolderPicker } from './ServerFolderPicker';
 
@@ -11,11 +11,63 @@ import { ServerFolderPicker } from './ServerFolderPicker';
 // with its consequence spelled out, before anything is connected.
 //
 // Steps: Folder (where it lives on a remote setup, which folder, its name and
-// what it holds) → Access (read-only or writable) → Memory (remember, index,
-// learn facts). Nothing reaches the server until the last step's Connect.
+// what it holds, and what kind of folder it is) → Access (read-only or
+// writable) → Memory (remember, index, learn facts). Picking a kind fills in the
+// later steps with what suits it; every choice stays editable. Nothing reaches
+// the server until the last step's Connect.
 
 type Place = 'server' | 'client';
-type LearnMode = 'off' | 'use' | 'new';
+type LearnMode = NonNullable<ConnectedFolder['learnMode']>;
+
+interface Kind {
+  value: string;
+  label: string;
+  /** "Suggested for …" on the later steps. */
+  noun: string;
+  icon: React.ReactNode;
+  body: string;
+  notePlaceholder: string;
+  settings: { writable: boolean; memorize: boolean; index: boolean; learnMode: LearnMode };
+}
+
+const KINDS: Kind[] = [
+  {
+    value: 'notes',
+    label: 'Notes vault',
+    noun: 'a notes vault',
+    icon: <NotebookPen size={13} />,
+    body: 'Obsidian, Logseq, a folder of Markdown. Remembered, and Stem learns from every note, old and new.',
+    notePlaceholder: 'e.g. “My Obsidian vault: meeting notes, project plans, reading notes”',
+    settings: { writable: false, memorize: true, index: true, learnMode: 'all' }
+  },
+  {
+    value: 'code',
+    label: 'Code project',
+    noun: 'a code project',
+    icon: <Code2 size={13} />,
+    body: 'A repository Stem works in. Writable, and nothing from it is remembered or learned.',
+    notePlaceholder: 'e.g. “The billing service: TypeScript API and its tests”',
+    settings: { writable: true, memorize: false, index: false, learnMode: 'off' }
+  },
+  {
+    value: 'docs',
+    label: 'Documents',
+    noun: 'documents',
+    icon: <FileText size={13} />,
+    body: 'PDFs, contracts, manuals. Searchable, and remembered when they come up in a chat.',
+    notePlaceholder: 'e.g. “Contracts, invoices and appliance manuals”',
+    settings: { writable: false, memorize: true, index: true, learnMode: 'use' }
+  },
+  {
+    value: 'private',
+    label: 'Confidential',
+    noun: 'confidential files',
+    icon: <Lock size={13} />,
+    body: 'A client’s files, medical or legal papers. Searchable, but nothing is kept.',
+    notePlaceholder: 'e.g. “Acme Corp’s project files, under NDA”',
+    settings: { writable: false, memorize: false, index: true, learnMode: 'off' }
+  }
+];
 
 const STEPS = ['Folder', 'Access', 'Memory'] as const;
 
@@ -25,6 +77,11 @@ const LEARN_CHOICES: { value: LearnMode; label: string; hint: string }[] = [
     value: 'new',
     label: 'New & changed',
     hint: 'Also reads files added or edited from now on, in the background. Existing files are left alone.'
+  },
+  {
+    value: 'all',
+    label: 'Full history',
+    hint: 'Reads every file already in the folder once it’s indexed, then keeps up with new and edited ones. About one model call per few pages, so a large folder costs many calls.'
   },
   { value: 'off', label: 'Off', hint: 'Never learns facts from this folder. Search still works.' }
 ];
@@ -57,6 +114,7 @@ export function ConnectFolderWizard({
   const [memorize, setMemorize] = useState(true);
   const [index, setIndex] = useState(true);
   const [learnMode, setLearnMode] = useState<LearnMode>('use');
+  const [kind, setKind] = useState<Kind | null>(null);
   const [serverPicker, setServerPicker] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +140,16 @@ export function ConnectFolderWizard({
     const picked = await window.stem.pickDirectory();
     if (picked[0]) choose(picked[0]);
   };
+
+  const pickKind = (k: Kind) => {
+    setKind(k);
+    setWritable(k.settings.writable);
+    setMemorize(k.settings.memorize);
+    setIndex(k.settings.index);
+    setLearnMode(k.settings.learnMode);
+  };
+
+  const suggested = kind && <p className="muted folder-dialog-hint wizard-suggested">Suggested for {kind.noun}. Change anything.</p>;
 
   const name = label.trim();
   const absolute = /^([/\\~]|[A-Za-z]:[/\\])/.test(path.trim());
@@ -257,7 +325,7 @@ export function ConnectFolderWizard({
                     className="ci-textarea"
                     aria-label="What the folder holds"
                     rows={2}
-                    placeholder="e.g. “My Obsidian vault: meeting notes, project plans, reading notes”"
+                    placeholder={(kind ?? KINDS[0]).notePlaceholder}
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
                   />
@@ -266,11 +334,20 @@ export function ConnectFolderWizard({
               </>
             )}
             {folderProblem && <p className="error folder-dialog-hint">{folderProblem}</p>}
+            <div className="folder-dialog-field">
+              <span>What kind of folder is it?</span>
+              <div className="wizard-kinds">
+                {KINDS.map((k) => (
+                  <span key={k.value}>{option(kind?.value === k.value, () => pickKind(k), k.label, k.body, k.icon)}</span>
+                ))}
+              </div>
+            </div>
           </>
         )}
 
         {step === 1 && (
           <div className="cfolder-add-choice">
+            {suggested}
             <span className="muted">May Stem change the files in “{name}”?</span>
             {option(
               !writable,
@@ -291,6 +368,7 @@ export function ConnectFolderWizard({
 
         {step === 2 && (
           <>
+            {suggested}
             <div className="cfolder-add-choice">
               <span className="muted">Should Stem remember what it reads here?</span>
               {option(
@@ -330,8 +408,7 @@ export function ConnectFolderWizard({
                   ))}
                 </select>
                 <span className="muted">
-                  {LEARN_CHOICES.find((c) => c.value === learnMode)?.hint} Reading the whole folder is in the folder’s
-                  settings once it’s connected.
+                  {LEARN_CHOICES.find((c) => c.value === learnMode)?.hint}
                 </span>
               </label>
             )}
