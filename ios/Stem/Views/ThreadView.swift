@@ -34,6 +34,10 @@ struct ThreadView: View {
         }
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
+        // On the message list only: `.refreshable` reaches every ScrollView
+        // below it, so placed after the inset it put a refresh control on the
+        // composer's chip strip and let it be pulled down.
+        .refreshable { await store.reload() }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 ForEach(session.approvals.forThread(store.threadId)) { a in
@@ -66,7 +70,6 @@ struct ThreadView: View {
             }
         }
         .toolbar(.hidden, for: .tabBar)
-        .refreshable { await store.reload() }
         .onAppear {
             store.open()
             session.visibleThreadId = store.threadId
