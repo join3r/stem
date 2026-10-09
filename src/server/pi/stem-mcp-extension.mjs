@@ -2653,6 +2653,12 @@ function registerMailTools(pi) {
           description:
             'true for a reviewer, judge or cold reader that must not see the user\'s memory or who wrote the ' +
             'work: no recall, and its mails never name the sender.'
+        },
+        model: {
+          type: 'string',
+          description:
+            'Optional model id from your preamble\'s model list, for a role without a model of its own - e.g. to ' +
+            'put two independent attempts on different models. Leave out to use the role\'s model.'
         }
       },
       required: ['role', 'name', 'brief']
@@ -2663,7 +2669,8 @@ function registerMailTools(pi) {
         role: params?.role,
         name: params?.name,
         brief: params?.brief,
-        ...(params?.blind === true ? { blind: true } : {})
+        ...(params?.blind === true ? { blind: true } : {}),
+        ...(typeof params?.model === 'string' && params.model.trim() ? { model: params.model } : {})
       });
       if (!res.ok) return taskErr(res.error || 'Could not start the agent.');
       return taskOk(res.text || 'Agent started.');

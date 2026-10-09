@@ -219,7 +219,8 @@ function coerceAgents(raw: unknown): MailAgent[] {
       role: a.role,
       name: a.name,
       spawnedBy: a.spawnedBy,
-      ...(a.blind === true ? { blind: true as const } : {})
+      ...(a.blind === true ? { blind: true as const } : {}),
+      ...(typeof a.model === 'string' && a.model ? { model: a.model } : {})
     });
   }
   return agents;

@@ -242,6 +242,7 @@ export class MailRouter {
   private readonly lanes = new Map<string, Lane>();
   /** Open fan-outs, keyed `${conversationId}\n${senderId}`. */
   private readonly joins = new Map<string, JoinState>();
+  private modelsCache: { at: number; models: { id: string; isDefault: boolean }[] } | null = null;
   /**
    * Who initiated each live delivery turn, keyed by turn id — the bridge reads
    * it to key a send_mail fan-out's join to the right initiator.
@@ -755,6 +756,28 @@ export class MailRouter {
           `Recipients must be its participants (${conversation.participants.join(', ')}), agents you started, or "user".`
       };
     }
+    // A blind recipient reads its mail alone. One mail to several recipients
+    // shows each the others' assignments, and on 2026-10-09 a lead's
+    // "reviewer ONLY: … auditor ONLY: …" follow-up handed two blind reviewers
+    // the auditor's task, model names included. Separate sends in one turn
+    // still come back as one assembly, so this costs the sender nothing.
+    if (to.length > 1) {
+      const blindTo: string[] = [];
+      for (const t of to) {
+        if (t !== 'user' && (await this.resolveMember(conversation, t))?.recall === false) blindTo.push(t);
+      }
+      if (blindTo.length) {
+        return {
+          ok: false,
+          error:
+            `${blindTo.join(', ')} ${blindTo.length === 1 ? 'judges' : 'judge'} blind, so ${
+              blindTo.length === 1 ? 'it gets' : 'each gets'
+            } a mail of its own: a mail to several recipients shows each of them the others' assignments. ` +
+            'Send one send_mail per recipient, each with only that recipient’s part — replies sent in the ' +
+            'same turn still come back to you together.'
+        };
+      }
+    }
     // Hub and spoke: only the driver (participants[0]) coordinates. A consulted
     // persona may reply to whoever mailed it — nothing else — so one job can
     // never be briefed twice by two coordinators, and parallel branches exist
@@ -984,14 +1007,41 @@ export class MailRouter {
             : `An agent named ${name} already exists in this conversation. Pick another name.`
       };
     }
-    if (agents.length >= MAX_AGENTS) {
+    // The last slot belongs to the personas the user put here: on 2026-10-09
+    // a lead's team filled all six, and the driver's check of the lead's
+    // report was refused, so the report reached the user unchecked.
+    const limit = isAgentId(ctx.personaId) ? MAX_AGENTS - 1 : MAX_AGENTS;
+    if (agents.length >= limit) {
       const yours = agents.filter((a) => a.spawnedBy === ctx.personaId).map((a) => a.id);
       return {
         ok: false,
         error:
-          `This conversation already has ${MAX_AGENTS} agents, the most it may have.` +
+          (limit < MAX_AGENTS
+            ? `This conversation has ${agents.length} agents, the most an agent may fill: the last place is kept ` +
+              'so whoever started you can have your work checked.'
+            : `This conversation already has ${MAX_AGENTS} agents, the most it may have.`) +
           (yours.length ? ` Continue one of yours with send_mail: ${yours.join(', ')}.` : ' Do the rest of the work yourself.')
       };
+    }
+    // A model only for a role without one: a model the user set on a persona
+    // is their choice, and a coding agent's model is set in its pin.
+    const model = req.model?.trim();
+    if (model) {
+      if (role.harness || role.model) {
+        return {
+          ok: false,
+          error: role.harness
+            ? `${role.name} runs a coding agent, whose model is set in the persona. Leave model out.`
+            : `${role.name} is set to ${role.model} by the user. Leave model out, or pick a role without a model of its own.`
+        };
+      }
+      const ids = (await this.modelIds()).map((m) => m.id);
+      if (!ids.includes(model)) {
+        return {
+          ok: false,
+          error: `No model "${model}" is available. Pick one of: ${ids.join(', ') || '(none listed — leave model out)'}.`
+        };
+      }
     }
     // A recall-off caller (a blind reviewer that may spawn) only starts blind
     // agents: it must not reach the user's history through one.
@@ -999,8 +1049,15 @@ export class MailRouter {
     try {
       await addAgent(
         conversation.id,
-        { id, role: role.id, name, spawnedBy: ctx.personaId, ...(blind ? { blind: true } : {}) },
-        MAX_AGENTS
+        {
+          id,
+          role: role.id,
+          name,
+          spawnedBy: ctx.personaId,
+          ...(blind ? { blind: true } : {}),
+          ...(model ? { model } : {})
+        },
+        limit
       );
     } catch (error) {
       // quiet: the tool result IS the error channel (a racing spawn took the name or the last slot).
@@ -1012,7 +1069,7 @@ export class MailRouter {
     return {
       ok: true,
       text:
-        `Started ${name} (${role.name}${blind ? ', blind' : ''}) as "${id}". Its reply comes back to you together ` +
+        `Started ${name} (${role.name}${model ? `, ${model}` : ''}${blind ? ', blind' : ''}) as "${id}". Its reply comes back to you together ` +
         'with every other agent you start in this turn — start them all now, then finish your turn.'
     };
   }
@@ -1111,6 +1168,19 @@ export class MailRouter {
   // ---- delivery internals ----
 
   /** The cap, read fresh per decision — a settings change applies to the very next hop. */
+  /**
+   * The models an agent may be put on (spawn_agent's model), cached a minute:
+   * listModels is an RPC to the backend and every spawning delivery asks.
+   */
+  private async modelIds(): Promise<{ id: string; isDefault: boolean }[]> {
+    if (this.modelsCache && Date.now() - this.modelsCache.at < 60_000) return this.modelsCache.models;
+    // quiet: no list means no model choice — the preamble omits the line and
+    // spawn_agent refuses a model, so agents run on their role's default.
+    const models = (await this.opts.runtime.listModels().catch(() => [])).map((m) => ({ id: m.id, isDefault: m.isDefault }));
+    if (models.length) this.modelsCache = { at: Date.now(), models };
+    return models;
+  }
+
   private async exchangeCap(): Promise<number> {
     // quiet: readSettings answers with defaults and degrades itself rather than
     // rejecting; the fallback keeps the guard working even if it ever does.
@@ -1412,6 +1482,14 @@ export class MailRouter {
       const selfAgent = self
         ? { role: registry.find((p) => p.id === self.role)?.name ?? self.role, spawnedBy: self.spawnedBy }
         : undefined;
+      // A role without a model of its own runs on the default; listing the
+      // models lets the lead put two of them on different ones (spawn_agent's
+      // model). All of a conversation's agents ran on one model before.
+      const roles = persona.canSpawn ? spawnableRoles(registry, conversation.participants) : undefined;
+      const models =
+        roles?.some((r) => !r.model && !r.code)
+          ? (await this.modelIds()).slice(0, 12).map((m) => (m.isDefault ? `${m.id} (default)` : m.id))
+          : [];
       const threadIdRef = { current: threadId ?? null };
       const settling = this.waitForSettle(turnId, threadIdRef);
       let started;
@@ -1435,7 +1513,8 @@ export class MailRouter {
             names,
             ...(persona.canSpawn ? { canSpawn: true } : {}),
             ...(own.length ? { agents: own } : {}),
-            ...(persona.canSpawn ? { roles: spawnableRoles(registry, conversation.participants) } : {}),
+            ...(roles ? { roles } : {}),
+            ...(models.length ? { models } : {}),
             ...(selfAgent ? { agent: selfAgent } : {}),
             ...(source ? { source } : {})
           }

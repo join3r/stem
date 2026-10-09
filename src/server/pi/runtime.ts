@@ -3360,6 +3360,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           name?: string;
           brief?: string;
           blind?: unknown;
+          model?: unknown;
           title?: string;
           ids?: unknown;
         };
@@ -3390,7 +3391,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           case 'spawn_agent':
             return respond(
               await bridge.spawnAgent(
-                { role: req.role, name: req.name, brief: req.brief, ...(req.blind === true ? { blind: true } : {}) },
+                {
+                  role: req.role,
+                  name: req.name,
+                  brief: req.brief,
+                  ...(req.blind === true ? { blind: true } : {}),
+                  ...(typeof req.model === 'string' && req.model.trim() ? { model: req.model } : {})
+                },
                 ctx
               )
             );

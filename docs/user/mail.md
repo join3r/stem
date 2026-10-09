@@ -23,11 +23,17 @@ you added both a coding persona and a review-only one (see
 persona does the work, the reviewer checks the change cold, the findings go
 back to the coding persona once, and you get one report. A Critic on a
 different model from the persona that leads gives a more independent read;
-set its model in its editor. An agent started blind judges without your
-memory and without knowing who wrote the work. Agents keep no memory, never
+set its model in its editor. For a persona without a model of its own, the
+persona starting the agent can pick one of your models, so two agents of the
+same persona can still work on different models. An agent started blind judges
+without your memory and without knowing who wrote the work, and it only ever
+gets mail addressed to it alone, so it never sees the other agents'
+assignments. Agents keep no memory, never
 answer you directly, and never appear in the Personas list: they belong to the
 conversation and go away with it. Their work shows under **Work** like any
-other persona's. A conversation can have at most six agents. An agent never
+other persona's. A conversation can have at most six agents, and agents started by another
+agent can fill only five of those places. The last one is kept for the persona
+you mailed, so it can always have its lead's work checked. An agent never
 gets integrations its starter lacks, and a persona that works on your
 computer (a coding agent, screen or browser control) is started as an agent
 only in a conversation you added it to.

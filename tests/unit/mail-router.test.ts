@@ -144,6 +144,7 @@ function fakeBackend(): FakeBackend {
       }, 0);
       return { threadId, turnId };
     },
+    listModels: async () => [{ id: 'e2e/stem-e2e-model', isDefault: true }],
     readThread: async (threadId: string) => ({
       title: 't',
       messages: (transcripts.get(threadId) ?? []).map((m, i) => ({ id: String(i), ...m }))
@@ -1748,6 +1749,128 @@ describe('spawn_agent', () => {
     const after = await readMail();
     expect(after.items.filter((i) => i.from.startsWith('critic~') && i.to.includes('user'))).toHaveLength(0);
     expect(after.conversations[0].exchangeCount).toBe(6);
+  });
+  it('keeps the last agent slot for the personas the user put in the conversation', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.normal = [
+      {
+        mode: 'ok',
+        reply: 'delegating',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.spawnAgent({ role: 'orchestrator', name: 'lead', brief: 'run it' }, ctx)).ok).toBe(true);
+        }
+      },
+      {
+        mode: 'ok',
+        reply: 'checking',
+        bridge: async (bridge, ctx) => {
+          // The lead's team filled every place an agent may; the driver's check still starts.
+          expect((await bridge.spawnAgent({ role: 'verifier', name: 'check', brief: 'check the report' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'checked answer' }
+    ];
+    fake.scriptsByPersona['orchestrator~lead'] = [
+      {
+        mode: 'ok',
+        reply: 'staffing',
+        bridge: async (bridge, ctx) => {
+          for (let n = 1; n <= 4; n++) {
+            expect((await bridge.spawnAgent({ role: 'critic', name: `r${n}`, brief: 'go' }, ctx)).ok).toBe(true);
+          }
+          const fifth = await bridge.spawnAgent({ role: 'critic', name: 'r5', brief: 'go' }, ctx);
+          expect(fifth.ok).toBe(false);
+          if (!fifth.ok) {
+            expect(fifth.error).toContain('the last place is kept');
+            expect(fifth.error).toContain('critic~r1');
+          }
+        }
+      },
+      { mode: 'ok', reply: 'lead report' }
+    ];
+    await router.compose({ to: ['normal'], subject: 'reserve', body: 'go' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'checked answer' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations[0].status).toBe('idle');
+    });
+    expect((await readMail()).conversations[0].agents?.map((a) => a.id)).toEqual([
+      'orchestrator~lead',
+      'critic~r1',
+      'critic~r2',
+      'critic~r3',
+      'critic~r4',
+      'verifier~check'
+    ]);
+  });
+
+  it('puts an agent of a role without a model on the model it was started with', async () => {
+    await savePersona({ id: 'pinned', name: 'Pinned', prompt: 'p', model: 'xai/grok-5' });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.normal = [
+      {
+        mode: 'ok',
+        reply: 'staffing',
+        bridge: async (bridge, ctx) => {
+          const unknown = await bridge.spawnAgent({ role: 'verifier', name: 'a', brief: 'go', model: 'nope/none' }, ctx);
+          expect(unknown.ok).toBe(false);
+          if (!unknown.ok) expect(unknown.error).toContain('e2e/stem-e2e-model');
+          const owned = await bridge.spawnAgent({ role: 'pinned', name: 'b', brief: 'go', model: 'e2e/stem-e2e-model' }, ctx);
+          expect(owned.ok).toBe(false);
+          if (!owned.ok) expect(owned.error).toContain('set to xai/grok-5 by the user');
+          expect(
+            (await bridge.spawnAgent({ role: 'verifier', name: 'c', brief: 'go', model: 'e2e/stem-e2e-model' }, ctx)).ok
+          ).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'done' }
+    ];
+    await router.compose({ to: ['normal'], subject: 'models', body: 'go' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'done')).toBe(true);
+      expect(m.conversations[0].status).toBe('idle');
+    });
+    expect(fake.starts.find((s) => s.persona?.id === 'verifier~c')?.model).toBe('e2e/stem-e2e-model');
+    // The driver's preamble listed it, the default marked.
+    expect(fake.starts[0].mail?.models).toEqual(['e2e/stem-e2e-model (default)']);
+  });
+
+  it('refuses one mail to several recipients when one of them judges blind', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.normal = [
+      {
+        mode: 'ok',
+        reply: 'first wave',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.spawnAgent({ role: 'verifier', name: 'judge', brief: 'judge', blind: true }, ctx)).ok).toBe(true);
+          expect((await bridge.spawnAgent({ role: 'verifier', name: 'audit', brief: 'audit' }, ctx)).ok).toBe(true);
+        }
+      },
+      {
+        mode: 'ok',
+        reply: 'second wave',
+        bridge: async (bridge, ctx) => {
+          const shared = await bridge.send({ to: ['verifier~judge', 'verifier~audit'], body: 'judge ONLY: x. audit ONLY: y.' }, ctx);
+          expect(shared.ok).toBe(false);
+          if (!shared.ok) expect(shared.error).toContain('verifier~judge judges blind');
+          expect((await bridge.send({ to: ['verifier~judge'], body: 'x' }, ctx)).ok).toBe(true);
+          expect((await bridge.send({ to: ['verifier~audit'], body: 'y' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'final' }
+    ];
+    await router.compose({ to: ['normal'], subject: 'blind split', body: 'go' });
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'final' && i.to.includes('user'))).toBe(true);
+      expect(m.conversations[0].status).toBe('idle');
+    });
+    // Both second-wave replies came back as one assembly: three driver turns in all.
+    expect(fake.starts.filter((s) => s.persona?.id === 'normal')).toHaveLength(3);
   });
 });
 

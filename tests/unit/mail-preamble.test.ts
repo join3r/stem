@@ -108,6 +108,22 @@ describe('mail preamble source context', () => {
     expect(driver).toContain(
       'Roles you can start: Verifier (verifier, default model); Critic (critic, xai/grok-5, no recall); Bad name (x, default model).'
     );
+    expect(driver).not.toContain('Models for a role');
+    // With a model list, the lead can put two agents of one role on different models.
+    const withModels = mailPreamble(
+      {
+        subject: 's',
+        from: 'user',
+        participants: ['driver'],
+        canSpawn: true,
+        roles: [{ id: 'verifier', name: 'Verifier' }],
+        models: ['openai-codex/gpt-6.1-sol (default)', 'xai/grok-5']
+      },
+      'driver'
+    );
+    expect(withModels).toContain(
+      'Models for a role without its own (spawn_agent model): openai-codex/gpt-6.1-sol (default), xai/grok-5.'
+    );
     const plain = mailPreamble({ subject: 's', from: 'driver', participants }, 'spoke');
     expect(plain).not.toContain('spawn_agent');
   });

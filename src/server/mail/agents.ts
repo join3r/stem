@@ -75,8 +75,9 @@ export function narrowMcpServers(role?: string[], starter?: string[]): string[] 
  * started by an agent cannot (the depth limit every sub-agent system has, for
  * the same runaway reason). Its reach is bounded by its starter's, from the
  * CURRENT rows on every delivery (the router resolves both fresh): the MCP
- * allowlist is the role's narrowed by the starter's, and a recall-off starter
- * or a blind start means no recall. Nothing is frozen at spawn, so tightening
+ * allowlist is the role's narrowed by the starter's, a recall-off starter
+ * or a blind start means no recall, and a model picked at start applies while
+ * the role has none of its own. Nothing is frozen at spawn, so tightening
  * either persona in the editor applies from the agent's next mail.
  */
 export function agentPersona(role: Persona, agent: MailAgent, starter: Pick<Persona, 'mcpServers' | 'recall'>): Persona {
@@ -85,6 +86,8 @@ export function agentPersona(role: Persona, agent: MailAgent, starter: Pick<Pers
   delete persona.clients;
   if (!role.canSpawn || isAgentId(agent.spawnedBy)) delete persona.canSpawn;
   if (agent.blind || starter.recall === false) persona.recall = false;
+  // spawn_agent refuses a model for a role with one; this keeps a later pin the user sets in charge.
+  if (agent.model && !role.model && !role.harness) persona.model = agent.model;
   const mcpServers = narrowMcpServers(role.mcpServers, starter.mcpServers);
   if (mcpServers) persona.mcpServers = mcpServers;
   else delete persona.mcpServers;

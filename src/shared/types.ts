@@ -593,6 +593,12 @@ export interface StartTurnInput {
      */
     roles?: { id: string; name: string; model?: string; blind?: true; code?: 'writes' | 'reviews' }[];
     /**
+     * Model ids spawn_agent may put an agent on (set with roles when a role
+     * has no model of its own), the default marked — so two agents of one
+     * role can still run on different models.
+     */
+    models?: string[];
+    /**
      * Set when this delivery runs an AGENT (see MailAgent): its role's name
      * and who started it — the one it reports to.
      */
@@ -3016,6 +3022,8 @@ export interface MailAgent {
   spawnedBy: string;
   /** Judges blind: no recall, and its mails never name the sender. */
   blind?: true;
+  /** The model it runs on, chosen at start — only for a role without a model of its own. */
+  model?: string;
 }
 
 export interface MailConversation {

@@ -285,6 +285,8 @@ export interface SpawnAgentRequest {
   brief?: string;
   /** Judge blind: no recall, and its mails never name the sender. */
   blind?: boolean;
+  /** A model id for a role without a model of its own. */
+  model?: string;
 }
 
 /**

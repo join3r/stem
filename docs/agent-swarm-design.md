@@ -55,14 +55,26 @@ personas, the "which reviewer am I" confusion and the exchange-cap pressure.
   user creates it in the editor.
 
 Limits: depth 2 (lead → agent → sub-agent), at most 6 live agents per
-conversation, the exchange cap stays as the runaway valve and each spawn
+conversation, of which agents may start at most 5: the last slot stays with
+the personas the user put in the conversation (on 2026-10-09 a lead's team
+filled all six and the driver's check of its report was refused), the exchange cap stays as the runaway valve and each spawn
 counts once: an agent's report to its starter is free, because the brief or
 follow-up that asked for it already paid.
 
 A spawner's preamble lists the roles it may start (every persona not pinned
 to the user's computer, plus pinned ones the user added), each with its model
 and whether it runs without recall, so the lead never guesses names and can
-pick roles on different models.
+pick roles on different models. A role without a model of its own runs on the
+default, so the preamble also lists the available models and spawn_agent takes
+a `model` for such a role (refused for a role the user set a model on, and for
+a coding role): before this, every agent in the 2026-10-09 benchmark run,
+including four "independent" reviewers, ran on one model.
+
+A mail to several recipients is refused when any of them judges blind (an
+agent started blind, or a recall-off persona). One shared mail shows each
+recipient the others' assignments, and in that run a "reviewer ONLY: … auditor
+ONLY: …" follow-up handed two blind reviewers the auditor's task, model names
+included. Separate sends in one turn still come back as one assembly.
 
 ## Roles shipped
 

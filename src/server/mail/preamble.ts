@@ -105,6 +105,7 @@ export function mailPreamble(
     canSpawn?: boolean;
     agents?: string[];
     roles?: { id: string; name: string; model?: string; blind?: true; code?: 'writes' | 'reviews' }[];
+    models?: string[];
     agent?: { role: string; spawnedBy: string };
     source?: { itemId: string; body: string; attachmentNames?: string[] };
   },
@@ -171,7 +172,8 @@ export function mailPreamble(
       'separate sub-questions, plus a blind critic given your draft to read cold; then answer, revising at ' +
       'most once. ' +
       'Independent attempts: a hard problem with a checkable answer — two or three blind agents solve it ' +
-      'separately, on different models where the roles allow; compare their reasoning and keep the ' +
+      'separately, on different models (a role\'s own, or spawn_agent\'s model for a role without one); ' +
+      'compare their reasoning and keep the ' +
       'best-argued answer, not the majority. ' +
       (mail.roles?.some((r) => r.code === 'writes') && mail.roles.some((r) => r.code === 'reviews')
         ? 'Code: a change to a codebase — the persona that writes code does the work; when it reports, start ' +
@@ -180,6 +182,9 @@ export function mailPreamble(
         : '') +
       'Never start agents for a chat-like ask, and never send an agent work you could finish in the same time.' +
       (roles ? ` Roles you can start: ${roles}.` : '') +
+      (mail.models?.length
+        ? ` Models for a role without its own (spawn_agent model): ${mail.models.map(cleanName).filter(Boolean).join(', ')}.`
+        : '') +
       (agents.length ? ` Your agents here: ${agents.map(label).join(', ')}.` : '')
     : '';
   const role = mail.agent
