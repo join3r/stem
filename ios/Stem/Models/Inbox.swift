@@ -78,3 +78,67 @@ enum MailSections {
         }
     }
 }
+
+/// How a mail conversation reads: newest on top. Each mail the user sent or
+/// received is one entry; the persona↔persona mails that led to a reply fold
+/// onto it. Port of desktop src/renderer/mail/thread.ts (minus work records,
+/// which the phone doesn't show).
+struct MailThreadEntry: Identifiable {
+    let item: MailItem
+    /// The persona↔persona mails exchanged before this one, oldest first.
+    let exchange: [MailItem]
+    var id: String { item.id }
+}
+
+enum MailThread {
+    struct Layout {
+        /// Newest first.
+        var entries: [MailThreadEntry]
+        /// Persona↔persona mails after the newest entry: consulting still under way.
+        var trailing: [MailItem]
+        /// Shown open by default: the newest mail, the latest reply to you, pending approvals.
+        var open: Set<String>
+    }
+
+    static func layout(_ items: [MailItem]) -> Layout {
+        var entries: [MailThreadEntry] = []
+        var pending: [MailItem] = []
+        for item in items.sorted(by: { $0.at < $1.at }) {
+            if item.from == "user" || item.to.contains("user") {
+                entries.append(MailThreadEntry(item: item, exchange: pending))
+                pending = []
+            } else {
+                pending.append(item)
+            }
+        }
+        var open = Set<String>()
+        if let newest = entries.last { open.insert(newest.id) }
+        if let reply = entries.last(where: { $0.item.from != "user" && $0.item.to.contains("user") }) { open.insert(reply.id) }
+        for e in entries where e.item.approval?.status == "pending" { open.insert(e.id) }
+        return Layout(entries: entries.reversed(), trailing: pending, open: open)
+    }
+
+    /// "Consulted Verifier · 2 mails".
+    static func exchangeLabel(_ exchange: [MailItem], author: String, name: (String) -> String) -> String {
+        var others: [String] = []
+        for m in exchange {
+            for id in [m.from] + m.to where id != author && id != "user" && !others.contains(id) { others.append(id) }
+        }
+        if others.isEmpty { others = Array(Set(exchange.map(\.from))) }
+        return "Consulted \(others.map(name).joined(separator: ", ")) · \(exchange.count) \(exchange.count == 1 ? "mail" : "mails")"
+    }
+}
+
+extension MailSections {
+    /// Mail you sent that personas are still working: shown above the Inbox so a
+    /// fresh send doesn't vanish into Sent, but never unread or "waiting on you".
+    static func working(_ mail: MailListResult, now: Double = Inbox.nowMs()) -> [MailConversation] {
+        mail.conversations
+            .filter { c in
+                c.status == "working"
+                    && !(c.userUpdatedAt > (c.userSentAt ?? 0))
+                    && Inbox.placement(id: c.id, updatedAt: c.userUpdatedAt, state: mail.inbox, now: now) == .inbox
+            }
+            .sorted { ($0.userSentAt ?? 0) > ($1.userSentAt ?? 0) }
+    }
+}

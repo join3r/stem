@@ -141,7 +141,8 @@ final class Session {
             if let role = personas.first(where: { $0.id == roleId })?.name { return "\(name) (\(role))" }
             return name
         }
-        return personas.first { $0.id == id }?.name ?? id
+        // Once the list has loaded, an id it lacks is a deleted persona; its raw id means nothing.
+        return personas.first { $0.id == id }?.name ?? (personas.isEmpty ? id : "Deleted persona")
     }
 
     var currentModel: ModelSummary? {

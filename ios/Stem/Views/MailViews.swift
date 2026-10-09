@@ -17,6 +17,14 @@ struct MailListView: View {
                     .pickerStyle(.segmented)
                     .listRowSeparator(.hidden)
                 }
+                if folder == .inbox, !working.isEmpty {
+                    // Sent and still being worked: visible here, never unread or "waiting on you".
+                    Section("Working") {
+                        ForEach(working) { c in
+                            NavigationLink(value: Route.mail(c.id)) { MailRow(conversation: c) }
+                        }
+                    }
+                }
                 Section {
                     ForEach(rows) { c in
                         NavigationLink(value: Route.mail(c.id)) { MailRow(conversation: c) }
@@ -42,7 +50,9 @@ struct MailListView: View {
             .listStyle(.plain)
             .overlay {
                 if !session.mail.loaded { ProgressView() }
-                else if rows.isEmpty { ContentUnavailableView("No mail in \(folder.rawValue)", systemImage: "tray") }
+                else if rows.isEmpty && (folder != .inbox || working.isEmpty) {
+                    ContentUnavailableView("No mail in \(folder.rawValue)", systemImage: "tray")
+                }
             }
             .refreshable { await session.mail.reload() }
             .navigationTitle("Mail")
@@ -69,6 +79,7 @@ struct MailListView: View {
     }
 
     private var rows: [MailConversation] { session.mail.sections[folder] ?? [] }
+    private var working: [MailConversation] { MailSections.working(session.mail.mail) }
 }
 
 struct MailRow: View {
@@ -111,44 +122,57 @@ struct MailRow: View {
 struct MailConversationView: View {
     @Environment(Session.self) private var session
     let conversationId: String
-    @State private var draft: Draft
-    @State private var error: String?
     @State private var showAdd = false
-
-    init(conversationId: String) {
-        self.conversationId = conversationId
-        _draft = State(initialValue: DraftStore.load("mail:\(conversationId)"))
-    }
+    @State private var replying = false
+    /// Mails the user opened or folded, flipping their default (see MailThread.layout).
+    @State private var flipped: Set<String> = []
+    /// Replies whose folded-in persona exchange is shown.
+    @State private var shownExchanges: Set<String> = []
 
     private var conversation: MailConversation? { session.mail.conversation(conversationId) }
     private var working: Bool { conversation?.status == "working" }
+    private var lead: String { conversation?.participants.first ?? "normal" }
 
     var body: some View {
+        let layout = MailThread.layout(session.mail.items(conversationId))
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                if let c = conversation {
-                    Text(c.subject.isEmpty ? "(no subject)" : c.subject).font(.title3.bold())
-                    Text("With " + c.participants.map(session.personaName).joined(separator: ", "))
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                ForEach(session.mail.items(conversationId)) { item in MailItemCard(item: item) }
-                if working {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text("Working…").font(.footnote).foregroundStyle(.secondary)
+            LazyVStack(alignment: .leading, spacing: 10) {
+                if let c = conversation { header(c) }
+                if working { liveRow }
+                if !layout.trailing.isEmpty { exchange(key: "trailing", layout.trailing, author: lead) }
+                ForEach(layout.entries) { entry in
+                    if layout.open.contains(entry.id) != flipped.contains(entry.id) {
+                        MailItemCard(item: entry.item, onFold: entry.item.approval?.status == "pending" ? nil : { flip(entry.id) })
+                    } else {
+                        foldedRow(entry)
                     }
+                    if !entry.exchange.isEmpty { exchange(key: entry.id, entry.exchange, author: entry.item.from) }
                 }
             }
             .padding(14)
         }
-        .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                if let error { ErrorBanner(text: error) { self.error = nil } }
-                Composer(kind: .mail, draftKey: "mail:\(conversationId)", draft: $draft, busy: false,
-                         placeholder: "Reply", onSend: reply)
+            HStack {
+                Button { Task { await session.mail.setArchived([conversationId], true) } } label: {
+                    Image(systemName: "archivebox").font(.title3)
+                }
+                .accessibilityLabel("Archive")
+                .frame(minWidth: 44, minHeight: 44)
+                Spacer()
+                Button { replying = true } label: {
+                    Label("Reply", systemImage: "arrowshape.turn.up.left").font(.body.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .controlSize(.large)
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
+        .sheet(isPresented: $replying) {
+            MailReplySheet(conversationId: conversationId).environment(session)
         }
         .navigationTitle(conversation?.subject ?? "Mail")
         .navigationBarTitleDisplayMode(.inline)
@@ -182,18 +206,164 @@ struct MailConversationView: View {
         .onChange(of: conversation?.userUpdatedAt) { _, _ in Task { await markRead() } }
     }
 
+    private func header(_ c: MailConversation) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(c.subject.isEmpty ? "(no subject)" : c.subject).font(.title3.bold())
+            HStack(spacing: 8) {
+                let others = c.participants.dropFirst().map(session.personaName)
+                Text(([session.personaName(lead) + (others.isEmpty ? "" : " leads")] + others).joined(separator: " · "))
+                    .font(.footnote).foregroundStyle(.secondary)
+                if c.status == "awaiting-user" { pill("Waiting on you", .orange) }
+                if c.status == "failed" { pill("Failed", .red) }
+                if c.status == "aborted" { pill("Stopped", .secondary) }
+            }
+        }
+    }
+
+    private func pill(_ text: String, _ color: Color) -> some View {
+        Text(text).font(.caption.weight(.semibold)).foregroundStyle(color)
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            .background(color.opacity(0.14), in: Capsule())
+    }
+
+    /// While personas work: who is on it, and Stop — at the top, where you look.
+    private var liveRow: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("\(session.personaName(lead)) is on it").font(.subheadline.weight(.semibold))
+            Spacer()
+            Button(role: .destructive) { Task { await session.mail.stop(conversationId) } } label: {
+                Label("Stop", systemImage: "stop.circle")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(12)
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.accentColor.opacity(0.45)))
+    }
+
+    private func foldedRow(_ entry: MailThreadEntry) -> some View {
+        Button { flip(entry.id) } label: {
+            HStack(spacing: 10) {
+                Text(session.personaName(entry.item.from)).font(.subheadline.weight(.semibold))
+                Text(entry.item.body.replacingOccurrences(of: "\n", with: " "))
+                    .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 4)
+                Text(RelativeTime.short(entry.item.at)).font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.25)))
+    }
+
+    @ViewBuilder
+    private func exchange(key: String, _ items: [MailItem], author: String) -> some View {
+        Button {
+            if shownExchanges.contains(key) { shownExchanges.remove(key) } else { shownExchanges.insert(key) }
+        } label: {
+            Label(MailThread.exchangeLabel(items, author: author, name: session.personaName),
+                  systemImage: "arrow.turn.down.right")
+                .font(.caption)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
+        .tint(.secondary)
+        if shownExchanges.contains(key) {
+            ForEach(items) { MailItemCard(item: $0).padding(.leading, 16).opacity(0.85) }
+        }
+    }
+
+    private func flip(_ id: String) {
+        if flipped.contains(id) { flipped.remove(id) } else { flipped.insert(id) }
+    }
+
     private func markRead() async {
         if let c = conversation, MailSections.isUnread(c, session.mail.mail) {
             await session.mail.setRead([conversationId], true)
         }
     }
+}
 
-    private func reply(_ text: String, _ files: [DraftAttachment]) async -> Bool {
+/// Reply, Apple Mail style: a sheet with your text on top and the mail you are
+/// answering quoted beneath it. Cancel keeps the draft.
+struct MailReplySheet: View {
+    @Environment(Session.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    let conversationId: String
+    @State private var draft: Draft
+    @State private var error: String?
+
+    init(conversationId: String) {
+        self.conversationId = conversationId
+        _draft = State(initialValue: DraftStore.load("mail:\(conversationId)"))
+    }
+
+    private var conversation: MailConversation? { session.mail.conversation(conversationId) }
+    private var items: [MailItem] { session.mail.items(conversationId) }
+    /// A run parked on Allow/Deny takes the reply instead of the lead.
+    private var parkedBy: String? { items.last { $0.approval?.status == "pending" }?.from }
+    private var recipient: String { parkedBy ?? conversation?.participants.first ?? "normal" }
+    private var quoted: MailItem? { items.last { $0.from != "user" && $0.to.contains("user") } }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text("To").foregroundStyle(.secondary)
+                        Text(session.personaName(recipient))
+                            .padding(.horizontal, 10).padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            .overlay(Capsule().strokeBorder(Color.accentColor))
+                        let others = (conversation?.participants ?? []).filter { $0 != recipient }.map(session.personaName)
+                        if parkedBy != nil {
+                            Text("instead of its Allow or Deny").font(.footnote).foregroundStyle(.secondary)
+                        } else if !others.isEmpty {
+                            Text("\(others.joined(separator: ", ")) only if \(session.personaName(recipient)) asks")
+                                .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    if conversation?.status == "working" {
+                        Text("\(session.personaName(recipient)) reads this when its current run ends.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .font(.subheadline)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                if let error { ErrorBanner(text: error) { self.error = nil } }
+                Composer(kind: .mail, draftKey: "mail:\(conversationId)", draft: $draft, busy: false,
+                         placeholder: "Reply to \(session.personaName(recipient))", onSend: send)
+                ScrollView {
+                    if let q = quoted {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("\(session.personaName(q.from)) · \(RelativeTime.short(q.at))")
+                                .font(.caption).foregroundStyle(.secondary)
+                            MarkdownView(q.body)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.secondarySystemBackground).opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
+                        .padding(16)
+                    }
+                }
+            }
+            .navigationTitle("Reply")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }
+    }
+
+    private func send(_ text: String, _ files: [DraftAttachment]) async -> Bool {
         do {
             let uploads = try await Uploads.upload(files, client: session.client)
             try await session.mail.reply(conversationId, body: text, attachments: uploads)
+            dismiss()
             return true
         } catch {
+            // The sheet stays open with the text kept, so nothing is lost.
             self.error = error.localizedDescription
             return false
         }
@@ -203,6 +373,8 @@ struct MailConversationView: View {
 struct MailItemCard: View {
     @Environment(Session.self) private var session
     let item: MailItem
+    /// Fold this mail back to one line (absent where it can't fold).
+    var onFold: (() -> Void)? = nil
 
     var body: some View {
         let mine = item.from == "user"
@@ -216,6 +388,11 @@ struct MailItemCard: View {
                 Spacer()
                 Text(Date(timeIntervalSince1970: item.at / 1000).formatted(date: .abbreviated, time: .shortened))
                     .font(.caption).foregroundStyle(.secondary)
+                if let onFold {
+                    Button(action: onFold) { Image(systemName: "chevron.up").font(.caption.weight(.semibold)) }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Fold this mail")
+                }
             }
             if item.stale == true {
                 Text("Late reply — written before your newest message").font(.caption).foregroundStyle(.orange)
