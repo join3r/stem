@@ -44,7 +44,9 @@ import { MailToField } from './MailToField';
 import { personaName, type PendingSend } from './useMail';
 import {
   EMPTY_COMPOSE,
+  freshCompose,
   readComposeDraft,
+  rememberRecipients,
   readReplyDraft,
   writeComposeDraft,
   writeReplyDraft
@@ -779,7 +781,12 @@ export const MailComposeView = forwardRef<MailViewHandle, {
 }>(function MailComposeView({ personas, onCompose, onCancel, forward }, ref) {
   // A plain New mail resumes the saved draft; a forward starts from its quote
   // and is never saved (it is one click away on the original mail).
-  const [saved] = useState(() => (forward ? EMPTY_COMPOSE : readComposeDraft() ?? EMPTY_COMPOSE));
+  // A blank one is addressed to whoever the last mail went to.
+  const [saved] = useState(() => {
+    // An empty list is personas still loading, not every persona deleted.
+    const fresh = freshCompose(personas.length ? new Set(personas.map((p) => p.id)) : undefined);
+    return forward ? { ...EMPTY_COMPOSE, to: fresh.to } : readComposeDraft() ?? fresh;
+  });
   // The To: list in SELECTION ORDER — the first persona leads (it receives the
   // mail and owns returning to the user); the rest are participants the lead
   // can consult with send_mail.
@@ -822,6 +829,7 @@ export const MailComposeView = forwardRef<MailViewHandle, {
               ...(files.attachments.length ? { attachments: files.attachments } : {})
             }
       );
+      rememberRecipients(to);
       if (!forward) writeComposeDraft(null);
     } catch (err) {
       sentRef.current = false;

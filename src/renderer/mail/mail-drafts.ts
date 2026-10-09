@@ -33,6 +33,8 @@ export const EMPTY_COMPOSE: ComposeDraft = { to: ['normal'], subject: '', body: 
 interface Drafts {
   replies: Record<string, ReplyDraft>;
   compose: ComposeDraft | null;
+  /** Who the last sent New mail (or forward) went to; a fresh New mail starts there. */
+  lastTo: string[] | null;
 }
 
 let drafts: Drafts | null = null;
@@ -50,13 +52,14 @@ function store(): StorageLike | null {
 
 function load(): Drafts {
   if (drafts) return drafts;
-  drafts = { replies: {}, compose: null };
+  drafts = { replies: {}, compose: null, lastTo: null };
   try {
     const raw = store()?.getItem(MAIL_DRAFTS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<Drafts>;
       if (parsed.replies && typeof parsed.replies === 'object') drafts.replies = parsed.replies;
       if (parsed.compose && typeof parsed.compose === 'object') drafts.compose = { ...EMPTY_COMPOSE, ...parsed.compose };
+      if (Array.isArray(parsed.lastTo) && parsed.lastTo.every((id) => typeof id === 'string')) drafts.lastTo = parsed.lastTo;
     }
   } catch {
     // A corrupt or unreadable store costs the saved drafts, never the pane.
@@ -73,7 +76,7 @@ function persist(): void {
   for (const [id, r] of Object.entries(d.replies)) replies[id] = { text: r.text, attachments: durable(r.attachments) };
   const compose = d.compose && { ...d.compose, attachments: durable(d.compose.attachments) };
   try {
-    store()?.setItem(MAIL_DRAFTS_KEY, JSON.stringify({ replies, compose }));
+    store()?.setItem(MAIL_DRAFTS_KEY, JSON.stringify({ replies, compose, lastTo: d.lastTo }));
   } catch {
     // Best-effort: the in-memory copy still serves this window.
   }
@@ -115,6 +118,25 @@ export function writeComposeDraft(draft: ComposeDraft | null): void {
   const empty = !draft || (!draft.body.trim() && !draft.subject.trim() && draft.attachments.length === 0);
   if (empty && !d.compose) return;
   drafts = { ...d, compose: empty ? null : draft };
+  changed();
+}
+
+/**
+ * A blank New mail, addressed to whoever the last one went to. `known` is the
+ * persona ids that still exist: a deleted persona drops out, and if nobody is
+ * left the mail falls back to the default persona.
+ */
+export function freshCompose(known?: Set<string>): ComposeDraft {
+  const last = (load().lastTo ?? []).filter((id) => !known || known.has(id));
+  return last.length ? { ...EMPTY_COMPOSE, to: last } : EMPTY_COMPOSE;
+}
+
+/** Remember who a sent New mail went to, for the next one. */
+export function rememberRecipients(to: string[]): void {
+  if (!to.length) return;
+  const d = load();
+  if (d.lastTo && d.lastTo.length === to.length && d.lastTo.every((id, i) => id === to[i])) return;
+  drafts = { ...d, lastTo: [...to] };
   changed();
 }
 

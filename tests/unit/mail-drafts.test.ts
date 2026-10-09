@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   MAIL_DRAFTS_KEY,
   EMPTY_COMPOSE,
+  freshCompose,
   pruneReplyDrafts,
+  rememberRecipients,
   readComposeDraft,
   readReplyDraft,
   resetMailDrafts,
@@ -72,5 +74,15 @@ describe('mail drafts', () => {
     expect(readReplyDraft('gone').text).toBe('');
     expect(readReplyDraft('a').text).toBe('x');
     expect(calls).toBe(3);
+  });
+
+  it('a fresh New mail goes to whoever the last one went to, across a restart', () => {
+    expect(freshCompose().to).toEqual(['normal']);
+    rememberRecipients(['verifier', 'normal']);
+    resetMailDrafts(storage);
+    expect(freshCompose().to).toEqual(['verifier', 'normal']);
+    // A deleted persona drops out; nobody left falls back to the default.
+    expect(freshCompose(new Set(['normal'])).to).toEqual(['normal']);
+    expect(freshCompose(new Set(['other'])).to).toEqual(['normal']);
   });
 });
