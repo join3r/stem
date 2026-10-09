@@ -8,7 +8,7 @@ import {
   useRef,
   useState
 } from 'react';
-import { File, Forward, Paperclip, Plus, Send, ShieldAlert, Square, X } from 'lucide-react';
+import { File, Forward, Paperclip, Plus, RotateCcw, Send, ShieldAlert, Square, X } from 'lucide-react';
 import { MAIL_BETA_TITLE } from '../chats/ChatList';
 import type {
   MailApproval,
@@ -24,7 +24,14 @@ import { MdxView } from '../chat/MdxView';
 import { formatSystemVersion, sameSystem } from '../../shared/sys-version';
 import { forwardAttachments, forwardCompose, forwardQuote, forwardSubject } from '../../shared/mail-forward';
 import { groupMailTimeline } from './grouping';
-import { personaName } from './useMail';
+import { personaName, type PendingSend } from './useMail';
+import {
+  EMPTY_COMPOSE,
+  readComposeDraft,
+  readReplyDraft,
+  writeComposeDraft,
+  writeReplyDraft
+} from './mail-drafts';
 import { useMailWork } from './useMailWork';
 import { MailWork } from './MailWork';
 import { GeneratedImages } from '../chat/GeneratedImage';
@@ -96,7 +103,11 @@ function useAttachmentDraft(initial?: TurnAttachment[]) {
 
   const clear = useCallback(() => setAttachments([]), []);
 
-  return { attachments, addFiles, pickFiles, onPaste, onDrop, remove, clear };
+  const add = useCallback((more: TurnAttachment[]) => {
+    if (more.length) setAttachments((prev) => [...prev, ...more]);
+  }, []);
+
+  return { attachments, addFiles, pickFiles, onPaste, onDrop, remove, clear, add };
 }
 
 /**
@@ -154,6 +165,10 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   items: MailItem[];
   personas: Persona[];
   onReply: (body: string, attachments?: TurnAttachment[]) => void;
+  /** This conversation's replies still on their way, or failed. */
+  pending: PendingSend[];
+  onRetrySend: (id: string) => void;
+  onDropSend: (id: string) => void;
   /** Resolves once the persona is in; rejection shows its message inline. */
   onAddParticipant: (personaId: string) => Promise<void>;
   /** Stop the working personas: queued deliveries dropped, running turns interrupted. */
@@ -167,11 +182,16 @@ export const MailConversationView = forwardRef<MailViewHandle, {
    */
   currentSys?: SystemVersion;
 }>(function MailConversationView(
-  { conversation, items, personas, onReply, onAddParticipant, onStop, onForward, currentSys },
+  { conversation, items, personas, onReply, pending, onRetrySend, onDropSend, onAddParticipant, onStop, onForward, currentSys },
   ref
 ) {
-  const [draft, setDraft] = useState('');
-  const files = useAttachmentDraft();
+  // Keyed by conversation in App, so this mounts fresh per conversation and
+  // its draft is that conversation's own.
+  const [draft, setDraft] = useState(() => readReplyDraft(conversation.id).text);
+  const files = useAttachmentDraft(readReplyDraft(conversation.id).attachments);
+  useEffect(() => {
+    writeReplyDraft(conversation.id, { text: draft, attachments: files.attachments });
+  }, [conversation.id, draft, files.attachments]);
   useImperativeHandle(ref, () => ({
     addAttachments: (dropped) => void files.addFiles(dropped)
   }));
@@ -224,6 +244,62 @@ export const MailConversationView = forwardRef<MailViewHandle, {
     setDraft('');
     files.clear();
   };
+
+  /** A failed send goes back into the box for another try; it leaves the thread. */
+  const editSend = (p: PendingSend) => {
+    setDraft((prev) => (prev.trim() ? `${prev}\n\n${p.body}` : p.body));
+    files.add(p.attachments ?? []);
+    onDropSend(p.id);
+  };
+
+  const pendingCard = (p: PendingSend) => (
+    <article
+      key={p.id}
+      className={`mail-item from-user mail-pending${p.status === 'failed' ? ' failed' : ''}`}
+      aria-live="polite"
+    >
+      <div className="mail-item-head">
+        <strong>You</strong>
+        <span className="mail-item-to">to {personaName(personas, conversation.participants[0])}</span>
+        <span className="mail-pending-state">
+          {p.status === 'sending' ? (
+            <>
+              <span className="mail-spin" aria-hidden="true" /> Sending…
+            </>
+          ) : (
+            'Not sent'
+          )}
+        </span>
+      </div>
+      {p.body && <p className="mail-item-body-plain">{p.body}</p>}
+      {p.attachments && p.attachments.length > 0 && (
+        <div className="message-attachments">
+          {p.attachments.map((att, i) => (
+            <span className="attachment-chip" key={i}>
+              <File size={13} />
+              <span className="attachment-name">{att.name}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {p.status === 'failed' && (
+        <>
+          <p className="mail-pending-error">{p.error || 'The server didn’t answer.'} Your text is safe.</p>
+          <div className="mail-pending-actions">
+            <button type="button" className="push default" onClick={() => onRetrySend(p.id)}>
+              <RotateCcw size={12} /> Retry
+            </button>
+            <button type="button" className="push" onClick={() => editSend(p)}>
+              Edit
+            </button>
+            <button type="button" className="push" onClick={() => onDropSend(p.id)}>
+              Delete
+            </button>
+          </div>
+        </>
+      )}
+    </article>
+  );
 
   const forward = (m: MailItem) => {
     // The quote is read by a persona: "User", not the renderer's "You".
@@ -390,6 +466,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
         {addingTo && addError && <p className="task-failed">{addError}</p>}
       </header>
       <div className="mail-items" ref={scrollRef}>
+        {[...pending].reverse().map(pendingCard)}
         {unlinkedWork.map((group) => <MailWork key={group.id} group={group} personas={personas} unlinked />)}
         {work.error && <p className="mail-work-note">{work.error} <button type="button" onClick={work.refresh}>Retry</button></p>}
         {groups.map((group) => {
@@ -460,11 +537,20 @@ export const MailComposeView = forwardRef<MailViewHandle, {
   // The To: list in SELECTION ORDER — the first-picked persona is the driver
   // (it receives the mail and owns returning to the user); the rest are
   // participants the driver can consult with send_mail.
-  const [to, setTo] = useState<string[]>(['normal']);
-  const [subject, setSubject] = useState(forward?.subject ?? '');
-  const [body, setBody] = useState('');
-  const [isPrivate, setIsPrivate] = useState(false);
-  const files = useAttachmentDraft(forward?.attachments);
+  // A plain New mail resumes the saved draft; a forward starts from its quote
+  // and is never saved (it is one click away on the original mail).
+  const [saved] = useState(() => (forward ? EMPTY_COMPOSE : readComposeDraft() ?? EMPTY_COMPOSE));
+  const [to, setTo] = useState<string[]>(saved.to);
+  const [subject, setSubject] = useState(forward?.subject ?? saved.subject);
+  const [body, setBody] = useState(saved.body);
+  const [isPrivate, setIsPrivate] = useState(saved.private);
+  const files = useAttachmentDraft(forward?.attachments ?? saved.attachments);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const sentRef = useRef(false);
+  useEffect(() => {
+    if (forward || sentRef.current) return;
+    writeComposeDraft({ to, subject, body, private: isPrivate, attachments: files.attachments });
+  }, [forward, to, subject, body, isPrivate, files.attachments]);
   // A forward always has something to send — the quote — even with no note.
   const empty = !forward && !body.trim() && !files.attachments.length;
   useImperativeHandle(ref, () => ({
@@ -482,6 +568,8 @@ export const MailComposeView = forwardRef<MailViewHandle, {
     setSending(true);
     setError(null);
     try {
+      // Stop saving first: the pane unmounts as the send resolves.
+      sentRef.current = true;
       await onCompose(
         forward
           ? forwardCompose({ to, subject, note: body, quote: forward.quote, attachments: files.attachments, private: isPrivate })
@@ -493,10 +581,18 @@ export const MailComposeView = forwardRef<MailViewHandle, {
               ...(files.attachments.length ? { attachments: files.attachments } : {})
             }
       );
+      if (!forward) writeComposeDraft(null);
     } catch (err) {
+      sentRef.current = false;
       setError(err instanceof Error ? err.message : String(err));
       setSending(false);
     }
+  };
+
+  const discard = () => {
+    if (!forward) writeComposeDraft(null);
+    sentRef.current = true;
+    onCancel();
   };
 
   return (
@@ -508,7 +604,12 @@ export const MailComposeView = forwardRef<MailViewHandle, {
             Beta
           </span>
         </h1>
-        <button className="icon-action sm" onClick={onCancel} title="Discard" aria-label="Discard">
+        <button
+          className="icon-action sm"
+          onClick={forward ? discard : onCancel}
+          title={forward ? 'Discard' : 'Close — the draft is kept'}
+          aria-label={forward ? 'Discard' : 'Close and keep the draft'}
+        >
           <X size={14} />
         </button>
       </header>
@@ -586,6 +687,24 @@ export const MailComposeView = forwardRef<MailViewHandle, {
           >
             <Paperclip size={15} />
           </button>
+          {confirmDiscard ? (
+            <span className="mail-discard-confirm" role="group" aria-label="Discard this draft?">
+              Discard this draft?
+              <button type="button" className="push default danger" onClick={discard}>
+                Discard
+              </button>
+              <button type="button" className="push" onClick={() => setConfirmDiscard(false)}>
+                Keep
+              </button>
+            </span>
+          ) : (
+            !forward && (
+              <button type="button" className="mail-discard" onClick={() => setConfirmDiscard(true)} disabled={!body.trim() && !subject.trim() && !files.attachments.length}>
+                Discard…
+              </button>
+            )
+          )}
+          <span className="mail-compose-spacer" />
           <button
             className="mail-send"
             onClick={() => void send()}

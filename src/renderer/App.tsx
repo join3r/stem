@@ -288,6 +288,8 @@ export default function App() {
   // and the unread badge all read from here.
   const mailApi = useMail(!!status?.ok);
   const { mail } = mailApi;
+  const mailRef = useRef(mail);
+  mailRef.current = mail;
   // What the centre pane actually shows — the same condition that hides the
   // chatview-host below, shared so drop routing can't disagree with the DOM.
   const mailPaneShowing =
@@ -1324,15 +1326,20 @@ export default function App() {
     },
     [mailApi]
   );
-  /** Send from the compose form; the mail is on its way (Sent has the copy), so
-   *  the pane closes back to the app's resting state — email semantics, not chat:
-   *  the reply arrives in the Inbox, it isn't watched for. */
+  /** Send from the compose form, then open the new conversation: the mail you
+   *  just sent stays in view, with the personas' progress on it, instead of
+   *  vanishing into a folded Sent section. */
   const onComposeSend = useCallback(
     async (input: Parameters<typeof mailApi.compose>[0]) => {
-      await mailApi.compose(input);
-      setMailView(null);
+      const before = new Set(mailRef.current.conversations.map((c) => c.id));
+      const list = await mailApi.compose(input);
+      const created = list.conversations
+        .filter((c) => !before.has(c.id))
+        .sort((a, b) => b.createdAt - a.createdAt)[0];
+      if (created) openMail(created.id);
+      else setMailView(null);
     },
-    [mailApi]
+    [mailApi, openMail]
   );
   const onWriteSubject = useCallback(
     (threadId: string) => {
@@ -1800,6 +1807,7 @@ export default function App() {
               if (!conversation) return null;
               return (
                 <MailConversationView
+                  key={conversation.id}
                   ref={mailPaneRef}
                   conversation={conversation}
                   items={mail.items}
@@ -1808,6 +1816,9 @@ export default function App() {
                   onReply={(body, attachments) =>
                     void mailApi.reply(conversation.id, body, attachments)
                   }
+                  pending={mailApi.pending.filter((p) => p.conversationId === conversation.id)}
+                  onRetrySend={mailApi.retrySend}
+                  onDropSend={mailApi.dropSend}
                   onAddParticipant={(personaId) =>
                     mailApi.addParticipant(conversation.id, personaId)
                   }

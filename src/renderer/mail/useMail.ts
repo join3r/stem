@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InboxState } from '../../shared/inbox';
+import { pruneReplyDrafts } from './mail-drafts';
 import { withArchived, withRead, withSnooze } from '../../shared/inbox';
 import type {
   MailComposeInput,
@@ -22,13 +23,32 @@ const EMPTY: MailListResult = {
   inbox: { baseline: 0, entries: {} }
 };
 
+/**
+ * A reply on its way to the server, shown in the conversation the moment the
+ * user sends it. It leaves once the server's list carries the real item; a
+ * failed one stays, text intact, until the user retries, edits or drops it.
+ */
+export interface PendingSend {
+  id: string;
+  conversationId: string;
+  body: string;
+  attachments?: TurnAttachment[];
+  at: number;
+  status: 'sending' | 'failed';
+  error?: string;
+}
+
 export interface MailApi {
   mail: MailListResult;
   personas: Persona[];
   refresh: () => void;
   /** Resolves with the fresh list so the caller can open the new conversation. */
   compose: (input: MailComposeInput) => Promise<MailListResult>;
+  /** Never rejects: a failure stays in `pending` as a failed send. */
   reply: (conversationId: string, body: string, attachments?: TurnAttachment[]) => Promise<void>;
+  pending: PendingSend[];
+  retrySend: (id: string) => void;
+  dropSend: (id: string) => void;
   addParticipant: (conversationId: string, personaId: string) => Promise<void>;
   /** Stop the conversation's in-flight work; resolves once the interrupts are sent. */
   stop: (conversationId: string) => Promise<void>;
@@ -41,6 +61,9 @@ export interface MailApi {
 export function useMail(ready: boolean): MailApi {
   const [mail, setMail] = useState<MailListResult>(EMPTY);
   const [personas, setPersonas] = useState<Persona[]>([]);
+  const [pending, setPending] = useState<PendingSend[]>([]);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
   const pendingPatches = useRef(new Map<number, (inbox: InboxState) => InboxState>());
   const patchSeq = useRef(0);
 
@@ -55,7 +78,10 @@ export function useMail(ready: boolean): MailApi {
 
   const refresh = useCallback(() => {
     if (!window.stem) return;
-    window.stem.listMail().then(applyServer).catch(() => {
+    window.stem.listMail().then((list) => {
+      applyServer(list);
+      pruneReplyDrafts(new Set(list.conversations.map((c) => c.id)));
+    }).catch(() => {
       // quiet-shaped but deliberate: offline, the pane keeps whatever it has.
     });
     window.stem.listPersonas().then(setPersonas).catch(() => {});
@@ -136,12 +162,48 @@ export function useMail(ready: boolean): MailApi {
     },
     [applyServer]
   );
-  const reply = useCallback(
-    async (conversationId: string, body: string, attachments?: TurnAttachment[]) => {
-      applyServer(await window.stem.replyMail(conversationId, body, attachments));
+  const deliver = useCallback(
+    async (send: PendingSend) => {
+      try {
+        const list = await window.stem.replyMail(send.conversationId, send.body, send.attachments);
+        // One batch: the real item lands as the placeholder leaves.
+        applyServer(list);
+        setPending((prev) => prev.filter((p) => p.id !== send.id));
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        setPending((prev) => prev.map((p) => (p.id === send.id ? { ...p, status: 'failed', error } : p)));
+      }
     },
     [applyServer]
   );
+  const reply = useCallback(
+    async (conversationId: string, body: string, attachments?: TurnAttachment[]) => {
+      const send: PendingSend = {
+        id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        conversationId,
+        body,
+        ...(attachments?.length ? { attachments } : {}),
+        at: Date.now(),
+        status: 'sending'
+      };
+      setPending((prev) => [...prev, send]);
+      await deliver(send);
+    },
+    [deliver]
+  );
+  const retrySend = useCallback(
+    (id: string) => {
+      const send = pendingRef.current.find((p) => p.id === id);
+      if (!send || send.status !== 'failed') return;
+      const again: PendingSend = { ...send, status: 'sending', error: undefined, at: Date.now() };
+      setPending((prev) => prev.map((p) => (p.id === id ? again : p)));
+      void deliver(again);
+    },
+    [deliver]
+  );
+  const dropSend = useCallback((id: string) => {
+    setPending((prev) => prev.filter((p) => p.id !== id));
+  }, []);
   const addParticipant = useCallback(
     async (conversationId: string, personaId: string) => {
       applyServer(await window.stem.addMailParticipant(conversationId, personaId));
@@ -173,7 +235,22 @@ export function useMail(ready: boolean): MailApi {
     [applyServer, refresh]
   );
 
-  return { mail, personas, refresh, compose, reply, addParticipant, stop, archive, snooze, setRead, remove };
+  return {
+    mail,
+    personas,
+    refresh,
+    compose,
+    reply,
+    pending,
+    retrySend,
+    dropSend,
+    addParticipant,
+    stop,
+    archive,
+    snooze,
+    setRead,
+    remove
+  };
 }
 
 /**

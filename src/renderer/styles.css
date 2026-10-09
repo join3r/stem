@@ -4310,3 +4310,20 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .record-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); }
 .record-actions .push { display: inline-flex; align-items: center; gap: var(--sp-2); }
 .record-hint { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-12); }
+
+/* Mail sends on their way, and the ones that failed — text kept, Retry/Edit/Delete. */
+.mail-pending .mail-pending-state { margin-left: auto; display: inline-flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-11); color: var(--muted); }
+.mail-pending:not(.failed) { opacity: 0.75; }
+.mail-item.mail-pending.failed { border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 6%, var(--inline-bg)); }
+.mail-pending.failed .mail-pending-state { color: var(--danger); font-weight: 600; }
+.mail-pending-error { margin: var(--sp-3) 0 0; font-size: var(--fs-12); color: var(--danger); }
+.mail-pending-actions { display: flex; gap: var(--sp-3); margin-top: var(--sp-4); }
+.mail-pending-actions .push { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.mail-spin { display: inline-block; width: 10px; height: 10px; border-radius: 999px; border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent); animation: mail-spin 1s linear infinite; flex: none; }
+@keyframes mail-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .mail-spin { animation-duration: 3s; } }
+.mail-compose-spacer { flex: 1; }
+.mail-discard { border: none; background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-12); cursor: pointer; padding: var(--sp-2) var(--sp-3); }
+.mail-discard:hover:not(:disabled) { color: var(--ink); }
+.mail-discard:disabled { opacity: 0.5; cursor: default; }
+.mail-discard-confirm { display: inline-flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-12); }
