@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isValidCron, nextAfter, parseCron } from '../../src/server/scheduler/cron';
+import { describeCron, isValidCron, nextAfter, parseCron } from '../../src/shared/cron';
 
 // All times are local — construct Dates with the local constructor so the test is
 // timezone-independent (we only assert relative field values, never UTC offsets).
@@ -103,5 +103,29 @@ describe('nextAfter', () => {
       if (previousTz === undefined) delete process.env.TZ;
       else process.env.TZ = previousTz;
     }
+  });
+});
+
+describe('describeCron', () => {
+  it.each([
+    ['0 8 * * *', 'Daily at 08:00'],
+    ['0 8 * * 1-5', 'Weekdays at 08:00'],
+    ['30 9 * * 1', 'Mondays at 09:30'],
+    ['0 10 * * 0,6', 'Weekends at 10:00'],
+    ['0 * * * *', 'Every hour'],
+    ['15 * * * *', 'Every hour at :15'],
+    ['*/10 * * * *', 'Every 10 minutes'],
+    ['0 */6 * * *', 'Every 6 hours'],
+    ['0 9 1 * *', 'Monthly on the 1st at 09:00'],
+    ['0 9 22 * *', 'Monthly on the 22nd at 09:00']
+  ])('%s → %s', (expr, words) => {
+    expect(describeCron(expr)).toBe(words);
+  });
+
+  it('gives up on shapes it cannot say exactly', () => {
+    expect(describeCron('0 8 1 * 1')).toBeNull();
+    expect(describeCron('0 8 * 6 *')).toBeNull();
+    expect(describeCron('0 8,20 * * *')).toBeNull();
+    expect(describeCron('not cron')).toBeNull();
   });
 });

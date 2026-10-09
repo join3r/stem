@@ -405,6 +405,8 @@ describe('every run gets a fresh thread', () => {
     await until(async () => (await storedStatus()) === 'ok', 'the run to be recorded');
     await flush();
     expect(runtime.deleted).toEqual([]);
+    // The Runs list points at the kept thread, which is what its mail item carries too.
+    expect((await readTasks())[0].recentRuns?.[0]?.threadId).toBeTruthy();
     scheduler.stop();
   });
 
@@ -493,6 +495,11 @@ describe('TaskScheduler.runNow + management', () => {
     scheduler.runNow(res.task.id);
     await until(async () => (await storedStatus()) === 'ok', 'the good run to be recorded');
     expect((await readTasks())[0].lastError).toBeUndefined();
+    // Both firings are in the Runs list, newest first; neither mailed, so neither keeps a thread.
+    const runs = (await readTasks())[0].recentRuns!;
+    expect(runs.map((r) => r.status)).toEqual(['ok', 'failed']);
+    expect(runs[1].error).toMatch(/working directory does not exist/);
+    expect(runs.every((r) => r.threadId === undefined)).toBe(true);
     scheduler.stop();
   });
 

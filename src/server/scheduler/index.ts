@@ -6,13 +6,15 @@ import type {
   ScheduledRunReport,
   ScheduledTask,
   ScheduleTaskRequest,
+  TaskRunRecord,
   TaskRunsAs,
   TaskSchedule
 } from '../../shared/types';
+import { TASK_RECENT_RUNS } from '../../shared/types';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { noteTurnStart } from '../live-turns';
-import { isValidCron, nextAfter } from './cron';
+import { isValidCron, nextAfter } from '../../shared/cron';
 import { clipError, coerceRunsAs, readTasksStore, saveTasks, titleFromPrompt } from '../workspace/tasks';
 import { getPersona } from '../workspace/personas';
 import { personaTurnFields } from '../workspace/persona-turn';
@@ -809,6 +811,16 @@ export class TaskScheduler {
     await this.disposeRunThread(run, reflection);
 
     task.lastRunAt = atIso;
+    // The Runs list: a quiet run's thread is gone by now, so this is all it leaves.
+    const failed = task.lastStatus === 'failed';
+    const record: TaskRunRecord = {
+      at: atIso,
+      status: failed ? 'failed' : 'ok',
+      ...(failed && task.lastError ? { error: task.lastError } : {}),
+      ...(run.notified && run.threadId ? { threadId: run.threadId } : {}),
+      ...(parked ? { parked: true } : {})
+    };
+    task.recentRuns = [record, ...(task.recentRuns ?? [])].slice(0, TASK_RECENT_RUNS);
     // nextRunAt was already claimed (advanced) at dispatch time for scheduled and
     // catch-up runs; a manual runNow deliberately leaves the schedule untouched.
     // A one-time task that has fired its scheduled slot is finished — drop it from

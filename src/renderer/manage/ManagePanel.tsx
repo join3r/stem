@@ -120,7 +120,23 @@ function ManagePanelImpl({
         {tab === 'mcp' && <McpSkillsTab models={models} />}
         {tab === 'personas' && <PersonasTab models={models} />}
         {tab === 'folders' && <SourcesTab models={models} />}
-        {tab === 'tasks' && <TasksTab onOpenChat={chatProps.onOpen} models={models} />}
+        {tab === 'tasks' && (
+          <TasksTab
+            onOpenChat={chatProps.onOpen}
+            onNewChat={() => {
+              setTab('chats');
+              chatProps.onChatsTabChange('chats');
+              chatProps.onNewChat(null);
+            }}
+            onOpenMail={(id) => {
+              setTab('chats');
+              chatProps.onChatsTabChange('inbox');
+              chatProps.onOpenMail(id);
+            }}
+            mailItems={chatProps.mail.items}
+            models={models}
+          />
+        )}
         {tab === 'settings' && (
           <SettingsTab
             models={models}

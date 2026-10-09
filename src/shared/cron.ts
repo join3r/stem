@@ -203,3 +203,45 @@ export function nextAfter(expr: string, from: Date): Date | null {
   }
   return null;
 }
+
+const DAY_NAMES = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
+
+/**
+ * A plain-words reading of the common shapes ("Weekdays at 08:00", "Every
+ * hour", "Mondays at 09:00"), or null when the expression is anything more
+ * intricate — the Tasks tab then shows the expression itself rather than a
+ * description that might be wrong.
+ */
+export function describeCron(expr: string): string | null {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5 || !isValidCron(expr)) return null;
+  const [min, hour, dom, month, dow] = parts as [string, string, string, string, string];
+  const num = (s: string) => (/^\d+$/.test(s) ? Number(s) : null);
+  const m = num(min);
+  const h = num(hour);
+  const at = m !== null && h !== null ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` : null;
+  const step = (s: string) => /^\*\/(\d+)$/.exec(s)?.[1];
+  if (month !== '*') return null;
+  if (dom === '*' && dow === '*') {
+    if (at) return `Daily at ${at}`;
+    if (hour === '*' && m !== null) return m === 0 ? 'Every hour' : `Every hour at :${String(m).padStart(2, '0')}`;
+    if (hour === '*' && step(min)) return `Every ${step(min)} minutes`;
+    if (min === '*' && hour === '*') return 'Every minute';
+    if (m !== null && step(hour)) return `Every ${step(hour)} hours${m ? ` at :${String(m).padStart(2, '0')}` : ''}`;
+    return null;
+  }
+  if (!at) return null;
+  if (dom === '*') {
+    if (dow === '1-5') return `Weekdays at ${at}`;
+    if (dow === '0,6' || dow === '6,0' || dow === '6,7' || dow === '6-7') return `Weekends at ${at}`;
+    const d = num(dow);
+    if (d !== null) return `${DAY_NAMES[d % 7]} at ${at}`;
+    return null;
+  }
+  const d = num(dom);
+  if (dow === '*' && d !== null) {
+    const suffix = d % 10 === 1 && d !== 11 ? 'st' : d % 10 === 2 && d !== 12 ? 'nd' : d % 10 === 3 && d !== 13 ? 'rd' : 'th';
+    return `Monthly on the ${d}${suffix} at ${at}`;
+  }
+  return null;
+}

@@ -62,18 +62,21 @@ test('Tasks tab renders seeded scheduled tasks', async () => {
   await expect(win.locator('.manage-body').getByText('Scheduled tasks', { exact: true })).toBeVisible();
   await expect(win.getByText('Summarize my unread email')).toBeVisible();
   await expect(win.getByText('Check the release page')).toBeVisible();
-  // Each row shows who/what its runs execute as — unpinned, the app default.
-  await expect(win.getByText('App default').first()).toBeVisible();
+  // Each row shows its schedule in words and who/what its runs execute as — unpinned, the app default.
+  await expect(win.getByText('Daily at 08:00 · App default').first()).toBeVisible();
 });
 
 test('pausing a task persists enabled=false and clears the next run through real IPC', async () => {
   const win = await boot([seedTask('a', 'Summarize my unread email')]);
   await expect(win.getByText('Summarize my unread email')).toBeVisible();
 
-  await win.getByRole('button', { name: 'Pause' }).click();
-  // The row flips to a Resume affordance and shows the paused state.
-  await expect(win.getByRole('button', { name: 'Resume' })).toBeVisible();
-  await expect(win.getByText('Paused')).toBeVisible();
+  // Pausing is the editor header's switch, and it acts at once (not on Save).
+  await win.getByText('Summarize my unread email').click();
+  const active = win.getByRole('switch', { name: 'Active' });
+  await expect(active).toBeChecked();
+  await active.click();
+  await expect(active).not.toBeChecked();
+  await expect(win.locator('.ld-ident').getByText('Paused')).toBeVisible();
 
   // Confirm it round-tripped to the scheduler/store, not just the UI: a paused task
   // has enabled=false and nextRunAt cleared (so it can never be detected as due).
@@ -126,11 +129,27 @@ test('deleting a task removes it from the store, leaving the others', async () =
   const win = await boot([seedTask('a', 'Summarize my unread email'), seedTask('b', 'Check the release page')]);
   await expect(win.getByText('Summarize my unread email')).toBeVisible();
 
-  // Two tasks → two Delete buttons; remove the first.
-  await win.getByRole('button', { name: 'Delete task' }).first().click();
+  // Delete lives in the task's editor and asks once, in place.
+  await win.getByText('Summarize my unread email').click();
+  await win.getByRole('button', { name: 'Delete task' }).click();
+  await win.getByRole('button', { name: 'Delete task?' }).click();
 
+  // Back on the list (the editor's prompt box would also match the text).
+  await expect(win.locator('.ld-detail')).toHaveCount(0);
   await expect(win.getByText('Summarize my unread email')).toBeHidden();
   await expect(win.getByText('Check the release page')).toBeVisible();
   const remaining = await win.evaluate(() => (window as any).stem.listTasks().then((t: any[]) => t.map((x) => x.title)));
   expect(remaining).toEqual(['Check the release page']);
+});
+
+test('a schedule edit reads back in words and is written only on Save', async () => {
+  const win = await boot([seedTask('a', 'Summarize my unread email')]);
+  await win.getByText('Summarize my unread email').click();
+  await win.getByRole('tab', { name: 'Schedule' }).click();
+  await win.getByLabel('Cron schedule').fill('0 9 * * 1-5');
+  await expect(win.getByText('Weekdays at 09:00, in the Stem server’s time.')).toBeVisible();
+  const expr = () => win.evaluate(() => (window as any).stem.listTasks().then((t: any[]) => t[0].schedule.expr));
+  expect(await expr()).toBe('0 8 * * *');
+  await win.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect.poll(expr).toBe('0 9 * * 1-5');
 });

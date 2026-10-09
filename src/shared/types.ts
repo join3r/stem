@@ -1080,7 +1080,29 @@ export interface ScheduledTask {
    * it stood, for Revert; cleared by Revert or by the user's own prompt edit.
    */
   rewritten?: { at: string; original: string };
+  /**
+   * The last few firings, newest first (at most TASK_RECENT_RUNS). The run
+   * thread itself is deleted when it sent no mail, so this is the only trace a
+   * quiet run leaves; `threadId` is set only for a run whose thread was kept.
+   */
+  recentRuns?: TaskRunRecord[];
 }
+
+/** One firing of a scheduled task, as the Tasks tab's Runs list shows it. */
+export interface TaskRunRecord {
+  /** ISO time the run started. */
+  at: string;
+  status: 'ok' | 'failed';
+  /** Why it failed (clipped like lastError). */
+  error?: string;
+  /** The run's thread, kept because it sent mail (its mail item carries the same runThreadId). */
+  threadId?: string;
+  /** Stopped for an Allow/Deny that went out by mail. */
+  parked?: boolean;
+}
+
+/** How many firings a task remembers in `recentRuns`. */
+export const TASK_RECENT_RUNS = 10;
 
 /** What the assistant's `schedule_task` tool passes (exactly one of cron/at). */
 export interface ScheduleTaskRequest {

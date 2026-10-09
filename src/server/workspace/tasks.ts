@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, writeFile } from 'node:fs/promises';
-import type { ScheduledTask, TaskRunsAs, TaskSchedule } from '../../shared/types';
+import type { ScheduledTask, TaskRunRecord, TaskRunsAs, TaskSchedule } from '../../shared/types';
+import { TASK_RECENT_RUNS } from '../../shared/types';
 import { degrade } from '../degrade';
 import { tasksStorePath } from './paths';
 
@@ -111,8 +112,26 @@ function coerce(raw: unknown): ScheduledTask | null {
     ...(r.lastStatus === 'ok' || r.lastStatus === 'failed' || r.lastStatus === 'running'
       ? { lastStatus: r.lastStatus }
       : {}),
-    ...(typeof r.lastError === 'string' && r.lastError ? { lastError: clipError(r.lastError) } : {})
+    ...(typeof r.lastError === 'string' && r.lastError ? { lastError: clipError(r.lastError) } : {}),
+    ...(Array.isArray(r.recentRuns) ? { recentRuns: coerceRuns(r.recentRuns) } : {})
   };
+}
+
+function coerceRuns(raw: unknown[]): TaskRunRecord[] {
+  const out: TaskRunRecord[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== 'object') continue;
+    const r = x as Partial<TaskRunRecord>;
+    if (typeof r.at !== 'string' || (r.status !== 'ok' && r.status !== 'failed')) continue;
+    out.push({
+      at: r.at,
+      status: r.status,
+      ...(typeof r.error === 'string' && r.error ? { error: clipError(r.error) } : {}),
+      ...(typeof r.threadId === 'string' && r.threadId ? { threadId: r.threadId } : {}),
+      ...(r.parked === true ? { parked: true } : {})
+    });
+  }
+  return out.slice(0, TASK_RECENT_RUNS);
 }
 
 async function loadStore(): Promise<{ tasks: ScheduledTask[]; version: number }> {

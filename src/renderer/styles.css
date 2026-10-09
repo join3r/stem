@@ -4538,3 +4538,12 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .ld-radio em { display: block; font-style: normal; font-size: var(--fs-11); color: var(--muted); line-height: 1.4; }
 .ld-title .grp-head-add { vertical-align: -2px; margin-left: var(--sp-2); }
 .ld-row-main em.tail { direction: rtl; text-align: left; }
+.ld-when { font-size: var(--fs-11); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ld-failed { border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.ld-failed .set-sub { color: var(--danger); }
+.ld-runs { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ld-run { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-3) var(--sp-4); border: 0.5px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.ld-run-main { flex: 1; min-width: 0; }
+.ld-run-main strong { display: block; font-size: var(--fs-12); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ld-run-main em { display: block; font-style: normal; font-size: var(--fs-11); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ld-run-main em.failed { color: var(--danger); }
