@@ -27,7 +27,7 @@ describe('cosine floors per embedder scale', () => {
 
   it('gives EmbeddingGemma 2 its own measured scale, never the 300M model', () => {
     expect(cosineScaleFor(localModelCacheKey(EMBED_CATALOG['embeddinggemma-2']))).toBe('gemma2');
-    expect(cosineScaleFor(localModelCacheKey(EMBED_CATALOG['embeddinggemma-300m']))).toBe('e5');
+    expect(cosineScaleFor('local:onnx-community/embeddinggemma-300m-ONNX')).toBe('e5');
     expect(cosineFloorsFor('local:onnx-community/embeddinggemma-2-ONNX')).toEqual(COSINE_FLOORS.gemma2);
     const e5 = COSINE_FLOORS.e5;
     const g = COSINE_FLOORS.gemma2;

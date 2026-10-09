@@ -42,6 +42,10 @@ function withEmbeddings(patch: Partial<RetrievalSettings['embeddings']>, custom:
 }
 
 describe('embed catalog', () => {
+  it('no longer offers the embedders retired in 0.6.0', () => {
+    expect(Object.keys(EMBED_CATALOG).sort()).toEqual(['embeddinggemma-2', 'multilingual-e5-small', 'qwen3-embedding-0.6b']);
+  });
+
   it('applies the e5 query/passage prefixes verbatim', () => {
     const spec = EMBED_CATALOG['multilingual-e5-small'];
     expect(applyPrefixes(spec, 'query', ['kde bývam?'])).toEqual(['query: kde bývam?']);
@@ -49,7 +53,7 @@ describe('embed catalog', () => {
   });
 
   it('applies the EmbeddingGemma prompt prefixes from its model card', () => {
-    const spec = EMBED_CATALOG['embeddinggemma-300m'];
+    const spec = EMBED_CATALOG['embeddinggemma-2'];
     expect(applyPrefixes(spec, 'query', ['x'])).toEqual(['task: search result | query: x']);
     expect(applyPrefixes(spec, 'passage', ['x'])).toEqual(['title: none | text: x']);
   });

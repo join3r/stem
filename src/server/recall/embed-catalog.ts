@@ -102,29 +102,6 @@ export const EMBED_CATALOG: Record<LocalEmbedModelId, LocalEmbedModelSpec> = {
     approxSizeMB: 120,
     label: 'Multilingual E5 Small',
     prefixes: { query: 'query: ', passage: 'passage: ' }
-  },
-  'multilingual-e5-base': {
-    id: 'multilingual-e5-base',
-    repo: 'Xenova/multilingual-e5-base',
-    dim: 768,
-    dtype: 'q8',
-    approxSizeMB: 280,
-    label: 'Multilingual E5 Base',
-    prefixes: { query: 'query: ', passage: 'passage: ' }
-  },
-  'embeddinggemma-300m': {
-    id: 'embeddinggemma-300m',
-    repo: 'onnx-community/embeddinggemma-300m-ONNX',
-    dim: 768,
-    // q4, NOT q8: every Gemma variant ships weights as an external .onnx_data
-    // file, and the q8 one (305 MB) reliably crashes onnxruntime inside an
-    // Electron utilityProcess ("mutex lock failed" abort) while q4 (197 MB)
-    // loads and embeds fine. Same abort reproduces in a bare harness, so treat
-    // this as an ORT/Electron limit, not an app bug.
-    dtype: 'q4',
-    approxSizeMB: 200,
-    label: 'EmbeddingGemma 300M',
-    prefixes: { query: 'task: search result | query: ', passage: 'title: none | text: ' }
   }
 };
 

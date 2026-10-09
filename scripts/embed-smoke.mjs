@@ -15,20 +15,6 @@ const CATALOG = {
     dim: 384,
     dtype: 'q8',
     prefixes: { query: 'query: ', passage: 'passage: ' }
-  },
-  'multilingual-e5-base': {
-    repo: 'Xenova/multilingual-e5-base',
-    dim: 768,
-    dtype: 'q8',
-    prefixes: { query: 'query: ', passage: 'passage: ' }
-  },
-  'embeddinggemma-300m': {
-    repo: 'onnx-community/embeddinggemma-300m-ONNX',
-    dim: 768,
-    // q4 to match embed-catalog.ts: gemma's q8 external-data build crashes ORT
-    // inside an Electron utilityProcess.
-    dtype: 'q4',
-    prefixes: { query: 'task: search result | query: ', passage: 'title: none | text: ' }
   }
 };
 

@@ -66,9 +66,7 @@ const FACT_INJECT_PRESETS: { label: string; value: number }[] = [
 const LOCAL_EMBED_MODELS: { id: LocalEmbedModelId; label: string; detail: string }[] = [
   { id: 'embeddinggemma-2', label: 'EmbeddingGemma 2', detail: '~315 MB · recommended · best measured' },
   { id: 'qwen3-embedding-0.6b', label: 'Qwen3 Embedding 0.6B', detail: '~640 MB · previous default' },
-  { id: 'multilingual-e5-small', label: 'Multilingual E5 Small', detail: '~120 MB · smallest' },
-  { id: 'multilingual-e5-base', label: 'Multilingual E5 Base', detail: '~280 MB · higher quality' },
-  { id: 'embeddinggemma-300m', label: 'EmbeddingGemma 300M', detail: '~330 MB · largest' }
+  { id: 'multilingual-e5-small', label: 'Multilingual E5 Small', detail: '~120 MB · smallest' }
 ];
 
 const EMBED_MODES: { id: EmbeddingsMode; label: string; hint: string }[] = [
@@ -92,7 +90,11 @@ const GTE_FACT_MODEL = RECOMMENDED_FACT_MODEL;
  */
 function customOption(m: CustomEmbedModel | CustomRerankModel): { id: string; label: string; detail: string } {
   const dim = 'dim' in m && m.dim ? ` · ${m.dim}-dim` : '';
-  return { id: m.id, label: m.label, detail: `~${m.approxSizeMB} MB${dim} · imported` };
+  // An imported embedder that cosineScaleFor (server/recall/embed-scale.ts) has no
+  // measured scale for borrows e5's similarity floors, which can over- or
+  // under-fetch on another model, so the picker says so.
+  const untuned = 'dim' in m && !/qwen3|embeddinggemma-2(?![0-9])/i.test(m.repo) ? ' · thresholds not tuned' : '';
+  return { id: m.id, label: m.label, detail: `~${m.approxSizeMB} MB${dim} · imported${untuned}` };
 }
 
 const RERANK_MODES: { id: RerankerMode; label: string; hint: string }[] = [

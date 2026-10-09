@@ -241,7 +241,7 @@ describe('embed worker manager', () => {
     const { mgr, workers } = manager();
     mgr.ensure(SPEC);
     workers[0].emit(ready());
-    mgr.reconfigure(EMBED_CATALOG['multilingual-e5-base']);
+    mgr.reconfigure(EMBED_CATALOG['embeddinggemma-2']);
     // Graceful shutdown: dispose lets the worker release its ONNX session; the
     // manager SIGTERMs it on the 'disposed' ack (a self-exit would abort with
     // "mutex lock failed" while ORT threads wind down).
@@ -250,7 +250,7 @@ describe('embed worker manager', () => {
     workers[0].emit({ type: 'disposed' });
     expect(workers[0].killed).toBe(true);
     expect(workers).toHaveLength(2);
-    expect((workers[1].sent[0] as { spec: { id: string } }).spec.id).toBe('multilingual-e5-base');
+    expect((workers[1].sent[0] as { spec: { id: string } }).spec.id).toBe('embeddinggemma-2');
     // The old worker's exit must not trigger a respawn — it was superseded.
     workers[0].exit(0);
     expect(workers).toHaveLength(2);
@@ -363,7 +363,7 @@ describe('co-hosted reranker', () => {
     mgr.ensureRerank(RERANK_SPEC);
     workers[0].emit(ready());
     workers[0].emit(rerankReady());
-    mgr.reconfigure(EMBED_CATALOG['multilingual-e5-base']);
+    mgr.reconfigure(EMBED_CATALOG['embeddinggemma-2']);
     expect(workers).toHaveLength(2);
     expect(workers[1].sent.map((m) => m.type).sort()).toEqual(['load', 'load-rerank']);
   });

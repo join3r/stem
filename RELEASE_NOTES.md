@@ -54,7 +54,8 @@ Maintainer notes:
   relevant memories where Qwen3 found under 40%, in English, Slovak, Czech and German, with half
   the RAM. It is the default for new installs, and Stem GTE Memory picks from what it finds. If
   you're upgrading, Stem offers the switch once. Switching re-indexes your memory in the background,
-  and Manage → Memory switches back.
+  and Manage → Memory switches back. Multilingual E5 Base and EmbeddingGemma 300M are gone from
+  the list: anyone still on one moves to EmbeddingGemma 2, and their old download is deleted.
 - **Commands at a slash.** Type `/` at the start of a message to see what the box can do —
   `/pin`, `/note` and `/learn` — narrow it by typing, and pick one with Enter, Tab or a click.
 

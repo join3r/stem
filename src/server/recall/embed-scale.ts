@@ -68,9 +68,10 @@ export const COSINE_FLOORS: Record<CosineScale, CosineFloors> = {
  * bundled/imported models and the bare model name for a server endpoint, so one
  * substring test covers `local:onnx-community/Qwen3-Embedding-0.6B-ONNX`,
  * `qwen3-embedding:4b` and an imported Qwen3 export alike. The Gemma 2 test
- * must not match `embeddinggemma-300m`, a different model that was never
- * measured. Everything else — e5, Gemma 300M, bge, unknown — keeps the e5
- * numbers, which is the pre-existing behaviour, not a claim that they fit.
+ * must not match `embeddinggemma-300m` (retired in 0.6.0, never measured), which
+ * a user can still import as a custom model. Everything else — e5, imports, bge,
+ * unknown — keeps the e5 numbers, which is the pre-existing behaviour, not a
+ * claim that they fit.
  */
 export function cosineScaleFor(modelKey: string): CosineScale {
   if (/qwen3/i.test(modelKey)) return 'qwen3';

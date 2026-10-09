@@ -574,14 +574,21 @@ describe('embeddings settings migration + coercion', () => {
     expect(emb.localModel).toBe('embeddinggemma-2');
   });
 
+  it('moves an install on an embedder retired in 0.6.0 to the default', async () => {
+    for (const retired of ['multilingual-e5-base', 'embeddinggemma-300m']) {
+      writeFileSync(path, JSON.stringify({ retrieval: { embeddings: { mode: 'local', localModel: retired } } }));
+      expect((await readSettings()).retrieval.embeddings.localModel).toBe('embeddinggemma-2');
+    }
+  });
+
   it('round-trips mode and localModel through updateRetrievalSettings', async () => {
     await updateRetrievalSettings({ embeddings: { mode: 'remote' } });
     expect((await readSettings()).retrieval.embeddings.mode).toBe('remote');
     // A mode switch is a partial patch — the other fields survive.
-    await updateRetrievalSettings({ embeddings: { mode: 'local', localModel: 'multilingual-e5-base' } });
+    await updateRetrievalSettings({ embeddings: { mode: 'local', localModel: 'multilingual-e5-small' } });
     const emb = (await readSettings()).retrieval.embeddings;
     expect(emb.mode).toBe('local');
-    expect(emb.localModel).toBe('multilingual-e5-base');
+    expect(emb.localModel).toBe('multilingual-e5-small');
     expect(emb.baseUrl).toBe('http://localhost:11434');
     // Off round-trips too (it is a real persisted mode, not just absence).
     await updateRetrievalSettings({ embeddings: { mode: 'off' } });

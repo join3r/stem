@@ -41,7 +41,7 @@ function markup(stage: 'embed' | 'rerank'): string {
 describe('import dialog prefills', () => {
   it('offers the E5 and EmbeddingGemma prefixes the catalog actually uses', () => {
     expect(scheme('e5').prefixes).toEqual(EMBED_CATALOG['multilingual-e5-small'].prefixes);
-    expect(scheme('gemma').prefixes).toEqual(EMBED_CATALOG['embeddinggemma-300m'].prefixes);
+    expect(scheme('gemma').prefixes).toEqual(EMBED_CATALOG['embeddinggemma-2'].prefixes);
   });
 
   it('offers "none" as real empty prefixes, not as an absent scheme', () => {

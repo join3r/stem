@@ -17,6 +17,7 @@ import { resolveRerankSpec } from '../recall/rerank-catalog';
 import { createLocalRerankClient, createRerankRouter } from '../recall/rerank-local';
 import { createGteFactPilot, GTE_FACT_PILOT_ID } from '../recall/gte-fact-pilot';
 import { ensureGteModel } from '../recall/gte-model-download';
+import { pruneRetiredModels } from '../recall/retired-models';
 import { createRemoteHealthTracker, type RemoteHealthTracker } from '../recall/remote-health';
 import { spawnEmbedWorker } from '../recall/embed-worker-host';
 import { createScanWorkerManager, type ScanWorkerManager } from '../recall/scan-manager';
@@ -24,6 +25,7 @@ import { spawnScanWorker } from '../recall/scan-worker-host';
 import { setScanWorkerManager } from '../recall/scan';
 import * as activity from '../activity';
 import { log } from '../log';
+import { degrade } from '../degrade';
 import { recallStore } from '../recall/store';
 const { getEpisodicGeneration, pruneMessageVectorsExceptModel, pruneSummaryVectorsExceptModel, pruneVectorsExceptModel, getSummariesMissingVector, upsertSummaryVector } = recallStore;
 
@@ -179,6 +181,9 @@ export function initRetrieval(deps: {
   const getRetrieval = async () => (await readSettings()).retrieval;
   const getEmbedSettings = async () => (await getRetrieval()).embeddings;
   const getRerankSettings = async () => (await getRetrieval()).reranker;
+  void getRetrieval()
+    .then((r) => pruneRetiredModels(embedModelsDir(), r))
+    .catch((err) => degrade('retrieval', 'retired model cleanup skipped', err));
   // The retrieval host owns the download, whether it is a desktop or shared
   // server. Preserve the trial's explicit read-only/offline model override.
   const gteOverride = process.env.STEM_GTE_FACT_MODEL_DIR?.trim();
