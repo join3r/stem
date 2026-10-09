@@ -280,6 +280,9 @@ function ChatMacRows({
   );
 }
 
+/** Why computer control wears an Alpha pill, in Settings and the persona editor. */
+export const COMPUTER_ALPHA_TITLE = 'Alpha: computer control works, but it can misclick or lose its place, and its rules are still changing.';
+
 export function ChatComputerRows(props: { devices: DeviceInfo[]; clientDeviceId: string | null }) {
   return <ChatMacRows feature="computer" {...props} />;
 }

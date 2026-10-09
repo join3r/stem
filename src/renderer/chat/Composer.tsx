@@ -25,7 +25,7 @@ import { clearDraft, readDraft, writeDraft } from './draft-store';
 import { dismissLearnNotice, readLearn, startLearn, subscribeLearn } from './learn-store';
 import { dismissCompactNotice, readCompact, startCompact, subscribeCompact } from './compact-store';
 import { consumePrefill, consumeSheet, dismissRecorderError, dropPractice, readRecorder, subscribeRecorder } from './recorder-store';
-import { RecordSheet } from './RecordSheet';
+import { RECORDER_ALPHA_TITLE, RecordSheet } from './RecordSheet';
 
 const MAX_COMPOSER_HEIGHT = 180;
 
@@ -584,6 +584,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               }
             >
               <span className="record-dot" aria-hidden="true" /> {recordingHere ? 'Stop' : 'Record'}
+              {!recordingHere && (
+                <span className="beta-pill alpha-pill" aria-hidden="true" title={RECORDER_ALPHA_TITLE}>
+                  Alpha
+                </span>
+              )}
             </button>
           </div>
         )}

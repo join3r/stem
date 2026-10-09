@@ -13,7 +13,7 @@ import type {
 import { InfoTip } from '../../../ui/InfoTip';
 import { useRemoteServer } from '../../../hooks/useRemoteServer';
 import { DisclosureRow, RowSelect, ValueRow } from './rows';
-import { ChatBrowserRows, ChatCodingRows, ChatComputerRows } from './ChatFeatureRows';
+import { COMPUTER_ALPHA_TITLE, ChatBrowserRows, ChatCodingRows, ChatComputerRows } from './ChatFeatureRows';
 
 /** How long a chat's scratch folder survives being ignored. null = never sweep. */
 const SCRATCH_TTLS: { label: string; days: number | null }[] = [
@@ -663,7 +663,12 @@ export function AutonomySections() {
           prompts appear on this display. Offered with the server on this Mac
           too (2026-10-05): a one-machine Stem drives its own screen through
           the same device rails. */}
-      <div className="grp-head">Computer control</div>
+      <div className="grp-head">
+        Computer control
+        <span className="beta-pill alpha-pill" title={COMPUTER_ALPHA_TITLE}>
+          Alpha
+        </span>
+      </div>
       <div className="group">
         <ChatComputerRows devices={devices} clientDeviceId={clientDeviceId} />
         {computerHost?.supported && (

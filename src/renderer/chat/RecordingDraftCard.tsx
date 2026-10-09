@@ -3,6 +3,7 @@ import { Check, Circle, FlaskConical, Loader2, Pencil, Play, Plus, Trash2 } from
 import type { RecordingDraft } from '../../shared/types';
 import { noteDraft, prefillComposer, requestSheet, startPractice } from './recorder-store';
 import { practiceMessage } from '../../shared/practice-message';
+import { RECORDER_ALPHA_TITLE } from './RecordSheet';
 
 // The card a recording becomes in its chat: the skill Stem wrote from it, what
 // it worked out changes each run ("Delivery date ← the date in the supplier's
@@ -108,6 +109,9 @@ export function RecordingDraftCard({
       <div className="record-card-head">
         <span className="record-dot" aria-hidden="true" />
         <strong>Recorded skill</strong>
+        <span className="beta-pill alpha-pill" title={RECORDER_ALPHA_TITLE}>
+          Alpha
+        </span>
         <span className="muted">
           {examples} recording{examples === 1 ? '' : 's'} · {stepCount} steps
         </span>

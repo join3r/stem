@@ -13,6 +13,9 @@ const GRANTS: { key: keyof ComputerAccess; name: string; why: string; required: 
   { key: 'screen', name: 'Screen Recording', why: 'pictures, only for values no text explains', required: false }
 ];
 
+/** Why the recorder wears an Alpha pill; the chip, this sheet and the draft card say the same. */
+export const RECORDER_ALPHA_TITLE = 'Alpha: recording works, but what it captures and how it writes the skill may still go wrong.';
+
 export function RecordSheet({
   threadId,
   draftId,
@@ -91,6 +94,9 @@ export function RecordSheet({
         <div className="mcp-approval-head">
           <span className="record-dot" aria-hidden="true" />
           <strong>{draftId ? 'Record another example' : 'Record a skill'}</strong>
+          <span className="beta-pill alpha-pill" title={RECORDER_ALPHA_TITLE}>
+            Alpha
+          </span>
         </div>
         <p className="muted">
           Do the task the way you always do. Stem notes what you click and type, by name, and the text in front of you, so

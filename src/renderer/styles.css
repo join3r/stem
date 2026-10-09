@@ -3675,6 +3675,14 @@ summary.mail-work-action { cursor: pointer; }
    word people (and tests) know it by; the explanation rides on the title. */
 .beta-pill { display: inline-block; margin-left: var(--sp-3); padding: 1px var(--sp-3); border-radius: var(--radius-pill); font-size: var(--fs-10); font-weight: 600; letter-spacing: 0.02em; text-transform: none; vertical-align: 1px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .seg-ctl button .beta-pill { margin-left: var(--sp-2); padding: 0 5px; }
+/* "Alpha" is one step earlier than Beta: it works on the author's Mac but may
+   misbehave anywhere else (computer control, the skill recorder). Warn-toned so
+   the two never read as the same promise. */
+.alpha-pill { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.seg-ctl button .alpha-pill { margin-left: var(--sp-2); padding: 0 5px; }
+.persona-pin-row { display: flex; align-items: center; gap: var(--sp-3); }
+.persona-pin-row > select { flex: 1; min-width: 0; }
+.persona-pin-row > .beta-pill { margin-left: 0; }
 .release-notes-recommend { margin: var(--sp-6) 0 var(--sp-2); font-size: var(--fs-13); }
 .release-notes-recommend p { margin: 0 0 var(--sp-3); }
 .release-notes-recommend p svg { vertical-align: -2px; }

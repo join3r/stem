@@ -11,6 +11,7 @@ import type {
   PersonaNote
 } from '../../../shared/types';
 import { InfoTip } from '../../ui/InfoTip';
+import { COMPUTER_ALPHA_TITLE } from './settings/ChatFeatureRows';
 import { ModelPicker } from '../../ui/ModelPicker';
 import { clampEffort, effortsOf, EffortSelect } from '../../ui/EffortSelect';
 import { EFFORT_LABELS } from '../../modelLabels';
@@ -794,34 +795,39 @@ export function PersonasTab({ models }: { models: ModelSummary[] }) {
                       pin is the capability — no pin, no `computer` tool — and only a Mac
                       that switched on "Let Stem control this Mac" is offered. */}
                   <div className="persona-harness">
-                    <select
-                      className="vfield"
-                      aria-label="Computer this persona controls"
-                      value={p.computer?.device ?? ''}
-                      onChange={(e) =>
-                        setDraft({
-                          ...p,
-                          computer: e.target.value ? { device: e.target.value } : undefined
-                        })
-                      }
-                    >
-                      <option value="">Controls no computer</option>
-                      {p.computer?.device &&
-                        !devices.some((d) => d.id === p.computer?.device && d.runsComputer) && (
-                          <option value={p.computer.device}>
-                            Controls {devices.find((d) => d.id === p.computer?.device)?.label ??
-                              p.computer.device}{' '}
-                            (not letting Stem control it)
-                          </option>
-                        )}
-                      {devices
-                        .filter((d) => d.runsComputer)
-                        .map((d) => (
-                          <option key={d.id} value={d.id}>
-                            Controls {d.label}
-                          </option>
-                        ))}
-                    </select>
+                    <div className="persona-pin-row">
+                      <select
+                        className="vfield"
+                        aria-label="Computer this persona controls"
+                        value={p.computer?.device ?? ''}
+                        onChange={(e) =>
+                          setDraft({
+                            ...p,
+                            computer: e.target.value ? { device: e.target.value } : undefined
+                          })
+                        }
+                      >
+                        <option value="">Controls no computer</option>
+                        {p.computer?.device &&
+                          !devices.some((d) => d.id === p.computer?.device && d.runsComputer) && (
+                            <option value={p.computer.device}>
+                              Controls {devices.find((d) => d.id === p.computer?.device)?.label ??
+                                p.computer.device}{' '}
+                              (not letting Stem control it)
+                            </option>
+                          )}
+                        {devices
+                          .filter((d) => d.runsComputer)
+                          .map((d) => (
+                            <option key={d.id} value={d.id}>
+                              Controls {d.label}
+                            </option>
+                          ))}
+                      </select>
+                      <span className="beta-pill alpha-pill" title={COMPUTER_ALPHA_TITLE}>
+                        Alpha
+                      </span>
+                    </div>
                     {p.computer && !modelSeesImages(p, models) && (
                       <div className="persona-warn" role="status">
                         This persona’s model cannot see images. Computer control works from screenshots,
