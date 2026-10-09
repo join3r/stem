@@ -112,7 +112,7 @@ struct MailRow: View {
                     Text(status).font(.caption).foregroundStyle(conversation.status == "failed" ? .red : .orange)
                 }
                 if let p = preview {
-                    Text(p.body.replacingOccurrences(of: "\n", with: " "))
+                    Text(MdxText.preview(p.body))
                         .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                 }
             }

@@ -75,6 +75,25 @@ enum MdxText {
         .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// A message body as one line of plain text, for list-row previews: block
+    /// markers (headings, quotes, bullets, fences, table rules) and inline
+    /// markup go, and lines join with spaces so emphasis that wraps still parses.
+    static func preview(_ body: String) -> String {
+        let lines = MdxTreeParser.stripCiteMarkers(body).components(separatedBy: .newlines).compactMap { raw -> String? in
+            var t = raw.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("```") || t.hasPrefix("~~~") { return nil }
+            if t.range(of: #"^\|?\s*:?-{3,}"#, options: .regularExpression) != nil { return nil }
+            if t.range(of: #"^([-*_]\s*){3,}$"#, options: .regularExpression) != nil { return nil }
+            t = t.replacingOccurrences(
+                of: #"^(?:>\s*)*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)?"#, with: "", options: .regularExpression)
+            if t.hasPrefix("|") { t = t.replacingOccurrences(of: "|", with: " ") }
+            return t.isEmpty ? nil : t
+        }
+        let plain = String(Inline.attributed(lines.joined(separator: " ")).characters)
+        return plain.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+    }
+
     static func components(_ blocks: [MdxBlock], named name: String) -> [MdxComponent] {
         blocks.compactMap { if case .component(let c) = $0, c.name == name { return c }; return nil }
     }

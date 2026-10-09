@@ -110,4 +110,11 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(items.count, 2)
         XCTAssertTrue(items[1].contains { if case .list = $0 { return true }; return false })
     }
+
+    func testMailPreviewDropsMarkdown() {
+        XCTAssertEqual(MdxText.preview("**Completed on your Mac.\nBoth ran** fine."), "Completed on your Mac. Both ran fine.")
+        XCTAssertEqual(MdxText.preview("## Summary\n\n- one `x`\n- two\n\n> quoted _here_"), "Summary one x two quoted here")
+        XCTAssertEqual(MdxText.preview("| a | b |\n|---|---|\n| 1 | 2 |"), "a b 1 2")
+        XCTAssertEqual(MdxText.preview("```js\nlet x\n```\nafter"), "let x after")
+    }
 }
