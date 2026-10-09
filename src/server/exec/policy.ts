@@ -542,4 +542,4 @@ export function parseJudgeVerdict(text: string, from: 'first' | 'last' = 'first'
 // Re-exported so exec's own callers (and its tests) keep one import for the
 // policy surface. The rule itself lives in shared/ because Settings now shows
 // what "Auto" resolves to, and the renderer has to agree with the server.
-export { resolveJudgeModel } from '../../shared/modelRoles';
+export { resolveJudgeModel, resolveJudgeQuickModel } from '../../shared/modelRoles';

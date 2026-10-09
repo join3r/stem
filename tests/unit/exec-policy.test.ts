@@ -9,7 +9,8 @@ import {
   drivesGui,
   parseCommand,
   parseJudgeVerdict,
-  resolveJudgeModel
+  resolveJudgeModel,
+  resolveJudgeQuickModel
 } from '../../src/server/exec/policy';
 import { unixShell } from '../../src/server/exec/executor';
 import type { ModelSummary } from '../../src/shared/types';
@@ -568,5 +569,33 @@ describe('buildJudgePrompt', () => {
     expect(prompt).toMatch(/Think it through first/);
     expect(prompt).toMatch(/final line holding only one/);
     expect(prompt).not.toMatch(/Reply with exactly one word/);
+  });
+});
+
+describe('resolveJudgeModel / resolveJudgeQuickModel', () => {
+  const models = [
+    { id: 'x/small', isDefault: false },
+    { id: 'x/main', isDefault: true }
+  ] as ModelSummary[];
+
+  it('reviews on its own pin, else the chat’s model — never on Quick tasks', () => {
+    // 2026-10-09: on the Quick tasks model the judge refused "stop devtool,
+    // rebuild and start again" — install.sh was "not clearly a rebuild script".
+    expect(resolveJudgeModel({ judgeModel: 'x/pinned' }, models, 'x/chat')).toBe('x/pinned');
+    expect(resolveJudgeModel({ judgeModel: null }, models, 'x/chat')).toBe('x/chat');
+  });
+
+  it('falls back to a signed-in model when there is no live chat model', () => {
+    expect(resolveJudgeModel({ judgeModel: null }, models, null)).toBe('x/main');
+    expect(resolveJudgeModel({ judgeModel: null }, [{ id: 'x/only' } as ModelSummary], null)).toBe('x/only');
+    expect(resolveJudgeModel({ judgeModel: null }, [], null)).toBeNull();
+  });
+
+  it('runs the quick check on Quick tasks, else the chat’s model', () => {
+    // Only the quick check's "safe" runs anything, and a small model errs toward
+    // refusing — what it refuses goes to the review model above.
+    expect(resolveJudgeQuickModel({ backgroundModel: 'x/small' }, models, 'x/chat')).toBe('x/small');
+    expect(resolveJudgeQuickModel({ backgroundModel: null }, models, 'x/chat')).toBe('x/chat');
+    expect(resolveJudgeQuickModel({ backgroundModel: null }, models, null)).toBe('x/main');
   });
 });

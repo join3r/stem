@@ -22,7 +22,13 @@ import {
   providerName,
   resolveCustomProviderId
 } from '../../../../shared/providers';
-import { resolveBackgroundModel, resolveMemoryModel, resolveRoleEffort, resolveSkillsModel } from '../../../../shared/modelRoles';
+import {
+  resolveBackgroundModel,
+  resolveJudgeEffort,
+  resolveMemoryModel,
+  resolveRoleEffort,
+  resolveSkillsModel
+} from '../../../../shared/modelRoles';
 import { parsePiModelsJson, providerLabel } from '../../../../shared/piModelsImport';
 import { clampEffort, EffortSelect, effortsOf } from '../../../ui/EffortSelect';
 import { localProbeTarget, probeStillDescribes } from '../../../localProbe';
@@ -196,11 +202,11 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
         <InfoTip label="About model roles">
           Stem runs more than one model. The one you chat with writes the replies; the rest work in
           the background, on jobs you never watch. A role left unset falls back to its group —
-          Quick Chat, memory and skills to the model you chat with, chat subjects and the safety
-          check to <strong>Quick tasks</strong> — and every picker says underneath where it landed.
-          The split is by what a job needs, not where it runs: quick tasks are extraction a small
-          fast model does well, while memory and skills are judgment work that quietly degrades on
-          one. Stem never picks a cheaper model for you: the catalog it gets carries no prices, so
+          Quick Chat, memory, skills and the safety-check review to the model you chat with, chat
+          subjects and the safety check&rsquo;s quick first pass to <strong>Quick tasks</strong> —
+          and every picker says underneath where it landed. The split is by what a job needs, not
+          where it runs: quick tasks are work a small fast model does well, while memory, skills
+          and reviewing a refused command are judgment work that quietly degrades on one. Stem never picks a cheaper model for you: the catalog it gets carries no prices, so
           it would be guessing from names. Each group's header says what it currently runs on, so
           opening one is only ever about changing it.
         </InfoTip>
@@ -251,9 +257,9 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
       <SettingSection
         title="Judgment work"
         summary={
-          memoryModel || skillsModel
-            ? `Memory: ${nameOf(memoryModel) ?? 'main'} · Skills: ${nameOf(skillsModel) ?? 'main'}`
-            : 'Memory, Skills · follow the main model'
+          memoryModel || skillsModel || judgeModel
+            ? `Memory: ${nameOf(memoryModel) ?? 'main'} · Skills: ${nameOf(skillsModel) ?? 'main'} · Safety check: ${nameOf(judgeModel) ?? 'chat'}`
+            : 'Memory, Skills, Safety check · follow the main model'
         }
       >
         <div className="set-block">
@@ -344,31 +350,77 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
           />
         </div>
 
+        <div className="set-block">
+          <span className="set-sub">
+            Command safety check{' '}
+            <InfoTip label="About the safety-check model">
+              Reads a shell command before it runs and decides whether it serves what you asked for;
+              anything it flags stops for your approval. It works in two passes. A{' '}
+              <strong>quick check</strong> on the Quick tasks model clears the obvious commands
+              fast, and only a &ldquo;safe&rdquo; from it runs anything. What it does not clear is{' '}
+              <strong>reviewed by the model picked here</strong>, thinking at High, before you are
+              asked. The review is judgment, not extraction: a small model reads you too literally
+              and blocks the very thing you asked for (it refused to run a project&rsquo;s own
+              install script for &ldquo;rebuild&rdquo;), so left unset it uses the model running the
+              chat the command came from. It is a heuristic, not a security boundary.
+            </InfoTip>
+          </span>
+          <ModelPicker
+            models={models}
+            value={judgeModel}
+            onChange={(id) => {
+              setJudgeModel(id);
+              window.stem.updateExecSettings({ judgeModel: id }).then((s) => {
+                setJudgeModel(s.exec.judgeModel);
+                setJudgeIdle(judgeIdleReason(s));
+              });
+            }}
+            emptyLabel="Same as chat"
+            ariaLabel="Safety-check review model"
+            resolvedDefault={judgeIdle ? null : modelId}
+          />
+          <EffortSelect
+            label="Quick check effort"
+            value={judgeEffort}
+            efforts={effortsOf(models, backgroundResolved)}
+            emptyLabel="Default"
+            resolved={resolveJudgeEffort(null)}
+            onChange={(effort) => {
+              setJudgeEffort(effort);
+              window.stem.updateExecSettings({ judgeEffort: effort }).then((s) => setJudgeEffort(s.exec.judgeEffort));
+            }}
+          />
+          {!judgeIdle && (
+            <em className="mp-resolved">
+              quick check on {nameOf(backgroundResolved) ?? 'the chat model'} (Quick tasks); the model
+              above reviews what it does not clear
+            </em>
+          )}
+          {judgeIdle && <em className="mp-resolved">{judgeIdle}</em>}
+        </div>
       </SettingSection>
 
       <SettingSection
         title="Quick tasks"
-        summary={`${nameOf(backgroundResolved) ?? 'same as main'} · subjects, safety check`}
+        summary={`${nameOf(backgroundResolved) ?? 'same as main'} · subjects, safety quick check`}
       >
         <div className="set-block">
           <span className="set-sub">
             Quick tasks{' '}
             <InfoTip label="About the quick-tasks model">
-              The fallback for the two jobs that want a <strong>small, fast model</strong>: chat
-              subjects and the command safety check. Both are extraction rather than reasoning,
-              they run constantly and unattended, and{' '}
-              <strong>a cheap model here is the single biggest saving available</strong> — set it
-              once and both follow; pin one individually to take it out of the deal. Memory and
-              skills are deliberately not in this group: they are judgment work, so they follow the
-              model you chat with and have their own pickers above.
+              The fallback for the jobs that want a <strong>small, fast model</strong>: chat and mail
+              subjects, and the first pass of the command safety check. They run constantly and
+              unattended, and <strong>a cheap model here is the biggest saving available</strong>.
+              The safety check&rsquo;s quick check can only clear commands, never block them on its
+              own: what it refuses is reviewed by the model under Judgment work. Memory and skills
+              are not in this group at all: they are judgment work, so they follow the model you
+              chat with and have their own pickers above.
               <br />
               <strong>Effort</strong> is the same bargain by a different route: how much these jobs
-              are allowed to think before answering. <strong>Low is a good place to start</strong> —
-              the safety check in particular sits between you and every command you run, where
-              waiting costs more than depth buys. Each job below can override it with a level of
-              its own; left alone they follow this one — and where this is left on{' '}
-              <em>Model default</em>, they end at a level chosen for that job rather than at
-              whatever pi picks, which each of them says underneath.
+              are allowed to think before answering. <strong>Low is a good place to start</strong>.
+              A job below can override it with a level of its own; left alone it follows this one —
+              and where this is left on <em>Model default</em>, it ends at a level chosen for that
+              job rather than at whatever pi picks, which it says underneath.
             </InfoTip>
           </span>
           <ModelPicker
@@ -447,48 +499,6 @@ function ModelRolesSection({ models, modelId, onSelectModel }: ModelTabProps) {
           {subjectsOff && <em className="mp-resolved">not running — subjects are off under Chat</em>}
         </div>
 
-        <div className="set-block">
-          <span className="set-sub">
-            Command safety check{' '}
-            <InfoTip label="About the safety-check model">
-              Reads a shell command before it runs and decides whether it serves what you asked for;
-              anything it flags stops for your approval. It runs on <em>every</em> command that is
-              not allowlisted, so <strong>this is the role that most wants a cheap fast model</strong>
-              . It is a heuristic, not a security boundary, and a bigger model does not change that.
-              It thinks at <strong>Low</strong> unless you say otherwise — enough to judge whether a
-              command matches what you asked for, without making you wait for it.
-            </InfoTip>
-          </span>
-          <ModelPicker
-            models={models}
-            value={judgeModel}
-            onChange={(id) => {
-              setJudgeModel(id);
-              const effort = clampEffort(models, id ?? backgroundResolved, judgeEffort);
-              setJudgeEffort(effort);
-              window.stem.updateExecSettings({ judgeModel: id, judgeEffort: effort }).then((s) => {
-                setJudgeModel(s.exec.judgeModel);
-                setJudgeEffort(s.exec.judgeEffort);
-                setJudgeIdle(judgeIdleReason(s));
-              });
-            }}
-            emptyLabel="Quick tasks"
-            ariaLabel="Safety-check model"
-            resolvedDefault={judgeIdle ? null : backgroundResolved}
-          />
-          <EffortSelect
-            label="Safety-check effort"
-            value={judgeEffort}
-            efforts={effortsOf(models, judgeModel ?? backgroundResolved)}
-            emptyLabel="Quick tasks"
-            resolved={resolveRoleEffort('judge', null, backgroundEffort)}
-            onChange={(effort) => {
-              setJudgeEffort(effort);
-              window.stem.updateExecSettings({ judgeEffort: effort }).then((s) => setJudgeEffort(s.exec.judgeEffort));
-            }}
-          />
-          {judgeIdle && <em className="mp-resolved">{judgeIdle}</em>}
-        </div>
       </SettingSection>
     </>
   );

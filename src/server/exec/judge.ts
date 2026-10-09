@@ -1,9 +1,9 @@
 import type { DefaultsSettings, ExecSettings, HostShell, ModelSummary } from '../../shared/types';
 import type { ChatBackend } from '../backend/types';
-import { resolveRoleEffort } from '../../shared/modelRoles';
+import { resolveJudgeEffort } from '../../shared/modelRoles';
 import { log } from '../log';
 import { hostShellFromPlatform } from './host-shell';
-import { buildJudgePrompt, parseJudgeVerdict, resolveJudgeModel } from './policy';
+import { buildJudgePrompt, parseJudgeVerdict, resolveJudgeModel, resolveJudgeQuickModel } from './policy';
 import type { JudgeContext } from './judge-context';
 import type { StageRecord } from './decisions';
 
@@ -52,7 +52,8 @@ export interface JudgeRequest {
   command: string;
   cwd: string;
   settings: Pick<ExecSettings, 'judgeModel' | 'judgeEffort' | 'judgeAllow' | 'judgeDeny' | 'judgeEnvironment'>;
-  defaults: DefaultsSettings;
+  /** Quick tasks: the quick check's model. */
+  defaults: Pick<DefaultsSettings, 'backgroundModel'>;
   /** The user's words and the agent's earlier commands (judge-context.ts). */
   context: JudgeContext;
   currentModel?: string | null;
@@ -91,10 +92,11 @@ export class SafetyJudge {
 
   /**
    * Two stages, after Claude Code's auto-mode classifier. Stage 1 answers in
-   * one word at the judge's own effort and clears most commands. Only what it
-   * does not call safe goes to stage 2: the same prompt, thinking at High, the
-   * verdict on its last line. A small model reading fast blocks too much;
-   * reasoning undoes most of that without telling it to trust the agent.
+   * one word on Quick tasks at the judge's own effort and clears most
+   * commands. Only what it does not call safe goes to stage 2: the same prompt
+   * on the review model (the judge's pin, else the chat's), thinking at High,
+   * the verdict on its last line. A small model reading fast blocks too much;
+   * a capable one reasoning undoes that without telling it to trust the agent.
    */
   async judge(req: JudgeRequest): Promise<JudgeResult> {
     const promptInput = {
@@ -107,21 +109,22 @@ export class SafetyJudge {
       rules: { allow: req.settings.judgeAllow, deny: req.settings.judgeDeny, environment: req.settings.judgeEnvironment }
     };
     const prompt = buildJudgePrompt(promptInput, 1);
-    let model: string | null;
+    let reviewModel: string | null;
     const started = Date.now();
     let stage1: StageRecord;
     try {
-      // The shared background model if one is set, else the live chat's own —
-      // resolveJudgeModel only answers null when it was handed no models at all,
-      // and complete() then uses its own default, which is the best available
-      // answer anyway.
-      model = resolveJudgeModel(req.settings, req.defaults, await this.listModelsCached(), req.currentModel ?? null);
+      // Both only answer null when handed no models at all, and complete()
+      // then uses its own default, which is the best available answer anyway.
+      const models = await this.listModelsCached();
+      const currentModel = req.currentModel ?? null;
+      reviewModel = resolveJudgeModel(req.settings, models, currentModel);
+      const quickModel = resolveJudgeQuickModel(req.defaults, models, currentModel);
       const reply = await this.deps.runtime().complete(prompt, {
-        model,
+        model: quickModel,
         // The judge sits between you and every command you run, so it feels the
         // effort setting more than any other role does — its own if it has been
-        // given one, else the shared Quick tasks level, else Low.
-        effort: resolveRoleEffort('judge', req.settings.judgeEffort, req.defaults.backgroundEffort),
+        // given one, else Low.
+        effort: resolveJudgeEffort(req.settings.judgeEffort),
         timeoutMs: JUDGE_TIMEOUT_MS,
         priority: true
       });
@@ -141,7 +144,7 @@ export class SafetyJudge {
       const t = Date.now();
       try {
         const reply = await this.deps.runtime().complete(buildJudgePrompt(promptInput, 2), {
-          model,
+          model: reviewModel,
           effort: 'high',
           timeoutMs: JUDGE_STAGE2_TIMEOUT_MS,
           priority: true

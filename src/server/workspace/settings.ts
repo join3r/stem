@@ -104,7 +104,7 @@ const DEFAULTS: ServerSettings = {
   // coding agent asks to run (harness/service.ts), even when exec.enabled is
   // off. 'assisted' = allowlist → LLM judge → approval card ('manual' skips
   // the judge, 'yolo' skips everything but the protected-roots guard);
-  // judgeModel null = the shared background model, else the chat's own model;
+  // judgeModel = the review model (null = the chat's own); the quick check runs on Quick tasks;
   // the allowlist grows via the approval card's "Always allow" button.
   exec: {
     enabled: true,

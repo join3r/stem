@@ -75,13 +75,13 @@ export function resolveBackgroundModel(
 
 /**
  * The quick-tasks jobs — the ones that share the cheap model group and carry an
- * effort setting of their own. Deliberately just these two: both are extraction
- * on a latency budget, which is what makes one shared "make these cheap" knob
- * coherent. Skills (authoring + curation) used to be the third member and is
- * not a member at all now — it is editorial judgment, so it follows the model
- * you chat with (see {@link resolveSkillsModel}).
+ * effort setting of their own. Just one now: chat subjects, extraction on a
+ * latency budget. Skills used to be a member and is not: it is editorial
+ * judgment (see {@link resolveSkillsModel}). The safety check is half a member:
+ * its quick check runs on Quick tasks, its review does not
+ * (see {@link resolveJudgeQuickModel}).
  */
-export type BackgroundRole = 'subject' | 'judge';
+export type BackgroundRole = 'subject';
 
 /**
  * How hard each quick-tasks job thinks when nobody has said anything at all —
@@ -94,14 +94,10 @@ export type BackgroundRole = 'subject' | 'judge';
  * first line, on every new chat, forever.
  *
  * A subject is extraction, not thought: `off` is the honest level for it, and on
- * a model that has no `off` pi clamps up to its lowest instead of failing. The
- * safety check is the same bargain with a floor under it — it is a judgement
- * about whether a command matches what you asked for, so it thinks a little, and
- * it thinks fast because it stands between you and every command you run.
+ * a model that has no `off` pi clamps up to its lowest instead of failing.
  */
 export const ROLE_EFFORT_FLOOR: Record<BackgroundRole, string | null> = {
-  subject: 'off',
-  judge: 'low'
+  subject: 'off'
 };
 
 /**
@@ -121,23 +117,49 @@ export function resolveRoleEffort(
 }
 
 /**
- * Resolve the judge model for the command safety check.
- *
- * Falls back through the same chain as every other background role, and only
- * then to a model we know is signed in: passing null on to complete() would use
- * its built-in constant, which fails with "No API key" for anyone signed in to a
+ * How hard the safety check's quick check thinks: its own level, else Low. It
+ * answers in front of you on every command it sees, and it only has to clear
+ * the obvious ones; the review after a "not safe" thinks at High regardless
+ * (judge.ts).
+ */
+export const JUDGE_EFFORT_DEFAULT = 'low';
+
+export function resolveJudgeEffort(pinned: string | null): string {
+  return pinned ?? JUDGE_EFFORT_DEFAULT;
+}
+
+/**
+ * The model that reviews what the quick check did not clear: the safety
+ * check's own pin, else the model running the chat the command came from, else
+ * a model we know is signed in. Passing null on to complete() would use its
+ * built-in constant, which fails with "No API key" for anyone signed in to a
  * single other provider.
+ *
+ * This used to be Quick tasks for both passes. 2026-10-09: on gpt-6-luna (a
+ * sensible Quick tasks pick) the judge refused "stop devtool, rebuild and start
+ * again" because `install.sh` was "not clearly a rebuild script", and ran the
+ * user's own retry after "Yes" in 0 of 10 replays. With gpt-6.1-sol reviewing,
+ * all three commands ran every time and the same traps stayed blocked
+ * (judge-eval). Reading whether a command serves what you meant is judgment.
  */
 export function resolveJudgeModel(
   settings: Pick<ExecSettings, 'judgeModel'>,
+  models: ModelSummary[],
+  currentModel: string | null
+): string | null {
+  return settings.judgeModel ?? currentModel ?? appDefaultModel(models) ?? models[0]?.id ?? null;
+}
+
+/**
+ * The model of the quick check: Quick tasks, else the chat's model. A small
+ * model is safe here because only its "safe" runs anything, and that errs one
+ * way — the same replay had Luna's quick check call none of 85 traps safe. What
+ * it wrongly refuses goes to {@link resolveJudgeModel}'s review.
+ */
+export function resolveJudgeQuickModel(
   defaults: Pick<DefaultsSettings, 'backgroundModel'>,
   models: ModelSummary[],
   currentModel: string | null
 ): string | null {
-  return (
-    resolveBackgroundModel(settings.judgeModel, defaults.backgroundModel, currentModel) ??
-    appDefaultModel(models) ??
-    models[0]?.id ??
-    null
-  );
+  return resolveBackgroundModel(null, defaults.backgroundModel, currentModel) ?? appDefaultModel(models) ?? models[0]?.id ?? null;
 }

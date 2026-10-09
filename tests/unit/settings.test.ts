@@ -101,11 +101,11 @@ describe('onboarding + default-model settings', () => {
       backgroundEffort: 'low'
     });
     const withBackground = await readSettings();
-    expect(backgroundRunFor(withBackground, 'judge', { model: 'x/pinned', effort: null })).toEqual({
+    expect(backgroundRunFor(withBackground, 'subject', { model: 'x/pinned', effort: null })).toEqual({
       model: 'x/pinned',
       effort: 'low'
     });
-    expect(backgroundRunFor(withBackground, 'judge', { model: null, effort: null })).toEqual({
+    expect(backgroundRunFor(withBackground, 'subject', { model: null, effort: null })).toEqual({
       model: 'anthropic/claude-haiku-4',
       effort: 'low'
     });
@@ -113,7 +113,7 @@ describe('onboarding + default-model settings', () => {
     // resolving it here would freeze the chat model into every background call
     // instead of letting it follow.
     await updateDefaults({ backgroundModel: null });
-    expect(backgroundRunFor(await readSettings(), 'judge', { model: null, effort: null }).model).toBeNull();
+    expect(backgroundRunFor(await readSettings(), 'subject', { model: null, effort: null }).model).toBeNull();
   });
 
   it('memoryRunFor skips the background model entirely', async () => {
@@ -152,27 +152,27 @@ describe('onboarding + default-model settings', () => {
   it('lets a quick-tasks role pin its own effort, and follows Quick tasks when it has not', async () => {
     // Each job in the Quick tasks group carries its own level, and the
     // two halves fall through INDEPENDENTLY: pinning a model must not silently
-    // pin the effort with it (the safety check moved to a bigger model still
-    // wants to answer fast), and pinning an effort must not freeze the model.
+    // pin the effort with it (a subject moved to a bigger model still wants to
+    // answer fast), and pinning an effort must not freeze the model.
     // The regression this guards is the cheap version of the feature, where a
     // role's effort was read from `defaults.backgroundEffort` outright and the
     // per-role select saved a value nothing ever looked at.
     await updateDefaults({ backgroundModel: 'anthropic/claude-haiku-4', backgroundEffort: 'low' });
     const s = await readSettings();
-    expect(backgroundRunFor(s, 'judge', { model: null, effort: null })).toEqual({
+    expect(backgroundRunFor(s, 'subject', { model: null, effort: null })).toEqual({
       model: 'anthropic/claude-haiku-4',
       effort: 'low'
     });
-    expect(backgroundRunFor(s, 'judge', { model: null, effort: 'high' })).toEqual({
+    expect(backgroundRunFor(s, 'subject', { model: null, effort: 'high' })).toEqual({
       model: 'anthropic/claude-haiku-4',
       effort: 'high'
     });
-    expect(backgroundRunFor(s, 'judge', { model: 'x/judge', effort: null })).toEqual({
-      model: 'x/judge',
+    expect(backgroundRunFor(s, 'subject', { model: 'x/subject', effort: null })).toEqual({
+      model: 'x/subject',
       effort: 'low'
     });
-    expect(backgroundRunFor(s, 'judge', { model: 'x/judge', effort: 'off' })).toEqual({
-      model: 'x/judge',
+    expect(backgroundRunFor(s, 'subject', { model: 'x/subject', effort: 'off' })).toEqual({
+      model: 'x/subject',
       effort: 'off'
     });
   });
@@ -180,19 +180,16 @@ describe('onboarding + default-model settings', () => {
   it('ends a job that nobody has set at its own floor, not at the model’s default', async () => {
     // The sane-defaults rung. Out of the box a subject is three words off your
     // first line — reasoning on that is time spent before the chat can be found
-    // again — and the safety check answers in front of you on every command.
+    // again.
     //
-    // Crucially these are the LAST rung, not a pin. Setting Quick tasks
-    // still moves both, which is what the group knob is for.
+    // Crucially this is the LAST rung, not a pin. Setting Quick tasks still
+    // moves it, which is what the group knob is for.
     const bare = await readSettings();
     expect(backgroundRunFor(bare, 'subject', { model: null, effort: null }).effort).toBe('off');
-    expect(backgroundRunFor(bare, 'judge', { model: null, effort: null }).effort).toBe('low');
 
     await updateDefaults({ backgroundEffort: 'high' });
     const group = await readSettings();
-    for (const role of ['subject', 'judge'] as const) {
-      expect(backgroundRunFor(group, role, { model: null, effort: null }).effort).toBe('high');
-    }
+    expect(backgroundRunFor(group, 'subject', { model: null, effort: null }).effort).toBe('high');
   });
 
   it('persists and coerces the per-role effort pins', async () => {
