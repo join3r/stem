@@ -61,18 +61,16 @@ export function createLocalRerankClient(
 }
 
 /**
- * Route each call to the backend the current mode selects. Mode is read fresh
- * per call, mirroring the embeddings router, so switching Off/Built-in/Server
+ * Route each call to the local backend unless the mode is Off. Mode is read
+ * fresh per call, mirroring the embeddings router, so switching Off/Built-in
  * in Settings takes effect on the next turn with no restart.
  */
 export function createRerankRouter(deps: {
   getMode: () => Promise<RerankerSettings['mode']>;
   local: RerankClient;
-  remote: RerankClient;
 }): RerankClient {
   async function pick(): Promise<RerankClient | null> {
-    const mode = await deps.getMode();
-    return mode === 'local' ? deps.local : mode === 'remote' ? deps.remote : null;
+    return (await deps.getMode()) === 'local' ? deps.local : null;
   }
   return {
     async available() {

@@ -143,8 +143,8 @@ export function customModelId(repo: string): string {
 
 /**
  * Vector-cache key for a local model. The `local:` namespace keeps it disjoint
- * from remote server model ids, so switching HTTP↔local can never silently
- * reuse vectors produced by a different model.
+ * from the bare model ids the removed own-server mode keyed vectors under, so
+ * a stale one can never be silently reused for a different model.
  */
 export function localModelCacheKey(spec: LocalEmbedModelSpec): string {
   return `local:${spec.repo}`;
@@ -158,10 +158,8 @@ export function applyPrefixes(spec: LocalEmbedModelSpec, kind: EmbedKind, texts:
 
 /**
  * The model id that keys the vector cache under the current settings: the local
- * cache key, the remote server's model id, or '' when embeddings are off.
+ * cache key, or '' when embeddings are off.
  */
 export function effectiveEmbedModelKey(r: RetrievalSettings): string {
-  if (r.embeddings.mode === 'local') return localModelCacheKey(resolveEmbedSpec(r));
-  if (r.embeddings.mode === 'remote') return r.embeddings.model;
-  return '';
+  return r.embeddings.mode === 'local' ? localModelCacheKey(resolveEmbedSpec(r)) : '';
 }

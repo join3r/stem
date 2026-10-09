@@ -94,7 +94,6 @@ beforeEach(async () => {
     scheduler: () => null,
     providerAuth: () => null,
     embedManager: () => null,
-    remoteHealth: () => null,
     emit: () => {},
     onAuthenticated: () => Promise.reject(new Error('not needed')),
     scheduleMemoryRebuild: () => {},

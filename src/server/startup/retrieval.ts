@@ -8,8 +8,7 @@ import { embedMissingFactVectors } from '../recall/embed-facts';
 import { scanAllIndexedFolders } from '../folder-index';
 import { getEmbeddingsClient, setRetrievalClients } from '../recall/retrieval';
 import { startEmbedEndpoint } from '../recall/embed-endpoint';
-import { createHttpEmbeddingsClient, type EmbeddingsClient } from '../recall/embeddings';
-import { createHttpRerankClient } from '../recall/rerank';
+import type { EmbeddingsClient } from '../recall/embeddings';
 import { isCustomModelId, localModelCacheKey, resolveEmbedSpec } from '../recall/embed-catalog';
 import { createEmbedWorkerManager, type EmbedWorkerManager } from '../recall/embed-manager';
 import { createEmbeddingsRouter, createLocalEmbeddingsClient } from '../recall/embed-local';
@@ -18,7 +17,6 @@ import { createLocalRerankClient, createRerankRouter } from '../recall/rerank-lo
 import { createGteFactPilot, GTE_FACT_PILOT_ID } from '../recall/gte-fact-pilot';
 import { ensureGteModel } from '../recall/gte-model-download';
 import { pruneRetiredModels } from '../recall/retired-models';
-import { createRemoteHealthTracker, type RemoteHealthTracker } from '../recall/remote-health';
 import { spawnEmbedWorker } from '../recall/embed-worker-host';
 import { createScanWorkerManager, type ScanWorkerManager } from '../recall/scan-manager';
 import { spawnScanWorker } from '../recall/scan-worker-host';
@@ -32,8 +30,6 @@ const { getEpisodicGeneration, pruneMessageVectorsExceptModel, pruneSummaryVecto
 export interface RetrievalRuntime {
   embedManager: EmbedWorkerManager;
   scanManager: ScanWorkerManager;
-  /** Verdict cache for the user's remote retrieval endpoints (mode === 'remote'). */
-  remoteHealth: RemoteHealthTracker;
   disposeFactPilot(): void;
 }
 
@@ -114,20 +110,6 @@ export function logModelStatus(
 }
 
 /**
- * A remote endpoint's verdict, when it turns bad. Only the failures are written:
- * unlike a local model there is no lifecycle worth narrating, and 'ok' is the
- * state every working install sits in.
- */
-export function logRemoteHealth(
-  stage: 'embeddings' | 'reranker',
-  health: { state: string; error?: string }
-): void {
-  if (!changed(`remote:${stage}`, `${health.state}:${health.error ?? ''}`)) return;
-  if (health.state !== 'error') return;
-  log('retrieval', `remote ${stage} endpoint failing`, { error: health.error });
-}
-
-/**
  * Backfill thread-summary vectors (Level 1.5 search) for the freshly-ready
  * model. Every upsert sits under an await, so the pass snapshots the episodic
  * epoch and drops its writes when a "Reset recall" moved it: reset deletes the
@@ -160,10 +142,9 @@ export async function backfillSummaryVectors(emb: EmbeddingsClient, model: strin
 
 /**
  * Stem Recall relevance ranking. Embeddings route per the settings mode: the
- * bundled local model (in a utility process; the out-of-box default) or the
- * user's own HTTP endpoint. Config is read fresh each turn, so switching mode
- * or repointing endpoints in Settings takes effect on the next fact-ranking
- * pass with no restart. Off/not-ready → the clients report unavailable and
+ * bundled local model (in a utility process; the out-of-box default) or off.
+ * Config is read fresh each turn, so switching mode or model in Settings takes
+ * effect on the next fact-ranking pass with no restart. Off/not-ready → the clients report unavailable and
  * inject falls back to lexical/recency selection — a chat turn never waits on
  * a model download.
  */
@@ -225,18 +206,6 @@ export function initRetrieval(deps: {
     host().onShutdown(() => factPilot?.dispose());
   }
   const localEmbeddings = createLocalEmbeddingsClient(getRetrieval, embedManager);
-  // Remote endpoints have no lifecycle to stream the way the local worker does,
-  // so their health is the recorded outcome of the requests recall makes anyway
-  // — the wrappers below write it, and the Memory tab's red markers read it.
-  const remoteHealth = createRemoteHealthTracker();
-  remoteHealth.onChange((health) => {
-    deps.emit('retrieval:remoteHealth', health);
-    // Same silence as a local model's, for the same reason. onChange carries
-    // BOTH stages whenever either one moves, which is what the dedupe is for
-    // here: a stuck embeddings endpoint must not re-log every time the reranker
-    // changes its mind.
-    for (const stage of ['embeddings', 'reranker'] as const) logRemoteHealth(stage, health[stage]);
-  });
   setRetrievalClients({
     ...(factPilot ? {
       factRerank: () => factPilot.resolve(), factStatus: () => factPilot.status(),
@@ -244,31 +213,13 @@ export function initRetrieval(deps: {
     } : {}),
     embeddings: createEmbeddingsRouter({
       getMode: async () => (await getEmbedSettings()).mode,
-      local: localEmbeddings,
-      remote: remoteHealth.wrapEmbeddings(
-        createHttpEmbeddingsClient(async () => {
-          const e = await getEmbedSettings();
-          return e.mode === 'remote' && e.baseUrl && e.model
-            ? { baseUrl: e.baseUrl, model: e.model, apiKey: e.apiKey }
-            : null;
-        })
-      )
+      local: localEmbeddings
     }),
     // Precision rerank stage: the bundled cross-encoder (co-hosted in the embed
-    // worker) or the user's own Cohere/Jina-style /rerank endpoint (llama.cpp
-    // --reranking, vLLM, Infinity, TEI — note Ollama can't serve one). Off/not
-    // ready → inject degrades to the cosine ranking.
+    // worker). Off/not ready → inject degrades to the cosine ranking.
     rerank: createRerankRouter({
       getMode: async () => (await getRerankSettings()).mode,
-      local: createLocalRerankClient(getRetrieval, embedManager),
-      remote: remoteHealth.wrapRerank(
-        createHttpRerankClient(async () => {
-          const r = await getRerankSettings();
-          return r.mode === 'remote' && r.baseUrl && r.model
-            ? { baseUrl: r.baseUrl, model: r.model, apiKey: r.apiKey }
-            : null;
-        })
-      )
+      local: createLocalRerankClient(getRetrieval, embedManager)
     })
   });
   // Serve query embeddings to the stem-recall MCP server over a local unix
@@ -344,5 +295,5 @@ export function initRetrieval(deps: {
       });
     }, 1_500);
   }
-  return { embedManager, scanManager, remoteHealth, disposeFactPilot: () => factPilot?.dispose() };
+  return { embedManager, scanManager, disposeFactPilot: () => factPilot?.dispose() };
 }

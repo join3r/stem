@@ -16,8 +16,8 @@ import {
 
 function settings(): RetrievalSettings {
   return {
-    embeddings: { mode: 'local', localModel: 'qwen3-embedding-0.6b', baseUrl: '', model: '', apiKey: null },
-    reranker: { mode: 'local', localModel: 'qwen3-reranker-0.6b', factModel: GTE_FACT_PILOT_ID, baseUrl: '', model: '', apiKey: null },
+    embeddings: { mode: 'local', localModel: 'qwen3-embedding-0.6b' },
+    reranker: { mode: 'local', localModel: 'qwen3-reranker-0.6b', factModel: GTE_FACT_PILOT_ID },
     customEmbedModels: [], customRerankModels: []
   };
 }
@@ -103,11 +103,9 @@ describe('GTE fact pilot eligibility', () => {
     gemma.embeddings.localModel = 'embeddinggemma-2';
     expect(gteFactPilotEligible(gemma)).toBe(true);
     for (const stage of ['embeddings', 'reranker'] as const) {
-      for (const mode of ['off', 'remote'] as const) {
-        const config = settings();
-        config[stage].mode = mode;
-        expect(gteFactPilotEligible(config)).toBe(false);
-      }
+      const off = settings();
+      off[stage].mode = 'off';
+      expect(gteFactPilotEligible(off)).toBe(false);
       const config = settings();
       config[stage].localModel = 'custom:unmeasured-model';
       expect(gteFactPilotEligible(config)).toBe(false);

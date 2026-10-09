@@ -71,7 +71,6 @@ const LOCAL_EMBED_MODELS: { id: LocalEmbedModelId; label: string; detail: string
 
 const EMBED_MODES: { id: EmbeddingsMode; label: string; hint: string }[] = [
   { id: 'local', label: 'Built-in', hint: 'Bundled multilingual model, runs on this Mac' },
-  { id: 'remote', label: 'Server', hint: 'Your own OpenAI-compatible endpoint (Ollama, LM Studio…)' },
   { id: 'off', label: 'Off', hint: 'Rank facts by keywords/recency only' }
 ];
 
@@ -99,8 +98,7 @@ function customOption(m: CustomEmbedModel | CustomRerankModel): { id: string; la
 
 const RERANK_MODES: { id: RerankerMode; label: string; hint: string }[] = [
   { id: 'off', label: 'Off', hint: 'Rank facts by embedding similarity only' },
-  { id: 'local', label: 'Built-in', hint: 'Bundled cross-encoder re-scores the top matches, runs on this Mac' },
-  { id: 'remote', label: 'Server', hint: 'Your own /rerank endpoint (llama.cpp --reranking, vLLM, Infinity…)' }
+  { id: 'local', label: 'Built-in', hint: 'Bundled cross-encoder re-scores the top matches, runs on this Mac' }
 ];
 
 /**
@@ -286,30 +284,24 @@ function ImportedModels({
   );
 }
 
-// Embeddings-stage controls: an exclusive Built-in / Server / Off mode, the local
-// model picker + live download/ready status, or the remote endpoint fields (free
-// text — Stem just makes the HTTP call). Text edits stay local while typing and
-// persist on blur; mode/model switches persist immediately.
+// Embeddings-stage controls: an exclusive Built-in / Off mode plus the local
+// model picker + live download/ready status. Mode/model switches persist
+// immediately.
 function EmbeddingsFields({
   value,
   custom,
   onPatch,
-  onRetrieval,
-  remoteError
+  onRetrieval
 }: {
   value: EmbeddingsSettings;
   /** Embedders the user imported — they join the picker below the curated ones. */
   custom: CustomEmbedModel[];
   onPatch: (patch: Partial<EmbeddingsSettings>) => void;
   onRetrieval: (retrieval: RetrievalSettings) => void;
-  /** Last recorded failure of the user's remote endpoint, shown under its fields. */
-  remoteError?: string | null;
 }) {
-  const [local, setLocal] = useState(value);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<RetrievalTestResult | null>(null);
   const [status, setStatus] = useState<LocalEmbedStatus | null>(null);
-  useEffect(() => setLocal(value), [value]);
   useEffect(() => {
     window.stem.getLocalEmbedStatus().then(setStatus);
     return window.stem.onLocalEmbedStatus(setStatus);
@@ -373,56 +365,17 @@ function EmbeddingsFields({
           <ImportedModels stage="embed" models={custom} onRetrieval={onRetrieval} />
         </>
       )}
-      {mode === 'remote' && (
-        <>
-          <input
-            className="ifield"
-            placeholder="http://localhost:11434"
-            aria-label="Embeddings base URL"
-            value={local.baseUrl}
-            onChange={(e) => setLocal({ ...local, baseUrl: e.target.value })}
-            onBlur={() => onPatch({ baseUrl: local.baseUrl })}
-          />
-          <input
-            className="ifield"
-            placeholder="qwen3-embedding:0.6b"
-            aria-label="Embeddings model"
-            value={local.model}
-            onChange={(e) => setLocal({ ...local, model: e.target.value })}
-            onBlur={() => onPatch({ model: local.model })}
-          />
-          <p className="muted">
-            For an endpoint you already run. The built-in EmbeddingGemma 2 found more of the memories
-            that matter than any Qwen3 embedding model in Stem's benchmarks, so a server buys no
-            quality.
-          </p>
-          <input
-            className="ifield"
-            type="password"
-            placeholder="API key (optional)"
-            aria-label="Embeddings API key"
-            value={local.apiKey ?? ''}
-            onChange={(e) => setLocal({ ...local, apiKey: e.target.value })}
-            onBlur={() => onPatch({ apiKey: local.apiKey })}
-          />
-          {remoteError && (
-            <p className="retrieval-status-error">
-              <TriangleAlert size={12} /> Error: {remoteError}
-            </p>
-          )}
-        </>
-      )}
       {mode !== 'off' && (
         <div className="retrieval-test">
           <button
             className="retrieval-test-btn"
             onClick={runTest}
             disabled={testing}
-            title={testing ? 'Testing…' : 'Test connection'}
-            aria-label="Test connection"
+            title={testing ? 'Testing…' : 'Test model'}
+            aria-label="Test embeddings"
           >
             <Plug size={14} />
-            <span>{testing ? 'Testing…' : 'Test connection'}</span>
+            <span>{testing ? 'Testing…' : 'Test model'}</span>
           </button>
           {!testing && test && (
             <span className={`retrieval-test-status ${test.ok ? 'ok' : 'err'}`} title={test.detail}>
@@ -437,17 +390,15 @@ function EmbeddingsFields({
 }
 
 // Reranker-stage controls, mirroring EmbeddingsFields: an exclusive Off /
-// Built-in / Server mode, the local model + live download/ready status, or the
-// remote endpoint fields. The reranker re-scores the embedding shortlist with a
-// cross-encoder — the precision stage that catches cross-language matches
-// cosine ranking misses.
+// Built-in mode plus the local model + live download/ready status. The
+// reranker re-scores the embedding shortlist with a cross-encoder — the
+// precision stage that catches cross-language matches cosine ranking misses.
 function RerankerFields({
   value,
   embeddings,
   custom,
   onPatch,
-  onRetrieval,
-  remoteError
+  onRetrieval
 }: {
   value: RerankerSettings;
   embeddings: EmbeddingsSettings;
@@ -455,15 +406,11 @@ function RerankerFields({
   custom: CustomRerankModel[];
   onPatch: (patch: Partial<RerankerSettings>) => void;
   onRetrieval: (retrieval: RetrievalSettings) => void;
-  /** Last recorded failure of the user's remote endpoint, shown under its fields. */
-  remoteError?: string | null;
 }) {
-  const [local, setLocal] = useState(value);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<RetrievalTestResult | null>(null);
   const [status, setStatus] = useState<LocalRerankStatus | null>(null);
   const factStatus = useFactRerankStatus();
-  useEffect(() => setLocal(value), [value]);
   useEffect(() => {
     let active = true;
     let receivedEvent = false;
@@ -506,8 +453,7 @@ function RerankerFields({
             <InfoTip label="What the reranker does">
               A second, precision pass: a cross-encoder re-scores the top embedding matches before
               injection, which is what catches cross-language matches (a Slovak question finding an
-              English fact). It applies whichever embeddings mode is active — Built-in or Server.
-              While off or not ready, ranking uses embedding similarity alone.
+              English fact). While off or not ready, ranking uses embedding similarity alone.
             </InfoTip>
           </strong>
           <em>{RERANK_MODES.find((m) => m.id === mode)?.hint}</em>
@@ -572,51 +518,17 @@ function RerankerFields({
           <ImportedModels stage="rerank" models={custom} onRetrieval={onRetrieval} />
         </>
       )}
-      {mode === 'remote' && (
-        <>
-          <input
-            className="ifield"
-            placeholder="http://localhost:8080"
-            aria-label="Reranker base URL"
-            value={local.baseUrl}
-            onChange={(e) => setLocal({ ...local, baseUrl: e.target.value })}
-            onBlur={() => onPatch({ baseUrl: local.baseUrl })}
-          />
-          <input
-            className="ifield"
-            placeholder="bge-reranker-v2-m3"
-            aria-label="Reranker model"
-            value={local.model}
-            onChange={(e) => setLocal({ ...local, model: e.target.value })}
-            onBlur={() => onPatch({ model: local.model })}
-          />
-          <input
-            className="ifield"
-            type="password"
-            placeholder="API key (optional)"
-            aria-label="Reranker API key"
-            value={local.apiKey ?? ''}
-            onChange={(e) => setLocal({ ...local, apiKey: e.target.value })}
-            onBlur={() => onPatch({ apiKey: local.apiKey })}
-          />
-          {remoteError && (
-            <p className="retrieval-status-error">
-              <TriangleAlert size={12} /> Error: {remoteError}
-            </p>
-          )}
-        </>
-      )}
       {mode !== 'off' && (
         <div className="retrieval-test">
           <button
             className="retrieval-test-btn"
             onClick={runTest}
             disabled={testing}
-            title={testing ? 'Testing…' : mode === 'local' ? 'Test model' : 'Test connection'}
+            title={testing ? 'Testing…' : 'Test model'}
             aria-label="Test reranker"
           >
             <Plug size={14} />
-            <span>{testing ? 'Testing…' : mode === 'local' ? 'Test model' : 'Test connection'}</span>
+            <span>{testing ? 'Testing…' : 'Test model'}</span>
           </button>
           {!testing && test && (
             <span className={`retrieval-test-status ${test.ok ? 'ok' : 'err'}`} title={test.detail}>
@@ -1128,20 +1040,19 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
         // controls live in the collapsed advanced section below, and an error
         // only visible there is an error nobody sees. Recall keeps working
         // while this shows, just worse: the summary line names what the
-        // ranking has degraded to. "Model" vs "server" per the failure's
-        // source, so a dead Ollama isn't blamed on the bundled model.
+        // ranking has degraded to.
         <div className="retrieval-alert" role="alert">
           <TriangleAlert size={16} />
           <div className="retrieval-alert-msg">
             {health.embed && (
               <span>
-                <strong>{health.embed.remote ? 'Embeddings server failed.' : 'Embedding model failed.'}</strong>{' '}
+                <strong>Embedding model failed.</strong>{' '}
                 {health.embed.error}
               </span>
             )}
             {health.rerank && (
               <span>
-                <strong>{health.rerank.remote ? 'Reranker server failed.' : 'Reranker model failed.'}</strong>{' '}
+                <strong>Reranker model failed.</strong>{' '}
                 {health.rerank.error}
               </span>
             )}
@@ -1380,7 +1291,6 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
                 custom={retrieval.customEmbedModels}
                 onPatch={patchEmbeddings}
                 onRetrieval={setRetrieval}
-                remoteError={health.embed?.remote ? health.embed.error : null}
               />
               <RerankerFields
                 value={retrieval.reranker}
@@ -1388,7 +1298,6 @@ export function FactsTab({ models, activeFacts }: { models: ModelSummary[]; acti
                 custom={retrieval.customRerankModels}
                 onPatch={patchReranker}
                 onRetrieval={setRetrieval}
-                remoteError={health.rerank?.remote ? health.rerank.error : null}
               />
             </div>
           )}

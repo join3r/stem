@@ -2,7 +2,6 @@ import type { ChatBackend } from '../backend';
 import type { TaskScheduler } from '../scheduler';
 import type { ProviderAuth } from '../pi/provider-auth';
 import type { EmbedWorkerManager } from '../recall/embed-manager';
-import type { RemoteHealthTracker } from '../recall/remote-health';
 import type { RuntimeStatus } from '../../shared/types';
 
 /**
@@ -18,8 +17,6 @@ export interface IpcDeps {
   scheduler(): TaskScheduler | null;
   providerAuth(): ProviderAuth | null;
   embedManager(): EmbedWorkerManager | null;
-  /** Verdict cache for the user's remote retrieval endpoints (mode === 'remote'). */
-  remoteHealth(): RemoteHealthTracker | null;
   /** Push on a client channel; it goes out on the SSE stream to every client
    *  whose role may receive it (see startup/transport.ts). */
   emit(channel: string, payload: unknown): void;

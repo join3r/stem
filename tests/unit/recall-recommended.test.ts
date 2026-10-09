@@ -21,8 +21,8 @@ function retrieval(over: {
   reranker?: Partial<RetrievalSettings['reranker']>;
 }): RetrievalSettings {
   return {
-    embeddings: { mode: 'local', localModel: RECOMMENDED_EMBED_MODEL, baseUrl: '', model: '', apiKey: null, ...over.embeddings },
-    reranker: { mode: 'local', localModel: RECOMMENDED_RERANK_MODEL, factModel: RECOMMENDED_FACT_MODEL, baseUrl: '', model: '', apiKey: null, ...over.reranker },
+    embeddings: { mode: 'local', localModel: RECOMMENDED_EMBED_MODEL, ...over.embeddings },
+    reranker: { mode: 'local', localModel: RECOMMENDED_RERANK_MODEL, factModel: RECOMMENDED_FACT_MODEL, ...over.reranker },
     customEmbedModels: [],
     customRerankModels: []
   };
@@ -58,14 +58,6 @@ describe('recall recommendation', () => {
     });
   });
 
-  it('a Qwen3 embedder on the user\'s own endpoint is offered the built-in one', () => {
-    const r = retrieval({ embeddings: { mode: 'remote', model: 'qwen3-embedding:4b' } });
-    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: true, factOk: true });
-    expect(recommendedRetrievalPatch(r)).toEqual({
-      embeddings: { mode: 'local', localModel: RECOMMENDED_EMBED_MODEL }
-    });
-  });
-
   it('patches only the stage that is off the recommendation', () => {
     const bge = retrieval({ reranker: { localModel: 'bge-reranker-v2-m3', factModel: undefined } });
     expect(recommendedRetrievalPatch(bge)).toEqual({
@@ -91,13 +83,5 @@ describe('recall recommendation', () => {
     const off = retrieval({ embeddings: { mode: 'off' }, reranker: { mode: 'off' } });
     expect(recallSetupStatus(off)).toEqual({ embedOk: false, rerankOk: false, factOk: false });
     expect(recommendedRetrievalPatch(off)?.embeddings?.mode).toBe('local');
-  });
-
-  it('a remote non-Qwen3 endpoint is not the recommendation', () => {
-    const r = retrieval({
-      embeddings: { mode: 'remote', model: 'nomic-embed-text' },
-      reranker: { mode: 'remote', model: 'bge-reranker-v2-m3' }
-    });
-    expect(recallSetupStatus(r)).toEqual({ embedOk: false, rerankOk: false, factOk: false });
   });
 });

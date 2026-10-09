@@ -18,23 +18,11 @@ function describe(retrieval: RetrievalSettings): string {
   const parts: string[] = [];
   if (!embedOk) {
     const e = retrieval.embeddings;
-    parts.push(
-      e.mode === 'off'
-        ? 'keyword-only ranking'
-        : e.mode === 'remote'
-          ? `the ${e.model || 'server'} embedder on your own endpoint`
-          : `the ${e.localModel} embedder`
-    );
+    parts.push(e.mode === 'off' ? 'keyword-only ranking' : `the ${e.localModel} embedder`);
   }
   if (!rerankOk) {
     const r = retrieval.reranker;
-    parts.push(
-      r.mode === 'off'
-        ? 'no reranker'
-        : r.mode === 'remote'
-          ? `the ${r.model || 'server'} reranker on your own endpoint`
-          : `the ${r.localModel} reranker`
-    );
+    parts.push(r.mode === 'off' ? 'no reranker' : `the ${r.localModel} reranker`);
   } else if (!factOk) {
     parts.push('the Qwen3 reranker alone');
   }

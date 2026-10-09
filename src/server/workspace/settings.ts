@@ -142,16 +142,11 @@ const DEFAULTS: ServerSettings = {
   // Embeddings + reranker for relevance-ranking facts at inject time. Embeddings
   // default to the bundled local model (multilingual, in-process, nothing leaves
   // the machine); weights download once on first need, and until they're ready
-  // fact selection stays lexical/recency-based. Remote URL/model defaults match
-  // a local Ollama setup for users who switch to their own endpoint.
+  // fact selection stays lexical/recency-based.
   retrieval: {
     embeddings: {
       mode: 'local',
-      localModel: DEFAULT_LOCAL_EMBED_MODEL,
-      baseUrl: 'http://localhost:11434',
-      // 4b, not 8b: measured best cross-language fact recall on Ollama (2026-07-04).
-      model: 'qwen3-embedding:4b',
-      apiKey: null
+      localModel: DEFAULT_LOCAL_EMBED_MODEL
     },
     reranker: {
       // On by default since the reranker became the fact-injection GATE
@@ -166,10 +161,7 @@ const DEFAULTS: ServerSettings = {
       // fresh install gets it; a stored reranker section without the field is
       // a user who set up recall before it existed and is offered the switch
       // by the release popup instead (shared/recall-recommended.ts).
-      factModel: GTE_FACT_PILOT_ID,
-      baseUrl: 'http://localhost:8080',
-      model: '',
-      apiKey: null
+      factModel: GTE_FACT_PILOT_ID
     },
     // Models the user brought themselves that Stem has no catalog entry for.
     // Empty on every install until somebody imports one.
@@ -319,7 +311,7 @@ function coerceCustomModels<T extends { id: string }>(raw: unknown, one: (v: unk
   return [...byId.values()];
 }
 
-const RERANKER_MODES: readonly RerankerMode[] = ['off', 'local', 'remote'];
+const RERANKER_MODES: readonly RerankerMode[] = ['off', 'local'];
 // Derived from the catalog, not written out by hand: a hand-kept copy silently
 // rejected 'qwen3-reranker-0.6b' when it was added everywhere but here, and
 // "selecting the new model silently reverts to the old one" is the failure mode.
@@ -327,28 +319,31 @@ const LOCAL_RERANK_MODELS: readonly LocalRerankModelId[] = Object.keys(
   RERANK_CATALOG
 ) as LocalRerankModelId[];
 
+/** A stage section as stored: `mode` may still hold a value this build dropped. */
+type StoredStage<T> = Omit<Partial<T>, 'mode'> & { mode?: unknown; enabled?: unknown };
+
 function coerceReranker(
-  raw: (Partial<RerankerSettings> & { enabled?: unknown }) | undefined,
+  raw: StoredStage<RerankerSettings> | undefined,
   def: RerankerSettings,
   custom: CustomRerankModel[]
 ): RerankerSettings {
   const r = raw ?? {};
+  // The own-server mode ('remote', with its baseUrl/model/apiKey) was removed
+  // in 0.6.0, and so was the pre-mode shape ({ enabled: boolean } + endpoint
+  // fields) whose enabled:true meant the same. Either one lands on exactly what
+  // a fresh install gets — built-in default model and fact model — so the stage
+  // nobody chose to turn off doesn't go quietly off; the endpoint fields are
+  // simply not carried over. Any other explicit mode ('off' included) is
+  // preserved — defaulting the gate on must not override a user who turned it off.
+  const legacyServer = r.mode === 'remote' || (r.mode === undefined && r.enabled === true);
+  if (legacyServer) return { ...def };
   // No reranker section at all is a first launch (or a file from before the
   // stage existed), which takes the default fact model. A section that merely
   // lacks the field was written by an earlier Stem for a user who had recall set
   // up already, and an update never changes a setting the user made.
   const factModel = raw === undefined ? def.factModel
     : r.factModel === GTE_FACT_PILOT_ID ? r.factModel : undefined;
-  // Migration from the pre-mode shape ({ enabled: boolean } + endpoint fields):
-  // enabled:true meant "user pointed us at their own /rerank server" → remote;
-  // anything else takes the default. An explicit mode ('off' included) is
-  // always preserved — defaulting the gate on must not override a user who
-  // turned it off.
-  const mode: RerankerMode = RERANKER_MODES.includes(r.mode as RerankerMode)
-    ? (r.mode as RerankerMode)
-    : r.enabled === true
-      ? 'remote'
-      : def.mode;
+  const mode: RerankerMode = RERANKER_MODES.includes(r.mode as RerankerMode) ? (r.mode as RerankerMode) : def.mode;
   return {
     mode,
     ...(factModel ? { factModel } : {}),
@@ -359,44 +354,37 @@ function coerceReranker(
       LOCAL_RERANK_MODELS.includes(r.localModel as LocalRerankModelId) ||
       custom.some((m) => m.id === r.localModel)
         ? (r.localModel as string)
-        : def.localModel,
-    baseUrl: typeof r.baseUrl === 'string' && r.baseUrl.trim() ? r.baseUrl.trim() : def.baseUrl,
-    model: typeof r.model === 'string' ? r.model.trim() : def.model,
-    apiKey: typeof r.apiKey === 'string' && r.apiKey.trim() ? r.apiKey : null
+        : def.localModel
   };
 }
 
-const EMBEDDINGS_MODES: readonly EmbeddingsMode[] = ['off', 'local', 'remote'];
+const EMBEDDINGS_MODES: readonly EmbeddingsMode[] = ['off', 'local'];
 // Same rule as LOCAL_RERANK_MODELS: the catalog is the one source of truth.
 const LOCAL_EMBED_MODELS: readonly LocalEmbedModelId[] = Object.keys(
   EMBED_CATALOG
 ) as LocalEmbedModelId[];
 
 function coerceEmbeddings(
-  raw: (Partial<EmbeddingsSettings> & { enabled?: unknown }) | undefined,
+  raw: StoredStage<EmbeddingsSettings> | undefined,
   def: EmbeddingsSettings,
   custom: CustomEmbedModel[]
 ): EmbeddingsSettings {
   const r = raw ?? {};
-  // Migration from the pre-mode shape ({ enabled: boolean } + endpoint fields):
-  // enabled:true meant "user pointed us at their own server" → remote. enabled:false
-  // is indistinguishable from "never touched" (defaults persist to settings.json),
-  // so it takes the new local default; an explicit Off mode remains available.
-  const mode: EmbeddingsMode = EMBEDDINGS_MODES.includes(r.mode as EmbeddingsMode)
-    ? (r.mode as EmbeddingsMode)
-    : r.enabled === true
-      ? 'remote'
-      : def.mode;
+  // The removed own-server mode ('remote', or the pre-mode enabled:true that
+  // meant the same) becomes the fresh-install default — see coerceReranker.
+  // enabled:false is indistinguishable from "never touched" (defaults persist
+  // to settings.json), so it takes the local default too; an explicit Off mode
+  // remains available.
+  const legacyServer = r.mode === 'remote' || (r.mode === undefined && r.enabled === true);
+  if (legacyServer) return { ...def };
+  const mode: EmbeddingsMode = EMBEDDINGS_MODES.includes(r.mode as EmbeddingsMode) ? (r.mode as EmbeddingsMode) : def.mode;
   return {
     mode,
     // Catalog ∪ imported — see coerceReranker.
     localModel:
       LOCAL_EMBED_MODELS.includes(r.localModel as LocalEmbedModelId) || custom.some((m) => m.id === r.localModel)
         ? (r.localModel as string)
-        : def.localModel,
-    baseUrl: typeof r.baseUrl === 'string' && r.baseUrl.trim() ? r.baseUrl.trim() : def.baseUrl,
-    model: typeof r.model === 'string' ? r.model.trim() : def.model,
-    apiKey: typeof r.apiKey === 'string' && r.apiKey.trim() ? r.apiKey : null
+        : def.localModel
   };
 }
 

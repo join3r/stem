@@ -132,7 +132,6 @@ describe('the mirror channels are caller-scoped', () => {
       scheduler: () => null,
       providerAuth: () => null,
       embedManager: () => null,
-      remoteHealth: () => null,
       emit: () => {},
       onAuthenticated: () => Promise.reject(new Error('not needed')),
       scheduleMemoryRebuild: () => {},

@@ -1,25 +1,15 @@
-// Generic embeddings seam for Stem Recall. Backend-agnostic: talks to any
-// OpenAI-compatible /v1/embeddings endpoint (Ollama, vLLM, LM Studio, TEI-openai,
-// hosted). Deliberately tiny — global fetch only, no SDK — so the same client can
-// back durable-fact ranking today and episodic semantic search (or anything else)
-// later. Config is read fresh on every call via the injected getter, mirroring the
-// LlmClient pattern, so a settings change takes effect on the next turn with no
-// restart.
+// Generic embeddings seam for Stem Recall: the client interface every consumer
+// (durable-fact ranking, episodic and folder search) codes against, plus the
+// traffic rules the backend under it shares. The one backend today is the
+// bundled local model (embed-local.ts); config is read fresh on every call, so
+// a settings change takes effect on the next turn with no restart.
 
-import { embedSchedule, type EmbedSchedule } from './embed-schedule';
-
-export interface EmbeddingsConfig {
-  baseUrl: string;
-  model: string;
-  apiKey?: string | null;
-}
+import type { EmbedSchedule } from './embed-schedule';
 
 /**
  * Whether the texts are search queries or the documents being searched. Some
  * models (e.g. the e5 family) were trained with distinct query/passage prefixes;
- * the local backend applies them per its catalog spec. The HTTP client ignores
- * this — remote servers run arbitrary models and blind prefixing would corrupt
- * ones that don't expect it.
+ * the local backend applies them per its catalog spec.
  */
 export type EmbedKind = 'query' | 'passage';
 
@@ -34,7 +24,7 @@ export interface EmbedOptions {
 }
 
 export interface EmbeddingsClient {
-  /** Whether a usable (enabled + configured) endpoint is present right now. */
+  /** Whether a usable (enabled + ready) backend is present right now. */
   available(): Promise<boolean>;
   /** The configured model id, used to key the vector cache; null when unavailable. */
   modelId(): Promise<string | null>;
@@ -46,9 +36,9 @@ export interface EmbeddingsClient {
   embed(texts: string[], kind?: EmbedKind, opts?: EmbedOptions): Promise<Float32Array[]>;
 }
 
-/** Thrown when the endpoint is disabled/unconfigured — callers fall back to recency. */
+/** Thrown when embeddings are off or not ready — callers fall back to recency. */
 export class EmbeddingsUnavailableError extends Error {
-  constructor(message = 'embeddings endpoint not configured') {
+  constructor(message = 'embeddings not available') {
     super(message);
     this.name = 'EmbeddingsUnavailableError';
   }
@@ -108,9 +98,9 @@ export function packBatches(texts: string[]): string[][] {
 }
 
 /**
- * A request cut off by our own timeout — the one failure worth retrying. Both
- * backends throw it (the HTTP client on its abort, the local worker manager on
- * its timer) so the shared scheduler below can bisect either one.
+ * A request cut off by our own timeout — the one failure worth retrying. The
+ * local worker manager throws it on its timer so the shared scheduler below can
+ * bisect.
  */
 export class EmbeddingsTimeoutError extends Error {}
 
@@ -137,12 +127,12 @@ export type EmbedSender = (texts: string[], kind: EmbedKind, budgetMs: number) =
  * passages are packed into bounded batches, each of which waits for a query
  * lull, is marked busy while out, runs on the long budget and bisects on
  * timeout; a query is registered so background work yields, and takes the busy
- * budget when a passage batch is already out. Written for the HTTP client after
- * the 2026-08-21 indexing incident and then found missing from the local worker
- * on 2026-09-03: Qwen3 0.6B on a CPU server took 1,580 facts as ONE request
- * against a flat 60s timer, every batch timed out, and the abandoned work kept
- * the cores busy for a quarter of an hour while each later request queued
- * behind it and timed out too. `kind` undefined counts as a query — the Test
+ * budget when a passage batch is already out. Written after the 2026-08-21
+ * indexing incident on a CPU embeddings server and then found missing from
+ * the local worker on 2026-09-03: Qwen3 0.6B on a CPU server took 1,580 facts
+ * as ONE request against a flat 60s timer, every batch timed out, and the
+ * abandoned work kept the cores busy for a quarter of an hour while each later
+ * request queued behind it and timed out too. `kind` undefined counts as a query — the Test
  * button and the ad-hoc callers embed one text and are waiting for it — and so
  * does an `urgent` passage (see {@link EmbedOptions}), which keeps its prefix
  * but takes the query's place in line.
@@ -212,88 +202,4 @@ export async function scheduledEmbed(
   } finally {
     end();
   }
-}
-
-function trimUrl(base: string): string {
-  return base.replace(/\/+$/, '');
-}
-
-export function createHttpEmbeddingsClient(
-  getConfig: () => Promise<EmbeddingsConfig | null>,
-  opts: {
-    timeoutMs?: number;
-    passageTimeoutMs?: number;
-    busyQueryTimeoutMs?: number;
-    schedule?: EmbedSchedule;
-  } = {}
-): EmbeddingsClient {
-  const budgets: EmbedBudgets = {
-    timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    passageTimeoutMs: opts.passageTimeoutMs ?? DEFAULT_PASSAGE_TIMEOUT_MS,
-    busyQueryTimeoutMs: opts.busyQueryTimeoutMs ?? DEFAULT_BUSY_QUERY_TIMEOUT_MS
-  };
-  const schedule = opts.schedule ?? embedSchedule;
-
-  async function embedBatch(cfg: EmbeddingsConfig, texts: string[], budgetMs: number): Promise<Float32Array[]> {
-    const url = `${trimUrl(cfg.baseUrl)}/v1/embeddings`;
-    const ctrl = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      ctrl.abort();
-    }, budgetMs);
-    let json: { data?: Array<{ index?: number; embedding?: number[] }> };
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {})
-        },
-        body: JSON.stringify({ model: cfg.model, input: texts }),
-        signal: ctrl.signal
-      });
-      if (!res.ok) throw new Error(`embeddings: ${url} → HTTP ${res.status}`);
-      json = (await res.json()) as typeof json;
-    } catch (err) {
-      // The abort's own message ("This operation was aborted") reaches the
-      // Memory-tab banner verbatim and reads like a crash. Name what happened:
-      // the endpoint was up but didn't answer inside our budget.
-      if (timedOut) {
-        throw new EmbeddingsTimeoutError(
-          `embeddings: ${url} → no response within ${Math.round(budgetMs / 1000)}s (endpoint reachable but slow)`
-        );
-      }
-      throw err;
-    } finally {
-      clearTimeout(timer);
-    }
-    const data = json?.data;
-    if (!Array.isArray(data) || data.length !== texts.length) {
-      throw new Error(`embeddings: expected ${texts.length} vectors, got ${Array.isArray(data) ? data.length : 'none'}`);
-    }
-    // Don't trust array order — place each row by its declared `index`.
-    const out = new Array<Float32Array | undefined>(texts.length);
-    data.forEach((row, i) => {
-      const idx = typeof row.index === 'number' ? row.index : i;
-      if (!Array.isArray(row.embedding)) throw new Error('embeddings: missing embedding vector');
-      out[idx] = Float32Array.from(row.embedding);
-    });
-    if (out.some((v) => !v)) throw new Error('embeddings: gap in returned vectors');
-    return out as Float32Array[];
-  }
-
-  return {
-    async available() {
-      return (await getConfig()) !== null;
-    },
-    async modelId() {
-      return (await getConfig())?.model ?? null;
-    },
-    async embed(texts, kind, opts) {
-      const cfg = await getConfig();
-      if (!cfg) throw new EmbeddingsUnavailableError();
-      return scheduledEmbed((batch, _kind, budgetMs) => embedBatch(cfg, batch, budgetMs), texts, kind, budgets, schedule, opts);
-    }
-  };
 }

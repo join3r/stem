@@ -8,7 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { logFlushed } from '../../src/server/log';
 import { logFilePath } from '../../src/server/workspace/paths';
-import { logModelStatus, logRemoteHealth } from '../../src/server/startup/retrieval';
+import { logModelStatus } from '../../src/server/startup/retrieval';
 
 /** Lines written so far that contain `needle`. */
 async function lines(needle: string): Promise<string[]> {
@@ -58,24 +58,5 @@ describe('local retrieval model status → stem.log', () => {
   it('says nothing when a model is unloaded', async () => {
     logModelStatus('embeddings', { model: 'multilingual-e5-small', state: 'idle' });
     expect(await lines('model idle')).toHaveLength(0);
-  });
-});
-
-describe('remote retrieval endpoint health → stem.log', () => {
-  it('logs failures only, and re-logs one that recovered and broke again', async () => {
-    logRemoteHealth('embeddings', { state: 'ok' });
-    logRemoteHealth('embeddings', { state: 'unknown' });
-    expect(await lines('remote embeddings endpoint failing')).toHaveLength(0);
-
-    logRemoteHealth('embeddings', { state: 'error', error: 'ECONNREFUSED' });
-    // onChange carries BOTH stages whenever either moves, so a stage whose
-    // verdict never changed is handed over again on every neighbouring change.
-    logRemoteHealth('embeddings', { state: 'error', error: 'ECONNREFUSED' });
-    expect(await lines('remote embeddings endpoint failing')).toHaveLength(1);
-
-    // Recovered, then broke the same way: two real events, two lines.
-    logRemoteHealth('embeddings', { state: 'ok' });
-    logRemoteHealth('embeddings', { state: 'error', error: 'ECONNREFUSED' });
-    expect(await lines('remote embeddings endpoint failing')).toHaveLength(2);
   });
 });

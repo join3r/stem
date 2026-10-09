@@ -46,7 +46,6 @@ import type {
   ImportModelResult,
   LocalEmbedStatus,
   LocalRerankStatus,
-  RemoteRetrievalHealth,
   TurnAttachment
 } from '../../shared/types';
 import { recallStore } from '../recall/store';
@@ -202,11 +201,6 @@ export function registerMemoryIpc(deps: IpcDeps): void {
     'models:removeCustom',
     (_e, stage: 'embed' | 'rerank', id: string): Promise<CustomModelResult> =>
       removeCustomModel(stage, String(id ?? ''))
-  );
-  registerServer(
-    'retrieval:remoteHealth',
-    (): RemoteRetrievalHealth =>
-      deps.remoteHealth()?.get() ?? { embeddings: { state: 'unknown' }, reranker: { state: 'unknown' } }
   );
   registerServer('memory:activeFacts', (_e, threadId: string | null): ActiveFacts | null => {
     if (!threadId) return null;

@@ -228,7 +228,6 @@ describe('chat lifecycle', () => {
       scheduler: () => null,
       providerAuth: () => null,
       embedManager: () => null,
-      remoteHealth: () => null,
       emit: (channel, payload) => emitted.push([channel, payload]),
       onAuthenticated: async () => ({}) as never,
       scheduleMemoryRebuild: () => undefined,

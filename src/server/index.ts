@@ -68,14 +68,11 @@ import { closeFolderIndexes } from './folder-index';
 import { ProviderAuth } from './pi/provider-auth';
 import { isRecallEnabled } from './workspace/memory';
 import { captureFromEvent } from './recall/capture';
-import { createHttpEmbeddingsClient } from './recall/embeddings';
-import { createHttpRerankClient } from './recall/rerank';
 import { resolveEmbedSpec } from './recall/embed-catalog';
 import type { EmbedWorkerManager } from './recall/embed-manager';
 import { resolveRerankSpec } from './recall/rerank-catalog';
 import { getFactRerankClient, getFactRerankStatus, retryFactRerank } from './recall/retrieval';
 import type { ScanWorkerManager } from './recall/scan-manager';
-import type { RemoteHealthTracker } from './recall/remote-health';
 import { backfillChatIndex, reindexChatThread } from './chatsearch/index-sync';
 import {
   markOnboardingCompleted,
@@ -195,9 +192,6 @@ let embedManager: EmbedWorkerManager | null = null;
 // Recall scan worker manager (cosine scans + episodic VACUUM off the main event
 // loop). Created in startServer; the worker itself spawns lazily.
 let scanManager: ScanWorkerManager | null = null;
-// Verdict cache for the user's remote retrieval endpoints (created in startServer
-// with the rest of the retrieval wiring).
-let remoteHealth: RemoteHealthTracker | null = null;
 // When the user last started/stopped a turn, on any surface. Drives the
 // scheduler's isUserActive signal so scheduled runs defer while they're chatting.
 let lastInteractiveAt = 0;
@@ -389,7 +383,6 @@ function registerIpc(): void {
     scheduler: () => scheduler,
     providerAuth: () => providerAuth,
     embedManager: () => embedManager,
-    remoteHealth: () => remoteHealth,
     emit,
     onAuthenticated,
     scheduleMemoryRebuild: () => scheduleMemoryRebuild(),
@@ -708,12 +701,6 @@ function registerIpc(): void {
       if (after.reranker.mode === 'local') embedManager.reconfigureRerank(resolveRerankSpec(after));
       else if (before.reranker.mode === 'local') embedManager.reconfigureRerank(null);
     }
-    // A touched stage gets its remote-endpoint verdict wiped: it described the
-    // OLD config (a mode that's no longer remote, a URL the user just fixed),
-    // and a stale red marker would say "still broken" about a change the next
-    // real request hasn't judged yet.
-    if (patch.embeddings) remoteHealth?.reset('embeddings');
-    if (patch.reranker) remoteHealth?.reset('reranker');
     if (patch.reranker || patch.embeddings) emit('reranker:factStatus', await getFactRerankStatus());
     return next;
   });
@@ -722,7 +709,7 @@ function registerIpc(): void {
     // actually responds (the fact-ranking path is otherwise silent).
     const retrieval = (await readSettings()).retrieval;
     const startedAt = Date.now();
-    if (stage === 'embeddings' && retrieval.embeddings.mode !== 'remote') {
+    if (stage === 'embeddings') {
       const emb = retrieval.embeddings;
       if (emb.mode === 'off') return { ok: false, detail: 'Embeddings are off.' };
       // Local mode: Test doubles as the "start/retry the download" button — force
@@ -747,75 +734,45 @@ function registerIpc(): void {
         return { ok: false, detail: err instanceof Error ? err.message : 'embed failed' };
       }
     }
-    if (stage === 'reranker' && retrieval.reranker.mode !== 'remote') {
-      const rr = retrieval.reranker;
-      if (rr.mode === 'off') return { ok: false, detail: 'Reranker is off.' };
-      if (rr.factModel === 'gte-memory-20260905-epoch2') {
-        retryFactRerank();
-        const pilot = await getFactRerankStatus();
-        if (!pilot.installed && !pilot.downloadable) return { ok: false, detail: 'Stem GTE Memory is unavailable on this Stem host.' };
-        if (pilot.status.state === 'error') return { ok: false, detail: pilot.status.error ?? 'Stem GTE Memory failed to load.' };
-        if (pilot.status.state !== 'ready') return { ok: true, detail: 'Preparing Stem GTE Memory; wait for Ready before comparing.' };
-        const client = await getFactRerankClient();
-        if (client?.modelId !== 'gte-memory-20260905-epoch2') {
-          return { ok: false, detail: 'Stem GTE Memory is not active. Check the selected model and try again.' };
-        }
-        try {
-          const ranked = await client.rerank('pets', ['I have a dog', 'the sky is blue'], 2);
-          return { ok: true, detail: `ranked ${ranked.length} · ${Date.now() - startedAt} ms · Stem GTE Memory` };
-        } catch (error) {
-          // quiet: return the probe failure to the settings UI that requested it.
-          return { ok: false, detail: error instanceof Error ? error.message : 'GTE rerank failed' };
-        }
-      }
-      // Local mode: Test doubles as the "start/retry the download" button, same
-      // contract as the embeddings branch above.
-      if (!embedManager) return { ok: false, detail: 'Embedding worker not started yet.' };
-      const spec = resolveRerankSpec(retrieval);
-      embedManager.ensureRerank(spec, { force: true });
-      const st = embedManager.rerankStatus();
-      if (st.state === 'error') return { ok: false, detail: st.error ?? 'model failed to load' };
-      if (st.state !== 'ready' || st.model !== spec.id) {
-        return {
-          ok: true,
-          detail: st.state === 'downloading' ? `downloading model — ${st.progressPct ?? 0}%` : 'loading model…'
-        };
+    const rr = retrieval.reranker;
+    if (rr.mode === 'off') return { ok: false, detail: 'Reranker is off.' };
+    if (rr.factModel === 'gte-memory-20260905-epoch2') {
+      retryFactRerank();
+      const pilot = await getFactRerankStatus();
+      if (!pilot.installed && !pilot.downloadable) return { ok: false, detail: 'Stem GTE Memory is unavailable on this Stem host.' };
+      if (pilot.status.state === 'error') return { ok: false, detail: pilot.status.error ?? 'Stem GTE Memory failed to load.' };
+      if (pilot.status.state !== 'ready') return { ok: true, detail: 'Preparing Stem GTE Memory; wait for Ready before comparing.' };
+      const client = await getFactRerankClient();
+      if (client?.modelId !== 'gte-memory-20260905-epoch2') {
+        return { ok: false, detail: 'Stem GTE Memory is not active. Check the selected model and try again.' };
       }
       try {
-        const ranked = await embedManager.rerank('pets', ['I have a dog', 'the sky is blue'], 2);
-        return { ok: true, detail: `ranked ${ranked.length} · ${Date.now() - startedAt} ms · local` };
-      } catch (err) {
-        // quiet: the Test button's answer, same as the embeddings branch.
-        return { ok: false, detail: err instanceof Error ? err.message : 'rerank failed' };
+        const ranked = await client.rerank('pets', ['I have a dog', 'the sky is blue'], 2);
+        return { ok: true, detail: `ranked ${ranked.length} · ${Date.now() - startedAt} ms · Stem GTE Memory` };
+      } catch (error) {
+        // quiet: return the probe failure to the settings UI that requested it.
+        return { ok: false, detail: error instanceof Error ? error.message : 'GTE rerank failed' };
       }
     }
-    const cfg = stage === 'embeddings' ? retrieval.embeddings : retrieval.reranker;
-    if (!cfg.baseUrl || !cfg.model) return { ok: false, detail: 'Set a base URL and model first.' };
-    const getCfg = async () => ({ baseUrl: cfg.baseUrl, model: cfg.model, apiKey: cfg.apiKey });
+    // Local mode: Test doubles as the "start/retry the download" button, same
+    // contract as the embeddings branch above.
+    if (!embedManager) return { ok: false, detail: 'Embedding worker not started yet.' };
+    const spec = resolveRerankSpec(retrieval);
+    embedManager.ensureRerank(spec, { force: true });
+    const st = embedManager.rerankStatus();
+    if (st.state === 'error') return { ok: false, detail: st.error ?? 'model failed to load' };
+    if (st.state !== 'ready' || st.model !== spec.id) {
+      return {
+        ok: true,
+        detail: st.state === 'downloading' ? `downloading model — ${st.progressPct ?? 0}%` : 'loading model…'
+      };
+    }
     try {
-      if (stage === 'embeddings') {
-        const [vec] = await createHttpEmbeddingsClient(getCfg, { timeoutMs: 20_000 }).embed(['Stem retrieval test']);
-        remoteHealth?.recordOk(stage);
-        return { ok: true, detail: `${vec.length}-dim · ${Date.now() - startedAt} ms` };
-      }
-      const ranked = await createHttpRerankClient(getCfg, { timeoutMs: 20_000 }).rerank(
-        'pets',
-        ['I have a dog', 'the sky is blue'],
-        2
-      );
-      remoteHealth?.recordOk(stage);
-      return { ok: true, detail: `ranked ${ranked.length} · ${Date.now() - startedAt} ms` };
+      const ranked = await embedManager.rerank('pets', ['I have a dog', 'the sky is blue'], 2);
+      return { ok: true, detail: `ranked ${ranked.length} · ${Date.now() - startedAt} ms · local` };
     } catch (err) {
-      // quiet: the Test button's answer, and the verdict cache below takes the
-      // same failure to the red markers on the retrieval settings.
-      const e = err as { message?: string; cause?: { code?: string } };
-      const detail = e.cause?.code ?? e.message ?? 'request failed';
-      // Test outcomes feed the verdict cache both ways: a passing test clears
-      // the red markers immediately (the fix shouldn't wait for the next recall
-      // pass to be believed), and a failing one raises them without waiting for
-      // a pass to trip over the endpoint.
-      remoteHealth?.recordError(stage, detail);
-      return { ok: false, detail };
+      // quiet: the Test button's answer, same as the embeddings branch.
+      return { ok: false, detail: err instanceof Error ? err.message : 'rerank failed' };
     }
   });
 }
@@ -1020,7 +977,6 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   });
   embedManager = retrieval.embedManager;
   scanManager = retrieval.scanManager;
-  remoteHealth = retrieval.remoteHealth;
 
   // Skill usage tracking: anchor trackingSince and prune entries for deleted
   // skills. Unconditional — usage feeds the Manage panel regardless of the

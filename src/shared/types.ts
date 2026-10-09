@@ -3649,10 +3649,8 @@ export interface CustomInstructionsSettings {
  * - `local`  — bundled in-process model (transformers.js/ONNX in a utility
  *              process); weights download once to userData, nothing leaves the
  *              machine. The out-of-box default.
- * - `remote` — the user's own OpenAI-compatible HTTP endpoint (Ollama, LM
- *              Studio, vLLM, hosted).
  */
-export type EmbeddingsMode = 'off' | 'local' | 'remote';
+export type EmbeddingsMode = 'off' | 'local';
 
 /** Curated local embedding models (specs live in server/recall/embed-catalog.ts). */
 export type LocalEmbedModelId =
@@ -3663,10 +3661,7 @@ export type LocalEmbedModelId =
 /** Quantization a local model is loaded at, passed to transformers.js as `dtype`. */
 export type LocalModelDtype = 'q8' | 'q4' | 'fp32';
 
-/**
- * Embeddings-stage settings: an exclusive mode plus the config for both backends
- * (kept side-by-side so switching modes never loses the remote endpoint details).
- */
+/** Embeddings-stage settings: an exclusive mode plus the local model it runs. */
 export interface EmbeddingsSettings {
   mode: EmbeddingsMode;
   /**
@@ -3676,10 +3671,6 @@ export interface EmbeddingsSettings {
    * their own weights; settings coercion validates it against catalog ∪ custom.
    */
   localModel: string;
-  /** Remote endpoint (used when mode === 'remote'): any OpenAI-compatible /v1/embeddings server. */
-  baseUrl: string;
-  model: string;
-  apiKey: string | null;
 }
 
 /** Live state of the local embedding worker/model — drives the Manage-panel status line. */
@@ -3707,10 +3698,8 @@ export interface LocalEmbedStatus {
  * - `off`    — no reranking; fact selection is embeddings-cosine only.
  * - `local`  — bundled cross-encoder (transformers.js/ONNX in the same utility
  *              process as local embeddings); weights download once to userData.
- * - `remote` — the user's own Cohere/Jina-style /rerank endpoint (llama.cpp
- *              --reranking, vLLM, Infinity, TEI).
  */
-export type RerankerMode = 'off' | 'local' | 'remote';
+export type RerankerMode = 'off' | 'local';
 
 /** One model copied in from a folder the user supplied (Settings → Memory). */
 export interface ImportedModelInfo {
@@ -3817,20 +3806,13 @@ export type CustomModelResult =
 /** Curated local reranker models (specs live in server/recall/rerank-catalog.ts). */
 export type LocalRerankModelId = 'bge-reranker-v2-m3' | 'qwen3-reranker-0.6b';
 
-/**
- * Reranker-stage settings: an exclusive mode plus the config for both backends
- * (kept side-by-side so switching modes never loses the remote endpoint details).
- */
+/** Reranker-stage settings: an exclusive mode plus the local model it runs. */
 export interface RerankerSettings {
   mode: RerankerMode;
   /** Stem GTE Memory for facts and skills (the default since 0.5.2); configured/absent uses the normal reranker. */
   factModel?: 'configured' | 'gte-memory-20260905-epoch2';
   /** Catalog id or imported {@link CustomRerankModel} id; see EmbeddingsSettings.localModel. */
   localModel: string;
-  /** Remote-endpoint fields (used when mode === 'remote'). */
-  baseUrl: string;
-  model: string;
-  apiKey: string | null;
 }
 
 /** Live state of the local reranker model — drives the Manage-panel status line. */
@@ -3852,26 +3834,6 @@ export interface FactRerankStatus {
   /** This host can fetch the pinned public model when selected. */
   downloadable?: boolean;
   status: LocalRerankStatus;
-}
-
-/**
- * Last known verdict on a user-configured remote retrieval endpoint (mode ===
- * 'remote'), per stage. Unlike the local statuses there is no lifecycle to
- * stream — just the outcome of the most recent real request: 'unknown' until
- * one has been made (or after a settings change wipes a stale verdict), then
- * 'ok'/'error'. An 'error' here means recall is silently degrading on every
- * pass, which is why it feeds the same red markers the local statuses do.
- */
-export interface RemoteEndpointHealth {
-  state: 'unknown' | 'ok' | 'error';
-  /** Human-readable failure while state === 'error'. */
-  error?: string;
-}
-
-/** Both stages' remote-endpoint verdicts, as pushed on 'retrieval:remoteHealth'. */
-export interface RemoteRetrievalHealth {
-  embeddings: RemoteEndpointHealth;
-  reranker: RemoteEndpointHealth;
 }
 
 /**
@@ -3903,10 +3865,10 @@ export interface PartialRetrievalSettings {
 
 export type RetrievalStage = 'embeddings' | 'reranker';
 
-/** Result of a live probe against a retrieval endpoint (the Settings "Test" button). */
+/** Result of a live probe against a retrieval stage's model (the Settings "Test" button). */
 export interface RetrievalTestResult {
   ok: boolean;
-  /** Human-readable detail: dims/latency on success, or the error (e.g. ECONNREFUSED). */
+  /** Human-readable detail: dims/latency or download progress on success, else the error. */
   detail: string;
 }
 
@@ -5167,7 +5129,7 @@ export interface StemApi {
   clearScratch(key: string): Promise<void>;
   /** Update the embeddings/reranker retrieval endpoints (deep-merged per stage). */
   updateRetrievalSettings(patch: PartialRetrievalSettings): Promise<AppSettings>;
-  /** Live-probe a retrieval endpoint with the current settings (Settings "Test" button). */
+  /** Live-probe a retrieval stage's model with the current settings (Settings "Test" button). */
   testRetrievalEndpoint(stage: RetrievalStage): Promise<RetrievalTestResult>;
   /** Everything the toolbar activity indicator shows: in-flight runs plus recent history. */
   getActivity(): Promise<ActivitySnapshot>;
@@ -5185,10 +5147,6 @@ export interface StemApi {
   onLocalRerankStatus(listener: (status: LocalRerankStatus) => void): () => void;
   getFactRerankStatus(): Promise<FactRerankStatus>;
   onFactRerankStatus(listener: (status: FactRerankStatus) => void): () => void;
-  /** Last known verdicts on the remote retrieval endpoints (mode === 'remote'). */
-  getRemoteRetrievalHealth(): Promise<RemoteRetrievalHealth>;
-  /** Fired whenever a remote retrieval endpoint's verdict changes. */
-  onRemoteRetrievalHealth(listener: (health: RemoteRetrievalHealth) => void): () => void;
   /** Overlay → main: run a prompt in the overlay's own thread (main hides the
    *  overlay + raises the HUD, pre-creating a thread for a fresh session). */
   runQuickChat(prompt: QuickChatPrompt): Promise<StartTurnResult>;

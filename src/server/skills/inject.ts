@@ -313,8 +313,8 @@ export async function selectSkills(
   const rr = opts.rerank !== undefined ? opts.rerank : await getSkillRerankClient();
   if (rr && shortlist.length > 0) {
     try {
-      // A floor of null means a backend whose score scale we cannot know (any
-      // remote /rerank server). Not an error — just not a cut we may make.
+      // A floor of null means a backend whose score scale we cannot know yet
+      // (a model still preparing). Not an error — just not a cut we may make.
       const floor = opts.minRerankScore ?? (await rr.minRelevantScore?.()) ?? null;
       if (floor !== null && (await rr.available())) {
         // One pair per call, NOT one batched call. A cross-encoder logit moves

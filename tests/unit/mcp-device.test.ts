@@ -359,7 +359,6 @@ describe('a call to a device, end to end', () => {
     scheduler: () => null,
     providerAuth: () => null,
     embedManager: () => null,
-    remoteHealth: () => null,
     emit: () => undefined,
     onAuthenticated: () => Promise.reject(new Error('no sign-in here')),
     scheduleMemoryRebuild: () => undefined,

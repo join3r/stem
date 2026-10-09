@@ -537,7 +537,27 @@ describe('embeddings settings migration + coercion', () => {
     expect(emb.localModel).toBe('embeddinggemma-2');
   });
 
-  it('migrates a legacy enabled:true endpoint to remote, keeping its fields', async () => {
+  // The own-server mode was removed in 0.6.0. Whoever was on it lands on what a
+  // fresh install gets rather than on Off, and the endpoint fields are dropped.
+  it('moves the removed own-server mode to the built-in default, dropping its fields', async () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        retrieval: {
+          embeddings: {
+            mode: 'remote',
+            localModel: 'multilingual-e5-small',
+            baseUrl: 'http://box:9999',
+            model: 'my-embed',
+            apiKey: 'sk-1'
+          }
+        }
+      })
+    );
+    expect((await readSettings()).retrieval.embeddings).toEqual({ mode: 'local', localModel: 'embeddinggemma-2' });
+  });
+
+  it('moves a legacy enabled:true endpoint to the built-in default too', async () => {
     writeFileSync(
       path,
       JSON.stringify({
@@ -546,11 +566,7 @@ describe('embeddings settings migration + coercion', () => {
         }
       })
     );
-    const emb = (await readSettings()).retrieval.embeddings;
-    expect(emb.mode).toBe('remote');
-    expect(emb.baseUrl).toBe('http://box:9999');
-    expect(emb.model).toBe('my-embed');
-    expect(emb.apiKey).toBe('sk-1');
+    expect((await readSettings()).retrieval.embeddings).toEqual({ mode: 'local', localModel: 'embeddinggemma-2' });
   });
 
   it('migrates a legacy enabled:false endpoint to the local default', async () => {
@@ -582,14 +598,13 @@ describe('embeddings settings migration + coercion', () => {
   });
 
   it('round-trips mode and localModel through updateRetrievalSettings', async () => {
-    await updateRetrievalSettings({ embeddings: { mode: 'remote' } });
-    expect((await readSettings()).retrieval.embeddings.mode).toBe('remote');
-    // A mode switch is a partial patch — the other fields survive.
     await updateRetrievalSettings({ embeddings: { mode: 'local', localModel: 'multilingual-e5-small' } });
+    // A mode switch is a partial patch — the chosen model survives it.
+    await updateRetrievalSettings({ embeddings: { mode: 'off' } });
+    await updateRetrievalSettings({ embeddings: { mode: 'local' } });
     const emb = (await readSettings()).retrieval.embeddings;
     expect(emb.mode).toBe('local');
     expect(emb.localModel).toBe('multilingual-e5-small');
-    expect(emb.baseUrl).toBe('http://localhost:11434');
     // Off round-trips too (it is a real persisted mode, not just absence).
     await updateRetrievalSettings({ embeddings: { mode: 'off' } });
     expect((await readSettings()).retrieval.embeddings.mode).toBe('off');
@@ -603,7 +618,29 @@ describe('reranker settings migration + coercion', () => {
     expect(rr.localModel).toBe('qwen3-reranker-0.6b');
   });
 
-  it('migrates a legacy enabled:true endpoint to remote, keeping its fields', async () => {
+  it('moves the removed own-server mode to the fresh-install default, dropping its fields', async () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        retrieval: {
+          reranker: {
+            mode: 'remote',
+            localModel: 'bge-reranker-v2-m3',
+            baseUrl: 'http://box:8012',
+            model: 'my-reranker',
+            apiKey: 'sk-2'
+          }
+        }
+      })
+    );
+    expect((await readSettings()).retrieval.reranker).toEqual({
+      mode: 'local',
+      localModel: 'qwen3-reranker-0.6b',
+      factModel: 'gte-memory-20260905-epoch2'
+    });
+  });
+
+  it('moves a legacy enabled:true endpoint to the fresh-install default too', async () => {
     writeFileSync(
       path,
       JSON.stringify({
@@ -613,10 +650,9 @@ describe('reranker settings migration + coercion', () => {
       })
     );
     const rr = (await readSettings()).retrieval.reranker;
-    expect(rr.mode).toBe('remote');
-    expect(rr.baseUrl).toBe('http://box:8012');
-    expect(rr.model).toBe('my-reranker');
-    expect(rr.apiKey).toBe('sk-2');
+    expect(rr.mode).toBe('local');
+    expect(rr.localModel).toBe('qwen3-reranker-0.6b');
+    expect(rr).not.toHaveProperty('baseUrl');
   });
 
   it('migrates a legacy enabled:false endpoint to the local default (never had a mode choice)', async () => {

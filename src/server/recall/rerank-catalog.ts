@@ -40,11 +40,6 @@ export interface LocalRerankModelSpec {
    * here, next to the weights it was measured against, because it is a property
    * of THIS model and of nothing else — the mistake that put a cosine floor in
    * the ranking logic and left it there across an embedder swap.
-   *
-   * Only meaningful for the bundled local models: a remote /rerank server runs
-   * an arbitrary model on an unknown scale (Cohere-style endpoints normalise to
-   * 0..1, this one does not), so remote callers get no floor and must fall back
-   * to a scale-free rule.
    */
   minRelevantScore: number;
   /**

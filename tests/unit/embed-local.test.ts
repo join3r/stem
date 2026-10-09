@@ -13,8 +13,8 @@ import { createEmbedSchedule } from '../../src/server/recall/embed-schedule';
 import type { RetrievalSettings } from '../../src/shared/types';
 
 const settings: RetrievalSettings = {
-  embeddings: { mode: 'local', localModel: 'multilingual-e5-small', baseUrl: '', model: '', apiKey: null },
-  reranker: { mode: 'off', localModel: 'bge-reranker-v2-m3', baseUrl: '', model: '', apiKey: null },
+  embeddings: { mode: 'local', localModel: 'multilingual-e5-small' },
+  reranker: { mode: 'off', localModel: 'bge-reranker-v2-m3' },
   customEmbedModels: [],
   customRerankModels: []
 };

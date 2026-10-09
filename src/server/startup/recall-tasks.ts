@@ -305,11 +305,11 @@ export function initRecallTasks(deps: {
 
   // Kick off a distillation pass shortly after startup so any messages captured
   // before the app last quit get turned into durable facts. The episodic embed
-  // pass runs too, covering remote embeddings mode (no ready-transition there).
+  // pass runs too, as a backstop to the one the model's ready-transition kicks.
   scheduleDistill(20_000);
   scheduleEpisodicEmbed(25_000);
-  // And keep it kicked: the pass dies with its endpoint (an ollama restart, a
-  // network blip mid-backlog) and its only other trigger is turn completion —
+  // And keep it kicked: the pass dies with its model (a worker crash or restart
+  // mid-backlog) and its only other trigger is turn completion —
   // on a headless server that can be hours away, leaving a half-done backfill
   // stalled invisibly. A watermark-current pass no-ops for the price of a COUNT.
   setInterval(() => scheduleEpisodicEmbed(), 10 * 60_000);

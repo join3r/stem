@@ -32,7 +32,6 @@ const deps = {
   scheduler: () => null,
   providerAuth: () => null,
   embedManager: () => null,
-  remoteHealth: () => null,
   emit: () => {},
   onAuthenticated: async () => ({}) as never,
   scheduleMemoryRebuild: () => {},

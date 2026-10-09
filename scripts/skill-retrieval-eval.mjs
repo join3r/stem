@@ -115,10 +115,9 @@ const negatives = (fixture.negatives ?? []).filter((n) => n.id);
 
 // ---- 2. real inference ----
 // Two backends. Local mirrors the bundled transformers.js path and applies the
-// model's training-time prefixes. Remote mirrors createHttpEmbeddingsClient,
-// which deliberately does NOT prefix — a remote server runs an arbitrary model
-// and blind prefixing would corrupt one that does not expect it. Keeping that
-// asymmetry here is the point: it is part of what production does.
+// model's training-time prefixes. Remote is a plain /v1/embeddings call that
+// deliberately does NOT prefix — a remote server runs an arbitrary model and
+// blind prefixing would corrupt one that does not expect it.
 let embed;
 let dispose = async () => {};
 let backendLabel;

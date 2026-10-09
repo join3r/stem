@@ -10,18 +10,17 @@ import type { EmbeddingsSettings, RetrievalSettings } from '../../shared/types';
 // available() NEVER awaits readiness — it kicks the worker (spawn/download) and
 // answers with the current state. Not-ready reads as unavailable, so callers
 // take their existing lexical/recency fallbacks and no chat turn ever waits on
-// a 120 MB download. Config is read fresh per call (same pattern as the HTTP
-// client) so a settings change applies on the next turn without a restart.
+// a 120 MB download. Config is read fresh per call so a settings change
+// applies on the next turn without a restart.
 //
-// Traffic goes through the same rules as the HTTP client (scheduledEmbed):
+// Traffic goes through the shared embed traffic rules (scheduledEmbed):
 // passages in bounded batches on the long budget, one at the worker at a time,
 // bisected on timeout; queries registered so backfills yield, on the busy
-// budget when a batch is already out. A CPU running Qwen3 0.6B is the same
-// shape of endpoint as a CPU running Ollama, and it failed the same way when
-// it was handed the whole fact set as one request (2026-09-03).
+// budget when a batch is already out. A CPU running Qwen3 0.6B failed exactly
+// that way when it was handed the whole fact set as one request (2026-09-03).
 
 // The worker's historical query budget, kept: a query right after load also
-// pays the first ONNX run's warm-up, which the HTTP client's 30s never had to.
+// pays the first ONNX run's warm-up, which the shared 30s default doesn't cover.
 const LOCAL_QUERY_TIMEOUT_MS = 60_000;
 
 export const LOCAL_EMBED_BUDGETS: EmbedBudgets = { ...DEFAULT_EMBED_BUDGETS, timeoutMs: LOCAL_QUERY_TIMEOUT_MS };
@@ -75,18 +74,16 @@ export function createLocalEmbeddingsClient(
 }
 
 /**
- * Route each call to the backend the current mode selects. Mode is read fresh
- * per call, mirroring the fresh-config-getter pattern, so switching Off/Local/
- * Remote in Settings takes effect on the next turn with no restart.
+ * Route each call to the local backend unless the mode is Off. Mode is read
+ * fresh per call, mirroring the fresh-config-getter pattern, so switching
+ * Off/Built-in in Settings takes effect on the next turn with no restart.
  */
 export function createEmbeddingsRouter(deps: {
   getMode: () => Promise<EmbeddingsSettings['mode']>;
   local: EmbeddingsClient;
-  remote: EmbeddingsClient;
 }): EmbeddingsClient {
   async function pick(): Promise<EmbeddingsClient | null> {
-    const mode = await deps.getMode();
-    return mode === 'local' ? deps.local : mode === 'remote' ? deps.remote : null;
+    return (await deps.getMode()) === 'local' ? deps.local : null;
   }
   return {
     async available() {

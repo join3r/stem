@@ -73,6 +73,12 @@ Maintainer notes:
   you already have should be looked at too. The old all-folders switch in Settings → App is gone,
   so existing folders stay as they are until you switch them on.
 
+### Removed
+
+- **Own server for memory search removed.** Settings → Memory no longer offers **Server** for
+  embeddings or the reranker. If you had pointed either at your own endpoint, Stem switches it to
+  the built-in models, which download in the background.
+
 ### Fixed
 
 - **MDX answers render while they stream.** An MDX answer used to show as raw text, tags and all,

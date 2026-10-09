@@ -15,12 +15,9 @@ import type { CustomEmbedModel, RetrievalSettings } from '../../src/shared/types
 const base: RetrievalSettings = {
   embeddings: {
     mode: 'local',
-    localModel: 'multilingual-e5-small',
-    baseUrl: 'http://localhost:11434',
-    model: 'qwen3-embedding:8b',
-    apiKey: null
+    localModel: 'multilingual-e5-small'
   },
-  reranker: { mode: 'off', localModel: 'bge-reranker-v2-m3', baseUrl: '', model: '', apiKey: null },
+  reranker: { mode: 'off', localModel: 'bge-reranker-v2-m3' },
   customEmbedModels: [],
   customRerankModels: []
 };
@@ -90,7 +87,6 @@ describe('embed catalog', () => {
 
   it('maps mode to the effective vector-cache key', () => {
     expect(effectiveEmbedModelKey(base)).toBe('local:Xenova/multilingual-e5-small');
-    expect(effectiveEmbedModelKey(withEmbeddings({ mode: 'remote' }))).toBe('qwen3-embedding:8b');
     expect(effectiveEmbedModelKey(withEmbeddings({ mode: 'off' }))).toBe('');
   });
 
