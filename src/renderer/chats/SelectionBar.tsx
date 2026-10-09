@@ -1,62 +1,38 @@
-import { AlarmClock, Archive, ArchiveRestore, MailOpen } from 'lucide-react';
-import { glyphsFor } from '../shortcuts';
+import { FolderInput, Mail, MailOpen, Trash2, X } from 'lucide-react';
 
-// Appears under the mode control the moment a multi-selection exists, and only
+// Appears above the chat tree the moment a multi-selection exists, and only
 // then — a permanently visible toolbar would be dead weight for the single-row
 // case, which is nearly every case.
 
 export interface SelectionBarProps {
   count: number;
-  /** Archived mode offers "move back to the Inbox" instead of "archive". */
-  archived: boolean;
-  onSnooze: (e: React.MouseEvent) => void;
-  onArchive: () => void;
   onMarkRead: () => void;
+  onMarkUnread: () => void;
+  /** Opens the folder picker at the button. */
+  onMove: (e: React.MouseEvent) => void;
+  onDelete: () => void;
   onClear: () => void;
 }
 
-export function SelectionBar({
-  count,
-  archived,
-  onSnooze,
-  onArchive,
-  onMarkRead,
-  onClear
-}: SelectionBarProps) {
+export function SelectionBar({ count, onMarkRead, onMarkUnread, onMove, onDelete, onClear }: SelectionBarProps) {
   return (
     <div className="inbox-selbar">
       <span className="inbox-selbar-count">{count} selected</span>
-      {/* The hover labels carry the keycap: these three actions are the whole
-          reason the triage shortcuts exist, and this bar is where you meet them. */}
       <span className="inbox-selbar-actions">
-        {!archived && (
-          <button
-            className="link-btn icon-only"
-            data-label={`Snooze  ${glyphsFor('snooze-thread')}`}
-            aria-label="Snooze"
-            onClick={onSnooze}
-          >
-            <AlarmClock size={14} />
-          </button>
-        )}
-        <button
-          className="link-btn icon-only"
-          data-label={`${archived ? 'Move to Inbox' : 'Archive'}  ${glyphsFor('archive-thread')}`}
-          aria-label={archived ? 'Move to Inbox' : 'Archive'}
-          onClick={onArchive}
-        >
-          {archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-        </button>
-        <button
-          className="link-btn icon-only"
-          data-label={`Mark read  ${glyphsFor('toggle-read')}`}
-          aria-label="Mark read"
-          onClick={onMarkRead}
-        >
+        <button className="link-btn icon-only" data-label="Mark read" aria-label="Mark read" onClick={onMarkRead}>
           <MailOpen size={14} />
         </button>
-        <button className="link-btn" onClick={onClear}>
-          Done
+        <button className="link-btn icon-only" data-label="Mark unread" aria-label="Mark unread" onClick={onMarkUnread}>
+          <Mail size={14} />
+        </button>
+        <button className="link-btn icon-only" data-label="Move to folder" aria-label="Move to folder" onClick={onMove}>
+          <FolderInput size={14} />
+        </button>
+        <button className="link-btn icon-only danger" data-label="Delete" aria-label="Delete" onClick={onDelete}>
+          <Trash2 size={14} />
+        </button>
+        <button className="link-btn icon-only" data-label="Clear selection  Esc" aria-label="Clear selection" onClick={onClear}>
+          <X size={14} />
         </button>
       </span>
     </div>

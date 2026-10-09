@@ -7,10 +7,13 @@ import { Trash2 } from 'lucide-react';
 // via Escape, the Cancel button, or a backdrop click.
 export function DeleteThreadDialog({
   title,
+  count = 1,
   onConfirm,
   onCancel
 }: {
   title: string;
+  /** More than one: a multi-selection in the chat list, named by count. */
+  count?: number;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -47,10 +50,10 @@ export function DeleteThreadDialog({
           <span className="row-icon">
             <Trash2 size={15} />
           </span>
-          <strong>Delete this thread?</strong>
+          <strong>{count > 1 ? `Delete ${count} chats?` : 'Delete this thread?'}</strong>
         </div>
         <p className="muted">
-          {name ? `“${name}” ` : 'This thread '}
+          {count > 1 ? `The ${count} selected chats ` : name ? `“${name}” ` : 'This thread '}
           will be permanently removed. This can’t be undone.
         </p>
         <div className="mcp-approval-actions">

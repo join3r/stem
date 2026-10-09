@@ -30,6 +30,8 @@ import { Kbd, glyphsFor, runKeyGlyphs, useShortcut, useShortcutHintMode, type Sh
 import { MailList } from '../mail/MailList';
 import type { ReturnChatRow } from './return-chat';
 import { FolderSettingsDialog, IncludeOldChatsDialog } from './FolderSettingsDialog';
+import { SelectionBar } from './SelectionBar';
+import { DeleteThreadDialog } from '../DeleteThreadDialog';
 
 export interface ChatListProps {
   data: ChatListResult;
@@ -181,7 +183,11 @@ type Editing = { kind: 'chat' | 'folder'; id: string; value: string; initial: st
 type FolderDialog = { mode: 'create'; parentId: string | null } | { mode: 'edit'; folderId: string };
 type Menu =
   | { kind: 'chat'; id: string; x: number; y: number }
-  | { kind: 'folder'; id: string; x: number; y: number };
+  | { kind: 'folder'; id: string; x: number; y: number }
+  /** Right-click on a row of a multi-selection: acts on every selected chat. */
+  | { kind: 'selection'; id: string; x: number; y: number }
+  /** The selection bar's Move button: pick a folder for the selected chats. */
+  | { kind: 'move'; id: string; x: number; y: number };
 
 export function ChatList(props: ChatListProps) {
   const { data, activeThreadId, onOpen, chatsTab: tab, onChatsTabChange: setTab, inboxReturn } = props;
@@ -198,6 +204,12 @@ export function ChatList(props: ChatListProps) {
   // that names the section the row belonged to.
   const inboxSegRef = useRef<HTMLButtonElement>(null);
   const [dropTarget, setDropTarget] = useState<string | 'root' | null>(null);
+  // Multi-selection in the tree: ⌘/Ctrl-click toggles a row, Shift-click takes
+  // the range from the anchor. A plain click drops it and opens the chat, the
+  // way a file list behaves. Empty in the ordinary single-row case.
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
+  const anchorRef = useRef<string | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
 
   // ---- search ----
   // The search box is collapsed to a header icon by default so it costs no vertical
@@ -324,16 +336,94 @@ export function ChatList(props: ChatListProps) {
   // to bottom — a collapsed folder's chats are not on screen, so they are not
   // counted. The same walk the tree renders with, so the number on a row's hint
   // and the key that opens it can never disagree.
-  const numberedChatIds = useMemo(() => {
+  // The same walk orders a Shift-click range.
+  const visibleChatIds = useMemo(() => {
     const out: string[] = [];
     const walk = (parentId: string | null) => {
       for (const f of childFolders(parentId)) if (expanded.has(f.id)) walk(f.id);
       for (const c of folderChats(parentId)) out.push(c.threadId);
     };
     walk(null);
-    return out.slice(0, 9);
+    return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- childFolders/folderChats are plain views over these
   }, [data.chats, data.folders, expanded]);
+  const numberedChatIds = useMemo(() => visibleChatIds.slice(0, 9), [visibleChatIds]);
+
+  // ---- multi-selection ----
+  const clearPicked = useCallback(() => {
+    setPicked((prev) => (prev.size ? new Set() : prev));
+    anchorRef.current = null;
+  }, []);
+  // The selection belongs to the tree as it is on screen: leaving the tab or
+  // searching drops it, and a chat that went away (deleted, here or elsewhere)
+  // leaves it.
+  useEffect(() => {
+    if (tab !== 'chats' || results !== null) clearPicked();
+  }, [tab, results, clearPicked]);
+  useEffect(() => {
+    setPicked((prev) => {
+      if (!prev.size) return prev;
+      const live = new Set(data.chats.map((c) => c.threadId));
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [data.chats]);
+  useEffect(() => {
+    if (!picked.size) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) clearPicked();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [picked.size, clearPicked]);
+  /** A row click: modifiers build the selection, a plain click opens the chat. */
+  const clickChat = (e: React.MouseEvent, threadId: string) => {
+    if (e.shiftKey) {
+      e.preventDefault();
+      const from = anchorRef.current ?? activeThreadId;
+      const a = from ? visibleChatIds.indexOf(from) : -1;
+      const b = visibleChatIds.indexOf(threadId);
+      if (b === -1) return;
+      const [lo, hi] = a === -1 ? [b, b] : [Math.min(a, b), Math.max(a, b)];
+      setPicked(new Set(visibleChatIds.slice(lo, hi + 1)));
+      if (anchorRef.current === null) anchorRef.current = from && a !== -1 ? from : threadId;
+      return;
+    }
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      setPicked((prev) => {
+        // The first ⌘-click takes the open chat along, as a file list would.
+        const next = new Set(prev.size === 0 && activeThreadId && visibleChatIds.includes(activeThreadId) ? [activeThreadId] : prev);
+        if (next.has(threadId)) next.delete(threadId);
+        else next.add(threadId);
+        return next;
+      });
+      anchorRef.current = threadId;
+      return;
+    }
+    clearPicked();
+    anchorRef.current = threadId;
+    onOpen(threadId);
+  };
+  const pickedIds = () => visibleChatIds.filter((id) => picked.has(id));
+  const pickedUnread = () =>
+    pickedIds().filter((id) => {
+      const chat = data.chats.find((c) => c.threadId === id);
+      return chat ? isUnread(chat, data.inbox, props.statuses[id] === 'running') : false;
+    });
+  const moveDestinations = useMemo(() => {
+    // Folders in tree order, indented by depth, for the Move picker.
+    const out: { id: string; name: string; depth: number }[] = [];
+    const walk = (parentId: string | null, depth: number) => {
+      for (const f of childFolders(parentId)) {
+        out.push({ id: f.id, name: f.name, depth });
+        walk(f.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- childFolders is a plain view over data.folders
+  }, [data.folders]);
   const hintMode = useShortcutHintMode();
   // Only while the Chats tab is the one on screen: on the Inbox the rows are mail,
   // and in a search the numbers would point at rows the user cannot see.
@@ -376,9 +466,10 @@ export function ChatList(props: ChatListProps) {
     e.preventDefault();
     e.stopPropagation();
     setDropTarget(null);
-    const chatId = e.dataTransfer.getData(CHAT_MIME);
-    if (chatId) {
-      props.onMoveChat(chatId, target);
+    const chatIds = e.dataTransfer.getData(CHAT_MIME);
+    if (chatIds) {
+      // A dragged selection carries every selected chat, one id per line.
+      for (const chatId of chatIds.split('\n')) if (chatId) props.onMoveChat(chatId, target);
       return;
     }
     const folderId = e.dataTransfer.getData(FOLDER_MIME);
@@ -520,6 +611,7 @@ export function ChatList(props: ChatListProps) {
         className={[
           'group-row chat-row',
           chat.threadId === activeThreadId ? 'selected' : '',
+          picked.has(chat.threadId) ? 'picked' : '',
           unread ? 'unread' : ''
         ]
           .filter(Boolean)
@@ -527,14 +619,20 @@ export function ChatList(props: ChatListProps) {
         style={{ paddingLeft: 12 + depth * 14 }}
         draggable={!isEditing}
         onDragStart={(e) => {
-          e.dataTransfer.setData(CHAT_MIME, chat.threadId);
+          const ids = picked.has(chat.threadId) ? pickedIds() : [chat.threadId];
+          e.dataTransfer.setData(CHAT_MIME, ids.join('\n'));
           e.dataTransfer.effectAllowed = 'move';
         }}
-        onClick={() => onOpen(chat.threadId)}
+        onMouseDown={(e) => {
+          // Shift-click would otherwise select the row text between the clicks.
+          if (e.shiftKey) e.preventDefault();
+        }}
+        onClick={(e) => clickChat(e, chat.threadId)}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          setMenu({ kind: 'chat', id: chat.threadId, x: e.clientX, y: e.clientY });
+          const many = picked.size > 1 && picked.has(chat.threadId);
+          setMenu({ kind: many ? 'selection' : 'chat', id: chat.threadId, x: e.clientX, y: e.clientY });
         }}
       >
         <span className="row-icon chat">
@@ -763,6 +861,20 @@ export function ChatList(props: ChatListProps) {
           </button>
         </div>
       )}
+      {tab === 'chats' && !showingSearch && picked.size > 0 && (
+        <SelectionBar
+          count={picked.size}
+          onMarkRead={() => props.onSetRead(pickedUnread(), true)}
+          onMarkUnread={() => props.onSetRead(pickedIds(), false)}
+          onMove={(e) => {
+            e.stopPropagation();
+            const r = e.currentTarget.getBoundingClientRect();
+            setMenu({ kind: 'move', id: '', x: r.left, y: r.bottom + 4 });
+          }}
+          onDelete={() => setConfirmBulkDelete(true)}
+          onClear={clearPicked}
+        />
+      )}
       <div
         className={`group chats-group${dropTarget === 'root' ? ' drop-target' : ''}`}
         onDragOver={tab === 'chats' ? allowDrop('root') : undefined}
@@ -814,7 +926,71 @@ export function ChatList(props: ChatListProps) {
           />
         )}
       </div>
-      {menu && (
+      {menu && (menu.kind === 'selection' || menu.kind === 'move') && (
+        <div
+          ref={menuRef}
+          className="ctx-menu"
+          style={{ left: menuPos?.x ?? menu.x, top: menuPos?.y ?? menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {menu.kind === 'selection' && (
+            <>
+              <div className="ctx-label">{picked.size} chats</div>
+              <button
+                disabled={pickedUnread().length === 0}
+                onClick={() => {
+                  props.onSetRead(pickedUnread(), true);
+                  closeMenu();
+                }}
+              >
+                Mark as read
+              </button>
+              <button
+                onClick={() => {
+                  props.onSetRead(pickedIds(), false);
+                  closeMenu();
+                }}
+              >
+                Mark as unread
+              </button>
+              <button
+                className="danger"
+                onClick={() => {
+                  setConfirmBulkDelete(true);
+                  closeMenu();
+                }}
+              >
+                Delete {picked.size} chats
+              </button>
+              <div className="ctx-sep" />
+            </>
+          )}
+          <div className="ctx-label">Move to…</div>
+          <div className="ctx-scroll">
+            <button
+              onClick={() => {
+                for (const id of pickedIds()) props.onMoveChat(id, null);
+                closeMenu();
+              }}
+            >
+              Root
+            </button>
+            {moveDestinations.map((f) => (
+              <button
+                key={f.id}
+                style={{ paddingLeft: 10 + f.depth * 12 }}
+                onClick={() => {
+                  for (const id of pickedIds()) props.onMoveChat(id, f.id);
+                  closeMenu();
+                }}
+              >
+                {f.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {menu && (menu.kind === 'chat' || menu.kind === 'folder') && (
         <div
           ref={menuRef}
           className="ctx-menu"
@@ -941,6 +1117,19 @@ export function ChatList(props: ChatListProps) {
             </>
           )}
         </div>
+      )}
+      {confirmBulkDelete && (
+        <DeleteThreadDialog
+          title=""
+          count={picked.size}
+          onConfirm={() => {
+            setConfirmBulkDelete(false);
+            const ids = pickedIds();
+            clearPicked();
+            for (const id of ids) props.onDeleteChat(id);
+          }}
+          onCancel={() => setConfirmBulkDelete(false)}
+        />
       )}
       {folderDialog &&
         (() => {
