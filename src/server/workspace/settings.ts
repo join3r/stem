@@ -36,6 +36,11 @@ import type {
   MailSettings
 } from '../../shared/types';
 import { type BackgroundRole, resolveRoleEffort } from '../../shared/modelRoles';
+import {
+  commandRegexError,
+  MAX_COMMAND_ALLOW_RULES,
+  MAX_COMMAND_PREFIX_LENGTH
+} from '../../shared/exec-rules';
 import { CUSTOM_PROVIDER_ID_RE, isCustomProviderId } from '../../shared/providers';
 import { degrade } from '../degrade';
 import { DEFAULT_SCRATCH_TTL_DAYS } from '../exec/scratch';
@@ -111,6 +116,7 @@ const DEFAULTS: ServerSettings = {
     judgeModel: null,
     judgeEffort: null,
     allowlist: [],
+    allowRegex: [],
     deviceAllowlists: {},
     scratchTtlDays: DEFAULT_SCRATCH_TTL_DAYS,
     // Prefer Git Bash on Windows (auto-detect bash.exe; cmd.exe if Git is missing).
@@ -499,9 +505,17 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
         (Array.isArray(rawExec.allowlist) ? rawExec.allowlist : [])
           .filter((p): p is string => typeof p === 'string')
           .map((p) => p.trim())
-          .filter((p) => p && p.length <= 200)
+          .filter((p) => p && p.length <= MAX_COMMAND_PREFIX_LENGTH)
       )
-    ].slice(0, 200),
+    ].slice(0, MAX_COMMAND_ALLOW_RULES),
+    allowRegex: [
+      ...new Set(
+        (Array.isArray(rawExec.allowRegex) ? rawExec.allowRegex : [])
+          .filter((p): p is string => typeof p === 'string')
+          .map((p) => p.trim())
+          .filter((p) => commandRegexError(p) === null)
+      )
+    ].slice(0, MAX_COMMAND_ALLOW_RULES),
     // The per-device buckets get the same laundering as the shared list, per
     // bucket, and the same caps — a device id key that is not a string array is
     // dropped whole rather than half-read.
@@ -517,9 +531,9 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
               (list as unknown[])
                 .filter((p): p is string => typeof p === 'string')
                 .map((p) => p.trim())
-                .filter((p) => p && p.length <= 200)
+                .filter((p) => p && p.length <= MAX_COMMAND_PREFIX_LENGTH)
             )
-          ].slice(0, 200)
+          ].slice(0, MAX_COMMAND_ALLOW_RULES)
         ])
         .filter(([, list]) => (list as string[]).length > 0)
         .slice(0, 50)

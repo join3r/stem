@@ -801,6 +801,7 @@ describe('exec settings', () => {
       judgeModel: null,
       judgeEffort: null,
       allowlist: [],
+      allowRegex: [],
       deviceAllowlists: {},
       scratchTtlDays: 30,
       windowsShell: 'git-bash',
@@ -833,8 +834,13 @@ describe('exec settings', () => {
     const next = await updateExecSettings({ enabled: false, judgeModel: 'anthropic/claude-haiku-4' });
     expect(next.exec.enabled).toBe(false);
     expect(next.exec.judgeModel).toBe('anthropic/claude-haiku-4');
-    const grown = await updateExecSettings({ allowlist: ['git push', 'npm'], approvalMode: 'yolo' });
+    const grown = await updateExecSettings({
+      allowlist: ['git push', 'npm'],
+      allowRegex: ['kubectl(?:\\s+.*)?\\s+get(?:\\s+.*)?'],
+      approvalMode: 'yolo'
+    });
     expect(grown.exec.allowlist).toEqual(['git push', 'npm']);
+    expect(grown.exec.allowRegex).toEqual(['kubectl(?:\\s+.*)?\\s+get(?:\\s+.*)?']);
     expect(grown.exec.approvalMode).toBe('yolo');
     expect((await readSettings()).exec.enabled).toBe(false);
   });
@@ -848,6 +854,18 @@ describe('exec settings', () => {
     expect(exec.enabled).toBe(true);
     expect(exec.judgeModel).toBeNull();
     expect(exec.allowlist).toEqual(['git push']);
+  });
+
+  it('coerces regex rules: trims, dedupes, and drops malformed entries', async () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        exec: {
+          allowRegex: ['  kubectl .* get .*  ', 'kubectl .* get .*', '(', '', 7, 'x'.repeat(201)]
+        }
+      })
+    );
+    expect((await readSettings()).exec.allowRegex).toEqual(['kubectl .* get .*']);
   });
 
   it('coerces an unknown approval mode back to assisted', async () => {

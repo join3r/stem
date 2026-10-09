@@ -3015,6 +3015,8 @@ export interface ExecSettings {
   judgeEffort: string | null;
   /** User-approved command prefixes (e.g. "git push", "npm") that auto-run as tier 1. */
   allowlist: string[];
+  /** Manual local/server regex rules, implicitly anchored to one raw command segment. */
+  allowRegex: string[];
   /**
    * Learned prefixes per TARGET device, for commands that run on a paired
    * computer (`run_command`'s `device`). Kept apart from `allowlist` on purpose:

@@ -102,6 +102,7 @@ function serverSettings(
       judgeModel: null,
       judgeEffort: null,
       allowlist: [],
+      allowRegex: [],
       deviceAllowlists: {},
       ...exec
     },
@@ -536,6 +537,24 @@ describe('approval tiers', () => {
     const host = execAskingHost('git status', (d) => (decision = d));
     const { service, approvals } = makeService(host, {
       readSettings: async () => serverSettings({ approvalMode: 'assisted', allowlist: ['git status'] }),
+      judge
+    });
+    await service.handleHarnessRequest(REQ);
+    expect(decision).toEqual({ optionId: 'allow' });
+    expect(approvals).toHaveLength(0);
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it('a local regex rule clears tier 1 without calling the judge', async () => {
+    let decision: unknown;
+    const judge = vi.fn();
+    const host = execAskingHost('kubectl --kubeconfig "" get pods', (d) => (decision = d));
+    const { service, approvals } = makeService(host, {
+      readSettings: async () =>
+        serverSettings({
+          approvalMode: 'assisted',
+          allowRegex: ['kubectl(?:\\s+--kubeconfig\\s+""\\s+)?get(?:\\s+.*)?']
+        }),
       judge
     });
     await service.handleHarnessRequest(REQ);
