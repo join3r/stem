@@ -56,10 +56,9 @@ function formatFull(v: number): string {
 }
 
 function trim(v: number): string {
-  return (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2)).replace(
-    /\.?0+$/,
-    ''
-  );
+  const text = Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
+  // Only zeros after a decimal point: "150" must stay "150", not "15".
+  return text.includes('.') ? text.replace(/\.?0+$/, '') : text;
 }
 
 /** Rough rendered width of a label at the chart's 11px UI font. */

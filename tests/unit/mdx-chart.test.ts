@@ -63,6 +63,11 @@ describe('scale', () => {
     expect(formatCompact(3_200_000, '$')).toBe('$3.2M');
     expect(formatCompact(-1500, '€')).toBe('-€1,500');
     expect(formatCompact(45, '%')).toBe('45%');
+    // Whole numbers keep their zeros: 100k, not 1k.
+    expect(formatCompact(100_000, '€')).toBe('€100k');
+    expect(formatCompact(150_000, '€')).toBe('€150k');
+    expect(formatCompact(20_000_000)).toBe('20M');
+    expect(formatCompact(1_500_000)).toBe('1.5M');
     expect(formatValue(12345.678, 'km')).toBe('12,345.68 km');
   });
 
