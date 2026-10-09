@@ -79,6 +79,26 @@ describe('message vector store', () => {
     expect(store.getEpisodicVectorStats(MODEL)).toEqual({ messageCount: 0, embeddedCount: 0 });
     store.setEpisodicLimitBytes(0);
   });
+
+  it('the limit counts chat text, not vectors: a vector-heavy file keeps its history', () => {
+    store.resetEpisodic();
+    const text = 'x'.repeat(1000);
+    for (let i = 0; i < 6; i++) store.recordMessage({ threadId: 'L', turnId: `l${i}`, role: 'user', text: `${i}${text}` });
+    // Big vectors push the file far past 20 kB while the chat text stays ~6 kB.
+    for (const id of seededIds()) store.upsertMessageVector(id, MODEL, new Float32Array(20_000).fill(0.5));
+    expect(store.getEpisodicStats().textBytes).toBe(6 * 1001);
+    expect(store.getEpisodicStats().sizeBytes).toBeGreaterThan(20_000);
+    store.setEpisodicLimitBytes(20_000);
+    expect(store.enforceEpisodicLimit()).toBe(0);
+    expect(store.messageCount()).toBe(6);
+
+    // Over the text limit: oldest go first, newest kept within 85% of it.
+    store.setEpisodicLimitBytes(4000); // target 3400 → the newest 3 fit
+    expect(store.enforceEpisodicLimit()).toBe(3);
+    expect(store.getMessagesForEmbedding(0, 10).map((m) => m.text[0])).toEqual(['3', '4', '5']);
+    expect(store.getEpisodicVectorStats(MODEL)).toEqual({ messageCount: 3, embeddedCount: 3 });
+    store.setEpisodicLimitBytes(0);
+  });
 });
 
 describe('episodic embed pass', () => {

@@ -10,6 +10,7 @@ import {
 } from './search-core';
 import {
   DEFAULT_EPISODIC_MAX_BYTES,
+  chatTextBytes,
   dbSizeBytesFor,
   enforceEpisodicLimitCore
 } from './maintenance-core';
@@ -3296,15 +3297,16 @@ export class RecallStore {
 
 
   /**
-   * Metadata for the Level-2 episodic store: how many messages are captured and how
-   * much disk recall.sqlite occupies.
+   * Metadata for the Level-2 episodic store: how many messages are captured, how
+   * much chat text they hold (what the limit counts), and how much disk
+   * recall.sqlite occupies in all.
    */
   getEpisodicStats = (): EpisodicStats => {
-    return { messageCount: this.messageCount(), sizeBytes: this.dbSizeBytes() };
+    return { messageCount: this.messageCount(), textBytes: chatTextBytes(this.open()), sizeBytes: this.dbSizeBytes() };
   };
 
 
-  /** Max on-disk size for the episodic store in bytes; 0 = unlimited. */
+  /** Max chat text kept in the episodic store, in bytes; 0 = unlimited. */
   getEpisodicLimitBytes = (): number => {
     const raw = Number.parseInt(this.getMeta(EPISODIC_MAX_KEY) ?? '', 10);
     return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_EPISODIC_MAX_BYTES;

@@ -138,13 +138,13 @@ export function EpisodicTab() {
                   key={p.label}
                   className={settings.episodicLimitBytes === p.bytes ? 'active' : ''}
                   onClick={() => selectLimit(p.bytes)}
-                  title={p.bytes === 0 ? 'Never prune episodic recall' : `Keep episodic recall under ${p.label}`}
+                  title={p.bytes === 0 ? 'Never prune episodic recall' : `Keep up to ${p.label} of chat text`}
                 >
                   {p.label}
                 </button>
               ))}
             </div>
-            <p className="muted">When the store grows past this, Stem drops the oldest messages first.</p>
+            <p className="muted">Counts chat text only. When it grows past this, Stem drops the oldest messages first.</p>
           </div>
         </div>
       )}
@@ -172,7 +172,8 @@ export function EpisodicTab() {
         {stats && stats.messageCount > 0 && (
           <p className="statement">
             {stats.messageCount.toLocaleString()}{' '}
-            {stats.messageCount === 1 ? 'message' : 'messages'} · {formatBytes(stats.sizeBytes)}
+            {stats.messageCount === 1 ? 'message' : 'messages'} · {formatBytes(stats.textBytes)} of text ·{' '}
+            {formatBytes(stats.sizeBytes)} on disk
           </p>
         )}
 

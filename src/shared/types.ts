@@ -2452,7 +2452,7 @@ export interface MemorySettings {
   enabled: boolean;
   useMemories: boolean;
   generateMemories: boolean;
-  /** Max on-disk size for the episodic store, in bytes (0 = unlimited). */
+  /** Max chat text kept in the episodic store, in bytes (0 = unlimited). */
   episodicLimitBytes: number;
   /** New-fact count that triggers an automatic tidy-up (0 = manual only). */
   tidyThreshold: number;
@@ -2464,7 +2464,9 @@ export interface MemorySettings {
 export interface EpisodicStats {
   /** Number of captured messages in the episodic store. */
   messageCount: number;
-  /** On-disk size of recall.sqlite (+ WAL sidecar) in bytes. */
+  /** UTF-8 bytes of captured message text — what the storage limit counts. */
+  textBytes: number;
+  /** On-disk size of recall.sqlite (+ WAL sidecar) in bytes, vectors and facts included. */
   sizeBytes: number;
 }
 
