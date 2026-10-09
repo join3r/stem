@@ -19,6 +19,7 @@ import type {
   ConnectedFolderKind,
   ConnectedFolderPatch,
   FolderIndexStatus,
+  FolderSuggestion,
   ModelSummary
 } from '../../../shared/types';
 import { resolveMemoryModel } from '../../../shared/modelRoles';
@@ -270,6 +271,10 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
   const [query, setQuery] = useState('');
   // After a disconnect that leaves learned facts behind: offer to forget them.
   const [forgetOffer, setForgetOffer] = useState<{ id: string; label: string; facts: number } | null>(null);
+  // "Suggest settings": the model's answer once applied to the draft (its
+  // reason stays on show until Save or leaving), and the call in flight.
+  const [advice, setAdvice] = useState<FolderSuggestion | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
   // A connected folder is a path on the SERVER's disk. When that isn't this
   // machine, revealing it here would open whatever happens to sit at the same
   // path locally — so the buttons that do it are not offered at all. Adding is
@@ -335,12 +340,49 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
     setOpenId(f.id);
     setError(null);
     setForgetOffer(null);
+    setAdvice(null);
   }
 
   function back() {
     setOpenId(null);
     setDraft(null);
     setError(null);
+    setAdvice(null);
+  }
+
+  /**
+   * Have the memory model look at the folder and fill the form with what suits
+   * it. Nothing is saved: the changes show as unsaved, the reason beside them.
+   * A folder on this computer is looked at here (its mirror may not have synced
+   * yet); anything else on the server.
+   */
+  async function suggest(f: ConnectedFolder, d: FolderDraft) {
+    setSuggesting(true);
+    setError(null);
+    try {
+      const note = d.note.trim() || undefined;
+      const s = await window.stem.suggestFolderSettings(
+        f.origin && f.origin.deviceId === deviceId
+          ? { path: f.origin.clientPath, local: true, ...(note ? { note } : {}) }
+          : { folderId: f.id }
+      );
+      setDraft((cur) =>
+        cur && {
+          ...cur,
+          kind: s.kind,
+          writable: s.writable,
+          memorize: s.memorize,
+          index: s.index,
+          learnMode: s.learnMode,
+          note: cur.note.trim() ? cur.note : s.note
+        }
+      );
+      setAdvice(s);
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e).replace(/^(Error:\s*)?(Error invoking remote method '[^']+':\s*)?(Error:\s*)?/, ''));
+    } finally {
+      setSuggesting(false);
+    }
   }
 
   /** The wizard connected a folder: open it. */
@@ -361,6 +403,7 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
       setFolders(next);
       const saved = next.find((x) => x.id === f.id);
       if (saved) setDraft(draftOf(saved));
+      setAdvice(null);
       // Index and learning work starts a moment after the write.
       if (patch.index !== undefined || patch.learnMode !== undefined) setTimeout(refreshStatus, 2_000);
     } catch (e) {
@@ -461,6 +504,16 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
     return (
       <div className="ld-detail">
         <DetailHeader backLabel="Connected folders" onBack={back}>
+          <button
+            type="button"
+            className="icon-action sm"
+            disabled={suggesting || !!f.missing || (f.syncState === 'awaiting-sync' && f.origin?.deviceId !== deviceId)}
+            onClick={() => void suggest(f, d)}
+            title={suggesting ? 'Looking at the folder…' : 'Suggest settings from what’s in the folder'}
+            aria-label="Suggest settings"
+          >
+            <Sparkles size={14} className={suggesting ? 'suggesting' : undefined} />
+          </button>
           {(!remote || f.origin?.deviceId === deviceId) && (
             <button
               type="button"
@@ -487,6 +540,14 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
           caption={`${kindLabel ? `${kindLabel} · ` : ''}${f.origin ? 'mirrored from' : ''} ${where}`.replace(/^\s+/, '')}
         />
         {error && <p className="task-failed">{error}</p>}
+        {advice && (
+          <p className="ld-advice" role="status">
+            <Sparkles size={13} />
+            <span>
+              Suggested from what’s in the folder{advice.reason ? `: ${advice.reason}` : '.'} Review the tabs, then Save.
+            </span>
+          </p>
+        )}
         <DetailTabs
           tabs={[
             { key: 'about', label: 'About' },

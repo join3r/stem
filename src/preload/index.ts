@@ -146,6 +146,13 @@ const api: StemApi = {
   revealConnectedFolder: (id: string) => ipcRenderer.invoke('cfolders:reveal', id),
   openWorkspaceFolder: () => ipcRenderer.invoke('cfolders:revealWorkspace'),
   pickDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
+  suggestFolderSettings: async (target: { folderId: string } | { path: string; local?: boolean; note?: string }) =>
+    'path' in target && target.local
+      ? ipcRenderer.invoke('cfolders:suggest', {
+          sample: await ipcRenderer.invoke('cfolders:sampleLocal', target.path),
+          note: target.note
+        })
+      : ipcRenderer.invoke('cfolders:suggest', target),
   browseServerFolders: (path?: string) => ipcRenderer.invoke('cfolders:browse', path),
   addClientFolders: (paths: string[]) => ipcRenderer.invoke('mirror:addLocal', paths),
   mirrorLocalState: () => ipcRenderer.invoke('mirror:localState'),

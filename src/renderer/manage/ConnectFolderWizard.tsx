@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Code2, FileText, FolderPlus, FolderSearch, Laptop, Lock, NotebookPen, Server } from 'lucide-react';
-import type { ConnectedFolder, ConnectedFolderKind, ConnectedFolderPatch } from '../../shared/types';
+import { Code2, FileText, FolderPlus, FolderSearch, Laptop, Lock, NotebookPen, Server, Sparkles } from 'lucide-react';
+import type { ConnectedFolder, ConnectedFolderKind, ConnectedFolderPatch, FolderSuggestion } from '../../shared/types';
 import { ServerFolderPicker } from './ServerFolderPicker';
 
 // Connecting a folder, as a short walk instead of a "+" that drops the folder in
@@ -14,7 +14,9 @@ import { ServerFolderPicker } from './ServerFolderPicker';
 // what it holds, and what kind of folder it is) → Access (read-only or
 // writable) → Memory (remember, index, learn facts). Picking a kind fills in the
 // later steps with what suits it; every choice stays editable. Nothing reaches
-// the server until the last step's Connect.
+// the server until the last step's Connect. "Suggest for me" has the memory
+// model look at the folder (names and counts, a README excerpt) and fill in
+// the kind and every later step the same way, with its reason on show.
 
 type Place = 'server' | 'client';
 type LearnMode = NonNullable<ConnectedFolder['learnMode']>;
@@ -120,6 +122,9 @@ export function ConnectFolderWizard({
   const [learnMode, setLearnMode] = useState<LearnMode>(preset?.settings.learnMode ?? 'use');
   const [kind, setKind] = useState<Kind | null>(preset);
   const [serverPicker, setServerPicker] = useState(false);
+  // The model's suggestion once applied (its reason is shown), and the call in flight.
+  const [advice, setAdvice] = useState<FolderSuggestion | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -130,6 +135,7 @@ export function ConnectFolderWizard({
 
   const choose = (picked: string) => {
     setPath(picked);
+    setAdvice(null);
     setLabel(baseName(picked));
     setError(null);
   };
@@ -146,6 +152,7 @@ export function ConnectFolderWizard({
   };
 
   const pickKind = (k: Kind) => {
+    setAdvice(null);
     setKind(k);
     setWritable(k.settings.writable);
     setMemorize(k.settings.memorize);
@@ -153,7 +160,11 @@ export function ConnectFolderWizard({
     setLearnMode(k.settings.learnMode);
   };
 
-  const suggested = kind && <p className="muted folder-dialog-hint wizard-suggested">Suggested for {kind.noun}. Change anything.</p>;
+  const suggested = advice ? (
+    <p className="muted folder-dialog-hint wizard-suggested">Suggested by Stem from what’s in the folder. Change anything.</p>
+  ) : (
+    kind && <p className="muted folder-dialog-hint wizard-suggested">Suggested for {kind.noun}. Change anything.</p>
+  );
 
   const name = label.trim();
   const absolute = /^([/\\~]|[A-Za-z]:[/\\])/.test(path.trim());
@@ -171,6 +182,30 @@ export function ConnectFolderWizard({
           ? `A connected folder is already called “${name}”.`
           : null;
   const canNext = step === 0 ? !!path.trim() && !folderProblem : true;
+
+  const suggest = async () => {
+    setSuggesting(true);
+    setError(null);
+    try {
+      const s = await window.stem.suggestFolderSettings({
+        path: path.trim(),
+        // A folder on this computer is looked at here; the server has no copy yet.
+        local: remote && place === 'client',
+        ...(note.trim() ? { note: note.trim() } : {})
+      });
+      setKind(KINDS.find((k) => k.value === s.kind) ?? null);
+      setWritable(s.writable);
+      setMemorize(s.memorize);
+      setIndex(s.index);
+      setLearnMode(s.learnMode);
+      if (!note.trim() && s.note) setNote(s.note);
+      setAdvice(s);
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e).replace(/^(Error:\s*)?(Error invoking remote method '[^']+':\s*)?(Error:\s*)?/, ''));
+    } finally {
+      setSuggesting(false);
+    }
+  };
 
   const connect = async () => {
     setBusy(true);
@@ -297,6 +332,7 @@ export function ConnectFolderWizard({
                     // Typing a path names the folder too, until the name is edited by hand.
                     if (!label || label === baseName(path)) setLabel(baseName(typed));
                     setPath(typed);
+                    setAdvice(null);
                     setError(null);
                   }}
                   onKeyDown={(e) => {
@@ -340,7 +376,20 @@ export function ConnectFolderWizard({
             )}
             {folderProblem && <p className="error folder-dialog-hint">{folderProblem}</p>}
             <div className="folder-dialog-field">
-              <span>What kind of folder is it?</span>
+              <span className="wizard-kind-head">
+                What kind of folder is it?
+                <button
+                  type="button"
+                  className="link-btn wizard-suggest"
+                  disabled={!absolute || !!folderProblem || suggesting || busy}
+                  onClick={() => void suggest()}
+                  title="Stem looks at the folder’s file names and README and fills in every step"
+                >
+                  <Sparkles size={12} />
+                  {suggesting ? 'Looking at the folder…' : 'Suggest for me'}
+                </button>
+              </span>
+              {advice?.reason && <p className="muted folder-dialog-hint wizard-advice">{advice.reason}</p>}
               <div className="wizard-kinds">
                 {KINDS.map((k) => (
                   <span key={k.value}>{option(kind?.value === k.value, () => pickKind(k), k.label, k.body, k.icon)}</span>
@@ -425,7 +474,7 @@ export function ConnectFolderWizard({
           <button type="button" className="push" disabled={busy} onClick={step === 0 ? onCancel : () => setStep(step - 1)}>
             {step === 0 ? 'Cancel' : 'Back'}
           </button>
-          <button type="button" className="push default" disabled={!canNext || busy} onClick={next}>
+          <button type="button" className="push default" disabled={!canNext || busy || suggesting} onClick={next}>
             {step < STEPS.length - 1 ? 'Next' : busy ? 'Connecting…' : 'Connect'}
           </button>
         </div>

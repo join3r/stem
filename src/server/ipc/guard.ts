@@ -93,6 +93,8 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'mirror:apply': [a.string, a.object],
   'mirror:report': [a.string, a.object],
   'cfolders:update': [a.string, a.object],
+  // { folderId } | { path } | { sample, note? } — reshaped in ipc/workspace.ts.
+  'cfolders:suggest': [a.object],
   'cfolders:remove': [a.string],
   'cfolders:forgetFacts': [a.string],
   'cfolders:skipped': [a.string],

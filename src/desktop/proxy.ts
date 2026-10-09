@@ -72,6 +72,8 @@ import { updateClientQuickChat, withClientSettings } from './settings';
 //                                                about the build installed HERE
 //                                                (see desktop/updates.ts)
 //   dialog:openFiles, dialog:openDirectory       native pickers
+//   cfolders:sampleLocal                         a look inside a folder on THIS
+//                                                disk, for "Suggest settings"
 //   link:open                                    a chat link, opened on THIS
 //                                                machine (desktop/open-link.ts)
 //   files:reveal, files:preview, files:previewData

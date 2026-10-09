@@ -6,6 +6,7 @@ import { openLink } from '../open-link';
 import { ensureFilesRoot, filePathWithin } from '../../server/files/store';
 import { imagePreviewDataUrl, imagePreviewFromBytes } from '../../server/pi/attachments';
 import { connectedFolderPath } from '../../server/workspace/connected-folders';
+import { sampleFolder } from '../../server/connected-folders/sample';
 import { workspaceRoot } from '../../server/workspace/paths';
 import { exportState } from '../../server/workspace/state-transfer';
 import { readClientIdentity, storedServerUrl } from '../client-store';
@@ -297,6 +298,14 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     for (const path of paths) folders = await deps.mirrorHost.addFolder(path);
     return folders;
   });
+  // "Suggest settings" for a folder on THIS computer that is not connected yet:
+  // the server has no copy of it, so the look inside happens here and only the
+  // summary (names, counts, a README excerpt) goes to the server's model call.
+  handleLocal('cfolders:sampleLocal', (_e, path: string) =>
+    sampleFolder(path).catch(() => {
+      throw new Error('Stem could not read that folder.');
+    })
+  );
   handleLocal('mirror:localState', (): MirrorFolderLocalState[] => deps.mirrorHost?.localState() ?? []);
 
   // A link clicked in a chat message (file: ones cannot ride window.open — see

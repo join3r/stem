@@ -3260,6 +3260,14 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .wizard-kinds > span { display: flex; }
 .wizard-kinds .cfolder-add-option { flex: 1; }
 .wizard-suggested { margin: 0; }
+.wizard-kind-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.wizard-suggest { font-size: var(--fs-12); }
+.wizard-advice { margin: 0; color: var(--ink); }
+.ld-advice { display: flex; align-items: flex-start; gap: var(--sp-3); margin: 0 0 var(--sp-4); font-size: var(--fs-12); color: var(--muted); }
+.ld-advice svg { flex: none; margin-top: 2px; color: var(--accent); }
+/* The editor's Suggest button while the model looks at the folder. */
+.icon-action .suggesting { animation: activity-pulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .icon-action .suggesting { animation: none; } }
 .cfolder-note { display: flex; flex-direction: column; gap: var(--sp-2); }
 .cfolder-note .ifield { width: 100%; }
 .cfolder-item { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-5) var(--sp-6); }

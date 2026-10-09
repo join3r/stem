@@ -15,18 +15,20 @@ import {
   updateConnectedFolder
 } from '../workspace/connected-folders';
 import { enrichConnectedFolders } from '../connected-folders/enrich';
+import { sampleFolder } from '../connected-folders/sample';
+import { suggestFolderSettings } from '../connected-folders/suggest';
 import { applyMirror, coerceManifestEntries, diffMirror, readMirrorSkipped, recordMirrorSkipped } from '../mirror';
 import { mirrorSyncApplied, mirrorSyncEnded, mirrorSyncPlanned } from '../mirror/sync-activity';
 import type { CallerContext } from './guard';
 import { MIRROR_FOLDERS_FRAME } from '../../shared/types';
-import type { ConnectedFolder, MirrorApplyInput, MirrorFolderInfo, MirrorReportInput } from '../../shared/types';
+import type { ConnectedFolder, FolderSample, MirrorApplyInput, MirrorFolderInfo, MirrorReportInput } from '../../shared/types';
 import { browseServerFolders } from '../workspace/browse';
 import { getFolderIndexStatuses, seedFolderLearnMarks, syncFolderIndexes } from '../folder-index';
 import { clearScratch, listScratchUsage, UNFILED_KEY } from '../exec/scratch';
 import { recallStore } from '../recall/store';
 import { log } from '../log';
 import { pushToDevice } from '../startup/transport';
-import { skillsRunOf, updateSkillsSettings } from '../workspace/settings';
+import { memoryRunOf, skillsRunOf, updateSkillsSettings } from '../workspace/settings';
 import { resetSkills, skillsResetStatus } from '../skills/reset';
 import { removeSkill } from '../skills/store';
 import { learnFromChat } from '../startup/skills';
@@ -213,6 +215,38 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     }
     return enrichConnectedFolders(folders);
   });
+  // "Suggest settings": the memory model reads a sample of the folder and
+  // answers with the wizard's fields; nothing is saved (the form is filled, the
+  // user saves). The sample is taken where the folder lives — here for a
+  // connected folder (a client folder's mirror is here too) or a server path
+  // the wizard has not connected yet; the desktop samples a folder on its own
+  // disk and sends just the sample (desktop/local, cfolders:sampleLocal).
+  registerServer(
+    'cfolders:suggest',
+    async (_e, target: { folderId?: unknown; path?: unknown; sample?: unknown; note?: unknown }) => {
+      let sample: FolderSample;
+      let note = typeof target.note === 'string' ? target.note.slice(0, 500) : undefined;
+      if (typeof target.folderId === 'string') {
+        const folder = (await listConnectedFolders()).find((f) => f.id === target.folderId);
+        if (!folder) throw new Error('No connected folder with that id.');
+        if (folder.missing) throw new Error('The folder is missing, so there is nothing to look at.');
+        sample = await sampleFolder(folder.path);
+        note ??= folder.note;
+      } else if (typeof target.path === 'string' && /^([/\\~]|[A-Za-z]:[/\\])/.test(target.path.trim())) {
+        sample = await sampleFolder(target.path.trim()).catch(() => {
+          throw new Error('Stem could not read that folder on the server.');
+        });
+      } else if (target.sample && typeof target.sample === 'object') {
+        sample = coerceFolderSample(target.sample);
+      } else {
+        throw new Error('cfolders:suggest needs a folder id, a full path or a sample.');
+      }
+      const llm: LlmClient = {
+        complete: async (prompt) => deps.runtime().complete(prompt, await memoryRunOf((s) => s.memory.model))
+      };
+      return suggestFolderSettings(llm, sample, note);
+    }
+  );
   registerServer('cfolders:remove', async (_e, id: string) => {
     const removed = (await listConnectedFolders()).find((f) => f.id === id);
     const folders = await removeConnectedFolder(id);
@@ -333,4 +367,30 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
       .sort((a, b) => b.bytes - a.bytes);
   });
   registerServer('exec:clearScratch', (_e, key: string) => clearScratch(key));
+}
+
+/**
+ * A FolderSample from a client, reshaped to the declared fields and sizes: it
+ * goes into a model prompt, so a malformed or oversized one must not.
+ */
+function coerceFolderSample(raw: object): FolderSample {
+  const o = raw as Record<string, unknown>;
+  const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : '');
+  const strs = (v: unknown, n: number) => (Array.isArray(v) ? v.slice(0, n).map((x) => str(x, 300)).filter(Boolean) : []);
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0);
+  const ex = o.excerpt as Record<string, unknown> | undefined;
+  return {
+    name: str(o.name, 200),
+    fileCount: num(o.fileCount),
+    truncated: o.truncated === true,
+    extensions: (Array.isArray(o.extensions) ? o.extensions.slice(0, 20) : [])
+      .filter((e): e is [unknown, unknown] => Array.isArray(e) && e.length === 2)
+      .map(([ext, n]) => [str(ext, 20), num(n)] as [string, number]),
+    topLevel: strs(o.topLevel, 40),
+    markers: strs(o.markers, 40),
+    paths: strs(o.paths, 40),
+    ...(ex && typeof ex === 'object' && typeof ex.text === 'string'
+      ? { excerpt: { file: str(ex.file, 300), text: str(ex.text, 1_200) } }
+      : {})
+  };
 }

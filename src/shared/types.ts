@@ -906,6 +906,43 @@ export interface ConnectedFolder {
 
 export type ConnectedFolderKind = 'notes' | 'code' | 'docs' | 'private';
 
+/**
+ * A cheap look inside a folder, for the model that suggests its settings: what
+ * the tree holds, never the files themselves (beyond one short README excerpt).
+ * Taken on whichever machine the folder lives on — the server for its own
+ * folders and mirrors, the desktop for a folder not yet connected from it.
+ */
+export interface FolderSample {
+  /** The folder's own name (last path segment). */
+  name: string;
+  /** Files counted, up to the walk's cap; `truncated` when the cap was hit. */
+  fileCount: number;
+  truncated: boolean;
+  /** Count per lower-cased extension ('' for none), most common first, top 20. */
+  extensions: [string, number][];
+  /** Top-level entries, directories with a trailing '/'. */
+  topLevel: string[];
+  /** Tell-tale names found anywhere in the walk (.git, .obsidian, package.json…). */
+  markers: string[];
+  /** A spread of relative file paths. */
+  paths: string[];
+  /** The start of a README (or the first Markdown file), if any. */
+  excerpt?: { file: string; text: string };
+}
+
+/** What the model thinks a folder's settings should be (the wizard's / editor's fields). */
+export interface FolderSuggestion {
+  kind: ConnectedFolderKind | null;
+  writable: boolean;
+  memorize: boolean;
+  index: boolean;
+  learnMode: NonNullable<ConnectedFolder['learnMode']>;
+  /** A one-line "what's in it", for an empty note field. */
+  note: string;
+  /** Why, in a sentence, shown beside the applied settings. */
+  reason: string;
+}
+
 /** The mutable fields of a connected folder (label, mode, memorize, note, index, learning, kind). */
 export type ConnectedFolderPatch = Partial<
   Pick<ConnectedFolder, 'label' | 'mode' | 'memorize' | 'note' | 'index' | 'learnMode' | 'learnModel'>
@@ -4623,6 +4660,12 @@ export interface StemApi {
   openWorkspaceFolder(): Promise<void>;
   /** Open a native directory picker; returns chosen absolute paths ([] if canceled). */
   pickDirectory(): Promise<string[]>;
+  /**
+   * Ask the memory model what a folder's settings should be. A connected folder
+   * by id, a not-yet-connected folder on the server by path, or one on THIS
+   * computer (`local`), which is sampled here and only the sample sent.
+   */
+  suggestFolderSettings(target: { folderId: string } | { path: string; local?: boolean; note?: string }): Promise<FolderSuggestion>;
   /**
    * Connect folders that live on THIS computer, mirroring them to the server
    * (remote installs only; the picker already ran). Returns the fresh list.
