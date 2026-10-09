@@ -871,7 +871,12 @@ export function ChatList(props: ChatListProps) {
               const name =
                 menu.kind === 'folder'
                   ? data.folders.find((f) => f.id === menu.id)?.name ?? ''
-                  : data.chats.find((c) => c.threadId === menu.id)?.title ?? '';
+                  : (() => {
+                      // Seed the field with the name the row shows, which is the
+                      // written subject when there is one, not the title behind it.
+                      const chat = data.chats.find((c) => c.threadId === menu.id);
+                      return chat?.subject ?? chat?.title ?? '';
+                    })();
               setEditing({ kind: menu.kind, id: menu.id, value: name, initial: name });
               closeMenu();
             }}

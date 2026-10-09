@@ -24,6 +24,7 @@ import {
   renameFolder,
   setChatFolder,
   setChatFormat,
+  setSubject,
   updateFolder
 } from '../workspace/chats';
 import { IDLE_MS } from '../chats/autofile';
@@ -197,6 +198,12 @@ export function registerChatsIpc(deps: IpcDeps): void {
   );
   registerServer('chats:rename', async (_e, threadId: string, name: string) => {
     const before = (await deps.runtime().listThreads()).find((t) => t.threadId === threadId);
+    // The sidebar shows a written subject in place of the title, so a rename
+    // that left one in the store changed nothing anyone could see. The name the
+    // user typed wins: drop the subject, and the row falls back to the title.
+    // Clearing it (rather than storing the typed name as the subject) also keeps
+    // the naming pass off the thread — it only renames names it wrote itself.
+    if ((await getSubjects())[threadId] !== undefined) await setSubject(threadId, '');
     // The sidebar's rename field commits on blur, so opening Rename and clicking
     // away asks for the name the chat already has. Writing it would append a
     // session_info entry all the same, and the bumped mtime would drag the chat
