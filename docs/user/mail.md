@@ -17,11 +17,10 @@ agents are worth the extra turns. It answers most requests alone. When an
 answer rests on facts that could be wrong, one agent checks them first. For a
 consequential question, agents gather evidence in parallel and a blind Critic
 reads the draft cold. For a hard problem, two or three agents solve it
-separately and the persona keeps the best-argued answer. For a code change, when
-you added both a coding persona and a review-only one (see
-[coding agents](settings.md#coding-agents-and-computer-control)), the coding
-persona does the work, the reviewer checks the change cold, the findings go
-back to the coding persona once, and you get one report. A Critic on a
+separately and the persona keeps the best-argued answer. For a code change, the
+coding persona does the work and ends its report with the change's diff; a
+blind agent that runs no coding agent reviews that diff, the findings go back
+to the coding persona once, and you get one report. A Critic on a
 different model from the persona that leads gives a more independent read;
 set its model in its editor. For a persona without a model of its own, the
 persona starting the agent can pick one of your models, so two agents of the

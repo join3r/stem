@@ -59,13 +59,11 @@ describe('spawnable roles', () => {
     const list: Persona[] = [
       { id: 'critic', name: 'Critic', prompt: '', recall: false, model: 'xai/grok-5' },
       { id: 'coder', name: 'Coder', prompt: '', harness: { agent: 'claude', cwd: '/r' } },
-      { id: 'rev', name: 'Reviewer', prompt: '', harness: { agent: 'codex', cwd: '/r', reviewOnly: true } },
       { id: 'mac', name: 'Mac', prompt: '', computer: { device: 'm1' } }
     ];
-    expect(spawnableRoles(list, ['coder', 'rev'])).toEqual([
+    expect(spawnableRoles(list, ['coder'])).toEqual([
       { id: 'critic', name: 'Critic', model: 'xai/grok-5', blind: true },
-      { id: 'coder', name: 'Coder', code: 'writes' },
-      { id: 'rev', name: 'Reviewer', code: 'reviews' }
+      { id: 'coder', name: 'Coder', code: true }
     ]);
     expect(spawnableRoles(list, []).map((r) => r.id)).toEqual(['critic']);
   });

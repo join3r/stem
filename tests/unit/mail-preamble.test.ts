@@ -128,14 +128,16 @@ describe('mail preamble source context', () => {
     expect(plain).not.toContain('spawn_agent');
   });
 
-  it('the Code recipe appears only when a writing and a reviewing coding role can both be started', () => {
+  it('the Code recipe appears when a coding role can be started, with a diff-only reviewer', () => {
     const base = { subject: 's', from: 'user', participants: ['driver'], canSpawn: true };
-    const writer = { id: 'coder', name: 'Coder', code: 'writes' as const };
-    const reviewer = { id: 'rev', name: 'Reviewer', model: 'gpt-6-sol', code: 'reviews' as const };
-    const both = mailPreamble({ ...base, roles: [writer, reviewer] }, 'driver');
+    const writer = { id: 'coder', name: 'Coder', code: true as const };
+    const critic = { id: 'critic', name: 'Critic', model: 'xai/grok-5', blind: true as const };
+    const both = mailPreamble({ ...base, roles: [writer, critic] }, 'driver');
     expect(both).toContain('Code: a change to a codebase');
-    expect(both).toContain('Coder (coder, default model, writes code); Reviewer (rev, gpt-6-sol, reviews code, never edits)');
-    expect(mailPreamble({ ...base, roles: [writer] }, 'driver')).not.toContain('Code: a change');
+    expect(both).toContain('end its report with the full git diff');
+    expect(both).toContain('a role that does not write code');
+    expect(both).toContain('Coder (coder, default model, writes code); Critic (critic, xai/grok-5, no recall)');
+    expect(mailPreamble({ ...base, roles: [critic] }, 'driver')).not.toContain('Code: a change');
   });
 
   it('an agent is told it is one and reports to whoever started it', () => {

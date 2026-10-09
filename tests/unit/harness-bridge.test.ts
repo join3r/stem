@@ -370,7 +370,7 @@ describe('runtime side', () => {
     expect(seen[1].autoMode).toBeUndefined();
   });
 
-  it('a review-only pin and a recall-off turn ride the call; the payload can ask for neither', async () => {
+  it('a recall-off turn rides the call; the payload cannot ask for it', async () => {
     const seen: HarnessRequest[] = [];
     const { internal, worker, sent } = runtimeWithBridge({
       handleHarnessRequest: async (req) => {
@@ -381,22 +381,16 @@ describe('runtime side', () => {
       settleAll: () => {}
     });
     worker.currentTurn = newTurnContext('t', 'turn-1');
-    worker.currentTurn.codingGrant = { kind: 'pin', pin: { agent: 'codex', cwd: '/repo', reviewOnly: true } };
+    worker.currentTurn.codingGrant = { kind: 'pin', pin: { agent: 'codex', cwd: '/repo' } };
     worker.currentTurn.noRecall = true;
     internal.handleHarnessBridgeRequest(worker, 'elicit-1', JSON.stringify({ prompt: 'review' }));
     await settleSends(sent);
-    expect(seen[0]).toMatchObject({ agent: 'codex', reviewOnly: true, noRecall: true });
+    expect(seen[0]).toMatchObject({ agent: 'codex', noRecall: true });
 
     sent.length = 0;
-    worker.currentTurn.codingGrant = { kind: 'pin', pin: { agent: 'codex', cwd: '/repo' } };
     delete worker.currentTurn.noRecall;
-    internal.handleHarnessBridgeRequest(
-      worker,
-      'elicit-2',
-      JSON.stringify({ prompt: 'go', reviewOnly: false, noRecall: false })
-    );
+    internal.handleHarnessBridgeRequest(worker, 'elicit-2', JSON.stringify({ prompt: 'go', noRecall: false }));
     await settleSends(sent);
-    expect(seen[1].reviewOnly).toBeUndefined();
     expect(seen[1].noRecall).toBeUndefined();
   });
 

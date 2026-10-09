@@ -99,8 +99,7 @@ function coerceHarness(raw: unknown): PersonaHarnessPin | undefined {
     ...(device ? { device } : {}),
     ...(model ? { model } : {}),
     // Strictly true: anything else (a string "true", 1) stays on the cards.
-    ...(r.autoMode === true ? { autoMode: true as const } : {}),
-    ...(r.reviewOnly === true ? { reviewOnly: true as const } : {})
+    ...(r.autoMode === true ? { autoMode: true as const } : {})
   };
 }
 

@@ -203,7 +203,6 @@ export function createDesktopHarnessHost(deps: HarnessHostDeps): DesktopHarnessH
         prompt: request.prompt,
         ...(request.model ? { model: request.model } : {}),
         ...(request.autoMode === true ? { autoMode: true as const } : {}),
-        ...(request.reviewOnly === true ? { reviewOnly: true as const } : {}),
         maxTurnMs: request.maxTurnMs ?? DEVICE_MAX_TURN_MS
       },
       {
@@ -296,14 +295,11 @@ export function createDesktopHarnessHost(deps: HarnessHostDeps): DesktopHarnessH
             cwd: request.cwd,
             ...(request.sessionId ? { sessionId: request.sessionId } : {}),
             ...(request.model ? { model: request.model } : {}),
-            ...(request.autoMode === true ? { autoMode: true as const } : {}),
-            ...(request.reviewOnly === true ? { reviewOnly: true as const } : {})
+            ...(request.autoMode === true ? { autoMode: true as const } : {})
           });
           deliverResult(
             request.requestId,
-            ensured.ok
-              ? { ok: true, sessionId: ensured.sessionId, ...(ensured.reviewOnly ? { reviewOnly: true as const } : {}) }
-              : { ok: false, error: ensured.error }
+            ensured.ok ? { ok: true, sessionId: ensured.sessionId } : { ok: false, error: ensured.error }
           );
           return;
         }

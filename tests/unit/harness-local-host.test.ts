@@ -142,33 +142,6 @@ describe('sessions', () => {
     expect(calls.modes).toEqual(['auto', 'acceptEdits']);
   });
 
-  it('runs a review-only session read-only (codex) or on asks (claude), and refuses other agents', async () => {
-    const { factory, calls } = fakeRuntime();
-    const host = new LocalHarnessHost({ runtimeFactory: factory });
-    expect(await host.ensureSession({ agent: 'codex', cwd: '/tmp/p', sessionId: 'codex-1', reviewOnly: true })).toEqual({
-      ok: true,
-      sessionId: 'codex-1',
-      reviewOnly: true
-    });
-    // Review only wins over Auto.
-    const claude = await host.ensureSession({ agent: 'claude', cwd: '/tmp/p', reviewOnly: true, autoMode: true });
-    expect(claude).toMatchObject({ ok: true, reviewOnly: true });
-    // Unticked: the codex session goes back to its own default.
-    await host.ensureSession({ agent: 'codex', cwd: '/tmp/p', sessionId: 'codex-1' });
-    expect(calls.modes).toEqual(['read-only', 'default', 'agent']);
-    const other = await host.ensureSession({ agent: 'opencode', cwd: '/tmp/p', reviewOnly: true });
-    expect(other).toMatchObject({ ok: false });
-    expect(!other.ok && other.error).toContain('Review only works with Claude Code or Codex');
-  });
-
-  it('fails a review-only session closed when the read-only mode will not set', async () => {
-    const { factory } = fakeRuntime({ setModeError: 'unknown mode' });
-    const host = new LocalHarnessHost({ runtimeFactory: factory });
-    const res = await host.ensureSession({ agent: 'codex', cwd: '/tmp/p', reviewOnly: true });
-    expect(res).toMatchObject({ ok: false });
-    expect(!res.ok && res.error).toContain('refused its read-only mode');
-  });
-
   it('falls back to acceptEdits when the model refuses Auto', async () => {
     const { factory, calls } = fakeRuntime({ refuseAuto: true });
     const host = new LocalHarnessHost({ runtimeFactory: factory });

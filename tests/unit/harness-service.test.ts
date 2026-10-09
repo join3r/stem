@@ -11,7 +11,6 @@ import { dirname, join } from 'node:path';
 import type { HarnessApprovalRequest, HarnessModelListing, ServerSettings } from '../../src/shared/types';
 import type {
   HarnessEnsureResult,
-  HarnessPermissionAsk,
   HarnessHost,
   HarnessRunTurnInput,
   HarnessSessionSpec,
@@ -369,6 +368,15 @@ describe('device targeting', () => {
 });
 
 describe('recall preamble', () => {
+  it('a recall-off delegation gets no background facts', async () => {
+    const host = scriptedHost({});
+    const facts = vi.fn(async () => ({ facts: [{ text: 'secret fact' }] }));
+    const { service } = makeService(host, { facts });
+    await service.handleHarnessRequest({ ...REQ, noRecall: true });
+    expect(host.turns[0].prompt).toBe('add a --version flag');
+    expect(facts).not.toHaveBeenCalled();
+  });
+
   it('prepends facts as escaped untrusted data, and only when there are any', async () => {
     const host = scriptedHost({});
     const { service } = makeService(host, {
@@ -854,83 +862,5 @@ describe('listModels', () => {
     const { service } = makeService(host);
     const res = await service.listModels({});
     expect(res).toEqual({ ok: false, error: 'claude did not advertise any models' });
-  });
-});
-
-describe('review only', () => {
-  const OPTIONS = [
-    { optionId: 'allow', kind: 'allow_once', name: 'Allow' },
-    { optionId: 'reject', kind: 'reject_once', name: 'Reject' }
-  ];
-  const ack = (spec: HarnessSessionSpec): HarnessEnsureResult => ({
-    ok: true,
-    sessionId: spec.sessionId ?? 'fresh-session',
-    ...(spec.reviewOnly ? { reviewOnly: true as const } : {})
-  });
-
-  /** A turn raising each ask in order, collecting the decisions. */
-  function askingHost(asks: Omit<HarnessPermissionAsk, 'permissionId' | 'options'>[], out: unknown[]): ScriptedHost {
-    return scriptedHost({
-      ensure: ack,
-      turn: async (_input, sink) => {
-        for (const [i, ask] of asks.entries()) {
-          out.push(await sink.onPermission({ permissionId: `p${i}`, options: OPTIONS, ...ask }));
-        }
-        return { ok: true, stopReason: 'end_turn', text: 'reviewed' };
-      }
-    });
-  }
-
-  it('runs reads inside the folder and refuses every write, even in yolo, never carding', async () => {
-    const decisions: unknown[] = [];
-    const host = askingHost(
-      [
-        { title: 'git diff', toolName: 'execute', command: 'git diff' },
-        { title: 'rm -rf src', toolName: 'execute', command: 'rm -rf src' },
-        { title: 'cat /etc/passwd', toolName: 'execute', command: 'cat /etc/passwd' },
-        { title: 'Edit src/a.ts', toolName: 'edit' },
-        // The user's own allowlist is not a reviewer's.
-        { title: 'npm install', toolName: 'execute', command: 'npm install' }
-      ],
-      decisions
-    );
-    const judge = vi.fn();
-    const { service, approvals } = makeService(host, {
-      readSettings: async () => serverSettings({ approvalMode: 'yolo', allowlist: ['npm install'] }),
-      judge
-    });
-    const res = await service.handleHarnessRequest({ ...REQ, agent: 'codex', reviewOnly: true, autoMode: true });
-    expect(res.ok).toBe(true);
-    expect(decisions).toEqual([
-      { optionId: 'allow' },
-      { optionId: 'reject' },
-      { optionId: 'reject' },
-      { optionId: 'reject' },
-      { optionId: 'reject' }
-    ]);
-    expect(approvals).toHaveLength(0);
-    expect(judge).not.toHaveBeenCalled();
-    // Review only wins over Auto on the way to the host.
-    expect(host.ensures[0]).toMatchObject({ reviewOnly: true });
-    expect(host.ensures[0].autoMode).toBeUndefined();
-    expect(host.turns[0].reviewOnly).toBe(true);
-  });
-
-  it('refuses to run when the host did not confirm review-only (an older Stem on the Mac)', async () => {
-    const host = scriptedHost({ label: 'Studio' });
-    const { service } = makeService(host);
-    const res = await service.handleHarnessRequest({ ...REQ, agent: 'codex', reviewOnly: true });
-    expect(res.ok).toBe(false);
-    expect(!res.ok && res.error).toContain('cannot run review-only coding agents yet');
-    expect(host.turns).toHaveLength(0);
-  });
-
-  it('a recall-off delegation gets no background facts', async () => {
-    const host = scriptedHost({});
-    const facts = vi.fn(async () => ({ facts: [{ text: 'secret fact' }] }));
-    const { service } = makeService(host, { facts });
-    await service.handleHarnessRequest({ ...REQ, noRecall: true });
-    expect(host.turns[0].prompt).toBe('add a --version flag');
-    expect(facts).not.toHaveBeenCalled();
   });
 });

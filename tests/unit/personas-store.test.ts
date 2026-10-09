@@ -347,11 +347,6 @@ describe('save', () => {
     expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '/src/stem', autoMode: true });
     await savePersona(persona({ harness: { agent: 'claude', cwd: '/src/stem', autoMode: 'true' as never } }));
     expect((await getPersona('p1'))?.harness).toEqual({ agent: 'claude', cwd: '/src/stem' });
-    // Review only, the same strictness.
-    await savePersona(persona({ harness: { agent: 'codex', cwd: '/src/stem', reviewOnly: true } }));
-    expect((await getPersona('p1'))?.harness).toEqual({ agent: 'codex', cwd: '/src/stem', reviewOnly: true });
-    await savePersona(persona({ harness: { agent: 'codex', cwd: '/src/stem', reviewOnly: 1 as never } }));
-    expect((await getPersona('p1'))?.harness).toEqual({ agent: 'codex', cwd: '/src/stem' });
   });
 });
 

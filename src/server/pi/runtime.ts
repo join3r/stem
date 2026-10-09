@@ -3004,7 +3004,6 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         let device: string | undefined;
         let model: string | undefined;
         let autoMode: true | undefined;
-        let reviewOnly: true | undefined;
         const choosing = grant.kind === 'chat' && grant.target === null;
         if (grant.kind === 'pin') {
           const clamped = clampPinnedCwd(str(req.cwd), grant.pin);
@@ -3017,7 +3016,6 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           model = grant.pin.model?.trim() || undefined;
           // Same for the Auto opt-in: only the persona editor sets it.
           autoMode = grant.pin.autoMode === true ? true : undefined;
-          reviewOnly = grant.pin.reviewOnly === true ? true : undefined;
         } else {
           agent = grant.target ? grant.target.agent : str(req.agent);
           device = grant.target ? grant.target.device : str(req.device);
@@ -3045,7 +3043,6 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           device,
           model,
           ...(autoMode ? { autoMode } : {}),
-          ...(reviewOnly ? { reviewOnly } : {}),
           ...(turn?.noRecall ? { noRecall: true as const } : {}),
           freshSession: req.fresh_session === true,
           itemId: typeof req.item_id === 'string' && req.item_id ? req.item_id : undefined,

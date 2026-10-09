@@ -178,10 +178,7 @@ come from two places, and a conversation gets them from exactly one:
   (agent, computer, folder) and a computer pin ("Computer this persona controls").
   A persona without one has no coding agent, or no computer control — whatever the
   switches below say. Chatting as your Secretary will not start Claude Code unless the
-  Secretary has a coding setup. A Claude Code or Codex setup can be marked **Review
-  only, never edits**: the agent reads the folder and runs read-only commands such as
-  `git diff`, and Stem refuses anything that would change a file without asking you.
-  Pin such a reviewer to the same folder as the persona that writes the code.
+  Secretary has a coding setup.
 - **A chat with no persona** (Quick Chat included) gets them from Settings → Features →
   Coding agents / Computer control → **Allow in chats**. Off by default. The switch
   belongs to your Stem server, so it covers chats from every device, the phone too.

@@ -104,7 +104,7 @@ export function mailPreamble(
     names?: Record<string, string>;
     canSpawn?: boolean;
     agents?: string[];
-    roles?: { id: string; name: string; model?: string; blind?: true; code?: 'writes' | 'reviews' }[];
+    roles?: { id: string; name: string; model?: string; blind?: true; code?: true }[];
     models?: string[];
     agent?: { role: string; spawnedBy: string };
     source?: { itemId: string; body: string; attachmentNames?: string[] };
@@ -153,7 +153,7 @@ export function mailPreamble(
         r.id !== name ? r.id : '',
         model || 'default model',
         r.blind ? 'no recall' : '',
-        r.code === 'writes' ? 'writes code' : r.code === 'reviews' ? 'reviews code, never edits' : ''
+        r.code ? 'writes code' : ''
       ]
         .filter(Boolean)
         .join(', ');
@@ -175,9 +175,14 @@ export function mailPreamble(
       'separately, on different models (a role\'s own, or spawn_agent\'s model for a role without one); ' +
       'compare their reasoning and keep the ' +
       'best-argued answer, not the majority. ' +
-      (mail.roles?.some((r) => r.code === 'writes') && mail.roles.some((r) => r.code === 'reviews')
-        ? 'Code: a change to a codebase — the persona that writes code does the work; when it reports, start ' +
-          'a blind agent of the reviewing role to review the change cold (from git diff) and list concrete ' +
+      // The review reads the diff as text: a coding agent cannot be held to
+      // read-only (Codex's own config overrode its read-only mode in live
+      // tests, and a repo's .claude settings approve Claude Code's edits
+      // before Stem is asked), so the reviewer is never a coding agent.
+      (mail.roles?.some((r) => r.code)
+        ? 'Code: a change to a codebase — the persona that writes code does the work, briefed to end its ' +
+          'report with the full git diff of its change; then start a blind agent of a role that does not ' +
+          'write code, on a different model where you can, send it only that diff, and have it list concrete ' +
           'problems only; send those findings back to the writer once; then answer with one report. '
         : '') +
       'Never start agents for a chat-like ask, and never send an agent work you could finish in the same time.' +

@@ -84,7 +84,7 @@ included. Separate sends in one turn still come back as one assembly.
 | Verifier | Evidence: searches and checks factual claims | recall on, web tools |
 | Critic | Blind contrarian: finds what is wrong or missing | recall off, memory off, blind; the user gives it a different model family from the lead (not auto-picked: the seed cannot know which sign-ins exist) |
 | Code personas | Claude Code on a pinned device and folder, relay only | as today |
-| Code reviewer | Codex (or Claude Code) harness pinned **Review only**, same folder as the code persona | the user makes it in the editor; no seed, since only the user knows the folder |
+| Code reviewer | No coding agent: a blind agent of any role that does not write code (Critic, Verifier), on a different model where possible, reviewing the writer's `git diff` as text | nothing to set up |
 
 Orchestrator is retired: its fan-out knowledge moves into the lead's recipes.
 Secretary keeps spawn rights: the junk it made came from permanent helper
@@ -104,8 +104,8 @@ prompt, so a user who rewrites Normal keeps them.
 - **Independent attempts** (Grok Heavy shape) — 2–3 agents on different
   models solve it separately; the lead compares and keeps the best reasoning,
   not the majority.
-- **Code** — code persona implements; Code reviewer (Codex) reviews the diff
-  blind; findings go back to the code persona once; one report to the user.
+- **Code** — code persona implements and reports its `git diff`; a blind
+  non-coding agent on another model reviews that text; findings go back to the code persona once; one report to the user.
 
 ## Memory
 
@@ -132,11 +132,16 @@ briefs; blind agents get none. Project-scoped memory is a separate track.
    view shows agents, remove persona-management ops, v5 migration.
 2. Lead + recipes: role list and recipes in the spawning preamble, agent
    reports free against the exchange cap, Orchestrator retired.
-3. Code loop: `PersonaHarnessPin.reviewOnly` (Codex `read-only` mode,
-   Claude Code `default` mode; Stem answers every ask itself: built-in
-   read-only commands inside the folder run, everything else is refused, never
-   a card; a device must ack the flag or the run is refused), Code recipe when
-   both a writing and a reviewing role are startable, and no background facts
-   for a recall-off persona's coding agent.
+3. Code loop: Code recipe when a coding role is startable. The writer ends
+   its report with the full `git diff`; a blind agent of a non-coding role,
+   on a different model where possible, reviews that text; findings go back
+   to the writer once; one report. No background facts for a recall-off
+   persona's coding agent (`noRecall`). A review-only coding agent was built
+   first (6567c44) and reverted: live tests on 2026-10-09 showed Codex's
+   `read-only` mode still writing in the workspace (the user's own
+   `~/.codex/config.toml` sandbox setting won, and a `-c` override was
+   ignored), and Claude Code's repo `.claude` settings or an earlier "Always
+   allow" approve edits before Stem is asked. A reviewer that only reads a
+   diff cannot edit anything.
 4. Measure: run real past requests (Gemma benchmark, CFK-1723, two research
    asks) Direct vs Council/Code, judged blind; tune recipes only on that.
