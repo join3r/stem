@@ -391,3 +391,43 @@ describe('learn on use: injected-doc log → distill citation', () => {
     expect(recallStore.getUnconsumedTurnDocs(['turn-use-1'])).toHaveLength(0);
   });
 });
+
+describe("'new' mode chosen before the first scan", () => {
+  it('counts the files the first scan finds as learned, and learns only later ones', async () => {
+    const { writeFileSync } = await import('node:fs');
+    const { addConnectedFolders, updateConnectedFolder } = await import('../../src/server/workspace/connected-folders');
+    const { learnAllIndexedFolders, scanAllIndexedFolders, seedFolderLearnMarks } = await import(
+      '../../src/server/folder-index'
+    );
+    const root = join(dir, 'fresh-new-mode');
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'old-a.md'), '# A\nThe garage door code is 4411.');
+    writeFileSync(join(root, 'old-b.md'), '# B\nThe boiler is serviced every November.');
+
+    // What the connect wizard does: connect, then index + 'new' in one patch,
+    // before any scan has run (the IPC handler seeds the marks right away).
+    const folder = (await addConnectedFolders([root])).find((f) => f.path.endsWith('fresh-new-mode'))!;
+    await updateConnectedFolder(folder.id, { index: true, learnMode: 'new' });
+    await seedFolderLearnMarks(folder.id);
+
+    const seen: string[] = [];
+    const makeLlm = (): LlmClient => ({
+      complete: async (prompt: string) => {
+        seen.push(prompt);
+        return claimsReply([]);
+      }
+    });
+
+    await scanAllIndexedFolders();
+    await learnAllIndexedFolders({ makeLlm });
+    expect(seen).toHaveLength(0);
+
+    writeFileSync(join(root, 'later.md'), '# Later\nThe new router password is on the fridge.');
+    await scanAllIndexedFolders();
+    await learnAllIndexedFolders({ makeLlm });
+    expect(seen.join('\n')).toContain('router password');
+    expect(seen.join('\n')).not.toContain('garage door');
+
+    await updateConnectedFolder(folder.id, { index: false });
+  });
+});

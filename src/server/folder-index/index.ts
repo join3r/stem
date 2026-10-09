@@ -159,6 +159,14 @@ export async function scanAllIndexedFolders(): Promise<void> {
         if (res.indexed > 0 || res.removed > 0) {
           log('folder-index', `scanned ${f.label}`, { indexed: res.indexed, removed: res.removed });
         }
+        store.markScanned();
+        // A folder put in 'new' mode before its files were indexed: what this
+        // scan found was already there, so it counts as learned.
+        if (effectiveLearnMode(f) === 'new' && !store.hasLearnBaseline() && baselineReady(f, store)) {
+          store.stampAllLearned();
+          store.markLearnBaseline();
+          log('folder-learn', `learning from new and changed files in ${f.label} from now on`);
+        }
       } catch (err) {
         activity.fail('folders.scan', err, `Scanning ${f.label}`);
         log('folder-index', `scan failed for ${f.label}`, { error: (err as Error).message });
@@ -203,13 +211,26 @@ export async function getFolderIndexStatuses(): Promise<Record<string, FolderInd
 }
 
 /**
+ * Whether the index holds the folder's whole current content: scanned at least
+ * once, and for a client folder, mirrored up in full at least once.
+ */
+function baselineReady(f: ConnectedFolder, store: FolderIndexStore): boolean {
+  return store.hasScanned() && (!f.origin || !!f.lastSyncedAt);
+}
+
+/**
  * Seed a folder's learn marks for 'new' mode: everything currently indexed
  * counts as already learned, so only files added/changed from now on distill.
  * Also how switching away from a running 'all' sweep cancels its backlog.
  */
 export async function seedFolderLearnMarks(folderId: string): Promise<void> {
   try {
-    storeFor(folderId).stampAllLearned();
+    const store = storeFor(folderId);
+    store.stampAllLearned();
+    // Before the first scan (or a client folder's first full mirror) there is
+    // nothing to stamp yet; the scan that fills the index sets the baseline.
+    const folder = (await listConnectedFolders()).find((f) => f.id === folderId);
+    if (folder && baselineReady(folder, store)) store.markLearnBaseline();
   } catch (err) {
     log('folder-learn', 'seeding learn marks failed', { folderId, error: (err as Error).message });
   }
@@ -265,7 +286,14 @@ export async function learnAllIndexedFolders(opts: {
       }
       const folders = (await indexedFolders()).filter((f) => {
         const mode = effectiveLearnMode(f);
-        return mode === 'new' || mode === 'all';
+        if (mode === 'all') return true;
+        if (mode !== 'new') return false;
+        try {
+          return storeFor(f.id).hasLearnBaseline();
+        } catch (e) {
+          degrade('folder-learn.pending', 'skipped a folder whose backlog would not read', e);
+          return false;
+        }
       });
       const target = folders.find((f) => {
         try {

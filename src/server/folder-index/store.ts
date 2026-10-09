@@ -335,6 +335,30 @@ export class FolderIndexStore {
     this.open().prepare(`UPDATE docs SET learned_hash = hash`).run();
   }
 
+  // 'new' mode needs a baseline: "everything already here counts as learned"
+  // only means something once the folder's files are actually in the index. A
+  // folder switched to 'new' before its first scan (the connect wizard does
+  // exactly that) would otherwise index every file unstamped and sweep it all.
+  // The drain skips a 'new' folder until its baseline is set.
+
+  /** True once a scan pass has completed over this index. */
+  hasScanned(): boolean {
+    return this.readMeta('scanned') !== null;
+  }
+
+  markScanned(): void {
+    this.writeMeta('scanned', '1');
+  }
+
+  /** True once 'new' mode's "learned up to here" stamp covers a full index. */
+  hasLearnBaseline(): boolean {
+    return this.readMeta('learn_baseline') !== null;
+  }
+
+  markLearnBaseline(): void {
+    this.writeMeta('learn_baseline', '1');
+  }
+
   /** Total indexed text volume — the "≈N model calls" estimate's numerator. */
   totalTextChars(): number {
     return (this.open()
