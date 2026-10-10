@@ -11,6 +11,8 @@ import { getMemoryRebuildStatus, runMemoryRebuildStep } from '../recall/rebuild'
 import { summarizeFactTexts } from '../recall/audit';
 import { recallStore } from '../recall/store';
 import { curateSkills } from '../skills/curate';
+import { migrateSkillProvenance } from '../skills/provenance';
+import { degrade } from '../degrade';
 import { applyAutomaticTransitions } from '../skills/lifecycle';
 import { isSettlePassRunning } from './skills';
 import { getEmbeddingsClient } from '../recall/retrieval';
@@ -213,15 +215,23 @@ export function initRecallTasks(deps: {
       // step 4). Synchronous fs work over a dozen small files — cheap enough to sit
       // in front of the early return.
       const expired = applyAutomaticTransitions();
+      // Labels before the curator reads them: it decides what it may touch by
+      // origin, and older installs stored card approvals as the user's own asks.
+      // Relabelling needs no model; untangling waits until memory is on.
+      const provenance = await migrateSkillProvenance(isRecallEnabled() ? skillsLlm : null).catch((error: unknown) => {
+        degrade('skills.provenance', 'left skill labels as they were', error);
+        return null;
+      });
+      const repaired = provenance ? Object.keys(provenance.relabeled).length + provenance.untangled.length : 0;
       if (!isRecallEnabled()) {
-        if (expired) await deps.runtime().requestSkillReload();
+        if (expired || repaired) await deps.runtime().requestSkillReload();
         return;
       }
       const res = await activity.track('skills.curate', 'Curating skills', () => curateSkills(skillsLlm), (r) => ({
         worked: r.split + r.merged + r.archived + expired > 0,
         detail: `Split ${r.split}, merged ${r.merged}, archived ${r.archived}, expired ${expired}`
       }));
-      if (res.split || res.merged || res.archived || expired) await deps.runtime().requestSkillReload();
+      if (res.split || res.merged || res.archived || expired || repaired) await deps.runtime().requestSkillReload();
     } catch {
       // quiet: track() already failed the skills.curate row.
     } finally {

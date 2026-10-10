@@ -241,16 +241,20 @@ export function splitCandidate(skill: { body: string; description: string }): bo
 
 // ---- backups ----
 
-class History {
+export class History {
   private dir: string | null = null;
   private saved = new Set<string>();
+
+  /** `label` names the run apart from the curator's own, e.g. "relabel". */
+  constructor(private readonly label?: string) {}
 
   /** Copy a skill's current SKILL.md aside before it is rewritten or removed. Throws when it cannot. */
   keep(slug: string): void {
     if (this.saved.has(slug)) return;
     const root = skillsRoot();
     if (!this.dir) {
-      this.dir = join(root, HISTORY_DIR, new Date().toISOString().replace(/[:.]/g, '-'));
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      this.dir = join(root, HISTORY_DIR, this.label ? `${stamp}-${this.label}` : stamp);
       mkdirSync(this.dir, { recursive: true });
     }
     writeFileSync(join(this.dir, `${slug}.md`), readFileSync(join(root, slug, 'SKILL.md'), 'utf8'), 'utf8');

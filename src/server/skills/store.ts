@@ -281,6 +281,26 @@ export function saveSkill(draft: SkillDraft, opts: { origin: SkillOrigin; expect
 }
 
 /**
+ * Change only a skill's `origin`, leaving its text, version and dates as they are.
+ * The one write that may relabel: the provenance migration (skills/provenance.ts),
+ * correcting labels an older Stem got wrong. Every other writer keeps the original.
+ */
+export function relabelSkill(slug: string, origin: SkillOrigin): WriteResult {
+  const root = skillsRoot();
+  const existing = readRecordIn(root, slug);
+  if (!existing) return { ok: false, error: `No skill "${slug}".` };
+  const record = { ...existing, origin };
+  try {
+    writeFileSync(join(root, slug, SKILL_FILE), composeSkillMd(record), 'utf8');
+  } catch (error) {
+    // quiet: the caller gets the reason; the old label stays and the pass runs again.
+    return { ok: false, error: `Could not relabel skill "${slug}": ${message(error)}` };
+  }
+  bumpSkillsRev(root);
+  return { ok: true, slug, record, created: false };
+}
+
+/**
  * Delete a skill directory. `requireAgentAuthored` is the guard the model's own
  * tool runs under: it may retire what it wrote, never a file the user put there.
  */

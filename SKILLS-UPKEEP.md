@@ -561,3 +561,20 @@ What changed (`skills/curate.ts`, `skills/contract.ts`):
 Not done, from the same research: synthetic queries per skill as extra index
 text and as a confusability regression test after each split/merge (Re-Invoke,
 arXiv 2408.01875); admission by verified re-run (ASI).
+
+### Imports and older libraries (same day)
+
+- **Imports are never edited automatically.** The end-of-turn pass skips a turn
+  that followed or reported an `imported` skill (no patch, no near-duplicate
+  beside it), and an auto-mode edit to one becomes an approval card. A wrong
+  step in an import is for its upstream to fix, or for the user to ask about.
+- **Provenance migration** (`skills/provenance.ts`, once per install, before the
+  curator). Older Stems stored card approvals as `user-requested` and could not
+  tell an import from an ask, and the old curator merged Stem skills into the
+  user's own. The sessions' `manage_skill` saves are the evidence: only Stem
+  saved it (or no save at all, where the sessions reach back past its creation)
+  → `approved`; the user saved text that was pasted or fetched, or a skill file
+  arrived that turn → `imported`; no evidence → the label stays. A locked skill
+  that drifted from the user's last save gets one model call that moves other
+  jobs out as `approved` skills; an import is restored to what was installed.
+  Backups in `.curator-history/<run>-relabel`; marker `.skills-provenance.json`.
