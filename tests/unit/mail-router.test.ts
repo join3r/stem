@@ -84,6 +84,12 @@ interface FakeBackend {
    * runs them instead.
    */
   scriptsByPersona: Record<string, TurnScript[]>;
+  /** Mid-turn mail the router handed a live turn (steerTurn), in order. */
+  steers: { id: string; turnId: string; message: string }[];
+  /** Whether steerConsumed reports steered mail as read by the model. */
+  steersRead: boolean;
+  /** False = a backend without steering: steerTurn refuses every turn. */
+  steering: boolean;
 }
 
 function fakeBackend(): FakeBackend {
@@ -94,8 +100,12 @@ function fakeBackend(): FakeBackend {
     interrupted: [],
     script: { mode: 'ok', reply: 'the reply' },
     scripts: [],
-    scriptsByPersona: {}
+    scriptsByPersona: {},
+    steers: [],
+    steersRead: true,
+    steering: true
   };
+  const liveTurns = new Set<string>();
   let nextThread = 0;
   let mailBridge: MailBridge | null = null;
   const transcripts = new Map<string, { role: string; content: string }[]>();
@@ -118,6 +128,7 @@ function fakeBackend(): FakeBackend {
         for (const content of script.replies ?? [script.reply ?? ''])
           log.push({ role: 'assistant', content });
       transcripts.set(threadId, log);
+      liveTurns.add(turnId);
       setTimeout(() => {
         void (async () => {
           // The turn's tool phase: bridge calls happen while the turn is live,
@@ -130,6 +141,7 @@ function fakeBackend(): FakeBackend {
               turnId
             });
           }
+          liveTurns.delete(turnId);
           emitter.emit('event', {
             method: script.parked ? 'turn/aborted' : script.mode === 'ok' ? 'turn/completed' : 'turn/failed',
             params: {
@@ -144,6 +156,13 @@ function fakeBackend(): FakeBackend {
       }, 0);
       return { threadId, turnId };
     },
+    steerTurn: async (turnId: string, message: string) => {
+      if (!fake.steering || !liveTurns.has(turnId)) return null;
+      const id = `steer-${fake.steers.length + 1}`;
+      fake.steers.push({ id, turnId, message });
+      return id;
+    },
+    steerConsumed: () => fake.steersRead,
     listModels: async () => [{ id: 'e2e/stem-e2e-model', isDefault: true }],
     readThread: async (threadId: string) => ({
       title: 't',
@@ -1421,22 +1440,19 @@ describe('stop control', () => {
 
 describe('send budgets', () => {
   it('caps a persona’s own sends but never its reply to its initiator', async () => {
-    await savePersona({ id: 'verifier', name: 'Verifier', prompt: 'v', sendBudget: 1 });
+    // A consulted lead with a budget of one: its first agent spends it, the
+    // second is refused, and its plain reply to the driver still flows.
+    await savePersona({ id: 'verifier', name: 'Verifier', prompt: 'v', sendBudget: 1, canSpawn: true });
     const fake = fakeBackend();
     const router = makeRouter(fake);
-    fake.scriptsByPersona.verifier = [
+    fake.scriptsByPersona.orchestrator = [
       {
         mode: 'ok',
-        reply: 'consulting',
+        reply: 'delegating',
         bridge: async (bridge, ctx) => {
-          expect((await bridge.send({ to: ['orchestrator'], body: 'check' }, ctx)).ok).toBe(true);
-          const refused = await bridge.send({ to: ['secretary'], body: 'and you' }, ctx);
-          expect(refused.ok).toBe(false);
-          if (!refused.ok) expect(refused.error).toContain('budget');
+          expect((await bridge.send({ to: ['verifier'], body: 'check' }, ctx)).ok).toBe(true);
         }
       },
-      // Budget spent — the implicit reply back to the orchestrator still flows.
-      { mode: 'ok', reply: 'exempt reply' },
       // The driver ends the chain ON THE USER so no delivery outlives the test.
       {
         mode: 'ok',
@@ -1447,12 +1463,22 @@ describe('send budgets', () => {
       },
       { mode: 'ok', reply: 'fresh window' }
     ];
-    fake.scriptsByPersona.orchestrator = [
-      { mode: 'ok', reply: 'verdict' },
-      { mode: 'ok', reply: 'noted' }
+    fake.scriptsByPersona.verifier = [
+      {
+        mode: 'ok',
+        reply: 'consulting',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.spawnAgent({ role: 'secretary', name: 'helper', brief: 'look' }, ctx)).ok).toBe(true);
+          const refused = await bridge.spawnAgent({ role: 'secretary', name: 'second', brief: 'and you' }, ctx);
+          expect(refused.ok).toBe(false);
+          if (!refused.ok) expect(refused.error).toContain('budget');
+        }
+      },
+      // Budget spent — the implicit reply back to the orchestrator still flows.
+      { mode: 'ok', reply: 'exempt reply' }
     ];
     const { conversations } = await router.compose({
-      to: ['verifier', 'orchestrator', 'secretary'],
+      to: ['orchestrator', 'verifier', 'secretary'],
       subject: 'budget',
       body: 'go'
     });
@@ -1467,8 +1493,8 @@ describe('send budgets', () => {
         (i) => i.from === 'verifier' && i.to.includes('orchestrator') && i.body === 'exempt reply'
       )
     ).toBe(true);
-    // Only the initiated send counted — the exempt reply spent nothing.
-    expect(mail.conversations[0].sendCounts).toEqual({ verifier: 1 });
+    // Only the initiated sends counted — the exempt reply spent nothing.
+    expect(mail.conversations[0].sendCounts).toEqual({ orchestrator: 1, verifier: 1 });
 
     // A user reply opens a fresh window: the counts reset.
     await router.reply(conversations[0].id, 'again');
@@ -2688,5 +2714,265 @@ describe('parked runs', () => {
     expect(await router.stopConversation(conversations[0].id)).toEqual({ stopped: true });
     expect((await readMail()).items.find((i) => i.id === item.id)?.approval?.status).toBe('cancelled');
     expect((await router.resolveApproval(item.id, 'allow')).ok).toBe(false);
+  });
+});
+
+// The 2026-10-10 audit thread: after the driver had sent its report, a
+// helper's late mail woke it, the two traded acknowledgements, and the
+// exchange cap finally forced an empty placeholder mail onto the user.
+describe('after the answer', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('files a helper’s late mail once the driver has answered the user — no new driver turn', async () => {
+    await savePersona({ id: 'verifier', name: 'Verifier', prompt: 'v' });
+    const fake = fakeBackend();
+    // Without steering, part 2 waits in the queue behind the driver's turn.
+    fake.steering = false;
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.orchestrator = [
+      {
+        mode: 'ok',
+        reply: 'delegating',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['verifier'], body: 'check' }, ctx)).ok).toBe(true);
+          expect((await bridge.send({ to: ['secretary'], body: 'check too' }, ctx)).ok).toBe(true);
+        }
+      },
+      // Answers the user on the first part; slow enough that part 2 queues behind it.
+      {
+        mode: 'ok',
+        reply: '',
+        bridge: async (bridge, ctx) => {
+          await sleep(80);
+          expect((await bridge.send({ to: ['user'], body: 'final report' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'Acknowledged.' }
+    ];
+    fake.scriptsByPersona.verifier = [
+      {
+        mode: 'ok',
+        reply: '',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['orchestrator'], body: 'part 1' }, ctx)).ok).toBe(true);
+          await sleep(30);
+          expect((await bridge.send({ to: ['orchestrator'], body: 'part 2' }, ctx)).ok).toBe(true);
+        }
+      }
+    ];
+    // A slower helper whose plain reply lands after the answer.
+    fake.scriptsByPersona.secretary = [
+      {
+        mode: 'ok',
+        reply: 'part 3',
+        bridge: async () => {
+          await sleep(200);
+        }
+      }
+    ];
+    await router.compose({ to: ['orchestrator', 'verifier', 'secretary'], subject: 'audit', body: 'go' });
+    const mail = await vi.waitFor(
+      async () => {
+        const m = await readMail();
+        expect(m.items.some((i) => i.body === 'final report')).toBe(true);
+        expect(m.items.some((i) => i.body === 'part 3')).toBe(true);
+        expect(m.conversations[0].status).toBe('idle');
+        return m;
+      },
+      { timeout: 3000 }
+    );
+    await sleep(50);
+    // part 2 was queued when the driver answered; part 3 came after. Both are
+    // kept in the thread, marked filed, and neither started a driver turn.
+    expect(fake.starts.filter((s) => s.persona?.id === 'orchestrator')).toHaveLength(2);
+    const byBody = (body: string) => mail.items.find((i) => i.body === body);
+    expect(byBody('part 1')?.filed).toBeUndefined();
+    const final = await readMail();
+    expect(final.items.find((i) => i.body === 'part 2')?.filed).toBe(true);
+    expect(final.items.find((i) => i.body === 'part 3')?.filed).toBe(true);
+    // The user got the report and nothing else.
+    expect(final.items.filter((i) => i.to.includes('user')).map((i) => i.body)).toEqual(['final report']);
+  });
+
+  it('a user mail opens a filed wave again', async () => {
+    await savePersona({ id: 'verifier', name: 'Verifier', prompt: 'v' });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.orchestrator = [
+      { mode: 'ok', reply: 'first answer' },
+      {
+        mode: 'ok',
+        reply: '',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['verifier'], body: 'check again' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'second answer' }
+    ];
+    fake.scriptsByPersona.verifier = [{ mode: 'ok', reply: 'fine' }];
+    const { conversations } = await router.compose({ to: ['orchestrator', 'verifier'], subject: 's', body: 'q1' });
+    await settledMail();
+    await router.reply(conversations[0].id, 'q2');
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'second answer' && i.to.includes('user'))).toBe(true);
+      expect(m.items.find((i) => i.body === 'fine')?.filed).toBeUndefined();
+    });
+  });
+
+  it('sends a coordinator’s plain final message up to the user, never back down to its helper', async () => {
+    await savePersona({ id: 'verifier', name: 'Verifier', prompt: 'v' });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.orchestrator = [
+      {
+        mode: 'ok',
+        reply: '',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['verifier'], body: 'check' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'the answer' }
+    ];
+    fake.scriptsByPersona.verifier = [{ mode: 'ok', reply: 'facts' }];
+    await router.compose({ to: ['orchestrator', 'verifier'], subject: 's', body: 'q' });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'the answer')).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+      return m;
+    });
+    const answer = mail.items.find((i) => i.body === 'the answer');
+    expect(answer?.to).toEqual(['user']);
+    expect(fake.starts.filter((s) => s.persona?.id === 'verifier')).toHaveLength(1);
+  });
+
+  it('mails nothing for a helper that ends empty; the driver gets a one-line note instead', async () => {
+    await savePersona({ id: 'verifier', name: 'Verifier', prompt: 'v' });
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.orchestrator = [
+      {
+        mode: 'ok',
+        reply: '',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.send({ to: ['verifier'], body: 'check' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'answered without it' }
+    ];
+    fake.scriptsByPersona.verifier = [{ mode: 'ok', reply: '' }];
+    await router.compose({ to: ['orchestrator', 'verifier'], subject: 's', body: 'q' });
+    const mail = await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'answered without it')).toBe(true);
+      return m;
+    });
+    expect(mail.items.some((i) => i.from === 'verifier')).toBe(false);
+    expect(mail.items.some((i) => i.body.includes('finished without writing'))).toBe(false);
+    expect(fake.starts.at(-1)?.input).toContain('Verifier finished its turn without writing a reply.');
+  });
+
+  it('a join branch that ends empty settles with a note, and an empty assembly after an answer mails nothing', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.orchestrator = [
+      {
+        mode: 'ok',
+        reply: '',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.spawnAgent({ role: 'secretary', name: 'helper', brief: 'look' }, ctx)).ok).toBe(true);
+          expect((await bridge.send({ to: ['user'], body: 'interim answer' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: '' }
+    ];
+    fake.script = { mode: 'ok', reply: '' };
+    await router.compose({ to: ['orchestrator'], subject: 's', body: 'q' });
+    await vi.waitFor(async () => {
+      expect(fake.starts.filter((s) => s.persona?.id === 'orchestrator')).toHaveLength(2);
+      const m = await readMail();
+      expect(m.conversations[0].status).toBe('idle');
+    });
+    const assembly = fake.starts.filter((s) => s.persona?.id === 'orchestrator')[1];
+    expect(assembly.input).toContain('helper finished without writing a reply.');
+    const final = await readMail();
+    expect(final.items.filter((i) => i.to.includes('user')).map((i) => i.body)).toEqual(['interim answer']);
+  });
+
+  it('still tells the user when the driver ends empty without ever answering', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.script = { mode: 'ok', reply: '' };
+    await router.compose({ to: ['orchestrator'], subject: 's', body: 'q' });
+    const mail = await settledMail();
+    expect(mail.items.at(-1)?.body).toBe('(The persona finished without writing a reply.)');
+  });
+});
+
+describe('mail to a persona mid-turn', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function correctionScripts(fake: FakeBackend) {
+    fake.scriptsByPersona.orchestrator = [
+      {
+        mode: 'ok',
+        reply: '',
+        bridge: async (bridge, ctx) => {
+          expect((await bridge.spawnAgent({ role: 'secretary', name: 'helper', brief: 'audit the logs' }, ctx)).ok).toBe(true);
+          await sleep(30);
+          expect((await bridge.send({ to: ['secretary~helper'], body: 'correction: match +2 s' }, ctx)).ok).toBe(true);
+        }
+      },
+      { mode: 'ok', reply: 'final' }
+    ];
+    fake.script = {
+      mode: 'ok',
+      reply: 'helper report',
+      bridge: async () => {
+        await sleep(120);
+      }
+    };
+  }
+
+  it('hands a coordinator’s follow-up to the agent’s live turn instead of queueing a new turn', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    correctionScripts(fake);
+    await router.compose({ to: ['orchestrator'], subject: 's', body: 'q' });
+    const mail = await vi.waitFor(
+      async () => {
+        const m = await readMail();
+        expect(m.items.some((i) => i.body === 'final')).toBe(true);
+        expect(m.conversations[0].status).toBe('idle');
+        return m;
+      },
+      { timeout: 3000 }
+    );
+    expect(fake.steers).toHaveLength(1);
+    expect(fake.steers[0].message).toContain('correction: match +2 s');
+    // Neutral wording: the agent is not told who sent it.
+    expect(fake.steers[0].message).not.toContain('Orchestrator');
+    expect(fake.starts.filter((s) => s.persona?.id === 'secretary~helper')).toHaveLength(1);
+    // The mail itself is still in the thread.
+    expect(mail.items.some((i) => i.body === 'correction: match +2 s')).toBe(true);
+  });
+
+  it('delivers a steered mail the model never read the ordinary way once the turn ends', async () => {
+    const fake = fakeBackend();
+    fake.steersRead = false;
+    const router = makeRouter(fake);
+    correctionScripts(fake);
+    await router.compose({ to: ['orchestrator'], subject: 's', body: 'q' });
+    await vi.waitFor(
+      async () => {
+        const helper = fake.starts.filter((s) => s.persona?.id === 'secretary~helper');
+        expect(helper).toHaveLength(2);
+        expect(helper[1].input).toContain('correction: match +2 s');
+        const m = await readMail();
+        expect(m.conversations[0].status).toBe('idle');
+      },
+      { timeout: 3000 }
+    );
   });
 });

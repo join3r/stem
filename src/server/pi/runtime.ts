@@ -121,6 +121,7 @@ import { piMcpConfigPath, skillsRoot } from '../workspace/paths';
 import { readUsage, recordGrades, recordInjections, recordUses } from '../skills/usage';
 import { formatSkillsBlock, selectSkills, type SkillUsageStat } from '../skills/inject';
 import { loadedSkillNames } from '../skills/thread-history';
+import { AmbientBlocks, liveUserTexts } from './context-dedupe';
 import { formatPracticeBlock } from '../skills/record';
 import { listSkillRecords } from '../skills/store';
 import { gradeSkillUse, reportedSkillIssues } from '../skills/grade';
@@ -642,6 +643,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * cap — turn ids are never reused, so a stale latch can't cancel anything.
    */
   private preStartCancels = new Set<string>();
+  /**
+   * Steered messages by id: false until pi shows the model the message (its
+   * user message_start), true after. Read once by steerConsumed, which drops
+   * the entry; bounded like preStartCancels in case a caller never asks.
+   */
+  private steersRead = new Map<string, boolean>();
   /**
    * The last few settled turns, newest last, for skill authoring after the fact.
    * `/learn` and the "Save as skill" button both act on a turn the user has
@@ -1594,6 +1601,55 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     log('pi.interrupt', 'thread interruption requested', { threadId, turnId: live.currentTurn!.turnId, reason: reason ?? 'unspecified' });
     this.abortLiveTurn(live, live.currentTurn!, reason);
     return true;
+  }
+
+  /**
+   * A mail that arrived for a persona mid-turn (a lead's correction to the
+   * agent it briefed seconds ago): give it to the live turn instead of
+   * queueing a whole new turn behind it. On 2026-10-10 a lead's matching fix,
+   * sent 25 s after the brief, reached the agent six minutes later — after the
+   * agent had finished the job without it.
+   *
+   * pi's `steer` is only handed over while a tool is executing: pi then reads
+   * it after the tools and before the next model call, inside the same run.
+   * Sent in the gap after the model's final answer, it would instead start a
+   * continuation after agent_end, which this turn's bookkeeping never sees.
+   * So a steer arriving while the model is thinking or writing waits on the
+   * turn for its next tool start, and one still unsent or unread when the turn
+   * ends is cleared from pi's queue at settle (settleTurn) and reported unread.
+   */
+  async steerTurn(turnId: string, message: string): Promise<string | null> {
+    const worker = this.workers.find((w) => w.proc && w.currentTurn?.turnId === turnId);
+    const turn = worker?.currentTurn;
+    if (!worker || !turn || turn.aborted || turn.abortRequested) return null;
+    const id = randomUUID();
+    const steer = { id, message: `<!--stem:steer id="${id}"-->\n${message}`, sent: false };
+    this.steersRead.set(id, false);
+    while (this.steersRead.size > PRE_START_CANCEL_CAP) {
+      const oldest = this.steersRead.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.steersRead.delete(oldest);
+    }
+    (turn.steers ??= []).push(steer);
+    if ((turn.toolsRunning ?? 0) > 0) this.sendSteer(worker, turn, steer);
+    return id;
+  }
+
+  steerConsumed(steerId: string): boolean {
+    const read = this.steersRead.get(steerId) === true;
+    this.steersRead.delete(steerId);
+    return read;
+  }
+
+  /** Hand one held steer to pi, if its turn is still the live one. */
+  private sendSteer(worker: PiWorker, turn: TurnContext, steer: { message: string; sent: boolean }): void {
+    if (steer.sent || worker.currentTurn !== turn || !worker.proc) return;
+    steer.sent = true;
+    // Fire-and-forget: a refusal leaves the steer unread, and settle-time
+    // reporting already turns "unread" into an ordinary delivery.
+    worker.proc.request({ type: 'steer', message: steer.message }, 10_000).catch((error) => {
+      degrade('pi.steer', 'queued a mid-turn mail for the next turn instead', error);
+    });
   }
 
   /** Abort the streaming turn: pi's abort reaches the extension tool, but the
@@ -3877,6 +3933,24 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (p && !turn.memoryTainted && turn.privateRoots?.length && pathInsideAny(p, turn.privateRoots, this.options.workspaceRoot)) {
         this.taintTurn(turn);
       }
+      // A tool is running, so pi will read a steer before its next model call:
+      // hand over whatever mail waited for this moment (steerTurn).
+      turn.toolsRunning = (turn.toolsRunning ?? 0) + 1;
+      for (const steer of turn.steers ?? []) this.sendSteer(worker, turn, steer);
+    } else if (ev.type === 'tool_execution_end') {
+      turn.toolsRunning = Math.max(0, (turn.toolsRunning ?? 0) - 1);
+    } else if (ev.type === 'message_start' && turn.steers?.length) {
+      // The model is shown a steered mail as a user message of its own.
+      const message = ev.message as { role?: string; content?: unknown } | undefined;
+      if (message?.role === 'user') {
+        const text =
+          typeof message.content === 'string'
+            ? message.content
+            : Array.isArray(message.content)
+              ? message.content.map((part: { text?: unknown }) => (typeof part?.text === 'string' ? part.text : '')).join('')
+              : '';
+        for (const steer of turn.steers) if (text.includes(`<!--stem:steer id="${steer.id}"-->`)) this.steersRead.set(steer.id, true);
+      }
     }
     const { events, done } = normalizePiEvent(ev, turn);
     const now = Date.now();
@@ -3924,6 +3998,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * work until agent_settled (see onPiEvent). */
   private settleTurn(worker: PiWorker, turn: TurnContext, now: number): void {
     turn.endedAt = now;
+    // Steered mail the model never read (the run ended first, or failed) must
+    // not ride into this thread's NEXT prompt as a stale queued message: the
+    // mail router redelivers it the ordinary way (steerConsumed says unread).
+    if (turn.steers?.some((s) => s.sent && this.steersRead.get(s.id) !== true)) {
+      worker.proc?.send({ type: 'clear_queue' });
+    }
     // A computer-control run lives exactly as long as its turn: the Mac drops
     // its banner and helper now, whatever the turn's outcome was.
     if (turn.computerGrant) this.computerBridge?.endThread(turn.threadId);
@@ -4588,49 +4668,60 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // the draft is not in the library yet, so it is handed over here.
     if (input.practiceSkill) blocks.push(formatPracticeBlock(input.practiceSkill));
 
+    // The ambient blocks below go out only when the live context does not
+    // already hold them verbatim (context-dedupe.ts): a long thread, and above
+    // all a mail thread where every delivery is a turn, used to carry one full
+    // copy per message.
+    const ambient = new AmbientBlocks(historySnapshot === undefined ? [] : liveUserTexts(historySnapshot));
     const files = await buildFilesContext();
-    if (files) blocks.push(files);
+    if (files) ambient.add(files, 'the workspace files list');
     const connected = await buildConnectedFoldersContext();
-    if (connected) blocks.push(connected);
+    if (connected) ambient.add(connected, 'the connected folders');
     // Cheap names+signatures catalog of routed MCP tools (schemas fetched on demand
     // via describe_tool). Keeps the prompt floor flat as more servers are added.
     const catalog = await buildMcpCatalogContext(input.persona?.mcpServers ?? null);
-    if (catalog) blocks.push(catalog);
+    if (catalog) ambient.add(catalog, 'the integrations (MCP tool) catalogue');
     // Right after the catalog, and gated the same way as the tools themselves: the
     // MCP list can run to hundreds of entries (browser automation among them), and
     // without this the search tools are the only capability the model can't see
     // from here. Mirrors the gate written above for this turn.
     const web = buildWebSearchContext(input.webSearch ?? true);
-    if (web) blocks.push(web);
+    if (web) ambient.add(web, 'the web access tools');
     // A chat whose coding agent / Mac the model names (Settings → Features →
     // "Let the model choose") is told what it can pick from, fresh each turn.
     if (turn?.codingGrant?.kind === 'chat' && turn.codingGrant.target === null) {
       // quiet: without the list the model can still ask the user, and a wrong pick is refused with the options attached.
       const choices = await codingChoicesText().catch(() => '');
-      if (choices) blocks.push(choices);
+      if (choices) ambient.add(choices, 'the coding agents you can choose');
     }
     if (turn?.computerGrant?.kind === 'chat' && turn.computerGrant.device === null) {
       // quiet: same as the coding list above.
       const choices = await computerChoicesText().catch(() => '');
-      if (choices) blocks.push(choices);
+      if (choices) ambient.add(choices, 'the computers you can control');
     }
     if (turn?.browserGrant?.kind === 'chat' && turn.browserGrant.device === null) {
       // quiet: same as the coding list above.
       const choices = await browserChoicesText().catch(() => '');
-      if (choices) blocks.push(choices);
+      if (choices) ambient.add(choices, 'the browsers you can drive');
     }
     try {
       const exec = (await readSettings()).exec;
       if (exec.enabled) {
         const hint = hostShellAgentHint(resolveHostShell(exec));
-        if (hint) blocks.push(hint);
+        if (hint) ambient.add(hint, 'the shell hint');
       }
     } catch {
       // quiet: the hint only tells the model which shell it is writing commands
       // for; a turn must still go out without it, and exec reads the same
       // settings itself when a command actually runs.
     }
-    if (input.mail || input.scheduled) blocks.push(INBOX_MDX_NOTE);
+    // The Inbox note only where the reply can reach the Inbox: a persona that
+    // does not drive the conversation answers another model (mail/preamble.ts
+    // tells it how to write for one), and component advice would only invite
+    // charts nobody sees.
+    const drivesMail = !input.mail?.participants?.length || input.mail.participants[0] === input.persona?.id;
+    if (input.scheduled || (input.mail && drivesMail)) ambient.add(INBOX_MDX_NOTE, 'the Inbox formatting note');
+    blocks.push(...ambient.blocks());
 
     // Images go to pi natively; text-like files and PDF text layers are inlined,
     // other binaries noted and dropped.

@@ -374,6 +374,20 @@ export interface ChatBackend extends EventEmitter {
   interruptTurn(turnId: string, reason?: string): Promise<void>;
   /** Stop whatever turn this thread is streaming (a practice run taken over); false when none is. */
   interruptThread(threadId: string, reason?: string): boolean;
+  /**
+   * Hand a live turn a message mid-run: the model reads it after a tool call,
+   * before its next step, and the same turn carries on with it. Resolves to an
+   * id to check with steerConsumed once the turn settles, or null when the
+   * turn is not live (nothing was sent; deliver the message the ordinary way).
+   * Absent = not supported.
+   */
+  steerTurn?(turnId: string, message: string): Promise<string | null>;
+  /**
+   * Whether a steered message reached the model before its turn ended. Read
+   * once, after the turn settles: false means the caller still owes the
+   * message an ordinary delivery.
+   */
+  steerConsumed?(steerId: string): boolean;
   listModels(): Promise<ModelSummary[]>;
 
   // recall seam (one-shot completion used by Stem Recall distillation).

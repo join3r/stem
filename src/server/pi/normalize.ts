@@ -163,6 +163,19 @@ export interface TurnContext {
    * authority rule as the task bridge's threadId.
    */
   mail?: { conversationId: string; participants: string[] };
+  /**
+   * Tool executions in flight (pi's tool_execution_start/end), kept by
+   * PiRuntime. A steered mail goes to pi only while one runs: pi then reads it
+   * after the tools, inside this same run (see PiRuntime.steerTurn).
+   */
+  toolsRunning?: number;
+  /**
+   * Steered mail on this turn: handed to pi (`sent`) or held until the next
+   * tool starts. Whether the model read one is PiRuntime's steer ledger; at
+   * settle, anything unread is cleared from pi's queue and the mail router
+   * delivers it the ordinary way.
+   */
+  steers?: { id: string; message: string; sent: boolean }[];
   /** The persona this delivery runs as (the mail bridge's authoritative sender). */
   personaId?: string;
   /**

@@ -3019,6 +3019,13 @@ export interface MailItem {
    */
   stale?: boolean;
   /**
+   * Persona↔persona only: this mail reached a persona that had already given
+   * its answer for the wave (the driver had answered the user, or a lead had
+   * reported back), so it was filed here instead of starting another turn.
+   * The renderer shows it beside that answer, never as consulting under way.
+   */
+  filed?: boolean;
+  /**
    * What the sender attached, for DISPLAY: image thumbnails as data URLs,
    * everything else a named chip. The attachment bytes themselves ride only
    * the delivery turn — they are never persisted here.

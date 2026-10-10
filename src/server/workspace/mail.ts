@@ -97,6 +97,7 @@ function coerceItem(raw: unknown): MailItem | null {
   if (typeof r.subject === 'string' && r.subject) item.subject = r.subject;
   if (typeof r.result === 'string' && r.result) item.result = r.result;
   if (r.stale === true) item.stale = true;
+  if (r.filed === true) item.filed = true;
   if (Array.isArray(r.agentReplies)) {
     const replies = r.agentReplies.filter((t): t is string => typeof t === 'string' && t.length > 0);
     if (replies.length) item.agentReplies = replies;
@@ -631,6 +632,18 @@ export function setMailItemResult(itemId: string, result: string, images?: Gener
     const at = Date.now();
     conversation.updatedAt = Math.max(conversation.updatedAt, at);
     if (item.to.includes('user')) conversation.userUpdatedAt = Math.max(conversation.userUpdatedAt, at);
+  });
+}
+
+/**
+ * Mark persona↔persona items filed (MailItem.filed): their deliveries were
+ * dropped because the recipient had already answered for the wave. Unknown ids
+ * are skipped — the conversation may have been deleted meanwhile.
+ */
+export function markMailItemsFiled(itemIds: string[]): Promise<MailListResult> {
+  const ids = new Set(itemIds);
+  return update((store) => {
+    for (const item of store.items) if (ids.has(item.id)) item.filed = true;
   });
 }
 

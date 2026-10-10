@@ -91,6 +91,32 @@ function cleanName(name: string | undefined): string {
 }
 
 /**
+ * How to write mail that only a model reads — a persona's brief to another, an
+ * agent's report to whoever started it. These were written like letters to
+ * the user: the 2026-10-10 audit thread's helper sent 6,000-character reports
+ * with Markdown tables and headings to a lead that only parsed them. Dense,
+ * not cryptic: the facts stay exact, the ceremony goes.
+ */
+function modelMail(blind: boolean): string {
+  // A blind delivery never mentions the user, not even to say who is absent.
+  return (
+    `Mail between personas and agents is read only by models${blind ? '' : ', never by the user'}, so write it ` +
+    'dense: short clauses, lists over prose, no greetings, thanks, sign-offs or recaps, and nothing the reader ' +
+    'already has. Keep every fact, number, id, path, quote and caveat exact. No MDX components (Stats, Chart, ' +
+    'DataTable…) and no decorative headings in it.'
+  );
+}
+
+/**
+ * The acknowledgement rule. In the same thread the lead and its helper traded
+ * "Confirmed" / "Acknowledged" until the exchange cap stopped them — each
+ * courtesy was a full turn and a full mail.
+ */
+const NO_ACKS =
+  'Never send mail that only acknowledges, thanks or confirms. When a mail asks nothing of you, end your ' +
+  'turn without writing anything: an empty turn sends nothing.';
+
+/**
  * The model-visible mail-delivery preamble, fenced for replay stripping +
  * detection. `self` is the persona this delivery runs as, kept out of the
  * "other personas" line — the first smoke test told Normal that "normal" was
@@ -167,7 +193,10 @@ export function mailPreamble(
       'as one mail. Continue an agent with send_mail to its id. Pick the cheapest way that fits the request — ' +
       'Direct: answer alone; the default, and right for most requests. ' +
       'Checked: your answer rests on facts that could be wrong (numbers, dates, versions, quotes) — draft it, ' +
-      'have one agent of a checking role verify those claims with its tools, then answer. ' +
+      'have one agent of a checking role verify those claims with its tools, then answer. When the job is a ' +
+      'search for every case of something (an audit, a review, finding misses), give the checker a share of ' +
+      'the ground to search itself, not only your finds to confirm: a checker handed just your candidates can ' +
+      'drop the wrong ones but never catch what you missed. ' +
       'Council: a consequential or contested question — in one turn start agents that gather evidence on ' +
       'separate sub-questions, plus a blind critic given your draft to read cold; then answer, revising at ' +
       'most once. ' +
@@ -206,7 +235,7 @@ export function mailPreamble(
       ? others.length
         ? `Also on this conversation: ${others.map(label).join(', ')}. You may bring one in with the send_mail tool when the ` +
           'task calls for its role; its reply arrives as a later mail to you, and your current turn ends after ' +
-          `sending. Your plain final message goes back to whoever mailed you.${spawning ? ` ${spawning}` : ''}`
+          `sending. Your plain final message is your answer, and never goes back to a persona you brought in.${spawning ? ` ${spawning}` : ''}`
         : spawning
       : `You are a consulted participant here; the driver (${label(participants[0])}) alone coordinates the ` +
         `personas, so you cannot mail the others${spawning ? ' except agents you start' : ''}. Answer whoever ` +
@@ -229,11 +258,13 @@ export function mailPreamble(
         'automatically receives the user’s current mail as quoted context, so never restate or paraphrase ' +
         'that mail — send the specific assignment, plus only context the mail itself does not carry. ' +
         'A consulted persona’s reply arrives as a later ' +
-        'mail to you, and your current turn ends after sending. To answer the USER after a consultation, call ' +
-        'send_mail with to ["user"] and fold what the consultations added into that one answer — never repeat ' +
-        'a reply the user can already read. A plain final message goes back to whoever mailed you, which ' +
-        `mid-conversation may be a persona, not the user.${spawning ? ` ${spawning}` : ''}`
-      : 'send_mail can also reach the user directly (to ["user"]) — useful for a progress note mid-work.' +
+        'mail to you, and your current turn ends after sending. Your plain final message always goes to the ' +
+        'user, whoever mailed you: once the consultations are in, write the one answer there, folding in what ' +
+        'they added — never repeat a reply the user can already read, and never mail a persona just to ' +
+        'acknowledge it. Mail that reaches you after you have answered is filed in the thread without waking ' +
+        `you; the user's next mail brings it to you.${spawning ? ` ${spawning}` : ''}`
+      : 'Your plain final message goes to the user. send_mail can also reach the user directly (to ["user"]) — ' +
+        'useful for a progress note mid-work.' +
         (spawning ? ` ${spawning}` : '')
     : `You are a consulted participant here; the driver (${label(participants[0])}) alone answers the user and ` +
       `alone coordinates the personas, so you cannot mail the others${spawning ? ' except agents you start' : ''} ` +
@@ -268,6 +299,17 @@ export function mailPreamble(
     : [];
   const memory = personaNotesBlock(notes, MAIL_CLOSE);
   const standing = standingAnswersBlock(answers, MAIL_CLOSE);
+  // Who reads what this persona writes: a non-driver's every word goes to a
+  // model; a driver's final message goes to the user, but its send_mail to
+  // personas and agents (when it can mail any) goes to models.
+  const writesToModels = !isDriver || !!mail.agent || others.length > 0 || !!mail.canSpawn;
+  const writing = writesToModels
+    ? [
+        isDriver && !mail.agent
+          ? `${modelMail(blind)} ${blind ? 'Your final message' : 'Your answer to the user'} is read by a person: write that one normally. ${NO_ACKS}`
+          : `${modelMail(blind)} That includes your final message. ${NO_ACKS}`
+      ]
+    : [];
   return [
     `<!--stem:mail from=${blind ? '' : mail.from.split('>').join('')}-->`,
     blind
@@ -279,6 +321,7 @@ export function mailPreamble(
     ...(self ? [`You are ${label(self)}.`] : []),
     'Work the task with your tools. Your final message is sent back to the sender as your reply mail — write it as the reply.',
     ...(role ? [role] : []),
+    ...writing,
     ...memory,
     ...standing,
     ...source,

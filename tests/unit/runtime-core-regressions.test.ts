@@ -606,6 +606,71 @@ describe('pi RPC failure handling', () => {
     expect(ran).toBe(true);
   });
 
+  describe('steering mail into a live turn', () => {
+    type SteerInternal = {
+      onPiEvent: (worker: FakeWorker, event: Record<string, unknown>) => void;
+    };
+    const userMessage = (text: string) => ({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text }] } });
+
+    it('holds a steer until a tool runs, then hands it over and records the read', async () => {
+      const { runtime } = await tempRuntime();
+      const worker = workerOf(runtime);
+      const sent: Record<string, unknown>[] = [];
+      worker.proc = {
+        send: (command) => sent.push(command as Record<string, unknown>),
+        request: async (command) => {
+          sent.push(command);
+          return { success: true };
+        }
+      };
+      worker.currentTurn = newTurnContext('thread', 'turn1');
+      const internal = runtime as unknown as SteerInternal;
+
+      const id = await runtime.steerTurn('turn1', 'correction');
+      expect(id).toBeTruthy();
+      // The model is mid-thought: handed over now, pi could start a continuation
+      // after agent_end that this turn never sees.
+      expect(sent.filter((c) => c.type === 'steer')).toHaveLength(0);
+
+      internal.onPiEvent(worker, { type: 'tool_execution_start', toolCallId: 't1', toolName: 'bash', args: {} });
+      const steer = sent.find((c) => c.type === 'steer');
+      expect(steer?.message).toContain('correction');
+      expect(steer?.message).toContain(`<!--stem:steer id="${id}"-->`);
+
+      internal.onPiEvent(worker, { type: 'tool_execution_end', toolCallId: 't1', toolName: 'bash', result: {} });
+      internal.onPiEvent(worker, userMessage(String(steer?.message)));
+      internal.onPiEvent(worker, { type: 'agent_end' });
+      expect(sent.some((c) => c.type === 'clear_queue')).toBe(false);
+      expect(runtime.steerConsumed(id!)).toBe(true);
+    });
+
+    it('clears an unread steer from pi’s queue at settle and reports it unread', async () => {
+      const { runtime } = await tempRuntime();
+      const worker = workerOf(runtime);
+      const sent: Record<string, unknown>[] = [];
+      worker.proc = {
+        send: (command) => sent.push(command as Record<string, unknown>),
+        request: async (command) => {
+          sent.push(command);
+          return { success: true };
+        }
+      };
+      worker.currentTurn = newTurnContext('thread', 'turn1');
+      const internal = runtime as unknown as SteerInternal;
+      internal.onPiEvent(worker, { type: 'tool_execution_start', toolCallId: 't1', toolName: 'bash', args: {} });
+      const id = await runtime.steerTurn('turn1', 'late correction');
+      expect(sent.some((c) => c.type === 'steer')).toBe(true);
+      internal.onPiEvent(worker, { type: 'agent_end' });
+      expect(sent.some((c) => c.type === 'clear_queue')).toBe(true);
+      expect(runtime.steerConsumed(id!)).toBe(false);
+    });
+
+    it('refuses a turn that is not live', async () => {
+      const { runtime } = await tempRuntime();
+      expect(await runtime.steerTurn('nope', 'x')).toBeNull();
+    });
+  });
+
   it('settles a willRetry turn whose promised continuation never came', async () => {
     const { runtime } = await tempRuntime();
     const worker = workerOf(runtime);
@@ -1221,6 +1286,65 @@ describe('scheduled-run turns', () => {
       null
     );
     expect(scheduled.message).toContain(INBOX_MDX_NOTE);
+  });
+
+  // A persona that does not drive the conversation answers another model, so
+  // Inbox component advice is noise there.
+  it('gives the Inbox note to the mail driver only', async () => {
+    const { runtime } = await tempRuntime();
+    type Internal = {
+      buildMessage: (input: Record<string, unknown>, threadId: string, turn: null) => Promise<{ message: string }>;
+    };
+    const internal = runtime as unknown as Internal;
+    const mail = { conversationId: 'c', subject: 's', from: 'user', participants: ['driver', 'spoke'] };
+    const driver = await internal.buildMessage({ input: 'x', mail, persona: { id: 'driver' } }, 't-d', null);
+    expect(driver.message).toContain(INBOX_MDX_NOTE);
+    const spoke = await internal.buildMessage(
+      { input: 'x', mail: { ...mail, from: 'driver' }, persona: { id: 'spoke' } },
+      't-s',
+      null
+    );
+    expect(spoke.message).not.toContain(INBOX_MDX_NOTE);
+  });
+
+  it('does not repeat an ambient block the thread already holds, and names it instead', async () => {
+    const { runtime } = await tempRuntime();
+    const worker = workerOf(runtime);
+    worker.activeThreadId = 't-run';
+    const earlier = `<!--stem:context-->\n${INBOX_MDX_NOTE}\n<!--/stem:context-->\n\nfirst`;
+    worker.proc = {
+      request: async (command) =>
+        command.type === 'get_entries'
+          ? {
+              success: true,
+              data: {
+                leafId: 'a1',
+                entries: [
+                  { type: 'message', id: 'u1', parentId: null, message: { role: 'user', content: [{ type: 'text', text: earlier }] } },
+                  { type: 'message', id: 'a1', parentId: 'u1', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }
+                ]
+              }
+            }
+          : { success: true }
+    };
+    type Internal = {
+      buildMessage: (
+        input: Record<string, unknown>,
+        threadId: string,
+        turn: null,
+        turnId?: string,
+        worker?: unknown
+      ) => Promise<{ message: string }>;
+    };
+    const internal = runtime as unknown as Internal;
+    const input = { input: 'again', scheduled: { at: '2026-10-04T08:00:00Z', taskId: 'task-1' } };
+    const turn = await internal.buildMessage(input, 't-run', null, undefined, worker);
+    expect(turn.message).not.toContain(INBOX_MDX_NOTE);
+    expect(turn.message).toContain('not repeated here): the Inbox formatting note');
+    // Another thread on the same worker shares nothing.
+    worker.activeThreadId = 'other';
+    const fresh = await internal.buildMessage(input, 't-run', null, undefined, worker);
+    expect(fresh.message).toContain(INBOX_MDX_NOTE);
   });
 
   it('a private turn gets no recall block, a one-line notice, and is decided by the store, not the client', async () => {

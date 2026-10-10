@@ -308,3 +308,38 @@ describe('scheduled preamble: what earlier runs reported', () => {
     expect(block).toContain('Reply: rr');
   });
 });
+
+describe('mail preamble: writing for models', () => {
+  it('a spoke writes its whole reply dense and never just acknowledges', () => {
+    const text = mailPreamble({ subject: 's', from: 'driver', participants }, 'spoke');
+    expect(text).toContain('read only by models, never by the user');
+    expect(text).toContain('That includes your final message');
+    expect(text).toContain('Never send mail that only acknowledges');
+  });
+
+  it('an agent does too', () => {
+    const text = mailPreamble(
+      { subject: 's', from: 'driver', participants: ['driver'], agent: { role: 'Normal', spawnedBy: 'driver' } },
+      'normal~helper'
+    );
+    expect(text).toContain('That includes your final message');
+  });
+
+  it('a driver with others writes its mail to them dense but its answer to the user normally, and answers upward', () => {
+    const text = mailPreamble({ subject: 's', from: 'user', participants }, 'driver');
+    expect(text).toContain('read only by models');
+    expect(text).toContain('Your answer to the user is read by a person');
+    expect(text).toContain('Your plain final message always goes to the user');
+    expect(text).not.toContain('may be a persona, not the user');
+  });
+
+  it('a lone driver that cannot mail anyone gets no model-mail rules', () => {
+    const text = mailPreamble({ subject: 's', from: 'user', participants: ['driver'] }, 'driver');
+    expect(text).not.toContain('read only by models');
+  });
+
+  it('a spawning driver is told to give a checker its own share of a search', () => {
+    const text = mailPreamble({ subject: 's', from: 'user', participants: ['driver'], canSpawn: true }, 'driver');
+    expect(text).toContain('give the checker a share of the ground to search itself');
+  });
+});

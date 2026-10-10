@@ -39,6 +39,7 @@ import {
   readMail,
   setConversationSession,
   setConversationStatus,
+  markMailItemsFiled,
   setConversationSubject,
   setMailItemResult
 } from '../workspace/mail';
@@ -63,7 +64,7 @@ import {
 // the mail bridge) appends the item and queues a delivery turn per persona
 // recipient — the SENDING turn then just ends, its implicit reply suppressed
 // because it already spoke. The chain terminates when a turn finishes without
-// send_mail (implicit reply to whoever mailed it) or mails only the user. The
+// send_mail (its implicit reply goes up, see below) or mails only the user. The
 // exchange cap bounds one wave: each user send resets the counter (see
 // workspace/mail.ts), and at the cap the next hop is forced back to the user.
 //
@@ -100,6 +101,23 @@ import {
 // agent opens (or widens) the sender's join, so agents started one call at a
 // time in one turn still come back as one assembly. Agents live on the
 // conversation, never in the persona registry.
+//
+// Replies go up: a turn's plain final message goes to whoever its persona
+// answers to — the driver's to the user, an agent's to whoever started it,
+// any other participant's to the driver — even when the turn was started by a
+// helper's mail. Sent back down (the old rule), a coordinator's
+// "Acknowledged." woke the helper, whose "Acknowledged." woke the coordinator.
+// A turn that ends with no text sends nothing at all (settleSilentTurn).
+//
+// After the answer: once a persona has answered upward and left nothing open
+// (no fan-out, no new work sent down), mail from its own helpers in that wave
+// is filed in the thread — kept, marked `filed`, but starting no turn. The
+// next mail from above (or from the user) opens it again.
+//
+// Mid-turn mail: a send_mail to a persona that is already working on an
+// earlier mail from the same sender is handed to that live turn (steering),
+// so a correction reaches the work it corrects; mail the model never read
+// before its turn ended is delivered the ordinary way.
 //
 // Stale replies: every delivery carries the userSentAt of the user mail its
 // wave answers (the epoch), inherited hop to hop. A reply landing on the user
@@ -149,6 +167,14 @@ interface DeliveryTask {
    * synthetic bodies (implicit-reply hops, join assemblies) never do.
    */
   attachments?: TurnAttachment[];
+  /**
+   * The MailItem this delivery carries, when it carries one (a send_mail or an
+   * implicit-reply hop). A delivery dropped because its recipient had already
+   * answered marks this item filed.
+   */
+  itemId?: string;
+  /** A join's assembly: one turn carrying every branch's reply, no item of its own. */
+  assembly?: boolean;
 }
 
 /**
@@ -182,6 +208,18 @@ interface JoinState {
   buffered: { name: string; body: string; note?: string }[];
   /** Failures/detours, appended to the assembly mail. */
   notes: string[];
+}
+
+/**
+ * What one delivery turn sent through send_mail. `up` = to whoever the sender
+ * answers to (the user, for the driver); `down` = to anyone else — new work
+ * for a persona that reports to it.
+ */
+interface TurnSends {
+  persona: boolean;
+  user: boolean;
+  up: boolean;
+  down: boolean;
 }
 
 /** How a delivery's turn ended: ok, failed, or parked for the user's Allow/Deny. */
@@ -258,7 +296,25 @@ export class MailRouter {
    * What each live delivery turn sent via the bridge, keyed by turn id. A turn
    * that sent anything gets no implicit reply.
    */
-  private readonly turnMailSent = new Map<string, { persona: boolean; user: boolean }>();
+  private readonly turnMailSent = new Map<string, TurnSends>();
+  /**
+   * Personas that have given their answer for a wave, keyed
+   * `${conversationId}\n${personaId}` → the wave's epoch. Set when a turn
+   * answered upward (the driver to the user, anyone else to whoever it reports
+   * to), sent no new work down, and left no fan-out open. Mail from the
+   * persona's own subordinates in that wave is then filed instead of
+   * delivered: on 2026-10-10 the driver had already sent its report when a
+   * helper's late "Confirmed" woke it, and the two traded acknowledgements
+   * until the exchange cap forced an empty mail onto the user. Mail from
+   * anyone it answers to (or a new user mail) opens it again.
+   */
+  private readonly answered = new Map<string, number>();
+  /**
+   * Mail handed to a live turn mid-run (runtime.steerTurn), by that turn's id.
+   * When the turn settles, any the model never read is delivered the ordinary
+   * way.
+   */
+  private readonly turnSteers = new Map<string, { steerId: string; task: DeliveryTask }[]>();
   /** Deliveries queued or in flight per conversation — the status authority. */
   private readonly pending = new Map<string, number>();
   /** The status to write when a conversation's deliveries drain (default idle). */
@@ -271,7 +327,7 @@ export class MailRouter {
    */
   private readonly activityRows = new Map<string, { handle: activity.ActivityHandle; turns: number }>();
   /** Turns currently delivering, by turn id — what stopConversation interrupts. */
-  private readonly activeTurns = new Map<string, { conversationId: string }>();
+  private readonly activeTurns = new Map<string, { conversationId: string; personaId: string }>();
   /**
    * Conversations mid-stop: their aborted turns settle without failure notices
    * (the user who pressed Stop is the one reader a "run failed" mail would
@@ -842,7 +898,13 @@ export class MailRouter {
       'user instead — send_mail to ["user"], or just finish your reply.';
     const budgetRefusal =
       'Your persona’s send budget for this wave is used up. Finish your assignment — your final ' +
-      'reply goes to whoever mailed you — or send_mail to ["user"].';
+      'reply goes to whoever you answer to — or send_mail to ["user"].';
+    // Mail to a persona that has already answered for this wave, from one of
+    // its own subordinates, is filed rather than delivered (see `answered`).
+    const filedTo = personaTo.filter(
+      (t) => !this.joinFor(ctx.conversationId, t) && this.isFiled(conversation, t, ctx.personaId, epoch)
+    );
+    const filed = personaTo.length > 0 && filedTo.length === personaTo.length && !finalTo.includes('user');
     if (personaTo.length) {
       const cap = await this.exchangeCap();
       if (conversation.exchangeCount + exchangeHops(conversation, ctx.personaId, personaTo) > cap) {
@@ -854,12 +916,14 @@ export class MailRouter {
         if (spent + personaTo.length > budget) return { ok: false, error: budgetRefusal };
       }
     }
+    let itemId: string | undefined;
     try {
-      await appendMailItem({
+      const appended = await appendMailItem({
         conversationId: ctx.conversationId,
         from: ctx.personaId,
         to: finalTo,
         body,
+        ...(filed ? { filed: true } : {}),
         ...this.agentRepliesField(conversation.sessions[ctx.personaId]),
         guard: {
           exchangeCap: await this.exchangeCap(),
@@ -868,6 +932,7 @@ export class MailRouter {
         },
         ...(finalTo.includes('user') ? { staleIfUserSentAfter: epoch } : {})
       });
+      itemId = appended.items.at(-1)?.id;
     } catch (error) {
       // With deliveries running in parallel, a racing send can pass the
       // pre-check above and lose here — the store's guard is the authority.
@@ -876,9 +941,12 @@ export class MailRouter {
       }
       throw error;
     }
-    const sent = this.turnMailSent.get(ctx.turnId) ?? { persona: false, user: false };
+    const upward = this.upwardOf(conversation, ctx.personaId);
+    const sent = this.turnMailSent.get(ctx.turnId) ?? { persona: false, user: false, up: false, down: false };
     if (personaTo.length) sent.persona = true;
     if (finalTo.includes('user')) sent.user = true;
+    if (finalTo.includes(upward)) sent.up = true;
+    if (personaTo.some((t) => t !== upward)) sent.down = true;
     this.turnMailSent.set(ctx.turnId, sent);
 
     // A user-only send from an awaited branch ends that branch: its turn gets
@@ -913,8 +981,9 @@ export class MailRouter {
         }
         continue;
       }
+      if (filedTo.includes(recipient)) continue;
       delivered.push(recipient);
-      this.enqueueDelivery(ctx.conversationId, recipient, body, ctx.personaId, epoch, sourceItemId);
+      this.deliverOrSteer(ctx.conversationId, { personaId: recipient, body, from: ctx.personaId, epoch, sourceItemId, itemId });
     }
     // Fanning out — two or more deliveries from one send, or any send to an
     // agent — opens (or widens) this sender's join: the replies come back as
@@ -1197,11 +1266,99 @@ export class MailRouter {
     sourceItemId: string,
     attachments?: TurnAttachment[]
   ): void {
+    this.enqueueTask(conversationId, { personaId, body, from, epoch, sourceItemId, ...(attachments?.length ? { attachments } : {}) });
+  }
+
+  private enqueueTask(conversationId: string, task: DeliveryTask): void {
     this.pending.set(conversationId, (this.pending.get(conversationId) ?? 0) + 1);
     const lane: Lane = this.lanes.get(conversationId) ?? { active: new Map(), queue: [] };
     this.lanes.set(conversationId, lane);
-    lane.queue.push({ personaId, body, from, epoch, sourceItemId, ...(attachments?.length ? { attachments } : {}) });
+    lane.queue.push(task);
     this.pump(conversationId);
+  }
+
+  /**
+   * Deliver a send_mail to a persona — or, when that persona is mid-turn on an
+   * earlier mail from the same sender, hand it to that turn (runtime.steerTurn)
+   * so a correction lands while the work it corrects is still under way. The
+   * conversation stays pending while the backend answers; a turn that is no
+   * longer live, or a backend without steering, falls back to the queue.
+   */
+  private deliverOrSteer(conversationId: string, task: DeliveryTask): void {
+    const live = [...this.activeTurns].find(
+      ([turnId, t]) =>
+        t.conversationId === conversationId &&
+        t.personaId === task.personaId &&
+        this.turnInitiators.get(turnId) === task.from
+    );
+    const steerTurn = this.opts.runtime.steerTurn?.bind(this.opts.runtime);
+    if (!live || !steerTurn || task.from === 'user') {
+      this.enqueueTask(conversationId, task);
+      return;
+    }
+    const [turnId] = live;
+    // Neutral on purpose: a blind agent must not learn who mailed it.
+    const message =
+      '[Stem] A new mail from the sender of your current task arrived while you were working. It belongs to ' +
+      'that task: take it into account from here on. Your final message still answers both.\n\n' +
+      task.body;
+    this.pending.set(conversationId, (this.pending.get(conversationId) ?? 0) + 1);
+    void steerTurn(turnId, message)
+      // quiet: a failed steer is a mail the queue still delivers, below.
+      .catch(() => null)
+      .then(async (steerId) => {
+        if (steerId && this.activeTurns.has(turnId)) {
+          const steers = this.turnSteers.get(turnId) ?? [];
+          steers.push({ steerId, task });
+          this.turnSteers.set(turnId, steers);
+        } else if (!steerId || !this.opts.runtime.steerConsumed?.(steerId)) {
+          this.enqueueTask(conversationId, task);
+        }
+        await this.releasePending(conversationId);
+      });
+  }
+
+  /**
+   * Who a persona answers to: the driver answers the user, an agent whoever
+   * started it, and any other participant the driver.
+   */
+  private upwardOf(conversation: MailConversation, personaId: string): string {
+    const driver = conversation.participants[0];
+    if (personaId === driver) return 'user';
+    return conversation.agents?.find((a) => a.id === personaId)?.spawnedBy ?? driver;
+  }
+
+  /** Whether `from` works for `to`: everyone works for the driver, an agent for whoever started it. */
+  private reportsTo(conversation: MailConversation, from: string, to: string): boolean {
+    if (from === 'user' || from === to) return false;
+    if (to === conversation.participants[0]) return true;
+    return conversation.agents?.some((a) => a.id === from && a.spawnedBy === to) ?? false;
+  }
+
+  /** Mail from `from` to `to` in this wave is filed, not delivered (see `answered`). */
+  private isFiled(conversation: MailConversation, to: string, from: string, epoch: number): boolean {
+    return this.answered.get(`${conversation.id}\n${to}`) === epoch && this.reportsTo(conversation, from, to);
+  }
+
+  /**
+   * Record that `personaId` has answered for this wave, and file the
+   * deliveries already queued to it from its subordinates: their items stay
+   * in the thread, marked filed, and start no turn.
+   */
+  private async closeAnswered(conversation: MailConversation, personaId: string, epoch: number): Promise<void> {
+    this.answered.set(`${conversation.id}\n${personaId}`, epoch);
+    const lane = this.lanes.get(conversation.id);
+    if (!lane) return;
+    const dropped = lane.queue.filter(
+      (task) => task.personaId === personaId && task.epoch === epoch && this.reportsTo(conversation, task.from, personaId)
+    );
+    if (!dropped.length) return;
+    lane.queue = lane.queue.filter((task) => !dropped.includes(task));
+    // The delivery calling this still counts as pending, so this never drains.
+    this.pending.set(conversation.id, Math.max(1, (this.pending.get(conversation.id) ?? 1) - dropped.length));
+    const ids = dropped.flatMap((task) => (task.itemId ? [task.itemId] : []));
+    // quiet: an unmarked item still reads correctly, just without its "after the answer" label.
+    if (ids.length) await markMailItemsFiled(ids).catch(() => undefined);
   }
 
   /**
@@ -1216,7 +1373,16 @@ export class MailRouter {
       if (at < 0) break;
       const [task] = lane.queue.splice(at, 1);
       lane.active.set(task.personaId, '');
-      void this.deliver(conversationId, task.personaId, task.body, task.from, task.epoch, task.sourceItemId, task.attachments)
+      void this.deliver(
+        conversationId,
+        task.personaId,
+        task.body,
+        task.from,
+        task.epoch,
+        task.sourceItemId,
+        task.attachments,
+        task.assembly === true
+      )
         // quiet: deliver() reports every failure as a mail the user sees; a
         // rejection reaching here has already been told.
         .catch(() => undefined)
@@ -1317,7 +1483,14 @@ export class MailRouter {
     );
     const parts = ['Replies to your delegations:', ...sections];
     if (join.notes.length) parts.push(`Notes:\n${join.notes.map((n) => `- ${n}`).join('\n')}`);
-    this.enqueueDelivery(conversationId, join.senderId, parts.join('\n\n'), join.initiator, join.epoch, join.sourceItemId);
+    this.enqueueTask(conversationId, {
+      personaId: join.senderId,
+      body: parts.join('\n\n'),
+      from: join.initiator,
+      epoch: join.epoch,
+      sourceItemId: join.sourceItemId,
+      assembly: true
+    });
   }
 
   /**
@@ -1336,12 +1509,13 @@ export class MailRouter {
     from: string,
     epoch: number,
     sourceItemId: string,
-    attachments?: TurnAttachment[]
+    attachments?: TurnAttachment[],
+    assembly = false
   ): Promise<void> {
     // Minted out here so the finally below can clear the turn's bookkeeping on
     // every exit path.
     const turnId = randomUUID();
-    this.activeTurns.set(turnId, { conversationId });
+    this.activeTurns.set(turnId, { conversationId, personaId });
     let releaseRepoLock: (() => void) | undefined;
     let work: WorkHandle | undefined;
     try {
@@ -1419,6 +1593,9 @@ export class MailRouter {
       // lane holds their names for the activity row.
       this.lanes.get(conversationId)?.active.set(personaId, persona.name);
       this.updateActivityDetail(conversationId);
+      // Mail from whoever this persona answers to (or the user) is new work:
+      // whatever it had answered before no longer closes the wave for it.
+      if (!this.reportsTo(conversation, from, personaId)) this.answered.delete(`${conversationId}\n${personaId}`);
       const threadId = conversation.sessions[personaId];
       work = await beginMailWork(this.opts.runtime, { conversationId, sourceItemId, personaId, turnId, threadId });
 
@@ -1580,16 +1757,34 @@ export class MailRouter {
           'failed',
           epoch
         );
-      } else if (!sent) {
-        const reply =
-          (await this.lastAssistantText(runThreadId)) || '(The persona finished without writing a reply.)';
-        await this.routeImplicitReply(conversationId, personaId, from, reply, epoch, sourceItemId);
+      } else {
+        // Re-read: spawn_agent may have added agents during the turn, and who
+        // reports to whom is read off them.
+        const now = (await readMail()).conversations.find((c) => c.id === conversationId) ?? conversation;
+        let answeredUp = sent?.up ?? false;
+        if (!sent) {
+          const reply = await this.lastAssistantText(runThreadId);
+          // A plain final message goes UP: the driver's to the user, anyone
+          // else's to whoever it reports to — never down to a helper that
+          // mailed it. Sent down, a coordinator's "Acknowledged." was the next
+          // hop of a loop that ran until the exchange cap.
+          const target = this.reportsTo(now, from, personaId) ? this.upwardOf(now, personaId) : from;
+          if (reply) {
+            await this.routeImplicitReply(conversationId, personaId, target, reply, epoch, sourceItemId);
+            answeredUp = true;
+          } else {
+            await this.settleSilentTurn(now, personaId, from, epoch, sourceItemId, assembly);
+          }
+        }
+        // else: the turn mailed on its own. A user-addressed mail is an answer
+        // like an implicit one and settles idle — it used to settle awaiting-user,
+        // which tagged every driver's ordinary reply "needs you" while a
+        // single-persona answer went untagged. A persona-addressed mail keeps the
+        // chain going on the queued deliveries.
+        if (answeredUp && !sent?.down && !this.joinFor(conversationId, personaId)) {
+          await this.closeAnswered(now, personaId, epoch);
+        }
       }
-      // else: the turn mailed on its own. A user-addressed mail is an answer
-      // like an implicit one and settles idle — it used to settle awaiting-user,
-      // which tagged every driver's ordinary reply "needs you" while a
-      // single-persona answer went untagged. A persona-addressed mail keeps the
-      // chain going on the queued deliveries.
 
       // The reflection pass: what did this turn teach the persona? Only for
       // turns that settled ok (the failed branch above falls through to here),
@@ -1619,35 +1814,108 @@ export class MailRouter {
       this.turnInitiators.delete(turnId);
       this.turnEpochs.delete(turnId);
       this.turnSources.delete(turnId);
-      const left = (this.pending.get(conversationId) ?? 1) - 1;
-      if (left > 0) this.pending.set(conversationId, left);
-      else {
-        // The conversation's last delivery drained: settle its status. A
-        // user-stopped wave settles as 'aborted' — the Inbox row is where the
-        // stop shows, since no failure mail was written to say it.
-        this.pending.delete(conversationId);
-        const stopped = this.stopping.delete(conversationId);
-        const row = this.activityRows.get(conversationId);
-        if (row) {
-          this.activityRows.delete(conversationId);
-          const turns = `${row.turns} turn${row.turns === 1 ? '' : 's'}`;
-          activity.end(row.handle, { worked: true, detail: stopped ? `stopped after ${turns}` : turns });
-        }
-        const status = stopped ? 'aborted' : this.drainStatus.get(conversationId) ?? 'idle';
-        this.drainStatus.delete(conversationId);
-        await setConversationStatus(conversationId, status).catch(() => {
-          // quiet: the conversation was deleted while its deliveries ran — there
-          // is no row left for a status to show on.
-        });
-        this.opts.onChange();
+      // Mail steered into this turn that the model never read (the turn ended
+      // first) is still owed a delivery — queued before this one releases its
+      // pending count, so the conversation cannot drain in between.
+      for (const steer of this.turnSteers.get(turnId) ?? []) {
+        if (this.stopping.has(conversationId)) break;
+        if (!this.opts.runtime.steerConsumed?.(steer.steerId)) this.enqueueTask(conversationId, steer.task);
       }
+      this.turnSteers.delete(turnId);
+      await this.releasePending(conversationId);
     }
   }
 
   /**
-   * The implicit reply of a turn that sent no mail. To a user-initiated
-   * delivery it IS the answer (status idle at drain). To a persona-initiated
-   * one it is the next hop of the chain — unless the cap is spent, in which
+   * One delivery (or a steer attempt holding the conversation open) is done:
+   * drop its pending count, and when it was the last, settle the status. A
+   * user-stopped wave settles as 'aborted' — the Inbox row is where the stop
+   * shows, since no failure mail was written to say it.
+   */
+  private async releasePending(conversationId: string): Promise<void> {
+    const left = (this.pending.get(conversationId) ?? 1) - 1;
+    if (left > 0) {
+      this.pending.set(conversationId, left);
+      return;
+    }
+    this.pending.delete(conversationId);
+    const stopped = this.stopping.delete(conversationId);
+    const row = this.activityRows.get(conversationId);
+    if (row) {
+      this.activityRows.delete(conversationId);
+      const turns = `${row.turns} turn${row.turns === 1 ? '' : 's'}`;
+      activity.end(row.handle, { worked: true, detail: stopped ? `stopped after ${turns}` : turns });
+    }
+    const status = stopped ? 'aborted' : this.drainStatus.get(conversationId) ?? 'idle';
+    this.drainStatus.delete(conversationId);
+    await setConversationStatus(conversationId, status).catch(() => {
+      // quiet: the conversation was deleted while its deliveries ran — there
+      // is no row left for a status to show on.
+    });
+    this.opts.onChange();
+  }
+
+  /**
+   * A turn that ended with no text and no mail. Nothing is mailed for it any
+   * more: the "(The persona finished without writing a reply.)" placeholder
+   * used to go out as a real mail, woke whoever received it, and on
+   * 2026-10-10 landed on the user as the conversation's newest item, marked
+   * "needs you", after the real report.
+   *
+   * - The user is told only when this wave has not answered them at all: the
+   *   one mail that must never silently go missing is the answer.
+   * - A persona with nothing to say to its own helper says nothing.
+   * - A helper that came back empty settles its branch with a note, or — with
+   *   no fan-out waiting on it — tells its coordinator in a one-line Stem note
+   *   (no mail item), so the wave does not stall on a reply that never comes.
+   */
+  private async settleSilentTurn(
+    conversation: MailConversation,
+    personaId: string,
+    from: string,
+    epoch: number,
+    sourceItemId: string,
+    assembly: boolean
+  ): Promise<void> {
+    if (from === 'user') {
+      // userUpdatedAt moves on every item addressed to the user; at or past
+      // the wave's epoch, something already answered this wave.
+      if (conversation.userUpdatedAt > epoch) return;
+      await this.appendReply(
+        conversation.id,
+        personaId,
+        assembly
+          ? '(The persona read its helpers’ replies and finished without writing you an answer.)'
+          : '(The persona finished without writing a reply.)',
+        'idle',
+        epoch
+      );
+      return;
+    }
+    if (this.reportsTo(conversation, from, personaId)) return;
+    const join = this.joinFor(conversation.id, from);
+    const name = join?.awaiting.get(personaId);
+    if (join && name !== undefined) {
+      join.awaiting.delete(personaId);
+      join.notes.push(`${name} finished without writing a reply.`);
+      this.maybeAssemble(conversation.id, join);
+      return;
+    }
+    if (this.isFiled(conversation, from, personaId, epoch)) return;
+    this.enqueueDelivery(
+      conversation.id,
+      from,
+      `[Stem] ${await this.personaName(personaId)} finished its turn without writing a reply.`,
+      personaId,
+      epoch,
+      sourceItemId
+    );
+  }
+
+  /**
+   * The implicit reply of a turn that sent no mail, to whoever the persona
+   * answers to (`initiator`; see deliver). To the user it IS the answer (status
+   * idle at drain). To a persona it is the next hop of the chain — unless the cap is spent, in which
    * case it is forced back to the user (Q19: the runaway wave ends on you).
    */
   private async routeImplicitReply(
@@ -1665,13 +1933,21 @@ export class MailRouter {
       const { conversations } = await readMail();
       const conversation = conversations.find((c) => c.id === conversationId);
       if (!conversation) return;
+      // The recipient already answered for this wave: keep the reply in the
+      // thread, start nothing (see `answered`).
+      if (this.isFiled(conversation, initiator, personaId, epoch)) {
+        await appendMailItem({ conversationId, from: personaId, to: [initiator], body: reply, ...agentReplies, filed: true });
+        this.opts.onChange();
+        return;
+      }
       const join = this.joinFor(conversationId, initiator);
       const cap = await this.exchangeCap();
       if (conversation.exchangeCount + exchangeHops(conversation, personaId, [initiator]) <= cap) {
+        let itemId: string | undefined;
         try {
           // Exempt from the sender's budget: finishing an assignment must
           // always be possible, however capped the persona's own sends are.
-          await appendMailItem({
+          const appended = await appendMailItem({
             conversationId,
             from: personaId,
             to: [initiator],
@@ -1679,6 +1955,7 @@ export class MailRouter {
             ...agentReplies,
             guard: { exchangeCap: cap, budgetExempt: true }
           });
+          itemId = appended.items.at(-1)?.id;
         } catch (error) {
           // A racing parallel send spent the cap between the check and the
           // append: fall through to the cap-spent path below.
@@ -1701,7 +1978,7 @@ export class MailRouter {
           this.opts.onChange();
           return;
         }
-        this.enqueueDelivery(conversationId, initiator, reply, personaId, epoch, sourceItemId);
+        this.enqueueTask(conversationId, { personaId: initiator, body: reply, from: personaId, epoch, sourceItemId, itemId });
         this.opts.onChange();
         return;
       }
