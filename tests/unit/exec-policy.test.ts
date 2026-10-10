@@ -55,6 +55,18 @@ describe('parseCommand', () => {
     expect(seg.candidates).not.toContain('git');
   });
 
+  it('retains each raw segment with quotes and internal whitespace intact', () => {
+    const single = parseCommand('  grep  "a;  b" notes.txt  ', 'zsh');
+    expect(single.segments[0]?.raw).toBe('grep  "a;  b" notes.txt');
+
+    const chained = parseCommand('kubectl --kubeconfig "" get pods &&  pwd | grep src', 'zsh');
+    expect(chained.segments.map((segment) => segment.raw)).toEqual([
+      'kubectl --kubeconfig "" get pods',
+      'pwd',
+      'grep src'
+    ]);
+  });
+
   it('treats quoted arguments as plain text', () => {
     const parsed = parseCommand("grep 'a; b | c' notes.txt", 'zsh');
     expect(parsed.hasShellMeta).toBe(false);
@@ -153,6 +165,51 @@ describe('classify', () => {
     }
     // The reviewed snapshot/get flags stay tier 1.
     expect(classify('agent-browser snapshot -i -c -d 3 --session s1', settings, 'zsh').tier).toBe('run');
+  });
+
+  it('authorizes full raw segments with regex rules', () => {
+    const regexSettings = {
+      allowlist: [],
+      allowRegex: ['kubectl(?:\\s+--kubeconfig(?:=\\S*|\\s+"[^"]*"|\\s+\\S+))?\\s+get(?:\\s+.*)?']
+    };
+
+    expect(classify('kubectl --kubeconfig "" get pods', regexSettings, 'zsh').tier).toBe('run');
+    expect(classify('kubectl --kubeconfig=/tmp/k get pods', regexSettings, 'zsh').tier).toBe('run');
+    expect(classify('kubectl get pods', regexSettings, 'zsh').tier).toBe('run');
+    expect(classify('kubectl delete pods', regexSettings, 'zsh').tier).toBe('judge');
+    expect(classify('echo kubectl get pods', regexSettings, 'zsh').tier).toBe('judge');
+  });
+
+  it('requires every chained segment to clear a prefix or regex rule', () => {
+    const regexSettings = {
+      allowlist: ['pwd'],
+      allowRegex: ['kubectl(?:\\s+.*)?\\s+get(?:\\s+.*)?']
+    };
+
+    expect(classify('kubectl --kubeconfig "" get pods && pwd', regexSettings, 'zsh').tier).toBe('run');
+    expect(classify('kubectl --kubeconfig "" get pods && rm -rf /', regexSettings, 'zsh').tier).toBe('judge');
+  });
+
+  it('does not regex-match shell meta, oversized segments, or privileged operations', () => {
+    expect(classify('kubectl get pods > out', { allowlist: [], allowRegex: ['kubectl.*'] }, 'zsh').tier).toBe('judge');
+    expect(classify(`echo ${'x'.repeat(4096)}`, { allowlist: [], allowRegex: ['echo .*'] }, 'zsh').tier).toBe('judge');
+
+    const broad = { allowlist: [], allowRegex: ['.*'] };
+    expect(classify("find . -exec sh -c id ';'", broad, 'zsh').tier).toBe('judge');
+    expect(classify('/usr/bin/find . -exec sh -c id \';\'', broad, 'zsh').tier).toBe('judge');
+    expect(classify('rg --pre ./decode needle', broad, 'zsh').tier).toBe('judge');
+    expect(classify('./rg --pre ./decode needle', broad, 'zsh').tier).toBe('judge');
+    expect(classify('agent-browser snapshot --executable-path /tmp/evil', broad, 'zsh').tier).toBe('judge');
+    expect(classify('/usr/local/bin/agent-browser snapshot --executable-path /tmp/evil', broad, 'zsh').tier).toBe(
+      'judge'
+    );
+    expect(classify('/bin/cat /etc/passwd', broad, 'zsh').tier).toBe('judge');
+    expect(classify('C:\\Tools\\rg.exe --pre decode needle', broad, 'cmd').tier).toBe('judge');
+    expect(classify('rg.com --pre decode needle', broad, 'cmd').tier).toBe('judge');
+    expect(classify('C:\\Tools\\cat.com C:\\Windows\\win.ini', broad, 'cmd').tier).toBe('judge');
+    expect(classify('C:\\Tools\\agent-browser.com snapshot --executable-path evil.exe', broad, 'cmd').tier).toBe(
+      'judge'
+    );
   });
 
   it('tier 1 for user-allowlisted prefixes (bare command covers all subcommands)', () => {
@@ -400,9 +457,12 @@ describe('classify for a device target (zero trust)', () => {
   // Decision from the plan interview: a remote machine's tier 1 is exactly its
   // own learned allowlist, which starts empty — no static built-ins, so even
   // `ls` is judged there until its owner says otherwise.
-  it('does not extend the static allowlists to a remote machine', () => {
+  it('does not extend local static or regex rules to a remote machine', () => {
     expect(classify('ls -la', { allowlist: [] }, 'darwin', { includeBuiltins: false }).tier).toBe('judge');
     expect(classify('git status', { allowlist: [] }, 'darwin', { includeBuiltins: false }).tier).toBe('judge');
+    expect(classify('rm -rf /tmp/x', { allowlist: [], allowRegex: ['.*'] }, 'darwin', { includeBuiltins: false }).tier).toBe(
+      'judge'
+    );
   });
 
   it("trusts exactly the device's own learned prefixes", () => {

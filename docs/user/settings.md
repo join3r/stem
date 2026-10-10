@@ -107,7 +107,26 @@ Git Bash when it is installed, otherwise `cmd.exe`.
   protected.
 
 On an approval card, **Always allow** saves a command prefix for future turns.
-Keep prefixes narrow; `git status` grants less access than `git`.
+Keep prefixes narrow; `git status` grants less access than `git`. Approval cards
+never create regex rules.
+
+The Always-allowed commands editor also accepts manually defined **Regex** rules.
+Stem matches one rule against each complete command segment, exactly as written,
+including quotes and repeated whitespace. Matching is case-sensitive and implicitly
+anchored at both ends, so explicit `^` and `$` anchors are unnecessary. For
+example, this permits `kubectl get` with an optional kubeconfig before the verb
+while leaving `kubectl delete` unmatched:
+
+```text
+kubectl(?:\s+--kubeconfig(?:=\S*|\s+"[^"]*"|\s+\S+))?\s+get(?:\s+.*)?
+```
+
+Every segment in a chain must match a Prefix or Regex rule independently. Regex does
+not bypass protected-folder checks, unsafe command flags, or other command guards.
+These expressions use JavaScript regex: overly broad rules grant broad authority,
+and pathological expressions can make command approval unresponsive despite Stem's
+length limits. Regex rules currently cover commands run by Stem's server only;
+paired computers keep their separate prefix-only lists.
 
 A card waits ten minutes for an answer. Only the card on screen counts down; when
 several commands are waiting, each one's ten minutes starts when it becomes the card

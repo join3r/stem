@@ -591,9 +591,12 @@ export class HarnessService implements HarnessBridge {
             ctx.platform ?? hostShellFromPlatform(),
             { includeBuiltins: false, confine: { cwd: ctx.cwd || null, roots: await this.deviceWriteRoots(ctx) } }
           )
-        : classify(command, { allowlist: all.exec.allowlist }, hostShellFromPlatform(), {
-            confine: { cwd: ctx.cwd, roots: execReadRoots() }
-          });
+        : classify(
+            command,
+            { allowlist: all.exec.allowlist, allowRegex: all.exec.allowRegex },
+            hostShellFromPlatform(),
+            { confine: { cwd: ctx.cwd, roots: execReadRoots() } }
+          );
       if (cls.tier === 'run') return allowVia('allowlist', command);
 
       const base = {

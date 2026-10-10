@@ -1,4 +1,5 @@
 import type { ExecSettings, HostShell } from '../../shared/types';
+import { compileCommandRegex, MAX_REGEX_SEGMENT_LENGTH } from '../../shared/exec-rules';
 import { unixShell } from './executor';
 import { hostShellFromPlatform, isCmdShell } from './host-shell';
 import { firstPathOutside } from './protected';
@@ -100,8 +101,13 @@ const PRIVILEGED_FLAGS: Record<string, string[]> = {
   git: ['--output']
 };
 
-function carriesPrivilegedFlag(tokens: string[]): boolean {
-  const flags = PRIVILEGED_FLAGS[tokens[0] ?? ''];
+function guardedCommandName(word: string, shell: HostShell): string {
+  const name = word.split(isCmdShell(shell) ? /[\\/]/ : '/').pop() ?? word;
+  return shell === 'zsh' ? name : name.toLowerCase().replace(/\.(?:com|exe|cmd|bat)$/i, '');
+}
+
+function carriesPrivilegedFlag(tokens: string[], commandName: string): boolean {
+  const flags = PRIVILEGED_FLAGS[commandName];
   if (!flags) return false;
   return tokens.some((t) =>
     flags.some((f) => t === f || t.startsWith(`${f}=`) || (f.length === 2 && t.startsWith(f)))
@@ -133,6 +139,8 @@ function staticAllowlist(shell: HostShell): Set<string> {
 
 /** One chained command within a compound (or the whole thing when not chained). */
 export interface ParsedSegment {
+  /** Raw source for this segment, excluding its chain separator and outer whitespace. */
+  raw: string;
   /** Command word + subcommand when one is present (e.g. `git status`). */
   prefix: string;
   /** The candidate prefixes to match against an allowlist, shortest first. */
@@ -179,13 +187,13 @@ const WINDOWS_DQUOTE_META = new Set(['%']);
 // learned prefix — those are one-shot values that will not match again.
 const BARE_WORD = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
-function makeSegment(tokens: string[]): ParsedSegment {
+function makeSegment(tokens: string[], raw: string): ParsedSegment {
   const word = tokens[0] ?? '';
   const sub = tokens[1] && BARE_WORD.test(tokens[1]) ? tokens[1] : undefined;
   // Candidates are matched by exact string only, so `/usr/local/bin/foo` or `./git`
   // can be user-allowlisted verbatim but can never match an allowlisted bare `git`.
   const candidates = word ? (sub ? [word, `${word} ${sub}`] : [word]) : [];
-  return { prefix: candidates[candidates.length - 1] ?? '', candidates, tokens };
+  return { raw, prefix: candidates[candidates.length - 1] ?? '', candidates, tokens };
 }
 
 /**
@@ -207,6 +215,7 @@ export function parseCommand(command: string, shell: HostShell = hostShellFromPl
   let inToken = false;
   let hasShellMeta = false;
   let quote: "'" | '"' | null = null;
+  let segmentStart = 0;
 
   const endToken = (): void => {
     if (inToken) {
@@ -215,10 +224,11 @@ export function parseCommand(command: string, shell: HostShell = hostShellFromPl
       inToken = false;
     }
   };
-  const endSegment = (): void => {
+  const endSegment = (end: number, nextStart: number): void => {
     endToken();
-    if (tokens.length) segments.push(makeSegment(tokens));
+    if (tokens.length) segments.push(makeSegment(tokens, command.slice(segmentStart, end).trim()));
     tokens = [];
+    segmentStart = nextStart;
   };
 
   for (let i = 0; i < command.length; i += 1) {
@@ -251,19 +261,21 @@ export function parseCommand(command: string, shell: HostShell = hostShellFromPl
       continue;
     }
     if (ch === ';' || ch === '\n') {
-      endSegment();
+      endSegment(i, i + 1);
       continue;
     }
     if (ch === '&') {
       if (command[i + 1] === '&') {
+        const separatorStart = i;
         i += 1;
-        endSegment();
+        endSegment(separatorStart, i + 1);
       } else hasShellMeta = true; // lone `&` backgrounds the command — not a chain
       continue;
     }
     if (ch === '|') {
+      const separatorStart = i;
       if (command[i + 1] === '|') i += 1;
-      endSegment(); // both `|` (pipe) and `||` (or) join two plain commands
+      endSegment(separatorStart, i + 1); // both `|` and `||` join two plain commands
       continue;
     }
     if (hardMeta.has(ch)) hasShellMeta = true;
@@ -271,7 +283,7 @@ export function parseCommand(command: string, shell: HostShell = hostShellFromPl
     inToken = true;
   }
   if (quote) hasShellMeta = true; // unterminated quote — not a plain command
-  endSegment();
+  endSegment(command.length, command.length);
 
   return { segments, hasShellMeta };
 }
@@ -310,12 +322,11 @@ export interface ReadConfinement {
  *
  * `includeBuiltins: false` is the remote-target posture: a command aimed at a
  * paired computer starts from zero trust, so its tier 1 is exactly that
- * device's own learned allowlist (passed as `settings.allowlist`) and none of
- * the static lists — even `ls` is judged there until its owner says otherwise.
+ * device's learned prefixes—no local regex rules or static list entries.
  */
 export function classify(
   command: string,
-  settings: Pick<ExecSettings, 'allowlist'>,
+  settings: Pick<ExecSettings, 'allowlist'> & Partial<Pick<ExecSettings, 'allowRegex'>>,
   shell: ShellArg = hostShellFromPlatform(),
   opts: { includeBuiltins?: boolean; confine?: ReadConfinement } = {}
 ): Classification {
@@ -325,19 +336,25 @@ export function classify(
     return { tier: 'judge', prefixes: [], hasShellMeta: parsed.hasShellMeta };
   }
   const user = new Set(settings.allowlist);
+  const regexRules = opts.includeBuiltins === false
+    ? []
+    : (settings.allowRegex ?? []).map(compileCommandRegex).filter((rule): rule is RegExp => rule !== null);
   // includeBuiltins: false is the remote-target posture — that machine's tier 1
   // is only its learned allowlist, never ls/dir/git status from this host.
   const allowed = opts.includeBuiltins === false ? new Set<string>() : staticAllowlist(host);
-  const uncovered = parsed.segments.filter(
-    (seg) =>
-      !seg.candidates.some((c) => allowed.has(c) || user.has(c)) ||
+  const uncovered = parsed.segments.filter((seg) => {
+    const commandName = guardedCommandName(seg.tokens[0] ?? '', host);
+    return (
+      (!seg.candidates.some((c) => allowed.has(c) || user.has(c)) &&
+        !(seg.raw.length <= MAX_REGEX_SEGMENT_LENGTH && regexRules.some((rule) => rule.test(seg.raw)))) ||
       // Even an allowlisted (or user-learned) agent-browser action falls to the
       // judge when a privileged flag rides along — --executable-path next to
       // `get text` is arbitrary code, not a read (SEC-003).
-      (seg.tokens[0] === 'agent-browser' && !agentBrowserFlagsSafe(seg.tokens)) ||
+      (commandName === 'agent-browser' && !agentBrowserFlagsSafe(seg.tokens)) ||
       // Likewise a read-only probe carrying its execution flag (H-01).
-      carriesPrivilegedFlag(seg.tokens)
-  );
+      carriesPrivilegedFlag(seg.tokens, commandName)
+    );
+  });
   const prefixes = [...new Set(uncovered.map((seg) => seg.prefix).filter(Boolean))];
   if (uncovered.length) return { tier: 'judge', prefixes, hasShellMeta: false };
   // Every segment is allowlisted. A reader still only auto-runs inside the
@@ -345,7 +362,8 @@ export function classify(
   // learning `cat` would not change the answer.
   const confine = opts.confine ?? { cwd: null, roots: [] };
   for (const seg of parsed.segments) {
-    if (!PATH_READERS.has(seg.tokens[0] ?? '')) continue;
+    const commandName = guardedCommandName(seg.tokens[0] ?? '', host);
+    if (!PATH_READERS.has(commandName)) continue;
     const outside = firstPathOutside(seg.tokens.slice(1), confine.cwd, confine.roots, host);
     if (outside !== null) return { tier: 'judge', prefixes: [], hasShellMeta: false, outside };
   }

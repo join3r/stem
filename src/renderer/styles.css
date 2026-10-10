@@ -3936,7 +3936,32 @@ summary.mail-work-action { cursor: pointer; }
   max-height: 100px;
 }
 
-/* Settings → Features → Commands: the learned-prefix allowlist editor. */
+/* Settings → Features → Commands: the command-rule editor. */
+.exec-rule-group { margin-top: var(--sp-4); }
+.exec-rule-group .exec-allowlist { margin-top: var(--sp-2); }
+.exec-rule-type {
+  color: var(--muted);
+  font-size: var(--fs-10);
+  margin-right: var(--sp-2);
+  text-transform: uppercase;
+}
+.exec-rule-form {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+}
+.exec-rule-form .exec-rule-kind { width: auto; }
+.exec-save-error {
+  color: var(--danger);
+  font-size: var(--fs-11);
+  padding: var(--sp-2) var(--sp-6);
+}
+.exec-rule-error {
+  color: var(--danger);
+  font-size: var(--fs-11);
+  grid-column: 1 / -1;
+}
 .exec-allowlist {
   display: flex;
   flex-wrap: wrap;

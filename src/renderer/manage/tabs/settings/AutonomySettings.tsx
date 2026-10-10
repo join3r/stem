@@ -14,6 +14,11 @@ import { InfoTip } from '../../../ui/InfoTip';
 import { useRemoteServer } from '../../../hooks/useRemoteServer';
 import { DisclosureRow, RowSelect, ValueRow } from './rows';
 import { COMPUTER_ALPHA_TITLE, ChatBrowserRows, ChatCodingRows, ChatComputerRows } from './ChatFeatureRows';
+import {
+  commandRegexError,
+  MAX_COMMAND_ALLOW_RULES,
+  MAX_COMMAND_PREFIX_LENGTH
+} from '../../../../shared/exec-rules';
 
 /** How long a chat's scratch folder survives being ignored. null = never sweep. */
 const SCRATCH_TTLS: { label: string; days: number | null }[] = [
@@ -86,6 +91,10 @@ function scratchLabel(row: ScratchUsageRow): string {
 export function AutonomySections() {
   const [exec, setExec] = useState<ExecSettings | null>(null);
   const [allowInput, setAllowInput] = useState('');
+  const [allowKind, setAllowKind] = useState<'prefix' | 'regex'>('prefix');
+  const [allowError, setAllowError] = useState('');
+  const [execSaveError, setExecSaveError] = useState('');
+  const [execSaving, setExecSaving] = useState(false);
   // The OS of the machine that RUNS commands, plus the Git Bash it found there.
   // Asked of the server, not of this window: with Stem on a box somewhere,
   // window.stem.platform is this desk's OS and the shell setting is not about it.
@@ -141,6 +150,7 @@ export function AutonomySections() {
     if (pending) clearTimeout(pending);
     ruleTimers.current[field] = setTimeout(() => void window.stem.updateExecSettings({ [field]: value }), 400);
   }
+  const execSavePending = useRef(false);
 
   useEffect(() => {
     void window.stem.getSettings().then((s) => {
@@ -184,14 +194,32 @@ export function AutonomySections() {
       .catch(() => undefined);
   }
 
-  function updateExec(patch: Partial<ExecSettings>) {
-    setExec((cur) => (cur ? { ...cur, ...patch } : cur)); // optimistic; reconcile below
-    window.stem.updateExecSettings(patch).then((s) => {
+  async function updateExec(patch: Partial<ExecSettings>): Promise<boolean> {
+    if (execSavePending.current) {
+      setExecSaveError('Wait for the current command setting to finish saving.');
+      return false;
+    }
+    const previous = exec;
+    execSavePending.current = true;
+    setExecSaving(true);
+    setExecSaveError('');
+    setExec((cur) => (cur ? { ...cur, ...patch } : cur));
+    try {
+      const s = await window.stem.updateExecSettings(patch);
+      if (patch.allowRegex && !Array.isArray(s.exec.allowRegex)) throw new Error('Regex rules are unsupported.');
       setExec(s.exec);
       if (patch.gitBashPath !== undefined || patch.windowsShell !== undefined) {
         setBashPathDraft(s.exec.gitBashPath ?? '');
       }
-    });
+      return true;
+    } catch {
+      setExec(previous);
+      setExecSaveError('Could not save command settings. Check the connection and try again.');
+      return false;
+    } finally {
+      execSavePending.current = false;
+      setExecSaving(false);
+    }
   }
 
   async function chooseWindowsShell(next: WindowsShell) {
@@ -255,7 +283,9 @@ export function AutonomySections() {
   const deviceAllowCount = exec
     ? Object.values(exec.deviceAllowlists).reduce((sum, prefixes) => sum + prefixes.length, 0)
     : 0;
-  const allowCount = (exec?.allowlist.length ?? 0) + deviceAllowCount;
+  const allowRegex = exec?.allowRegex ?? [];
+  const regexSupported = Array.isArray(exec?.allowRegex);
+  const allowCount = (exec?.allowlist.length ?? 0) + allowRegex.length + deviceAllowCount;
   const scratchSummary =
     scratch === null
       ? 'Measuring…'
@@ -383,6 +413,11 @@ export function AutonomySections() {
                 onChange={(v) => updateExec({ approvalMode: v as ExecSettings['approvalMode'] })}
               />
             </ValueRow>
+            {execSaveError && (
+              <div className="exec-save-error" role="alert">
+                {execSaveError}
+              </div>
+            )}
 
             {exec.approvalMode === 'assisted' &&
               JUDGE_RULE_ROWS.map((row) => (
@@ -413,28 +448,55 @@ export function AutonomySections() {
                   <>
                     Always-allowed commands{' '}
                     <InfoTip label="About the allowlist">
-                      Command prefixes that run without the safety check — for Stem's own commands
-                      and a coding agent's alike — grown by the approval card's "Always allow"
-                      button or added here (e.g. <code>git push</code> or <code>npm</code>).
+                      Prefix and Regex rules that run without the safety check for Stem’s own commands
+                      and coding agents. Regex matches one whole command segment exactly as written,
+                      including quotes; every segment in a chain must match separately. Folder and unsafe-command
+                      guards still apply. Pathological JavaScript regex can make approvals unresponsive. Approval
+                      cards only learn Prefix rules.
                     </InfoTip>
                   </>
                 }
-                value={allowCount === 0 ? 'none' : `${allowCount} ${allowCount === 1 ? 'prefix' : 'prefixes'}`}
+                value={allowCount === 0 ? 'none' : `${allowCount} ${allowCount === 1 ? 'rule' : 'rules'}`}
               >
                 {exec.allowlist.length > 0 && (
-                  <div className="exec-allowlist">
-                    {exec.allowlist.map((prefix) => (
-                      <span key={prefix} className="pill">
-                        {prefix}
-                        <button
-                          title={`Remove "${prefix}"`}
-                          aria-label={`Remove "${prefix}" from the allowlist`}
-                          onClick={() => updateExec({ allowlist: exec.allowlist.filter((p) => p !== prefix) })}
-                        >
-                          <X size={11} />
-                        </button>
-                      </span>
-                    ))}
+                  <div className="exec-rule-group">
+                    <span className="set-sub">Prefixes</span>
+                    <div className="exec-allowlist">
+                      {exec.allowlist.map((prefix) => (
+                        <span key={prefix} className="pill">
+                          {prefix}
+                          <button
+                            title={`Remove "${prefix}"`}
+                            aria-label={`Remove "${prefix}" from the allowlist`}
+                            disabled={execSaving}
+                            onClick={() => updateExec({ allowlist: exec.allowlist.filter((p) => p !== prefix) })}
+                          >
+                            <X size={11} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {allowRegex.length > 0 && (
+                  <div className="exec-rule-group">
+                    <span className="set-sub">Regex</span>
+                    <div className="exec-allowlist">
+                      {allowRegex.map((source) => (
+                        <span key={source} className="pill">
+                          <span className="exec-rule-type">Regex</span>
+                          {source}
+                          <button
+                            title={`Remove regex "${source}"`}
+                            aria-label={`Remove regex "${source}" from the allowlist`}
+                            disabled={execSaving}
+                            onClick={() => updateExec({ allowRegex: allowRegex.filter((p) => p !== source) })}
+                          >
+                            <X size={11} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {/* Prefixes approved for a specific computer, one group per
@@ -472,22 +534,73 @@ export function AutonomySections() {
                   )
                 )}
                 <form
-                  onSubmit={(e) => {
+                  className="exec-rule-form"
+                  onSubmit={async (e) => {
                     e.preventDefault();
-                    const prefix = allowInput.trim();
-                    if (!prefix || exec.allowlist.includes(prefix)) return;
-                    updateExec({ allowlist: [...exec.allowlist, prefix] });
+                    const value = allowInput.trim();
+                    if (!value) return;
+                    if (allowKind === 'regex') {
+                      const error = commandRegexError(value);
+                      if (error) {
+                        setAllowError(error);
+                        return;
+                      }
+                      if (allowRegex.length >= MAX_COMMAND_ALLOW_RULES) {
+                        setAllowError('Remove a regex rule before adding another.');
+                        return;
+                      }
+                      if (allowRegex.includes(value)) return;
+                      if (!(await updateExec({ allowRegex: [...allowRegex, value] }))) return;
+                    } else {
+                      if (value.length > MAX_COMMAND_PREFIX_LENGTH) {
+                        setAllowError(`Prefixes must be ${MAX_COMMAND_PREFIX_LENGTH} characters or fewer.`);
+                        return;
+                      }
+                      if (exec.allowlist.length >= MAX_COMMAND_ALLOW_RULES) {
+                        setAllowError('Remove a prefix rule before adding another.');
+                        return;
+                      }
+                      if (exec.allowlist.includes(value)) return;
+                      if (!(await updateExec({ allowlist: [...exec.allowlist, value] }))) return;
+                    }
                     setAllowInput('');
+                    setAllowError('');
                   }}
                 >
+                  <select
+                    className="ifield exec-rule-kind"
+                    aria-label="Always-allowed command rule type"
+                    disabled={execSaving}
+                    value={allowKind}
+                    onChange={(e) => {
+                      setAllowKind(e.target.value as 'prefix' | 'regex');
+                      setAllowInput('');
+                      setAllowError('');
+                    }}
+                  >
+                    <option value="prefix">Prefix</option>
+                    {regexSupported && <option value="regex">Regex</option>}
+                  </select>
                   <input
                     className="ifield"
                     type="text"
-                    placeholder="Add a prefix, e.g. git push"
-                    aria-label="Add an allowlisted command prefix"
+                    placeholder={
+                      allowKind === 'prefix'
+                        ? 'Add a prefix, e.g. git push'
+                        : 'Add a regex, matched against the whole command segment'
+                    }
+                    aria-label={`Add an allowlisted command ${allowKind}`}
+                    disabled={execSaving}
                     value={allowInput}
-                    onChange={(e) => setAllowInput(e.target.value)}
+                    onChange={(e) => {
+                      setAllowInput(e.target.value);
+                      if (allowError) setAllowError('');
+                    }}
                   />
+                  {allowError && <em className="exec-rule-error">{allowError}</em>}
+                  {!regexSupported && (
+                    <em className="exec-rule-error">Regex rules require an updated Stem server.</em>
+                  )}
                 </form>
               </DisclosureRow>
             )}
