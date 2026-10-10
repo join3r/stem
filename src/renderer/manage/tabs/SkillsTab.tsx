@@ -109,9 +109,11 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
         // "90 days" is ARCHIVE_AFTER_DAYS in server/skills/lifecycle.ts, spelled out
         // here rather than plumbed through IPC: it is a sentence, not a setting.
         const retired = r.expired ? `, retired ${r.expired} unused >90 days` : '';
-        return r.merged + r.archived + r.expired === 0
-          ? 'No duplicate or stale skills found'
-          : `Merged ${r.merged}, archived ${r.archived}${retired} — archived skills stay on disk and can be switched back on above.`;
+        const split = r.split ?? 0;
+        const splitText = split ? `Split ${split} into one skill per job, ` : '';
+        return split + r.merged + r.archived + r.expired === 0
+          ? 'No duplicate, mixed or stale skills found'
+          : `${splitText}${split ? 'merged' : 'Merged'} ${r.merged}, archived ${r.archived}${retired} — archived skills stay on disk and can be switched back on above.`;
       } catch {
         return 'Tidy up failed — try again.';
       }

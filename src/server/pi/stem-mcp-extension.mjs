@@ -3953,7 +3953,7 @@ function registerSkillTools(pi) {
       'Use action "save" both to add a skill and to replace an existing one — always send the FULL body, never a fragment. ' +
       'Set `initiated_by` honestly: "user" when the user asked you to save or change a skill (that always goes through, whatever the user\'s automatic-skills setting says), ' +
       '"assistant" when saving it is your own idea (that follows their setting, and may ask them first or be declined). ' +
-      'A skill needs: a lowercase-hyphenated `name` of at most 64 characters, which is also its folder; a ONE-sentence `description` of at most 160 characters saying WHEN to reach for it, never restating the name; ' +
+      'A skill needs: a lowercase-hyphenated `name` of at most 64 characters, which is also its folder; a ONE-sentence `description` of at most 160 characters starting "Use when" and naming the one situation that calls for it, never restating the name (one skill is one job: two jobs on the same tool are two skills); ' +
       'and a `content` body of at most 4096 bytes with exactly the headings "## When to use", "## Steps", "## Verification", in that order. Write no front-matter. ' +
       'If the reply says the skill was rejected, it lists exactly what was wrong — fix those points and call again. ' +
       'Use action "remove" to delete an auto-created skill that is no longer useful.',

@@ -17,6 +17,15 @@
 export const SKILL_NAME_MAX = 64;
 /** Max length of `description:` — it is broadcast for every skill, every turn. */
 export const SKILL_DESCRIPTION_MAX = 160;
+/**
+ * How a model-written description must open. "Use when …" names the situation that
+ * should load the skill; "Use to …" / "Use for …" lists what it can do, and a list
+ * of capabilities is exactly how one description came to cover four unrelated jobs
+ * (2026-10-10: five of the six multi-job skills on the server opened that way, and
+ * no single-job one did). Retrieval matches the message against this sentence
+ * alone, so a description that covers several jobs matches each of them weakly.
+ */
+export const SKILL_DESCRIPTION_OPENING = 'Use when';
 /** Max body size. Bodies are inlined into the turn, so this is a token budget. */
 export const SKILL_BODY_MAX_BYTES = 4_096;
 /** A skill name is its directory name: lowercase words joined by single hyphens. */
@@ -74,6 +83,11 @@ export function restatesName(name: string, description: string): boolean {
   return nameWords.every((w, i) => descWords[i] === w);
 }
 
+/** True when the description opens with SKILL_DESCRIPTION_OPENING, case-insensitively. */
+export function opensWithSituation(description: string): boolean {
+  return description.trim().toLowerCase().startsWith(`${SKILL_DESCRIPTION_OPENING.toLowerCase()} `);
+}
+
 /** Rough sentence count — used only to hold the description to one sentence. */
 function sentenceCount(text: string): number {
   const trimmed = text.trim();
@@ -89,7 +103,7 @@ function sentenceCount(text: string): number {
  * the first: the authoring retry shows the model the whole list, so a second call
  * can fix everything at once rather than trading one failure for another.
  */
-export function validateSkill(draft: SkillDraft): SkillViolation[] {
+export function validateSkill(draft: SkillDraft, opts: { authored?: boolean } = {}): SkillViolation[] {
   const violations: SkillViolation[] = [];
   const name = String(draft.name ?? '').trim();
   const description = String(draft.description ?? '').trim();
@@ -125,6 +139,17 @@ export function validateSkill(draft: SkillDraft): SkillViolation[] {
     }
     if (description.includes('\n')) {
       violations.push({ field: 'description', message: 'description must be one line.' });
+    }
+    // Model-written text only (`authored`). A person editing a description in the
+    // app is not held to the phrasing: they are not the failure this guards, and
+    // refusing their wording would cost a save over a style rule.
+    if (opts.authored && !opensWithSituation(description)) {
+      violations.push({
+        field: 'description',
+        message:
+          `description must start with "${SKILL_DESCRIPTION_OPENING}" and name the ONE situation that calls for this procedure. ` +
+          'If it needs "or" to cover two unrelated jobs, those are two skills.'
+      });
     }
     if (name && restatesName(name, description)) {
       violations.push({
@@ -195,7 +220,9 @@ export const SKILL_CONTRACT_TEXT = `A skill is a procedure you can follow again 
 
 name: lowercase words joined by single hyphens, at most 64 characters. It is also the folder name. Name the task, not the conversation — "extract-video-captions", not "help-with-that-youtube-thing".
 
-description: ONE sentence, at most 160 characters, on one line. This is the only text matched against a future message to decide whether to load the skill, so it must say WHEN to reach for it, not merely what it is. Never restate the name.
+description: ONE sentence, at most 160 characters, on one line, starting "Use when". This is the only text matched against a future message to decide whether to load the skill, so it must name the one situation that calls for it, not list what it can do. Never restate the name.
+
+One skill is one job. Two jobs on the same tool or service — debugging a container's ports and upgrading its image — are two skills, each with its own description. A description that needs "or" to join unrelated tasks is a sign the skill should be split.
 
 body: at most 4096 bytes, with exactly these three headings in this order:
 

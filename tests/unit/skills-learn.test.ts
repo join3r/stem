@@ -297,7 +297,7 @@ The new PDF shows the hours and the total.`;
     ring = null;
     prompts = [];
     approvals = [];
-    answer = JSON.stringify({ skill: { name: 'monthly-cloudfarms-invoice', description: 'Make the monthly Cloudfarms invoice when the user gives the hours.', body: BODY } });
+    answer = JSON.stringify({ skill: { name: 'monthly-cloudfarms-invoice', description: 'Use when the user gives the hours for the monthly Cloudfarms invoice.', body: BODY } });
     const runtime = {
       setSkillBridge: () => undefined,
       setTurnSettledHook: () => undefined,

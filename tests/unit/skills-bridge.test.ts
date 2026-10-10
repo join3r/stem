@@ -36,7 +36,7 @@ const SAVE: SkillSaveRequest = {
   op: 'save',
   initiatedBy: 'assistant',
   name: 'extract-video-captions',
-  description: 'Pull the caption text out of a video when the user asks what was said in it.',
+  description: 'Use when the user asks what was said in a video.',
   body: BODY
 };
 

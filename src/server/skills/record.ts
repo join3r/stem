@@ -232,7 +232,7 @@ async function shrinkBody(llm: LlmClient, draft: SkillDraft): Promise<SkillDraft
     const body = reply.trim().replace(/^```(?:markdown|md)?\n([\s\S]*?)\n```$/, '$1').trim();
     if (!body) return null;
     current = { ...current, body };
-    const violations = validateSkill(current);
+    const violations = validateSkill(current, { authored: true });
     if (violations.length === 0) return current;
     if (!violations.every((v) => v.tooLong)) return null;
   }
@@ -255,7 +255,7 @@ export async function authorRecording(llm: LlmClient, input: RecordAuthorInput, 
     if (parsed.kind === 'declined') return { ok: false, reason: 'declined', detail: parsed.reason };
     if (parsed.kind === 'skill') {
       const draft = input.previous ? { ...parsed.draft, name: input.previous.name } : parsed.draft;
-      const violations = validateSkill(draft);
+      const violations = validateSkill(draft, { authored: true });
       if (violations.length === 0) return { ok: true, draft, ...parseRecordExtras(reply) };
       if (!shrunk && violations.every((v) => v.tooLong)) {
         shrunk = true;

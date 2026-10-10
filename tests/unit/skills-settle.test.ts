@@ -221,7 +221,7 @@ describe('settleSkills', () => {
     // identically whichever surface proposed the skill.
     const llm = scriptedLlm([
       JSON.stringify({
-        skill: { name: 'extract-video-captions', description: 'Pull the captions out of a video the user asks about.', body: BODY }
+        skill: { name: 'extract-video-captions', description: 'Use when the user asks about the captions of a video.', body: BODY }
       })
     ]);
     const res = await settleSkills(turn(), 'auto', llm);
@@ -283,7 +283,7 @@ describe('settleSkills', () => {
     writeSkill('extract-youtube-transcript', BODY, 'pull the transcript out of a YouTube video');
     const llm = scriptedLlm([
       '{"target":"extract-youtube-transcript"}',
-      JSON.stringify({ skill: { name: 'extract-video-details', description: 'Pull the transcript out of a video.', body: BODY } })
+      JSON.stringify({ skill: { name: 'extract-video-details', description: 'Use when the user wants the transcript of a video.', body: BODY } })
     ]);
     const res = await settleSkills(turn(), 'auto', llm);
     expect(llm.prompts).toHaveLength(2);

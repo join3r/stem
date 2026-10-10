@@ -369,7 +369,7 @@ export async function authorSkill(llm: LlmClient, input: AuthorInput): Promise<A
     // A patch must stay the skill it is patching; a renamed "patch" is a new skill
     // by another name, which is exactly the duplication this path exists to avoid.
     const draft = input.existing ? { ...parsed.draft, name: input.existing.name } : parsed.draft;
-    const violations = validateSkill(draft);
+    const violations = validateSkill(draft, { authored: true });
     if (violations.length === 0) {
       return { ok: true, draft, patched: !!input.existing, target: input.existing?.name, attempts: attempt };
     }

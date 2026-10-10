@@ -502,3 +502,54 @@ Not done: a second model call to judge outcome, and the counterfactual ("would
 the turn have been shorter without the skill"), which cannot be known from one
 run. `scripts/skill-author-eval.mjs` is where a with/without replay would live if
 the shipped mechanism needs validating against real replies.
+
+## Addendum 2026-10-10 — one skill, one job (Defect 2 reversed)
+
+The umbrella posture above was wrong for Stem, and the "Where Stem legitimately
+differs" table already held the reason: Hermes lets the model read an index and
+open the file it wants, while Stem ranks the user's message against each skill's
+one-sentence description and inlines only the winners. An umbrella has to describe
+four jobs in 160 characters, so it matches each of them weakly and unrelated
+messages strongly. The 2026-10 selection audits (wrong skills loaded, right
+skills missed) traced back to four umbrellas on the server:
+`trace-podcast-study-methodology` ("trace claims, provenance, earliest evidence,
+or audience membership across studies, images, Slack, and authenticated
+applications"), `agent-browser-vercel`, `upgrade-unraid-container-with-pinned-image`,
+`assess-postgresql-primary-headroom-grafana`. The cost of a wrong merge is not
+"recoverable, the content is still there": the content is there, but nothing
+retrieves it. Hermes' own umbrella pass is off by default, and its practitioners
+report the same blurring. Published results agree on the mechanism: selection
+accuracy falls with confusability between skills rather than with library size
+(arXiv 2601.04748), and focused skills beat comprehensive ones (arXiv 2602.12670).
+Mem0 v3 dropped write-time UPDATE/DELETE merging altogether.
+
+What changed (`skills/curate.ts`, `skills/contract.ts`):
+
+- **Split.** A changed skill with two or more `###` parts under Steps, or a
+  description not opening "Use when", gets a one-skill review: one job, or
+  several filed together? A split moves steps verbatim into 2–4 standalone
+  skills; the first keeps the slug and the usage history, the rest carry the
+  original `origin`. One retry with the rejection reason, then left whole.
+- **Merge only duplicates.** The bar is "would someone in one skill's situation
+  follow the other's steps from start to finish", never shared tool or domain.
+- **Small groups, changed skills only.** Each changed skill is reviewed with its
+  ≤3 nearest neighbours above cosine 0.7 (name+description vectors; on the
+  server's library the median pair is 0.64 and the closest 0.755). The whole-
+  library prompt timed out every run from 2026-10-08. `.skills-curated.json`
+  holds the hash each skill was last reviewed at, so a quiet library costs no
+  model call; Tidy up (`force`) reviews everything.
+- **Provenance.** Recorded skills are never reviewed. `/learn` skills are never
+  split, merged or archived; a description that breaks the rules may be rewritten,
+  the body never. Both appear READ-ONLY in merge groups, so an agent-written
+  duplicate can be archived in their favour (Hermes likewise curates only
+  agent-created skills).
+- **Backups.** Every skill a pass rewrites or deletes is copied first to
+  `.curator-history/<run>/<slug>.md`; ten runs are kept.
+- **Description rule.** Model-written descriptions must open "Use when" and name
+  one situation (`validateSkill(draft, { authored: true })`): five of the six
+  multi-job skills opened "Use to …"/"Use for …", no single-job one did. Text a
+  person typed (approval card, recording card) is not held to it.
+
+Not done, from the same research: synthetic queries per skill as extra index
+text and as a confusability regression test after each split/merge (Re-Invoke,
+arXiv 2408.01875); admission by verified re-run (ASI).

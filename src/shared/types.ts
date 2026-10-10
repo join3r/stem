@@ -2312,6 +2312,8 @@ export interface SkillsResetResult {
  */
 export interface SkillsCurateResult {
   skills: SkillSummary[];
+  /** Skills split into one skill per job. Optional: a server older than the renderer omits it. */
+  split?: number;
   merged: number;
   archived: number;
   /**

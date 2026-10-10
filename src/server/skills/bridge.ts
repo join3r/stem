@@ -134,7 +134,10 @@ export class SkillBridge {
     // Validate before policy, always. A rejected draft costs the model one retry
     // with the exact violations; showing the user a card for a file that would
     // fail the contract anyway wastes their attention instead.
-    const violations = validateSkill(draft);
+    // The model wrote this draft, so it meets the authored rules too — except a
+    // recording's, which arrives as the text the user edited and saved on its card.
+    // What the user accepts from an approval card below is checked without them too.
+    const violations = validateSkill(draft, { authored: req.origin !== 'recorded' });
     if (violations.length > 0) {
       return {
         ok: false,

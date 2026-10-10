@@ -66,7 +66,7 @@ describe('recording drafts', () => {
     evidence = [];
     stopped = [];
     answer = {
-      skill: { name: 'set-agrisys-delivery-date', description: 'Copy a confirmed delivery date from a supplier email into its agrisys order.', body: BODY },
+      skill: { name: 'set-agrisys-delivery-date', description: 'Use when a supplier email confirms a delivery date for an agrisys order.', body: BODY },
       variables: [{ name: 'Delivery date', from: 'the confirmed date in the supplier email' }],
       questions: ['Is the order number always in the subject?']
     };

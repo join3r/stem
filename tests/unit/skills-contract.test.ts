@@ -138,3 +138,22 @@ describe('SKILL_CONTRACT_TEXT', () => {
     expect(SKILL_CONTRACT_TEXT).toContain(String(SKILL_BODY_MAX_BYTES));
   });
 });
+
+describe('authored descriptions', () => {
+  // Five of the six multi-job skills on the server opened "Use to …" / "Use for …"
+  // and listed what they could do; no single-job one did (2026-10-10).
+  it('holds model-written text to "Use when"', () => {
+    const listed = draft({ description: 'Use to diagnose port mismatches or upgrade to pinned images.' });
+    expect(fields(validateSkill(listed, { authored: true }))).toEqual(['description']);
+    expect(validateSkill(draft({ description: 'use when a port does not answer.' }), { authored: true })).toEqual([]);
+  });
+
+  it('leaves text a person wrote alone', () => {
+    expect(validateSkill(draft({ description: 'Downloads the monthly invoice.' }))).toEqual([]);
+  });
+
+  it('says so in the contract the model reads', () => {
+    expect(SKILL_CONTRACT_TEXT).toContain('starting "Use when"');
+    expect(SKILL_CONTRACT_TEXT).toContain('One skill is one job.');
+  });
+});

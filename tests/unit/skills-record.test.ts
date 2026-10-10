@@ -121,7 +121,7 @@ describe('integrations and tips', () => {
 });
 
 describe('authorRecording', () => {
-  const skill = { name: 'set-delivery-date', description: 'Copy a confirmed delivery date from a supplier email into the agrisys order.', body: BODY };
+  const skill = { name: 'set-delivery-date', description: 'Use when a supplier email confirms a delivery date for the agrisys order.', body: BODY };
 
   it('returns the draft with its variables and questions', async () => {
     const seen: (unknown[] | undefined)[] = [];

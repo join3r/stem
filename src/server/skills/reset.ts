@@ -7,6 +7,7 @@ import { listSkillRecords } from './store';
 import { SKILLS_USAGE_FILE } from './usage';
 import { SKILLS_VECTORS_FILE } from './vectors';
 import { SKILLS_IGNORE_FILE } from './ignore';
+import { SKILLS_CURATED_FILE } from './curate';
 
 // The one-time migration off the old library.
 //
@@ -32,7 +33,7 @@ export const SKILLS_SCHEMA_VERSION = 2;
 export const SKILLS_SCHEMA_FILE = '.skills-schema';
 
 /** Sidecars that are meaningless once the library they describe is gone. */
-const SIDECARS = [SKILLS_USAGE_FILE, SKILLS_VECTORS_FILE, SKILLS_IGNORE_FILE, SKILLS_REV_FILE];
+const SIDECARS = [SKILLS_USAGE_FILE, SKILLS_VECTORS_FILE, SKILLS_IGNORE_FILE, SKILLS_REV_FILE, SKILLS_CURATED_FILE];
 
 export interface SkillsResetStatus {
   /** The user has not yet answered for this schema version. */

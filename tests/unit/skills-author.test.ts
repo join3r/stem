@@ -27,7 +27,7 @@ The transcript panel lists timestamped lines.`;
 
 const GOOD_SKILL = {
   name: 'extract-video-captions',
-  description: 'Pull the caption text out of a YouTube video when the user asks what was said in it.',
+  description: 'Use when the user asks what was said in a YouTube video.',
   body: GOOD_BODY
 };
 

@@ -197,7 +197,7 @@ export function initRecallTasks(deps: {
   };
 
   // Skills upkeep: the deterministic lifecycle clock, then the Level-2 LLM cleanup
-  // of self-authored skills (merge near-duplicates into umbrellas, archive
+  // of self-authored skills (split multi-job skills, merge true duplicates, archive
   // superseded ones), mirroring fact consolidation. The curator uses the same hidden
   // LlmClient seam and is gated by the memory toggle, since it's the same kind of
   // background self-improvement pass; the clock is not. On any change, reload so pi
@@ -218,10 +218,10 @@ export function initRecallTasks(deps: {
         return;
       }
       const res = await activity.track('skills.curate', 'Curating skills', () => curateSkills(skillsLlm), (r) => ({
-        worked: r.merged + r.archived + expired > 0,
-        detail: `Merged ${r.merged}, archived ${r.archived}, expired ${expired}`
+        worked: r.split + r.merged + r.archived + expired > 0,
+        detail: `Split ${r.split}, merged ${r.merged}, archived ${r.archived}, expired ${expired}`
       }));
-      if (res.merged || res.archived || expired) await deps.runtime().requestSkillReload();
+      if (res.split || res.merged || res.archived || expired) await deps.runtime().requestSkillReload();
     } catch {
       // quiet: track() already failed the skills.curate row.
     } finally {

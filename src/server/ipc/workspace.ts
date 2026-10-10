@@ -142,14 +142,14 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     // yet, and it costs one walk of the skills dir.
     const expired = applyAutomaticTransitions();
     const res = await activity.track('skills.curate', 'Curating skills', () => curateSkills(llm, { force: true }), (r) => ({
-      worked: r.merged + r.archived + expired > 0,
-      detail: `Merged ${r.merged}, archived ${r.archived}, expired ${expired}`
+      worked: r.split + r.merged + r.archived + expired > 0,
+      detail: `Split ${r.split}, merged ${r.merged}, archived ${r.archived}, expired ${expired}`
     }));
     await deps.runtime().requestSkillReload();
     // listSkills is async and lives inside an object literal, so it MUST be
     // awaited here: a nested promise isn't awaited by the IPC layer and
     // serializes to {} — which the Skills tab then crashed rendering.
-    return { skills: await listSkills(), merged: res.merged, archived: res.archived, expired };
+    return { skills: await listSkills(), split: res.split, merged: res.merged, archived: res.archived, expired };
   });
   // There is no `skills:distillNow` any more. Its "Collect now" swept the chat
   // backlog for skills, but the recall DB holds no tool calls to sweep; skills
