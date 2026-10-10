@@ -4,7 +4,7 @@ import type { EmbeddingsClient } from '../recall/embeddings';
 import type { RerankClient } from '../recall/rerank';
 import { dot, magnitude } from '../recall/vector';
 import { ensureSkillVectors, skillVectorText, type SkillEmbedder } from './vectors';
-import { DEFAULT_SHORTLIST_SIZE, queryHasSignal, selectCut, type CutReason, type CutResult } from './gate';
+import { DEFAULT_SHORTLIST_SIZE, countWords, queryHasSignal, selectCut, type CutReason, type CutResult } from './gate';
 
 // Per-turn skill selection: which saved procedures the model gets, and in what
 // depth. This is the half of the skills rebuild that takes retrieval away from
@@ -71,6 +71,10 @@ export interface SkillDecision {
   candidates: number;
   topCosine?: number;
   inlined: string[];
+  /** Cleared the cut but already sits in this chat's history, so not loaded again. */
+  alreadyLoaded?: string[];
+  /** The ranked text carried the previous user message (a short follow-up). */
+  withContext?: boolean;
 }
 
 export interface SkillSelection {
@@ -195,6 +199,39 @@ export interface SelectSkillsOptions {
   rerank?: RerankClient | null;
   /** Decay clock, in unix seconds. */
   now?: number;
+  /**
+   * The user's earlier messages in this chat, oldest first. Only a short
+   * follow-up uses them — see {@link skillQuery}.
+   */
+  previousUserMessages?: readonly string[];
+  /**
+   * Names of skills whose bodies are already in this chat's live history (see
+   * skills/thread-history.ts). They still take part in the ranking, so a
+   * follow-up whose best match is the skill already loaded does not hand its
+   * seat to the runner-up; they are just never inlined a second time.
+   */
+  alreadyLoaded?: ReadonlySet<string>;
+}
+
+/**
+ * Below this many words a message is treated as a follow-up and ranked together
+ * with the previous user message. "Skús teraz", "Can you please check it?" and
+ * "Odstránil" say nothing about the task on their own: ranked alone they either
+ * miss the skill the chat is about or, worse, clear the floor on noise and load
+ * an unrelated one. Both were observed in the 2026-10 audit of live turns. A
+ * full request carries its own topic and is ranked as written, so the calibrated
+ * floor keeps measuring what it was measured on.
+ */
+export const FOLLOW_UP_MAX_WORDS = 8;
+
+/** The text a turn's skills are ranked against. */
+export function skillQuery(current: string, previous: readonly string[] = []): string {
+  const query = current.trim();
+  const last = [...previous].reverse().find((text) => text.trim());
+  if (!last || countWords(query) >= FOLLOW_UP_MAX_WORDS) return query;
+  // Same bound the fact query applies, for the same reason: one pasted log must
+  // not drown the message it is context for.
+  return `${[...last.trim()].slice(0, 400).join('')}\n${query}`;
 }
 
 function enabledOnly(records: SkillRecordish[]): SkillRecordish[] {
@@ -253,7 +290,8 @@ export async function selectSkills(
   const now = opts.now ?? Date.now() / 1000;
 
   const client = opts.embeddings !== undefined ? opts.embeddings : getEmbeddingsClient();
-  const query = message.trim();
+  const query = skillQuery(message, opts.previousUserMessages);
+  const withContext = query !== message.trim();
   if (!client || maxInlined <= 0) return indexAll(candidates);
   // A near-empty message ("Try now", "Áno") gives both encoder families nothing
   // to score, so what comes back is noise — and noise occasionally clears any
@@ -358,11 +396,16 @@ export async function selectSkills(
   }
 
   const bySlug = new Map(candidates.map((r) => [r.slug, r]));
-  const inlined = cut.inlined.map((slug) => bySlug.get(slug)).filter((r): r is SkillRecordish => !!r);
+  const cutRecords = cut.inlined.map((slug) => bySlug.get(slug)).filter((r): r is SkillRecordish => !!r);
+  const loaded = opts.alreadyLoaded ?? new Set<string>();
+  // Already in the chat's history: the model has the steps, and a second copy
+  // only costs context. Nor does it go in the index — it is not "names only".
+  const inlined = cutRecords.filter((r) => !loaded.has(r.name));
+  const alreadyLoaded = cutRecords.filter((r) => loaded.has(r.name)).map((r) => r.slug);
   const inlinedSlugs = new Set(inlined.map((r) => r.slug));
   // Ranked first, then unscored (a missing vector is not evidence of anything, so
   // those sit behind everything that could actually be compared), then capped.
-  const indexed = [...scored.map((s) => s.record).filter((r) => !inlinedSlugs.has(r.slug)), ...unscored].slice(
+  const indexed = [...scored.map((s) => s.record), ...unscored].filter((r) => !inlinedSlugs.has(r.slug) && !loaded.has(r.name)).slice(
     0,
     opts.maxIndexed ?? MAX_INDEXED_SKILLS
   );
@@ -376,7 +419,9 @@ export async function selectSkills(
       reason: cut.reason,
       candidates: scored.length,
       topCosine: scored[0]?.cosine,
-      inlined: cut.inlined
+      inlined: inlined.map((r) => r.slug),
+      ...(alreadyLoaded.length ? { alreadyLoaded } : {}),
+      ...(withContext ? { withContext } : {})
     }
   };
 }

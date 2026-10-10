@@ -1006,6 +1006,27 @@ describe('scheduled-run turns', () => {
     }
   });
 
+  it('shows only the skills the turn followed, before turn/completed goes out', async () => {
+    const { runtime, worker } = await scheduledRuntime();
+    await runtime.startTurn({ input: 'hello', threadId: 'sched-1' });
+    const turn = worker.currentTurn!;
+    turn.skillsInjected = [
+      { slug: 'brew-coffee', name: 'brew-coffee', description: 'd', body: '## Steps\n1. Run `grind_beans`.\n' },
+      { slug: 'renew-domain', name: 'renew-domain', description: 'd', body: '## Steps\n1. Run `whois_lookup`.\n' }
+    ];
+    turn.trace.push({ id: 'call-1', name: 'grind_beans' });
+    const events: Array<{ method: string; params: unknown }> = [];
+    runtime.on('event', (event) => events.push(event));
+    (runtime as unknown as { onPiEvent(w: FakeWorker, e: Record<string, unknown>): void }).onPiEvent(worker, { type: 'agent_end' });
+
+    const methods = events.map((e) => e.method);
+    expect(methods.indexOf('item/started')).toBeGreaterThanOrEqual(0);
+    expect(methods.indexOf('item/started')).toBeLessThan(methods.indexOf('turn/completed'));
+    expect(events.filter((e) => e.method === 'item/started').map((e) => (e.params as { item: { name: string } }).item.name))
+      .toEqual(['brew-coffee']);
+    expect(turn.activity).toMatchObject([{ kind: 'skill', name: 'brew-coffee' }]);
+  });
+
   it('applies the pin a scheduled turn carries, and nothing else, before the prompt', async () => {
     const { runtime, requests } = await scheduledRuntime();
     await runtime.startTurn({
@@ -1414,7 +1435,7 @@ describe('fact pilot history at prompt preparation', () => {
     } finally { enabled.mockRestore(); resolve.mockRestore(); inject.mockRestore(); }
   });
 
-  it('does not fetch history for normal Qwen, private/recall-off, automated, or mismatched sessions', async () => {
+  it('keeps prior text from fact retrieval for normal Qwen, automated, and mismatched sessions', async () => {
     const { runtime } = await tempRuntime();
     const build = (runtime as unknown as { buildMessage: Build }).buildMessage.bind(runtime);
     const w = fakeWorker('a', 'Previous text');
@@ -1432,8 +1453,11 @@ describe('fact pilot history at prompt preparation', () => {
       await build({ input: 'Other session' }, 'other', null, 'current', w.worker);
       await build({ input: 'Scheduled message', scheduled: { at: new Date().toISOString(), taskId: 'task' } }, 'a', null, 'current', w.worker);
       await build({ input: 'Mail message', mail: { conversationId: 'mail', subject: 'Test', from: 'writer', participants: [] } }, 'a', null, 'current', w.worker);
-      expect(w.request).not.toHaveBeenCalled();
+      // History is still read for the leased session (skill selection uses it),
+      // never for a session the worker is not on.
+      expect(w.request).toHaveBeenCalledTimes(6);
       expect(inject).toHaveBeenCalledTimes(4); // normal, mismatch, scheduled, mail
+      for (const call of inject.mock.calls) expect(call[1]).toMatchObject({ previousUserMessages: [] });
     } finally { enabled.mockRestore(); resolve.mockRestore(); inject.mockRestore(); }
   });
 

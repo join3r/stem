@@ -120,6 +120,7 @@ import {
 import { piMcpConfigPath, skillsRoot } from '../workspace/paths';
 import { readUsage, recordGrades, recordInjections, recordUses } from '../skills/usage';
 import { formatSkillsBlock, selectSkills, type SkillUsageStat } from '../skills/inject';
+import { loadedSkillNames } from '../skills/thread-history';
 import { formatPracticeBlock } from '../skills/record';
 import { listSkillRecords } from '../skills/store';
 import { gradeSkillUse, reportedSkillIssues } from '../skills/grade';
@@ -3469,12 +3470,61 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   }
 
   /**
-   * Give the skills this turn loaded a row each in the activity strip.
+   * Grade the skills inlined into this turn and give the followed ones their
+   * activity rows. Runs once, just before turn/completed reaches the clients —
+   * a row arriving after it would land on a finished turn (and iOS reopens a
+   * turn on any item/started).
+   */
+  private settleSkills(turn: TurnContext): void {
+    // Close the usage loop for the skills whose bodies went into this turn: the
+    // injections were counted when the message was built, and this is where they
+    // are graded. Sidecar-only — refresh an open Skills tab, but no
+    // pendingSkillReload, since pi ignores non-skill files.
+    if (turn.skillsSettled) return;
+    turn.skillsSettled = true;
+    const injected = turn.skillsInjected ?? [];
+    if (injected.length > 0) {
+      // The model's own verdict first: a skill it reported as wrong is not one
+      // it followed, whatever the tool overlap says, so it comes out of the
+      // graded set before that set is recorded or routed on.
+      const reported = reportedSkillIssues(turn.assistantText, injected);
+      const failedSlugs = new Set(reported.map((i) => i.slug));
+      const used = gradeSkillUse(injected, turn.trace).filter((slug) => !failedSlugs.has(slug));
+      // The same verdicts route authoring: `snapshotTurnTrace` in settleTurn
+      // reads these off the turn, so the settle pass gets the graded set
+      // without a second pass over the trace. They must be assigned to `turn`
+      // itself — the object handed to the snapshot — or the routing goes back to
+      // being permanently empty, which is the bug this replaced.
+      turn.skillsGradedUsed = used;
+      turn.skillsReported = reported;
+      recordGrades(
+        injected.map((s) => s.slug),
+        used,
+        new Date(),
+        reported
+      );
+      // `recordUses` still drives the human-facing "used N×" line in the Manage
+      // panel, which predates the loop and means the same thing to a reader.
+      if (used.length > 0) recordUses(used);
+      this.emitEvent('skills/changed');
+      // Only now does the strip get a row, and only for what the turn followed.
+      // A row at load time showed every inlined skill as "used" — including the
+      // ones the ranking got wrong and the model rightly ignored, which read as
+      // Stem not knowing what it was doing.
+      const bySlug = new Map(injected.map((s) => [s.slug, s]));
+      this.announceSkills(turn, used.flatMap((slug) => bySlug.get(slug) ?? []));
+    }
+  }
+
+  /**
+   * Give the skills this turn followed a row each in the activity strip.
    *
    * Nothing was called — the steps went into the prompt before the model read the
    * message — but the strip is where a turn accounts for what went into it, and
    * "this answer came out of a saved procedure" was the one input it could not
-   * show. A skill was invisible everywhere in the chat: no tool call, no bubble,
+   * show. Only followed skills get one (settleSkills): a loaded skill the model
+   * ignored is an input that did nothing, and showing it advertised the ranking's
+   * misses. A skill was invisible everywhere in the chat: no tool call, no bubble,
    * nothing but a reply that happened to follow steps written weeks ago.
    *
    * Started-then-completed, in that order and immediately, so the rows ride the
@@ -3840,6 +3890,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
     for (const e of events) {
       if (e.method === 'item/completed') this.bufferGeneratedImage(e.params);
+      if (e.method === 'turn/completed') this.settleSkills(turn);
       this.emitEvent(e.method, tagTurnEvent(e.params, turn));
     }
     if (done) this.settleTurn(worker, turn, now);
@@ -3903,6 +3954,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
     }
     this.advancePhase(turn, [], now); // flush the trailing segment
+    // Usually already done as turn/completed went out; this covers the turns
+    // that end without one (aborts, leftovers). Before the timing write below,
+    // which persists turn.activity, so the skill rows survive reopen.
+    this.settleSkills(turn);
     this.reportTurnTiming(turn);
     // Web sources recovered by the tee ride out at turn end (the assistant
     // bubble exists by now, so the renderer can attach them).
@@ -3913,36 +3968,6 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // detect it (the bridge bumps the rev marker) and reload after agent_settled.
     if (this.readSkillsRev() !== worker.skillsRevAtTurnStart) {
       this.pendingSkillReload = true;
-      this.emitEvent('skills/changed');
-    }
-    // Close the usage loop for the skills whose bodies went into this turn: the
-    // injections were counted when the message was built, and this is where they
-    // are graded. Sidecar-only — refresh an open Skills tab, but no
-    // pendingSkillReload, since pi ignores non-skill files.
-    const injected = turn.skillsInjected ?? [];
-    if (injected.length > 0) {
-      // The model's own verdict first: a skill it reported as wrong is not one
-      // it followed, whatever the tool overlap says, so it comes out of the
-      // graded set before that set is recorded or routed on.
-      const reported = reportedSkillIssues(turn.assistantText, injected);
-      const failedSlugs = new Set(reported.map((i) => i.slug));
-      const used = gradeSkillUse(injected, turn.trace).filter((slug) => !failedSlugs.has(slug));
-      // The same verdicts route authoring: `snapshotTurnTrace` runs a few lines
-      // down and reads these off the turn, so the settle pass gets the graded set
-      // without a second pass over the trace. They must be assigned to `turn`
-      // itself — the object handed to the snapshot — or the routing goes back to
-      // being permanently empty, which is the bug this replaced.
-      turn.skillsGradedUsed = used;
-      turn.skillsReported = reported;
-      recordGrades(
-        injected.map((s) => s.slug),
-        used,
-        new Date(),
-        reported
-      );
-      // `recordUses` still drives the human-facing "used N×" line in the Manage
-      // panel, which predates the loop and means the same thing to a reader.
-      if (used.length > 0) recordUses(used);
       this.emitEvent('skills/changed');
     }
     worker.currentTurn = null;
@@ -4451,24 +4476,28 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     } catch (error) {
       degrade('pi.pins', 'sent the turn without the chat\'s pinboard', error);
     }
+    // The chat's history as the model will see it, read once for both fact and
+    // skill selection. The leased worker has already activated this session and
+    // has not received the current prompt yet, so this follows its actual
+    // branch, not the flat disk transcript (which can include abandoned sibling
+    // turns).
+    let historySnapshot: unknown;
+    if (worker?.proc && worker.activeThreadId === threadId) {
+      try {
+        const snapshot = await worker.proc.request({ type: 'get_entries' }, 2_000);
+        if (worker.activeThreadId === threadId) historySnapshot = snapshot.data;
+      } catch (error) {
+        degrade('pi.history', 'chose facts and skills from the current message alone', error);
+      }
+    }
+    const previousUserMessages =
+      historySnapshot !== undefined && !input.scheduled && !input.mail ? previousFactUserMessages(historySnapshot) : [];
     // A persona with recall off sees none of the user's memory: no facts, no
     // episodic history, no indexed folder excerpts. The block is skipped
     // outright rather than emptied, so nothing about the user rides along
     // with the material (Persona.recall explains why Critic needs this).
     if (isRecallEnabled() && input.persona?.recall !== false && !turn?.isPrivate) {
       const factReranker = await getFactRerankClient();
-      let previousUserMessages: string[] = [];
-      if (factReranker?.factQuery && !input.scheduled && !input.mail && worker?.proc && worker.activeThreadId === threadId) {
-        try {
-          // The leased worker has already activated this session and has not
-          // received the current prompt yet. Follow its actual branch, not the
-          // flat disk transcript (which can include abandoned sibling turns).
-          const snapshot = await worker.proc.request({ type: 'get_entries' }, 2_000);
-          if (worker.activeThreadId === threadId) previousUserMessages = previousFactUserMessages(snapshot.data);
-        } catch (error) {
-          degrade('recall.factContext', 'used only the current message for fact retrieval', error);
-        }
-      }
       const chosen: { facts: Fact[]; tier: FactTier } = { facts: [], tier: 'all' };
       const flags: { privateDocsInjected?: boolean } = {};
       const injectedDocs: InjectedDocRef[] = [];
@@ -4479,7 +4508,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         flags,
         injectedDocs,
         factReranker,
-        previousUserMessages
+        previousUserMessages: factReranker?.factQuery ? previousUserMessages : []
       });
       if (recall) blocks.push(recall);
       // Documents from a memorize:false folder were injected: taint the turn the
@@ -4518,7 +4547,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Sits after recall and before files so the model reads "what I remember" and
     // "how I do this" together, ahead of the ambient context blocks.
     try {
-      const selection = await selectSkills(input.input, listSkillRecords(), { usage: skillUsageLookup() });
+      const selection = await selectSkills(input.input, listSkillRecords(), {
+        usage: skillUsageLookup(),
+        previousUserMessages,
+        alreadyLoaded: loadedSkillNames(historySnapshot)
+      });
       // Log the cut on EVERY turn, including — especially — the turns that
       // inline nothing. The regression this replaced was invisible precisely
       // because a stage returning nothing and a stage with nothing to say
@@ -4540,10 +4573,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const inlined = selection.inlined.map((s) => s.slug);
         if (inlined.length > 0) {
           recordInjections(inlined);
-          if (turn?.threadId === threadId) {
-            turn.skillsInjected = selection.inlined;
-            this.announceSkills(turn, selection.inlined);
-          }
+          // Announced at settle, and only if followed (see settleTurn).
+          if (turn?.threadId === threadId) turn.skillsInjected = selection.inlined;
         }
       }
     } catch (error) {

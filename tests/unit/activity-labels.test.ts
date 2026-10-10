@@ -21,9 +21,9 @@ describe('web-search phrasing', () => {
   it('names a loaded skill instead of guessing at a tool', () => {
     // The skill's name is a slug, not a tool name — through labelForTool it would
     // come out as "Using extract-video-captions…", which reads like a tool call.
-    expect(settledActivityLabel('skill', 'extract-video-captions')).toBe('Used the skill extract-video-captions');
-    expect(activityLabel('skill', 'extract-video-captions')).toBe('Reading the skill extract-video-captions…');
-    expect(settledActivityLabel('skill')).toBe('Used a saved skill');
+    expect(settledActivityLabel('skill', 'extract-video-captions')).toBe('Followed the skill extract-video-captions');
+    expect(activityLabel('skill', 'extract-video-captions')).toBe('Following the skill extract-video-captions…');
+    expect(settledActivityLabel('skill')).toBe('Followed a saved skill');
   });
 
   it('reads naturally with the parenthesized server-name fallback', () => {

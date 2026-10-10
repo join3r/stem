@@ -132,6 +132,8 @@ export interface TurnContext {
    * the field again, so every end-of-turn write was a create for months.
    */
   skillsGradedUsed?: string[];
+  /** Set once PiRuntime.settleSkills has graded and announced this turn's skills. */
+  skillsSettled?: boolean;
   /**
    * Loaded skills the model itself REPORTED as wrong this turn, with its reason
    * (grade.ts `reportedSkillIssues`). Written beside `skillsGradedUsed` at

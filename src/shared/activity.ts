@@ -48,10 +48,9 @@ function labelForTool(name: string, detail?: string): string | undefined {
 export function settledActivityLabel(type: string, name?: string, detail?: string): string {
   const n = (name ?? '').toLowerCase();
   const on = detail ? ` ${detail}` : '';
-  // Same standing as "Read foo.ts": the thing was put in front of the model. The
-  // reply may still have gone its own way, which the skills block explicitly
-  // allows for — as a file's contents may go unused.
-  if (type === 'skill') return name ? `Used the skill ${name}` : 'Used a saved skill';
+  // Only skills the turn showed evidence of following get a row (the runtime's
+  // settleSkills), so this can say "followed" rather than merely "loaded".
+  if (type === 'skill') return name ? `Followed the skill ${name}` : 'Followed a saved skill';
   if (n === 'coding_agent' || type === 'codingAgent') return 'Ran a coding agent';
   if (n === 'generate_image' || type === 'imageGeneration') return 'Created an image';
   if (n === 'read') return detail ? `Read ${detail}` : 'Read a file';
@@ -84,7 +83,7 @@ export function settledActivityLabel(type: string, name?: string, detail?: strin
 export function activityLabel(type: string, name?: string, detail?: string): string {
   // Ahead of labelForTool: a skill's name is not a tool name, and left to that
   // fallback it would come out as "Using extract-video-captions…".
-  if (type === 'skill') return name ? `Reading the skill ${name}…` : 'Reading a saved skill…';
+  if (type === 'skill') return name ? `Following the skill ${name}…` : 'Following a saved skill…';
   if (name && type !== 'reasoning') {
     const specific = labelForTool(name, detail);
     if (specific) return specific;

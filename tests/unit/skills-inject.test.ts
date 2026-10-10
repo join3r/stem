@@ -16,6 +16,7 @@ import {
   MAX_INLINED_SKILLS,
   formatSkillsBlock,
   selectSkills,
+  skillQuery,
   skillUsageRate,
   type SkillRecordish
 } from '../../src/server/skills/inject';
@@ -24,6 +25,7 @@ import {
   ensureSkillVectors,
   skillVectorText
 } from '../../src/server/skills/vectors';
+import { loadedSkillNames } from '../../src/server/skills/thread-history';
 
 const vectorsFile = join(skillsDir, SKILLS_VECTORS_FILE);
 const QUERY = 'how do I deploy the staging build';
@@ -494,5 +496,87 @@ describe('formatSkillsBlock', () => {
     });
     expect(block).toContain('None matched this message');
     expect(block).toContain('- a — does a');
+  });
+});
+
+describe('selectSkills — chat context', () => {
+  it('ranks a short follow-up together with the previous user message', async () => {
+    const { client } = fakeEmbeddings({ deploy: 0.95, gardening: 0.9 });
+    const queries: string[] = [];
+    const rerank = {
+      ...fakeRerank({ deploy: -2 }),
+      rerank: async (q: string, docs: string[], topN: number) => {
+        queries.push(q);
+        return fakeRerank({ deploy: -2 }).rerank(q, docs, topN);
+      }
+    };
+    const sel = await selectSkills('Skús teraz', [skill('deploy'), skill('gardening')], {
+      embeddings: client,
+      rerank,
+      previousUserMessages: ['older message', QUERY]
+    });
+    // Alone, two words are refused as low-signal; with the chat's last message
+    // they are a follow-up to a deploy request.
+    expect(queries.every((q) => q === `${QUERY}\nSkús teraz`)).toBe(true);
+    expect(sel.inlined.map((s) => s.slug)).toEqual(['deploy']);
+    expect(sel.decision?.withContext).toBe(true);
+  });
+
+  it('ranks a full request as written', () => {
+    expect(skillQuery('please deploy the staging build to the cluster tonight', ['earlier']))
+      .toBe('please deploy the staging build to the cluster tonight');
+    expect(skillQuery('check it', [])).toBe('check it');
+  });
+
+  it('never loads a skill already in the chat, and does not hand its seat to the runner-up', async () => {
+    const { client } = fakeEmbeddings({ deploy: 0.95, gardening: 0.9, release: 0.85 });
+    const sel = await selectSkills(QUERY, [skill('deploy'), skill('gardening'), skill('release')], {
+      embeddings: client,
+      rerank: fakeRerank({ deploy: -2, gardening: -12 }),
+      alreadyLoaded: new Set(['deploy'])
+    });
+    expect(sel.inlined).toEqual([]);
+    // In the history already, so not listed as "names only" either.
+    expect(sel.indexed.map((s) => s.slug)).toEqual(['gardening', 'release']);
+    expect(sel.decision?.alreadyLoaded).toEqual(['deploy']);
+  });
+});
+
+describe('loadedSkillNames', () => {
+  const block = (name: string) =>
+    `<!--stem:context-->\n<stem_skills version="1">\nSaved procedures relevant to this message.\n\n` +
+    `### ${name} (saved at the user’s request)\ndesc\n\n## Steps\n1. go\n\n` +
+    `## Other saved skills (names only, steps not loaded)\n- listed-only — desc\n</stem_skills>\n<!--/stem:context-->\n\nhi`;
+  const user = (id: string, parentId: string | null, content: unknown) =>
+    ({ id, parentId, type: 'message', message: { role: 'user', content } });
+
+  it('finds inlined skills on the active branch only, not index entries', () => {
+    const names = loadedSkillNames({
+      leafId: 'b',
+      entries: [
+        user('a', null, block('deploy')),
+        user('b', 'a', [{ type: 'text', text: 'plain' }]),
+        user('sibling', 'a', block('abandoned'))
+      ]
+    });
+    expect([...names]).toEqual(['deploy']);
+  });
+
+  it('forgets skills a compaction summarised away, keeps the ones it kept', () => {
+    const names = loadedSkillNames({
+      leafId: 'd',
+      entries: [
+        user('a', null, block('summarised')),
+        user('b', 'a', block('kept')),
+        { id: 'c', parentId: 'b', type: 'compaction', firstKeptEntryId: 'b', summary: 's' },
+        user('d', 'c', block('after'))
+      ]
+    });
+    expect([...names].sort()).toEqual(['after', 'kept']);
+  });
+
+  it('returns nothing for a snapshot it cannot follow', () => {
+    expect(loadedSkillNames(undefined).size).toBe(0);
+    expect(loadedSkillNames({ leafId: 'x', entries: [] }).size).toBe(0);
   });
 });

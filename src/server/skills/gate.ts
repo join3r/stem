@@ -197,15 +197,14 @@ export const LEGACY_MIN_COSINE = 0.72;
  */
 export const MIN_QUERY_WORDS = 3;
 
+/** Words in a message; bare punctuation ("?", "...") is not a word in any language involved. */
+export function countWords(text: string): number {
+  return text.split(/\s+/).filter((token) => /[\p{L}\p{N}]/u.test(token)).length;
+}
+
 /** Whether the message is substantial enough to rank the library against. */
 export function queryHasSignal(query: string): boolean {
-  let words = 0;
-  for (const token of query.split(/\s+/)) {
-    // Bare punctuation ("?", "...") is not a word in any language involved.
-    if (/[\p{L}\p{N}]/u.test(token)) words += 1;
-    if (words >= MIN_QUERY_WORDS) return true;
-  }
-  return false;
+  return countWords(query) >= MIN_QUERY_WORDS;
 }
 
 /**
