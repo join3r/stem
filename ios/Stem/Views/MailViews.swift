@@ -274,7 +274,8 @@ struct MailConversationView: View {
         .controlSize(.small)
         .tint(.secondary)
         if shownExchanges.contains(key) {
-            ForEach(items) { MailItemCard(item: $0).padding(.leading, 16).opacity(0.85) }
+            // Newest first, like the thread around it.
+            ForEach(items.reversed()) { MailItemCard(item: $0).padding(.leading, 16).opacity(0.85) }
         }
     }
 
@@ -398,6 +399,9 @@ struct MailItemCard: View {
             }
             if item.stale == true {
                 Text("Late reply — written before your newest message").font(.caption).foregroundStyle(.orange)
+            }
+            if item.filed == true {
+                Text("Arrived after the answer — filed without starting another turn").font(.caption).foregroundStyle(.secondary)
             }
             MarkdownView(item.body)
             if let approval = item.approval { MailApprovalView(itemId: item.id, approval: approval) }

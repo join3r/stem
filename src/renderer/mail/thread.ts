@@ -10,7 +10,10 @@ import { groupMailTimeline } from './grouping';
 
 export interface ThreadEntry {
   item: MailItem;
-  /** The persona↔persona mails exchanged before this one, oldest first. */
+  /**
+   * The persona↔persona mails exchanged before this one (plus any filed after
+   * it), oldest first. The view shows them newest first, like the thread.
+   */
   exchange: MailItem[];
   /** Finished work this mail made (or, with no reply yet, that it started). */
   work: MailWorkGroup[];
@@ -35,7 +38,13 @@ export function layoutThread(mails: MailItem[], work: MailWorkGroup[]): ThreadLa
   let pending: MailItem[] = [];
   for (const group of groupMailTimeline(sorted)) {
     if (group.kind === 'exchange') {
-      pending.push(...group.items);
+      for (const item of group.items) {
+        // Filed mail reached a persona after it had answered: it belongs with
+        // that answer, never to "consulting still under way".
+        const answered = entries[entries.length - 1];
+        if (item.filed && answered && !pending.length) answered.exchange.push(item);
+        else pending.push(item);
+      }
       continue;
     }
     entries.push({ item: group.item, exchange: pending, work: [] });

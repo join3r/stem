@@ -226,6 +226,8 @@ struct MailItem: Decodable, Hashable, Identifiable {
     var at: Double
     var subject: String?
     var stale: Bool?
+    /// Persona↔persona mail that reached a persona after it had answered: filed, no turn started.
+    var filed: Bool?
     var attachments: [MessageAttachment]?
     var images: [GeneratedImageRef]?
     var agentReplies: [String]?

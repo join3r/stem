@@ -107,6 +107,10 @@ enum MailThread {
             if item.from == "user" || item.to.contains("user") {
                 entries.append(MailThreadEntry(item: item, exchange: pending))
                 pending = []
+            } else if item.filed == true, pending.isEmpty, !entries.isEmpty {
+                // Filed after an answer: it belongs with that answer, not to consulting under way.
+                let last = entries.removeLast()
+                entries.append(MailThreadEntry(item: last.item, exchange: last.exchange + [item]))
             } else {
                 pending.append(item)
             }

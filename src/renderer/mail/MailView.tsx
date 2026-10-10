@@ -356,11 +356,17 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   const exchangeMails = (key: string, exchange: MailItem[]) =>
     openExchanges.has(key) && (
       <div className="mail-exchange">
-        {exchange.map((m) => (
+        {/* Newest first, like the thread around it. */}
+        {[...exchange].reverse().map((m) => (
           <article key={m.id} className="mail-item exchange">
             <div className="mail-item-head">
               <strong>{name(m.from)}</strong>
               <span className="mail-item-to">→ {m.to.map(name).join(', ')}</span>
+              {m.filed && (
+                <span className="mail-item-stale" title="Arrived after the answer was sent; filed here without starting another turn">
+                  after the answer
+                </span>
+              )}
               <span className="mail-item-at">{formatAt(m.at, now)}</span>
             </div>
             <MdxView text={m.body} />
@@ -379,7 +385,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
           e.stopPropagation();
           toggle(setOpenExchanges, key);
         }}
-        title="The mail the personas sent each other before this reply"
+        title="The mail the personas sent each other around this reply"
       >
         <CornerDownRight size={12} />
         {exchangeLabel(exchange, author, name)}

@@ -31,6 +31,18 @@ describe('layoutThread', () => {
     expect(layout.trailingExchange).toEqual([]);
   });
 
+  it('filed mail after an answer folds onto that answer, not into consulting under way', () => {
+    const ask = mail('user', ['normal', 'verifier']);
+    const consult = mail('normal', ['verifier']);
+    const answer = mail('verifier', ['normal']);
+    const reply = mail('normal', ['user']);
+    const late = mail('verifier', ['normal'], { filed: true });
+    const layout = layoutThread([ask, consult, answer, reply, late], []);
+    expect(layout.entries[0].item.id).toBe(reply.id);
+    expect(layout.entries[0].exchange.map((m) => m.id)).toEqual([consult.id, answer.id, late.id]);
+    expect(layout.trailingExchange).toEqual([]);
+  });
+
   it('consulting after the newest mail is still under way', () => {
     const ask = mail('user', ['normal']);
     const consult = mail('normal', ['verifier']);
