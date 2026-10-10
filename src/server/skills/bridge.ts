@@ -136,8 +136,9 @@ export class SkillBridge {
     // fail the contract anyway wastes their attention instead.
     // The model wrote this draft, so it meets the authored rules too — except a
     // recording's, which arrives as the text the user edited and saved on its card.
-    // What the user accepts from an approval card below is checked without them too.
-    const violations = validateSkill(draft, { authored: req.origin !== 'recorded' });
+    // What the user accepts from an approval card below is checked without them too,
+    // and so is an imported skill, which is someone else's wording kept as it is.
+    const violations = validateSkill(draft, { authored: req.origin !== 'recorded' && req.origin !== 'imported' });
     if (violations.length > 0) {
       return {
         ok: false,
@@ -193,11 +194,11 @@ export class SkillBridge {
     if (editedViolations.length > 0) {
       return { ok: false, text: `The edited skill no longer meets the contract, so nothing was saved:\n${formatViolations(editedViolations)}` };
     }
-    // Provenance is 'user-requested' even though the model wrote the draft: the
-    // user read this exact text and accepted it, which is a stronger warrant than
-    // anything the assistant produced on its own, and it is what the injected
-    // label should say.
-    return this.write(edited, 'user-requested', req.expectExisting);
+    // 'approved', not 'user-requested': the user read this exact text and accepted
+    // it, which the injected label reflects (inject.ts), but the idea was Stem's.
+    // The curator may reshape what Stem thought of; it never touches what the user
+    // asked for (skills/curate.ts).
+    return this.write(edited, 'approved', req.expectExisting);
   }
 
   private write(draft: SkillDraft, origin: SkillOrigin, expectExisting?: boolean): SkillBridgeResult {

@@ -95,7 +95,7 @@ function writeSkill(
     'metadata:',
     '  stem:',
     `    source: ${src}`,
-    `    origin: ${JSON.stringify(opts.origin ?? 'user-requested')}`,
+    `    origin: ${JSON.stringify(opts.origin ?? 'approved')}`,
     `    version: ${opts.version ?? 1}`,
     '    created: "2026-01-01T00:00:00.000Z"',
     '    updated: "2026-01-01T00:00:00.000Z"',
@@ -279,7 +279,7 @@ describe('curateSkills', () => {
     expect(narrowed).not.toContain('docker port');
     const part = readFileSync(join(skillsDir, 'diagnose-container-port-mismatch', 'SKILL.md'), 'utf8');
     expect(part).toContain('docker port');
-    expect(part).toContain('origin: "user-requested"'); // provenance carried to the new part
+    expect(part).toContain('origin: "approved"'); // provenance carried to the new part
     const runs = readdirSync(join(skillsDir, '.curator-history'));
     expect(runs).toHaveLength(1);
     expect(readFileSync(join(skillsDir, '.curator-history', runs[0], 'upgrade-unraid-container.md'), 'utf8')).toContain('### Port diagnosis');
@@ -303,33 +303,16 @@ describe('curateSkills', () => {
     expect(readFileSync(join(skillsDir, 'upgrade-unraid-container', 'SKILL.md'), 'utf8')).toContain('### Port diagnosis');
   });
 
-  it('never reviews a recorded skill, and only re-describes a /learn one', async () => {
-    writeSkill('recorded-umbrella', { body: UMBRELLA_BODY, origin: 'recorded', description: 'Use to do two things.' });
-    writeSkill('learned-umbrella', { body: UMBRELLA_BODY, origin: 'learn', description: 'Use to do two things.' });
-    writeSkill('keep-a', {});
-    const llm = routedLlm({
-      split: [JSON.stringify({ verdict: 'split', skills: [] }), JSON.stringify({ verdict: 'one', description: 'Use when an Unraid container misbehaves.' })]
-    });
-    // The first answer is malformed on purpose; parseSplit reads it as "one" with no description.
-    const res = await curateSkills(llm, { embeddings: null });
+  it("never reviews the user's own skills, only Stem's ideas", async () => {
+    for (const origin of ['user-requested', 'imported', 'learn', 'recorded']) {
+      writeSkill(`${origin}-umbrella`, { body: UMBRELLA_BODY, origin, description: 'Use to do two things.' });
+    }
+    writeSkill('auto-umbrella', { body: UMBRELLA_BODY, origin: 'turn', description: 'Use to do two things.' });
+    const llm = routedLlm({});
+    const res = await curateSkills(llm, { force: true, embeddings: null });
     expect(res.split).toBe(0);
-    const reviewed = llm.prompts.filter((p) => !p.startsWith('You check a small group'));
-    expect(reviewed).toHaveLength(1);
-    expect(reviewed[0]).toContain('[learned-umbrella]');
-    expect(reviewed[0]).toContain('The user made this skill themselves');
-    expect(readFileSync(join(skillsDir, 'recorded-umbrella', 'SKILL.md'), 'utf8')).toContain('Use to do two things.');
-  });
-
-  it('rewrites a /learn description without touching its body', async () => {
-    writeSkill('learned-umbrella', { body: UMBRELLA_BODY, origin: 'learn', description: 'Use to do two things.' });
-    writeSkill('keep-a', {});
-    writeSkill('keep-b', {});
-    const llm = routedLlm({ split: [JSON.stringify({ verdict: 'one', description: 'Use when an Unraid container misbehaves.' })] });
-    await curateSkills(llm, { embeddings: null });
-    const after = readFileSync(join(skillsDir, 'learned-umbrella', 'SKILL.md'), 'utf8');
-    expect(after).toContain('Use when an Unraid container misbehaves.');
-    expect(after).toContain('### Port diagnosis');
-    expect(after).toContain('origin: "learn"');
+    expect(llm.prompts).toHaveLength(1);
+    expect(llm.prompts[0]).toContain('[auto-umbrella]');
   });
 
   it('shows read-only skills in a merge group but refuses to merge or archive them', async () => {
@@ -347,7 +330,7 @@ describe('curateSkills', () => {
       }
     };
     const res = await curateSkills(llm, { embeddings: sameSpace() });
-    expect(seen).toContain('READ-ONLY (made by the user)');
+    expect(seen).toContain("READ-ONLY (the user's own)");
     expect(res).toEqual({ merged: 0, archived: 1, split: 0 });
     expect(existsSync(join(skillsDir, 'agent-coffee', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(skillsDir, 'other-coffee', '.disabled'))).toBe(true);

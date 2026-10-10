@@ -538,11 +538,19 @@ What changed (`skills/curate.ts`, `skills/contract.ts`):
   library prompt timed out every run from 2026-10-08. `.skills-curated.json`
   holds the hash each skill was last reviewed at, so a quiet library costs no
   model call; Tidy up (`force`) reviews everything.
-- **Provenance.** Recorded skills are never reviewed. `/learn` skills are never
-  split, merged or archived; a description that breaks the rules may be rewritten,
-  the body never. Both appear READ-ONLY in merge groups, so an agent-written
-  duplicate can be archived in their favour (Hermes likewise curates only
-  agent-created skills).
+- **Provenance.** Only Stem's own ideas are reshaped: `assistant`/`turn` (Auto
+  mode) and the new `approved` (Stem proposed it on a card, the user accepted).
+  The user's own — `user-requested` (asked in chat), the new `imported`
+  (`manage_skill` with `initiated_by: "import"`: an existing skill installed as
+  it is), `learn`, `recorded` — are never split, merged, archived or
+  re-described, and appear READ-ONLY in merge groups so a Stem-written duplicate
+  can be archived in their favour (Hermes likewise curates only agent-created
+  skills). Card approvals used to be stored as `user-requested`, which hid 20 of
+  the server's 22 "user-requested" skills from this rule; a one-time relabel
+  fixed the server (session history: only `query-cloudfarms-postgres` was asked
+  for, and `agent-browser-vercel` was an import the umbrella curator had merged
+  three Stem skills into, split back out by hand). The review hash covers the
+  origin, so a relabel is reviewed on the next pass.
 - **Backups.** Every skill a pass rewrites or deletes is copied first to
   `.curator-history/<run>/<slug>.md`; ten runs are kept.
 - **Description rule.** Model-written descriptions must open "Use when" and name

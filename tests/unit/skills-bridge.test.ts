@@ -239,13 +239,28 @@ describe('validation', () => {
 });
 
 describe('provenance', () => {
-  it('records a card-approved skill as user-requested', async () => {
-    // The model drafted it, but the user read this exact text and accepted it —
-    // a stronger warrant than anything the assistant produced alone, and it is
-    // what the injected label has to say.
+  it('records a card-approved skill as approved, not as the user\'s own request', async () => {
+    // The user read this exact text and accepted it, but the idea was Stem's, so
+    // the curator may still reshape it — unlike a skill the user asked for.
     const { bridge } = harness({ mode: 'ask' });
     await bridge.handleRequest(SAVE, live);
+    expect(fileFor('extract-video-captions')).toContain('origin: "approved"');
+  });
+
+  it('records a skill the user asked for as user-requested', async () => {
+    const { bridge } = harness({ mode: 'ask' });
+    await bridge.handleRequest({ ...SAVE, initiatedBy: 'user' }, live);
     expect(fileFor('extract-video-captions')).toContain('origin: "user-requested"');
+  });
+
+  it('keeps an imported skill\'s own wording, without the "Use when" rule', async () => {
+    const { bridge } = harness({ mode: 'off' });
+    const res = await bridge.handleRequest(
+      { ...SAVE, initiatedBy: 'user', origin: 'imported', description: 'Browser automation CLI for AI agents.' },
+      live
+    );
+    expect(res.ok).toBe(true);
+    expect(fileFor('extract-video-captions')).toContain('origin: "imported"');
   });
 
   it('records an auto-mode save as the assistant\'s own', async () => {

@@ -3952,6 +3952,7 @@ function registerSkillTools(pi) {
       'Save, update, or remove one of your own reusable skills (a SKILL.md procedure). ' +
       'Use action "save" both to add a skill and to replace an existing one — always send the FULL body, never a fragment. ' +
       'Set `initiated_by` honestly: "user" when the user asked you to save or change a skill (that always goes through, whatever the user\'s automatic-skills setting says), ' +
+      '"import" when the user gave you an existing skill from elsewhere (a file, a link, a package) to install as it is — keep its wording, only fit it to the format below, ' +
       '"assistant" when saving it is your own idea (that follows their setting, and may ask them first or be declined). ' +
       'A skill needs: a lowercase-hyphenated `name` of at most 64 characters, which is also its folder; a ONE-sentence `description` of at most 160 characters starting "Use when" and naming the one situation that calls for it, never restating the name (one skill is one job: two jobs on the same tool are two skills); ' +
       'and a `content` body of at most 4096 bytes with exactly the headings "## When to use", "## Steps", "## Verification", in that order. Write no front-matter. ' +
@@ -3964,8 +3965,8 @@ function registerSkillTools(pi) {
         name: { type: 'string', description: 'The skill slug: lowercase words joined by single hyphens, max 64 chars.' },
         initiated_by: {
           type: 'string',
-          enum: ['user', 'assistant'],
-          description: 'Who wanted this saved: "user" if they asked, "assistant" if it is your own idea. Defaults to "assistant".'
+          enum: ['user', 'import', 'assistant'],
+          description: 'Who wanted this saved: "user" if they asked, "import" if they handed you an existing skill to install, "assistant" if it is your own idea. Defaults to "assistant".'
         },
         description: { type: 'string', description: 'save: ONE sentence, max 160 chars, saying when to use the skill.' },
         content: { type: 'string', description: 'save: the FULL body with the three required headings. Replaces any previous body.' },

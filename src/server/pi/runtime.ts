@@ -3322,7 +3322,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                 // Anything other than an explicit 'user' is treated as the
                 // assistant's own idea, so a missing or garbled flag fails toward
                 // asking rather than toward writing.
-                initiatedBy: req.initiated_by === 'user' ? 'user' : 'assistant',
+                initiatedBy: req.initiated_by === 'user' || req.initiated_by === 'import' ? 'user' : 'assistant',
+                // An import is the user's request too, but its text is not Stem's:
+                // the curator leaves it as it is (skills/curate.ts).
+                ...(req.initiated_by === 'import' ? { origin: 'imported' as const } : {}),
                 name: String(req.name ?? ''),
                 description: String(req.description ?? ''),
                 body: String(req.content ?? req.body ?? ''),

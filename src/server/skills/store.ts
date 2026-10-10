@@ -29,9 +29,17 @@ import { pruneUsage } from './usage';
 const SKILL_FILE = 'SKILL.md';
 
 /** Where a skill came from. Shown in the Manage panel and injected as a label. */
-export type SkillOrigin = 'user-requested' | 'assistant' | 'learn' | 'recorded' | 'turn' | 'unknown';
+/**
+ * Where a skill came from. The user's own: `user-requested` (they asked for it in
+ * chat), `imported` (they handed over an existing skill to install as it is),
+ * `learn`, `recorded`. Stem's own idea: `assistant` (saved silently in Auto mode),
+ * `turn` (the end-of-turn pass in Auto mode), `approved` (Stem proposed it and the
+ * user accepted the card — reviewed, but still Stem's idea). Only Stem's own ideas
+ * are reshaped by the curator (skills/curate.ts).
+ */
+export type SkillOrigin = 'user-requested' | 'imported' | 'assistant' | 'approved' | 'learn' | 'recorded' | 'turn' | 'unknown';
 
-const SKILL_ORIGINS: readonly string[] = ['user-requested', 'assistant', 'learn', 'recorded', 'turn', 'unknown'];
+const SKILL_ORIGINS: readonly string[] = ['user-requested', 'imported', 'assistant', 'approved', 'learn', 'recorded', 'turn', 'unknown'];
 
 export interface SkillRecord {
   slug: string;

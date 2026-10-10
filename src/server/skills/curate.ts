@@ -42,11 +42,12 @@ import { ensureSkillVectors } from './vectors';
 // Only skills that changed since the last pass are looked at again (`.skills-curated.json`),
 // so a quiet library costs no model call at all.
 //
-// Recorded skills (the user demonstrated them) and /learn skills (the user chose
-// that chat as one lesson) are the user's own unit of work: never split, merged or
-// archived. A merge group shows them read-only, so an agent-written duplicate of one
-// can still be archived in its favour. A /learn description that breaks the
-// authoring rules may be rewritten — the description only, never the body.
+// Only Stem's own ideas are reshaped: skills saved in Auto mode (`assistant`, `turn`)
+// and ones Stem proposed on a card the user accepted (`approved`). Everything the
+// user brought or asked for — `user-requested`, `imported`, `learn`, `recorded` —
+// is their unit of work and is never split, merged, archived or re-described. A
+// merge group shows those read-only, so a Stem-written duplicate of one can still
+// be archived in its favour.
 //
 // Body edits are otherwise not this pass's job. The assistant fixes a skill when it
 // uses one and finds it wrong, which is when the evidence exists; a split or merge
@@ -91,7 +92,7 @@ interface AgentSkill {
   origin: SkillOrigin;
   created: string;
   body: string;
-  /** Recorded or /learn: never split, merged or archived. */
+  /** Not Stem's own idea (see CURATED_ORIGINS): never split, merged, archived or re-described. */
   locked: boolean;
   useCount: number;
   lastUsedAt?: string;
@@ -109,7 +110,12 @@ type SplitVerdict =
   | { verdict: 'one'; description?: string }
   | { verdict: 'split'; skills: SkillDraft[] };
 
-const LOCKED_ORIGINS: readonly SkillOrigin[] = ['recorded', 'learn'];
+/**
+ * The origins the curator may reshape: Stem's own ideas. `unknown` is a file from
+ * before origins were recorded; every skill Stem wrote then came from its own
+ * end-of-turn pass, so it counts as one.
+ */
+export const CURATED_ORIGINS: readonly SkillOrigin[] = ['assistant', 'turn', 'approved', 'unknown'];
 
 const RETRIEVAL_NOTE = `How these skills are used: before every reply, the assistant matches the user's message against each skill's one-sentence description, and only the best matches are loaded. The description is the ONLY text that decides whether a skill is used. A skill must therefore be ONE job — one situation a user is in, one procedure from start to finish — with a description naming that situation. A description that has to cover several jobs matches each of them badly and matches the wrong messages instead.`;
 
@@ -140,14 +146,6 @@ The rules every skill follows:
 
 ${SKILL_CONTRACT_TEXT}`;
 
-const LOCKED_DESCRIPTION_INSTRUCTIONS = `You review the description of ONE skill from an assistant's library of reusable procedures. The user made this skill themselves, so its body and name stay exactly as they are.
-
-${RETRIEVAL_NOTE}
-
-Return ONLY a JSON object (no prose, no markdown fences):
-{"verdict": "one", "description": "<replacement description>"}
-The replacement is ONE sentence of at most 160 characters, starting "Use when", naming the situation in which someone needs this procedure. Never restate the name. Do not return anything else.`;
-
 const MERGE_INSTRUCTIONS = `You check a small group of skills from an assistant's library of reusable procedures for DUPLICATES.
 
 ${RETRIEVAL_NOTE}
@@ -169,15 +167,16 @@ archive — DEFAULT TO KEEP:
 - Never archive a skill merely to make the library smaller, and never because of its usage count: "never used since tracking began" is absence of evidence, not evidence.
 
 Both lists:
-- A skill marked READ-ONLY was made by the user (recorded or taught from a chat). Never list it in "merge" or "archive". An agent-written skill that duplicates it may be archived in its favour.
+- A skill marked READ-ONLY is the user's own (they asked for it, imported it, taught it or recorded it). Never list it in "merge" or "archive". An agent-written skill that duplicates it may be archived in its favour.
 - Do NOT reword a body you are keeping.
 - Use ONLY the slugs listed below. Never invent one.
 - If nothing is a duplicate — the usual answer — return {"merge":[],"archive":[]}.`;
 
 // ---- library state ----
 
-function hashSkill(s: { name: string; description: string; body: string }): string {
-  return createHash('sha1').update(`${s.name}\n${s.description}\n${s.body}`).digest('hex').slice(0, 16);
+/** Over the text AND the origin: a relabel changes what the curator may do, so it is a change to review. */
+function hashSkill(s: { name: string; description: string; body: string; origin: string }): string {
+  return createHash('sha1').update(`${s.origin}\n${s.name}\n${s.description}\n${s.body}`).digest('hex').slice(0, 16);
 }
 
 interface CuratedState {
@@ -216,7 +215,7 @@ function loadAgentSkills(usage: SkillsUsage): AgentSkill[] {
       origin: r.origin,
       created: r.created,
       body: r.body,
-      locked: LOCKED_ORIGINS.includes(r.origin),
+      locked: !CURATED_ORIGINS.includes(r.origin),
       useCount: usage.skills[r.slug]?.count ?? 0,
       lastUsedAt: usage.skills[r.slug]?.lastUsedAt,
       failCount: usage.skills[r.slug]?.failed ?? 0,
@@ -280,12 +279,11 @@ function skillBlock(s: AgentSkill, opts: { readOnly?: boolean } = {}): string {
   // A reported failure is the assistant's own verdict on the body — the one thing
   // here that IS evidence about content, worth knowing when two write-ups overlap.
   const failures = s.failCount ? ` · reported wrong ${s.failCount}×${s.lastFailure ? `, last: ${s.lastFailure.reason}` : ''}` : '';
-  const lock = opts.readOnly ? ' · READ-ONLY (made by the user)' : '';
+  const lock = opts.readOnly ? " · READ-ONLY (the user's own)" : '';
   return `## [${s.slug}] ${s.name}\n${s.description}\nCreated ${isoDay(s.created)} · ${usage}${failures}${lock}\n\n${s.body}`;
 }
 
 function buildSplitPrompt(skill: AgentSkill, taken: string[]): string {
-  if (skill.locked) return `${LOCKED_DESCRIPTION_INSTRUCTIONS}\n\nThe skill:\n\n${skillBlock(skill)}`;
   return `${SPLIT_INSTRUCTIONS}\n\nNames already taken: ${taken.join(', ')}\n\nThe skill:\n\n${skillBlock(skill)}`;
 }
 
@@ -578,10 +576,7 @@ export async function curateSkills(
 
   // 1. Split. One skill per call.
   for (const skill of skills.filter((s) => isChanged(s) && splitCandidate(s))) {
-    // A recording is the user's own words, edited on its card: not even its
-    // description is rewritten. A /learn skill gets a description review only.
-    if (skill.origin === 'recorded') continue;
-    if (skill.locked && opensWithSituation(skill.description)) continue;
+    if (skill.locked) continue;
     const taken = listSkillRecords().map((r) => r.slug);
     const prompt = buildSplitPrompt(skill, taken);
     let verdict: SplitVerdict;
@@ -590,7 +585,7 @@ export async function curateSkills(
       verdict = parseSplit(await llm.complete(prompt));
       // One retry with the exact reasons, the way authoring retries: a split that
       // broke a rule is usually one bad name or one oversized part.
-      if (verdict.verdict === 'split' && !skill.locked) {
+      if (verdict.verdict === 'split') {
         checked = checkSplit(skill, verdict.skills, new Set(taken));
         if (!checked.ok) {
           verdict = parseSplit(await llm.complete(`${prompt}\n\n---\n\nYour previous answer was rejected: ${checked.why}\nFix it and reply again with the same JSON shape.`));
