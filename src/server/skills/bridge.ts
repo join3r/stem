@@ -178,7 +178,9 @@ export class SkillBridge {
 
     // The user asked for this one: write it, whatever the mode says.
     if (mode === null) return this.write(draft, req.origin ?? 'user-requested', req.expectExisting);
-    if (mode === 'auto') return this.write(draft, req.origin ?? 'assistant', req.expectExisting);
+    // Auto mode never edits an import silently: the user installed it as it is,
+    // so Stem's idea of a fix goes to a card like any other ask-mode proposal.
+    if (mode === 'auto' && target?.origin !== 'imported') return this.write(draft, req.origin ?? 'assistant', req.expectExisting);
 
     const outcome = await this.deps.requestApproval(
       { ...draft, isPatch: !!req.expectExisting },

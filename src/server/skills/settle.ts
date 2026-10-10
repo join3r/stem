@@ -32,7 +32,7 @@ import { whereSkillsRun } from '../workspace/bootstrap';
 export const SKILL_GATE_MIN_TOOL_CALLS = 5;
 
 export type SettleDecision =
-  | { fire: false; reason: 'below-gate' | 'tainted' | 'scheduled' | 'mode-off' }
+  | { fire: false; reason: 'below-gate' | 'tainted' | 'scheduled' | 'mode-off' | 'imported' }
   | { fire: true; existing?: { name: string; description: string; body: string }; issue?: string };
 
 /**
@@ -57,7 +57,7 @@ export function decideSettle(turn: SettledTurnTrace, mode: SkillsMode): SettleDe
   // model is something that happened. It also outranks grading below, because a
   // turn can overlap a skill's tools and still have found its steps wrong.
   const reported = routeReported(turn);
-  if (reported) return { fire: true, ...reported };
+  if (reported) return importedSkill(reported.existing.name) ? { fire: false, reason: 'imported' } : { fire: true, ...reported };
 
   if (turn.trace.length < SKILL_GATE_MIN_TOOL_CALLS) return { fire: false, reason: 'below-gate' };
 
@@ -75,8 +75,19 @@ export function decideSettle(turn: SettledTurnTrace, mode: SkillsMode): SettleDe
   // was routed at. Falling back would have written the video-transcript procedure
   // into a skill about trailer music. When nothing graded used, the author is
   // shown the library instead and picks its own target (see `authorForTurn`).
+  //
+  // An imported skill is never patched from here, and a turn that followed one
+  // writes nothing at all: patching would edit a file the user installed as it
+  // is (a wrong step there is for its upstream to fix, or for the user to ask
+  // about), and a fresh skill beside it would be a near-duplicate of the import.
   const existing = firstExistingSkill(turn.skillsGradedUsed);
+  if (existing && importedSkill(existing.name)) return { fire: false, reason: 'imported' };
   return existing ? { fire: true, existing } : { fire: true };
+}
+
+/** Installed by the user as it is — off-limits to every automatic edit. */
+function importedSkill(slug: string): boolean {
+  return readSkillRecord(slug)?.origin === 'imported';
 }
 
 /**
@@ -119,9 +130,9 @@ export function firstExistingSkill(slugs: string[]): { name: string; description
  * but retrieval picks them by cosine against the user's message, which on
  * 2026-08-11 meant the two wrong ones. The index is where the right one was.
  *
- * Skills the user wrote by hand are left out, and so are disabled ones. A target
- * is a write: folding this turn into a `source: user` file edits something Stem
- * did not author (store.ts keeps the curator and the model off those), and
+ * Skills the user wrote by hand or imported are left out, and so are disabled
+ * ones. A target is a write: folding this turn into a `source: user` file or an
+ * import edits something Stem did not author (store.ts keeps the curator and the model off those), and
  * folding it into a disabled skill files the procedure somewhere retrieval will
  * never look again. Neither is a target worth offering, so neither is listed.
  */
@@ -132,11 +143,11 @@ function libraryForAuthor(injectedSlugs: string[]): {
   const candidates: AuthorCandidate[] = [];
   for (const slug of injectedSlugs) {
     const record = readSkillRecord(slug);
-    if (!record || record.source !== 'agent' || !record.enabled) continue;
+    if (!record || record.source !== 'agent' || record.origin === 'imported' || !record.enabled) continue;
     candidates.push({ slug: record.slug, name: record.name, description: record.description, body: record.body });
   }
   const libraryIndex = listSkillRecords()
-    .filter((r) => r.source === 'agent' && r.enabled)
+    .filter((r) => r.source === 'agent' && r.origin !== 'imported' && r.enabled)
     .map((r) => ({ slug: r.slug, description: r.description }));
   return { candidates, libraryIndex };
 }
@@ -189,7 +200,7 @@ export async function authorForTurn(
   // that window. Gone means no write at all — the author said this was not a new
   // skill, and inventing one now would be answering a question nobody asked.
   const record = readSkillRecord(first.target);
-  if (!record || record.source !== 'agent') {
+  if (!record || record.source !== 'agent' || record.origin === 'imported') {
     return {
       ok: false,
       reason: 'target',

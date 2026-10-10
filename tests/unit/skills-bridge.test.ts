@@ -269,6 +269,16 @@ describe('provenance', () => {
     expect(fileFor('extract-video-captions')).toContain('origin: "assistant"');
   });
 
+  it('asks before Stem changes an imported skill, even in auto mode', async () => {
+    await harness({ mode: 'off' }).bridge.handleRequest({ ...SAVE, initiatedBy: 'user', origin: 'imported' }, live);
+    const { bridge, seen } = harness({ mode: 'auto', approve: () => ({ approved: false }) });
+    const res = await bridge.handleRequest({ ...SAVE, body: `${BODY}\n\nAlso try the mobile site.`, expectExisting: true }, live);
+    expect(res.ok).toBe(false);
+    expect(seen.approvals).toHaveLength(1);
+    expect(fileFor('extract-video-captions')).not.toContain('mobile site');
+    expect(fileFor('extract-video-captions')).toContain('origin: "imported"');
+  });
+
   it('honours an explicit origin override from a surface that knows better', async () => {
     const { bridge } = harness({ mode: 'off' });
     await bridge.handleRequest({ ...SAVE, initiatedBy: 'user', origin: 'learn' }, live);

@@ -45,13 +45,13 @@ function turn(over: Partial<SettledTurnTrace> = {}): SettledTurnTrace {
   };
 }
 
-function writeSkill(slug: string, body = BODY, description = 'pull captions out of a video'): void {
+function writeSkill(slug: string, body = BODY, description = 'pull captions out of a video', origin?: string): void {
   mkdirSync(join(skillsDir, slug), { recursive: true });
   writeFileSync(
     join(skillsDir, slug, 'SKILL.md'),
     // The `source: agent` marker matters: the author is only ever offered skills
     // Stem wrote, so a fixture without it is invisible to the create path.
-    `---\nname: ${JSON.stringify(slug)}\ndescription: ${JSON.stringify(description)}\nmetadata:\n  stem:\n    source: agent\n---\n\n${body}\n`,
+    `---\nname: ${JSON.stringify(slug)}\ndescription: ${JSON.stringify(description)}\nmetadata:\n  stem:\n    source: agent\n${origin ? `    origin: ${origin}\n` : ''}---\n\n${body}\n`,
     'utf8'
   );
 }
@@ -185,6 +185,16 @@ describe('routing', () => {
       fire: false,
       reason: 'below-gate'
     });
+  });
+
+  it('leaves an imported skill alone: no patch, and no duplicate beside it', () => {
+    // The user installed it as it is; a wrong step is for its upstream to fix or
+    // for the user to ask about, never for the end-of-turn pass.
+    writeSkill('agent-browser-vercel', BODY, 'Use when driving a browser', 'imported');
+    expect(decideSettle(turn({ skillsGradedUsed: ['agent-browser-vercel'] }), 'auto')).toEqual({ fire: false, reason: 'imported' });
+    expect(
+      decideSettle(turn({ trace: trace(1), skillsReported: [{ slug: 'agent-browser-vercel', reason: 'flag renamed' }] }), 'auto')
+    ).toEqual({ fire: false, reason: 'imported' });
   });
 
   it('never routes on injection alone', () => {
