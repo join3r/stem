@@ -68,7 +68,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
     a.string,
     a.string,
     a.optional(a.nullish(a.string)),
-    a.optional(a.nullish(a.oneOf(['openai-completions', 'anthropic-messages'])))
+    a.optional(a.nullish(a.oneOf(['openai-completions', 'openai-responses', 'anthropic-messages'])))
   ],
   'providers:updateLocal': [a.string, a.object],
   'providers:disconnect': [a.string],

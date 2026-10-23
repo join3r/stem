@@ -624,14 +624,17 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
     const models = Array.isArray(r.models)
       ? r.models.filter((m): m is string => typeof m === 'string' && !!m.trim()).map((m) => m.trim())
       : [];
-    // API flavor: only custom endpoints may opt into anthropic-messages. Ollama/LM Studio
-    // are always openai-completions — a hand-edited settings.json cannot switch
-    // them; the field would be ignored downstream anyway. Persist the flavor
-    // verbatim (both `openai-completions` and `anthropic-messages`) so a saved
-    // settings.json is self-describing and future debugging can tell an explicit
+    // API flavor: only custom endpoints may opt into Responses or Anthropic
+    // Messages. Ollama/LM Studio are always openai-completions — a hand-edited
+    // settings.json cannot switch them; the field would be ignored downstream
+    // anyway. Persist the flavor verbatim so a saved settings.json is
+    // self-describing and future debugging can tell an explicit
     // openai-completions pick from an absent field (= not yet configured).
     const api: LocalProviderApi | undefined =
-      custom && (r.api === 'anthropic-messages' || r.api === 'openai-completions') ? r.api : undefined;
+      custom &&
+      (r.api === 'anthropic-messages' || r.api === 'openai-responses' || r.api === 'openai-completions')
+        ? r.api
+        : undefined;
     // Per-model overrides: custom endpoints only, coerced only as far as their shape —
     // an entry that fails the deeper guard (pi/model-overrides.ts) is KEPT here
     // and dropped at sync time instead. Losing the text on read is the exact

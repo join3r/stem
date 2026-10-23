@@ -262,11 +262,11 @@ export type LocalProviderId = BuiltInLocalProviderId | CustomProviderId;
 
 /**
  * Which API flavor the custom endpoint speaks. Ollama and LM Studio are always
- * OpenAI-compatible; only custom endpoints may set this to `anthropic-messages` (for
- * Anthropic's Messages API or a proxy that speaks it). Default (absent) is
- * `openai-completions` — matches the pre-existing single-flavor behavior.
+ * OpenAI-compatible; custom endpoints may instead select OpenAI's Responses API
+ * or Anthropic's Messages API (or a proxy speaking either protocol). Default
+ * (absent) is `openai-completions` — the pre-existing single-flavor behavior.
  */
-export type LocalProviderApi = 'openai-completions' | 'anthropic-messages';
+export type LocalProviderApi = 'openai-completions' | 'openai-responses' | 'anthropic-messages';
 
 /**
  * What one model of a custom endpoint needs said about it that its `/v1/models`

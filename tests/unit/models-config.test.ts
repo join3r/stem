@@ -175,6 +175,17 @@ describe('probeLocalProvider', () => {
     expect(init.headers).toEqual({ Authorization: 'Bearer sk-secret' });
   });
 
+  it('probes models for openai-responses with bearer authentication', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'gpt-6' }] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await probeLocalProvider('https://gw.example.com/v1', ' sk-secret ', 'openai-responses');
+    expect(res).toEqual({ ok: true, api: 'openai-responses', models: ['gpt-6'] });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { headers?: Record<string, string> }];
+    expect(url).toBe('https://gw.example.com/v1/models');
+    expect(init.headers).toEqual({ Authorization: 'Bearer sk-secret' });
+  });
+
   describe('auto-detect (api omitted)', () => {
     it('classifies via OPTIONS and probes openai-completions when /v1/chat/completions exists', async () => {
       // OPTIONS: /v1/chat/completions -> 200 (route present), /v1/messages -> 404.
@@ -191,12 +202,26 @@ describe('probeLocalProvider', () => {
       expect(res).toEqual({ ok: true, api: 'openai-completions', models: ['gpt-x'] });
     });
 
-    it('classifies as anthropic-messages when /v1/messages exists and /v1/chat/completions is 404', async () => {
-      // Anthropic-only proxy shape: /v1/chat/completions -> 404, /v1/messages -> 405 (route exists, wrong method).
+    it('classifies as openai-responses when only /v1/responses exists', async () => {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        const path = new URL(String(url)).pathname;
+        if (init?.method === 'OPTIONS') {
+          return new Response(null, { status: path.endsWith('/v1/responses') ? 200 : 404 });
+        }
+        return new Response(JSON.stringify({ data: [{ id: 'gpt-6' }] }), { status: 200 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const res = await probeLocalProvider('http://localhost:8080', 'sk-secret');
+      expect(res).toEqual({ ok: true, api: 'openai-responses', models: ['gpt-6'] });
+    });
+
+    it('classifies as anthropic-messages when only /v1/messages exists', async () => {
+      // Anthropic-only proxy shape: other routes -> 404, /v1/messages -> 405 (route exists, wrong method).
       const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
         const path = new URL(String(url)).pathname;
         if (init?.method === 'OPTIONS') {
           if (path.endsWith('/v1/chat/completions')) return new Response(null, { status: 404 });
+          if (path.endsWith('/v1/responses')) return new Response(null, { status: 404 });
           if (path.endsWith('/v1/messages')) return new Response(null, { status: 405 });
         }
         return new Response(JSON.stringify({ data: [{ id: 'anthropic--claude-4.8-opus' }] }), { status: 200 });
@@ -206,23 +231,47 @@ describe('probeLocalProvider', () => {
       expect(res).toEqual({ ok: true, api: 'anthropic-messages', models: ['anthropic--claude-4.8-opus'] });
     });
 
-    it('prefers openai-completions when both chat routes exist (tie-break to pre-existing default)', async () => {
-      // Both 200 on OPTIONS — the ambiguous case. Auto-detect must not silently
-      // pick anthropic when the more common flavor also works.
-      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-        if (init?.method === 'OPTIONS') return new Response(null, { status: 200 });
-        return new Response(JSON.stringify({ data: [{ id: 'x' }] }), { status: 200 });
+    it.each([
+      { routes: ['/v1/chat/completions', '/v1/responses'] },
+      { routes: ['/v1/chat/completions', '/v1/messages'] },
+      { routes: ['/v1/responses', '/v1/messages'] },
+      { routes: ['/v1/chat/completions', '/v1/responses', '/v1/messages'] }
+    ])('requires an explicit flavor when routes $routes exist', async ({ routes }) => {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'OPTIONS') {
+          return new Response(null, { status: routes.includes(new URL(String(url)).pathname) ? 200 : 404 });
+        }
+        return new Response(JSON.stringify({ data: [{ id: 'gpt6.1sol' }] }), { status: 200 });
       });
       vi.stubGlobal('fetch', fetchMock);
       const res = await probeLocalProvider('http://localhost:8080', 'sk-secret');
-      expect(res.ok).toBe(true);
-      expect(res.api).toBe('openai-completions');
+      expect(res.ok).toBe(false);
+      expect(res.error).toMatch(/multiple API routes.*select an API flavor explicitly/i);
+      expect(res.api).toBeUndefined();
+      expect(res.models).toBeUndefined();
+      expect(fetchMock.mock.calls.some(([url]) => new URL(String(url)).pathname === '/v1/models')).toBe(false);
     });
 
-    it('falls back to an openai-completions listing when both OPTIONS return 404', async () => {
-      // Some servers refuse OPTIONS entirely (405) or 404 every unknown path;
-      // the fallback keeps the pre-existing default so Ollama/LM Studio still
-      // probe as before.
+    it.each(['openai-completions', 'openai-responses', 'anthropic-messages'] as const)(
+      'allows an explicit %s selection after ambiguous detection',
+      async (api) => {
+        const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+          if (init?.method === 'OPTIONS') return new Response(null, { status: 200 });
+          return new Response(JSON.stringify({ data: [{ id: 'gpt6.1sol' }] }), { status: 200 });
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        expect((await probeLocalProvider('http://localhost:8080', 'sk-secret')).ok).toBe(false);
+        fetchMock.mockClear();
+        const res = await probeLocalProvider('http://localhost:8080', 'sk-secret', api);
+        expect(res).toEqual({ ok: true, api, models: ['gpt6.1sol'] });
+        expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method ?? 'GET'])).toEqual([
+          ['http://localhost:8080/v1/models', 'GET']
+        ]);
+      }
+    );
+
+    it('falls back to an openai-completions listing when all OPTIONS return 404', async () => {
+      // Preserve the legacy listing fallback when route classification is unavailable.
       const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
         if (init?.method === 'OPTIONS') return new Response(null, { status: 404 });
         return new Response(JSON.stringify({ data: [{ id: 'llama' }] }), { status: 200 });
@@ -478,6 +527,26 @@ describe('syncModelsConfig', () => {
     });
   });
 
+  it('writes an openai-responses block with /v1 and native protocol defaults', async () => {
+    use({
+      custom: {
+        enabled: true,
+        baseUrl: 'http://proxy.example:9999/openai/v1',
+        api: 'openai-responses',
+        apiKey: 'sk-secret',
+        models: ['gpt-6']
+      }
+    });
+    expect(await syncModelsConfig()).toBe(true);
+    expect(readConfig().providers.custom).toEqual({
+      baseUrl: 'http://proxy.example:9999/openai/v1',
+      api: 'openai-responses',
+      apiKey: 'sk-secret',
+      compat: {},
+      models: [{ id: 'gpt-6' }]
+    });
+  });
+
   // The flavor and issue #1's empty-block guard meet on the same line. A merge
   // that keeps the flavor but drops the guard writes `custom` with no models —
   // and every pi spawn dies on "Unknown provider" again, this time for the
@@ -496,7 +565,7 @@ describe('syncModelsConfig', () => {
     expect(existsSync(configPath)).toBe(false);
   });
 
-  it('rejects anthropic-messages on ollama/lmstudio and falls back to openai-completions', async () => {
+  it('rejects non-completions APIs on ollama/lmstudio and falls back to openai-completions', async () => {
     // Defense in depth: settings coercion also strips this, so getting here means
     // a hand-edited settings.json tried to bypass. models.json must not honor it.
     stubModels(['llama']);
@@ -506,7 +575,7 @@ describe('syncModelsConfig', () => {
       ollama: {
         enabled: true,
         baseUrl: 'http://localhost:11434',
-        api: 'anthropic-messages'
+        api: 'openai-responses'
       } as unknown as LocalProvidersSettings['ollama']
     });
     await syncModelsConfig();

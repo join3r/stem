@@ -1451,11 +1451,8 @@ function LocalServerAddForm({
   const [apiKey, setApiKey] = useState('');
   const [models, setModels] = useState('');
   const [customName, setCustomName] = useState('');
-  // API flavor for the Custom endpoint. Ollama/LM Studio ignore it — always
-  // openai-completions. `null` = auto-detect (default): the Test probe
-  // classifies which chat route the endpoint exposes and snaps the dropdown to
-  // that value. Enable requires a concrete flavor; the button stays disabled
-  // until Test succeeds or the user picks one explicitly.
+  // Custom endpoints need a concrete flavor; ambiguous detection leaves Enable disabled.
+  // Ollama/LM Studio always use openai-completions.
   const [api, setApi] = useState<LocalProviderApi | null>(null);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<LocalProviderTestResult | null>(null);
@@ -1525,10 +1522,7 @@ function LocalServerAddForm({
 
   async function runTest() {
     const request = testGateRef.current.begin();
-    // Auto-detect on Custom sends `undefined` so main runs the OPTIONS probe on
-    // both chat routes; a concrete pick from the dropdown short-circuits that.
-    // Ollama/LM Studio always name their flavor: they can't be anything but
-    // OpenAI-compatible, so sending it spares them two pointless round-trips.
+    // Explicit flavors bypass classification, including for Ollama/LM Studio.
     const probeApi: LocalProviderApi | undefined =
       server === 'custom' ? (api ?? undefined) : 'openai-completions';
     const tested = localProbeTarget(server, baseUrl, apiKey, probeApi ?? 'openai-completions');
@@ -1598,7 +1592,11 @@ function LocalServerAddForm({
   }
 
   const flavorLabel = (a: LocalProviderApi): string =>
-    a === 'anthropic-messages' ? 'Anthropic Messages' : 'OpenAI Chat Completions';
+    a === 'anthropic-messages'
+      ? 'Anthropic Messages'
+      : a === 'openai-responses'
+        ? 'OpenAI Responses'
+        : 'OpenAI Chat Completions';
   const testLabel = test
     ? test.ok
       ? `${test.models?.length ?? 0} model${(test.models?.length ?? 0) === 1 ? '' : 's'} found` +
@@ -1618,11 +1616,14 @@ function LocalServerAddForm({
           knows. <strong>Ollama</strong> and <strong>LM Studio</strong> run on this machine and report their own models
           — LM Studio loads one on first use, so its first reply can take a while. <strong>Custom endpoint</strong> is
           any other URL: a gateway, a proxy, a server elsewhere on your network. Leave the flavor on{' '}
-          <em>Auto-detect</em> and Test connection classifies which chat route the endpoint exposes
-          (<code>/v1/chat/completions</code> vs <code>/v1/messages</code>) before listing its models — or pick a
-          flavor by hand if the server is picky about that OPTIONS probe. Stem strips a trailing <code>/v1</code>
-          from your URL and lets the client add the versioned path itself. The key goes on the wire the way the
-          target API expects (<code>Authorization: Bearer</code> for OpenAI-flavored servers, <code>X-Api-Key</code>
+          <em>Auto-detect</em> and Test connection checks which routes answer (
+          <code>/v1/chat/completions</code>, <code>/v1/responses</code>, or <code>/v1/messages</code>) before listing
+          models. If multiple routes answer, choose the API flavor your model supports explicitly; route
+          availability does not prove model compatibility. You can also pick a flavor by hand if the server
+          refuses the OPTIONS probe. A successful test verifies model listing, not a real model turn. Stem strips a
+          trailing <code>/v1</code> from your URL and lets the client add the versioned path itself. The key goes on
+          the wire the way the target API expects (<code>Authorization: Bearer</code> for OpenAI-flavored servers,{' '}
+          <code>X-Api-Key</code>
           for Anthropic). Leave the model IDs empty and Stem uses whatever the endpoint lists, re-checked every
           half minute like Ollama and LM Studio — the way to add a second Ollama running on another machine.
           Type IDs to pin a fixed set instead; endpoints that serve no listing need that.
@@ -1674,6 +1675,7 @@ function LocalServerAddForm({
           >
             <option value="">Auto-detect (Test to classify)</option>
             <option value="openai-completions">OpenAI Chat Completions</option>
+            <option value="openai-responses">OpenAI Responses</option>
             <option value="anthropic-messages">Anthropic Messages</option>
           </select>
           <input
