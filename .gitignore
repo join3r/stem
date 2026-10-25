@@ -44,3 +44,9 @@ docs/.obsidian/
 # rather than committing it. (skill-retrieval-golden.json IS hand-authored and is
 # committed — it is a synthetic library on purpose, so the gate stays stable.)
 tests/fixtures/skill-authoring-golden.json
+
+# deploy/auto-update.sh: its default backup folder, its lock, and the commit it
+# last had to roll back from.
+/backups/
+/.auto-update.lock
+/.auto-update-failed

@@ -12,6 +12,15 @@ Maintainer notes:
   date, tag.
 -->
 
+## 0.7.2 — Unreleased
+
+### Added
+
+- **Your server can update itself.** Run `sudo deploy/auto-update.sh --install` once on the
+  server, and every night it checks for a new version. When there is one, it takes a backup,
+  updates, and restarts. If the new version doesn't start, it goes back to the one that was
+  working. "Running on a server" in the docs has the details.
+
 ## 0.7.1 — 2026-10-23
 
 ### Added

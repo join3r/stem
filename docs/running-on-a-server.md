@@ -328,6 +328,44 @@ anyway — it costs a minute and it is the only thing that makes going back poss
 
 To go back, check out the previous commit and run the same two commands.
 
+### Upgrading automatically
+
+`deploy/auto-update.sh` runs those same steps on its own, once a night. It follows the
+branch the checkout was cloned from, which is `main` unless you changed it. To turn it on:
+
+```
+sudo /opt/stem/deploy/auto-update.sh --install
+```
+
+That installs a systemd timer that fires at about 04:00, server time. The update itself
+runs as the user who owns `/opt/stem`, not as root. A night with nothing new does nothing.
+A night with something new goes like this:
+
+1. It takes the backup above into `/opt/stem/backups/`, keeping the newest 7.
+2. It pulls, builds, and restarts.
+3. It waits for the server to log that it is listening.
+
+If the build fails, the running server is left alone. If the new server does not come up,
+the script puts back the images that were running before and returns the checkout to the
+old commit. It skips that commit on later nights and tries again when a newer one lands.
+
+```
+journalctl -u stem-auto-update.service      # what each night did
+sudo systemctl start stem-auto-update.service   # update now
+sudo /opt/stem/deploy/auto-update.sh --uninstall   # turn it off
+```
+
+Running `deploy/auto-update.sh` with no arguments does one update by hand, with the same
+checks. Three optional settings go in `.env`:
+
+- `STEM_BACKUP_DIR`: where the archives go.
+- `STEM_KEEP_BACKUPS`: how many archives to keep.
+- `STEM_UPDATE_TIMEOUT`: how many seconds to wait for the server to come up. The default is 180.
+
+It changes nothing if the checkout has commits of its own that are not on the remote
+branch. Anything installed with `apt-get` inside the container is lost on each automatic
+upgrade, the same as on a manual one, so use `Dockerfile.local` for tools you need.
+
 ## When it does not come up
 
 **Read the log first.** Almost everything says what it is:
