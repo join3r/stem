@@ -12,7 +12,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "postinstall": "patch-package && node scripts/ensure-electron.mjs",
+    "postinstall": "node scripts/ensure-electron.mjs",
     "preflight": "node scripts/preflight.mjs",
     "predev": "npm run preflight && node scripts/brand-electron-dev.mjs",
     "dev": "electron-vite dev",
@@ -42,14 +42,14 @@
     "eval:mdx": "node scripts/mdx-usage-eval.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@huggingface/transformers": "^4.3.1",
-    "acpx": "0.13.1",
-    "electron-updater": "^6.8.9",
+    "acpx": "0.21.1",
+    "electron-updater": "^6.8.12",
     "ignore": "^7.0.12",
-    "pdfjs-dist": "^6.1.200",
+    "pdfjs-dist": "^6.4.299",
     "pele": "^1.6.0",
-    "pi-web-access": "0.18.0",
+    "pi-web-access": "0.46.0",
     "remark-gfm": "^4.0.0",
     "remark-mdx": "^3.1.0",
     "remark-parse": "^11.0.0",
@@ -68,20 +68,25 @@
     "@typescript-eslint/eslint-plugin": "^8.44.0",
     "@typescript-eslint/parser": "^8.44.0",
     "@vitejs/plugin-react": "^5.0.4",
-    "dompurify": "^3.4.16",
-    "electron": "^42.4.1",
-    "electron-builder": "^26.15.3",
+    "dompurify": "^3.4.17",
+    "electron": "^42.11.18",
+    "electron-builder": "^26.18.1",
     "electron-vite": "^4.0.0",
     "eslint": "^9.36.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.468.0",
-    "patch-package": "^8.0.1",
     "playwright": "^1.61.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "typescript": "^5.9.2",
-    "vite": "^7.1.7",
-    "vitest": "^4.1.9"
+    "vite": "^7.3.7",
+    "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "@earendil-works/pi-coding-agent": {
+      "undici": "^8.12.3"
+    },
+    "zod": "^4.6.7"
   }
 }

@@ -406,7 +406,7 @@ function askFromRequest(req: AcpPermissionRequest): HarnessPermissionAsk {
  * user set in settings.json (harness.agents.<name>.command) still wins.
  */
 export const STEM_AGENT_COMMAND_DEFAULTS: Readonly<Record<string, readonly string[]>> = {
-  claude: ['npx', '-y', '--no-audit', '--no-fund', '@agentclientprotocol/claude-agent-acp@^0.60.0'],
+  claude: ['npx', '-y', '--no-audit', '--no-fund', '@agentclientprotocol/claude-agent-acp@^0.95.0'],
   codex: ['npx', '-y', '--no-audit', '--no-fund', '@agentclientprotocol/codex-acp@^1.1.5']
 };
 

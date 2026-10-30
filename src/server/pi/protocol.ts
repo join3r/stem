@@ -26,7 +26,7 @@ import type { PiEvent } from './rpc';
  * raw-event shapes, hook timing, and extension APIs are all unversioned and
  * have broken on pi minor bumps before.
  */
-export const TESTED_PI_VERSION = '1.1.0';
+export const TESTED_PI_VERSION = '1.4.0';
 
 // ---- extension_ui_request sentinel titles ----
 

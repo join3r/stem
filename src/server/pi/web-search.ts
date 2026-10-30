@@ -17,18 +17,20 @@ import type { SourceRef, WebSearchSettings } from '../../shared/types';
 // `get_search_content`) that work the same on every provider, because the search
 // happens in the extension rather than inside the provider's own inference.
 //
-// The catch, and what the patched `auto` chain is about: "the search happens in the
+// The catch, and what Stem's own search order is about: "the search happens in the
 // extension" does not have to mean "the search costs a model". The package's own
-// ordering tried its OpenAI backend second, which spends a whole extra inference —
-// 4-12s, plus ChatGPT quota — asking a model to run a query and quote the results.
-// The old native trick was fast precisely because it had no such second model: the
-// provider's hosted tool ran inside the chat model's own request. Nothing about
-// being provider-agnostic requires giving that up. So the chain is reordered to try
-// plain index lookups first (self-hosted SearXNG, then any keyed backend, then Exa's
-// keyless MCP endpoint at ~0.4s and no credential at all), and to fall back to an
-// LLM-mediated backend only when every one of them is unreachable. Synthesis then
-// happens where it was always going to happen anyway — in the chat model, which is
-// mid-inference over the results regardless of who fetched them.
+// `auto` tries its OpenAI backend early (right after SearXNG when the chat model is
+// a ChatGPT one), which spends a whole extra inference — 4-12s, plus ChatGPT quota —
+// asking a model to run a query and quote the results. The old native trick was
+// fast precisely because it had no such second model: the provider's hosted tool
+// ran inside the chat model's own request. Nothing about being provider-agnostic
+// requires giving that up. So Stem's `auto` is an ordered route (searchRouting,
+// see SEARCH_ROUTE) that tries plain index lookups first (self-hosted SearXNG, then
+// any keyed backend, then Exa's keyless MCP endpoint at ~0.4s and no credential at
+// all), and falls back to an LLM-mediated backend only when every one of them is
+// unreachable. Synthesis then happens where it was always going to happen anyway —
+// in the chat model, which is mid-inference over the results regardless of who
+// fetched them.
 //
 // That ordering is what makes this fast for the users the OpenAI backend never
 // helped in the first place: on Claude, OpenRouter, Ollama or LM Studio there is no
@@ -39,12 +41,10 @@ import type { SourceRef, WebSearchSettings } from '../../shared/types';
 // a packaged desktop app has no npm and may have no network on first launch). pi
 // loads it with a second `-e` alongside Stem's own bridge extension.
 //
-// The `xai` backend is upstream as of 0.18.0 (PR #196, landed via #209), so it is
-// no longer patched in. What patches/pi-web-access+0.18.0.patch still carries is
-// Stem's own latency work, which has not been submitted upstream: the concurrent
-// multi-query fan-out in search-batch.ts, its wiring in index.ts, and the `auto`
-// chain reordering in gemini-search.ts. Until those land, postinstall keeps
-// running patch-package.
+// Up to 0.18.0 Stem patched the package (patch-package): a concurrent multi-query
+// fan-out and a reordered `auto` chain. 0.46.0 needs neither — it runs a call's
+// queries three at a time itself, and `searchRouting` expresses the order as
+// configuration — so the package now runs unmodified.
 
 const PACKAGE = 'pi-web-access';
 
@@ -65,7 +65,7 @@ const PACKAGE = 'pi-web-access';
  */
 
 /** The version this integration was written against (mirrors TESTED_PI_VERSION). */
-export const TESTED_WEB_ACCESS_VERSION = '0.18.0';
+export const TESTED_WEB_ACCESS_VERSION = '0.46.0';
 
 /**
  * `<piHome>/web-search.json` — pi-web-access reads its whole configuration from
@@ -78,16 +78,18 @@ export function webSearchConfigPath(): string {
 }
 
 /**
- * Absolute path to the vendored extension's entry point. Resolved through Node
- * from the package's own package.json (pi-web-access declares no `main`/`exports`,
- * so the bare specifier is not resolvable but a subpath is) — which works both
+ * Absolute path to the vendored extension's entry point: the precompiled bundle the
+ * package's own `pi.extensions` names, one file instead of ~80 TypeScript modules
+ * for pi to transpile on every spawn. Resolved through Node from the package's own
+ * package.json (pi-web-access declares no `main`/`exports`, so the bare specifier
+ * is not resolvable but a subpath is) — which works both
  * from `src/` under vitest and from the built `dist/main` bundle at runtime, since
  * the package is rollup-external and the app ships unpacked (asar: false).
  */
 export async function piWebAccessPath(): Promise<string | null> {
   try {
     const manifest = fileURLToPath(import.meta.resolve(`${PACKAGE}/package.json`));
-    const entry = join(manifest, '..', 'index.ts');
+    const entry = join(manifest, '..', 'dist', 'index.js');
     await access(entry);
     return entry;
   } catch {
@@ -155,6 +157,62 @@ export const SEARCH_BACKENDS = [
   { id: 'xai', field: 'xaiApiKey', optional: true },
   { id: 'searxng', field: 'searxngBaseUrl' }
 ] as const;
+
+/**
+ * Stem's `auto`: the order an unpinned search walks, written as the package's
+ * `searchRouting`. Index lookups first — whichever of them the user configured —
+ * then Exa's keyless MCP endpoint, which is always available, so in practice the
+ * chain stops there. The LLM-mediated backends come last, reached only when every
+ * index above is unavailable or erroring: `openai` runs a whole model inference
+ * per query (and on a ChatGPT login spends the subscription's quota), `gemini` too.
+ * Perplexity is an index since 0.37.0 (its Search API, no Sonar answer).
+ *
+ * Backends without a credential are skipped as `unavailable`, so listing the
+ * package's whole `auto` set costs nothing. `gemini` is the exception, added only
+ * with an API key: its availability check otherwise reads Chromium cookies for
+ * Gemini Web, which on a Mac can raise a keychain prompt in the middle of a search.
+ */
+export const SEARCH_ROUTE = [
+  'searxng',
+  'brave',
+  'parallel',
+  'tinyfish',
+  'search1api',
+  'searchinfinity',
+  'querit',
+  'tavily',
+  'firecrawl',
+  'jina',
+  'serpdive',
+  'kagi',
+  'bocha',
+  'ollama',
+  'perplexity',
+  'exa',
+  'openai'
+] as const;
+
+/**
+ * Failures that move a routed search on to the next backend. The package can only
+ * fall back on these kinds; `auth`, `credential`, `config` and `invalid-request`
+ * end the search with that backend's error — a dead key the user configured shows
+ * up as an error naming it rather than being quietly papered over by Exa.
+ */
+export const SEARCH_ROUTE_FALLBACK_ON = [
+  'transient',
+  'quota',
+  'network',
+  'invalid-response',
+  'unsupported',
+  'empty'
+] as const;
+
+/**
+ * Ceiling on one routed query, across every backend it tries. The package runs a
+ * call's queries three at a time, so a 4-query call is at most two of these —
+ * the 90s whole-call budget Stem's old patch enforced.
+ */
+export const SEARCH_ROUTE_TIMEOUT_MS = 45_000;
 
 /**
  * Every config field Stem will pass through to web-search.json. An allowlist
@@ -230,12 +288,27 @@ export async function writeWebSearchConfig(settings: WebSearchSettings): Promise
     // over RPC and renders its own activity rows. It does check `ctx.hasUI`, but
     // relying on that inference would put a stray localhost server one upstream
     // refactor away, so pin it explicitly.
-    workflow: 'none'
+    workflow: 'none',
+    // Since 0.34.0 the package starts a session with only a `web_enable` loader
+    // and registers the real tools inactive until the model calls it. Stem gates
+    // `web_search`/`fetch_content`/… by name every turn (stem-mcp-extension's
+    // enableBrowseTools), so the loader would only hide them behind an extra
+    // round trip. Eager: the tools are simply there, and the gate decides.
+    toolActivation: 'eager'
   };
   if (settings.provider && settings.provider !== 'auto') file.provider = settings.provider;
   for (const [name, value] of Object.entries(settings.credentials ?? {})) {
     const trimmed = typeof value === 'string' ? value.trim() : '';
     if (trimmed && WEB_SEARCH_FIELDS.includes(name)) file[name] = trimmed;
+  }
+  // The package applies searchRouting only while no `provider` is set, so this is
+  // exactly Stem's `auto`; a picked backend or `all` keeps the package's meaning.
+  if (!('provider' in file)) {
+    file.searchRouting = {
+      providers: [...SEARCH_ROUTE, ...('geminiApiKey' in file ? ['gemini'] : [])],
+      fallbackOn: [...SEARCH_ROUTE_FALLBACK_ON],
+      timeoutMs: SEARCH_ROUTE_TIMEOUT_MS
+    };
   }
   await writeFile(webSearchConfigPath(), JSON.stringify(file, null, 2) + '\n', { mode: 0o600 });
 }

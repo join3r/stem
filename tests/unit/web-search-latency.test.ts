@@ -18,18 +18,36 @@
 //
 //   1. N queries issue N upstream calls — no hidden fan-out.
 //   2. They overlap. A serial regression fails here, with no timing assertion.
-//   3. The call as a whole has a deadline, and blowing it degrades to partial
-//      results instead of hanging the turn.
-//   4. The model behind the search is pinned, not "first id found in the registry".
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+//   3. Each query has a deadline, so a call as a whole is bounded too.
+//   4. `auto` reaches a plain index before any backend that runs an inference.
+//   5. The model behind the search is discovered, never pinned.
+//
+// 1-2 were Stem's own patch up to pi-web-access 0.18.0; 0.46.0 runs a call's
+// queries concurrently itself (runSearchQueries), so they now pin the vendored
+// runner. 3-4 are Stem's `searchRouting`, written by writeWebSearchConfig.
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  runSearchBatch,
-  DEFAULT_SEARCH_CONCURRENCY,
-  DEFAULT_SEARCH_BUDGET_MS
-} from 'pi-web-access/search-batch.ts';
+import type { WebSearchSettings } from '../../src/shared/types';
+
+/**
+ * A vendored module, imported by a specifier tsc does not follow: the package's
+ * TypeScript sources do not typecheck under Stem's config (extract.ts's turndown
+ * types), and they are not Stem's to fix. The few exports used here are typed below.
+ */
+const vendored = (file: string): Promise<unknown> => import(/* @vite-ignore */ `pi-web-access/${file}`);
+
+type RunSearchQueries = <T>(queries: string[], run: (query: string, index: number) => Promise<T>) => Promise<T[]>;
+type Search = (query: string, options: object) => Promise<{ provider: string }>;
+
+let runSearchQueries: RunSearchQueries;
+beforeAll(async () => {
+  ({ runSearchQueries } = (await vendored('web-tool-core.ts')) as { runSearchQueries: RunSearchQueries });
+});
+
+/** The vendored runner's cap (SEARCH_QUERY_CONCURRENCY, not exported). */
+const CAP = 3;
 
 const QUERIES = ['alpha', 'beta', 'gamma', 'delta'];
 
@@ -70,132 +88,87 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 describe('multi-query search fans out instead of queueing', () => {
   it('issues exactly one upstream call per query', async () => {
     const calls: string[] = [];
-    const entries = await runSearchBatch(
-      QUERIES,
-      { search: async (q) => (calls.push(q), `answer:${q}`) },
-      { concurrency: 4 }
-    );
-    expect(calls).toEqual(QUERIES);
-    expect(entries.map((e) => e.value)).toEqual(QUERIES.map((q) => `answer:${q}`));
+    const results = await runSearchQueries(QUERIES, async (q) => (calls.push(q), `answer:${q}`));
+    expect([...calls].sort()).toEqual([...QUERIES].sort());
+    expect(results).toEqual(QUERIES.map((q) => `answer:${q}`));
   });
 
-  // THE regression test. Before this, four queries meant four round trips end to
-  // end: ~53s of a 132s turn for one call, twice over. Nothing here measures
-  // duration — a serial implementation simply never gets past the first gate.
-  it('starts every query before any of them has answered', async () => {
+  // THE regression test. Before Stem's fan-out, four queries meant four round
+  // trips end to end: ~53s of a 132s turn for one call, twice over. Nothing here
+  // measures duration — a serial implementation simply never gets past the first gate.
+  it('starts several queries before any of them has answered', async () => {
     const stub = gatedSearch();
-    const batch = runSearchBatch(QUERIES, { search: stub.search }, { concurrency: 4 });
+    const batch = runSearchQueries(QUERIES, stub.search);
 
     await settle();
-    expect(stub.gates.map((g) => g.query)).toEqual(QUERIES);
-    expect(stub.maxInFlight).toBe(4);
+    expect(stub.gates.map((g) => g.query)).toEqual(QUERIES.slice(0, CAP));
+    expect(stub.maxInFlight).toBe(CAP);
 
-    for (const gate of stub.gates) gate.resolve('ok');
+    for (let next = 0; next < QUERIES.length; ) {
+      for (; next < stub.gates.length; next++) stub.gates[next].resolve('ok');
+      await settle();
+    }
     await batch;
   });
 
   it('honours the concurrency cap so a 20-query call cannot stampede a provider', async () => {
     const stub = gatedSearch();
     const many = Array.from({ length: 20 }, (_, i) => `q${i}`);
-    const batch = runSearchBatch(many, { search: stub.search }, { concurrency: 4 });
+    const batch = runSearchQueries(many, stub.search);
 
     await settle();
-    expect(stub.gates).toHaveLength(4);
+    expect(stub.gates).toHaveLength(CAP);
 
     // Draining one slot starts exactly one more.
     stub.gates[0].resolve('ok');
     await settle();
-    expect(stub.gates).toHaveLength(5);
+    expect(stub.gates).toHaveLength(CAP + 1);
 
-    // Release the rest in waves; each wave admits only as many as it freed.
     for (let next = 1; next < many.length; ) {
       for (; next < stub.gates.length; next++) stub.gates[next].resolve('ok');
       await settle();
     }
     await batch;
-    expect(stub.maxInFlight).toBeLessThanOrEqual(4);
+    expect(stub.maxInFlight).toBeLessThanOrEqual(CAP);
   });
 
   it('returns results in query order, not completion order', async () => {
     const stub = gatedSearch();
-    const batch = runSearchBatch(QUERIES, { search: stub.search }, { concurrency: 4 });
+    const batch = runSearchQueries(QUERIES.slice(0, CAP), stub.search);
     await settle();
 
-    // Settle backwards.
     for (const gate of [...stub.gates].reverse()) gate.resolve(`answer:${gate.query}`);
 
-    const entries = await batch;
-    expect(entries.map((e) => e.query)).toEqual(QUERIES);
-    expect(entries.map((e) => e.value)).toEqual(QUERIES.map((q) => `answer:${q}`));
-  });
-
-  it('keeps a failed query local to its own slot', async () => {
-    const entries = await runSearchBatch(
-      QUERIES,
-      {
-        search: async (q) => {
-          if (q === 'beta') throw new Error('provider exploded');
-          return `answer:${q}`;
-        }
-      },
-      { concurrency: 4 }
-    );
-    expect(entries[1]).toEqual({ query: 'beta', error: 'provider exploded' });
-    expect(entries.filter((e) => e.error === null)).toHaveLength(3);
+    expect(await batch).toEqual(QUERIES.slice(0, CAP).map((q) => `answer:${q}`));
   });
 });
 
+/** Stem's web-search.json for these settings, read back as the extension sees it. */
+async function writtenConfig(settings: Partial<WebSearchSettings> = {}) {
+  const home = mkdtempSync(join(tmpdir(), 'stem-websearch-perf-'));
+  vi.resetModules();
+  vi.doMock('../../src/server/workspace/paths', () => ({ piHome: () => home }));
+  const { writeWebSearchConfig, webSearchConfigPath } = await import('../../src/server/pi/web-search');
+  await writeWebSearchConfig({ main: true, quickChat: true, provider: 'auto', credentials: {}, ...settings });
+  const file = JSON.parse(readFileSync(webSearchConfigPath(), 'utf8')) as Record<string, unknown>;
+  vi.doUnmock('../../src/server/workspace/paths');
+  return { home, file };
+}
+
 describe('the call as a whole is bounded', () => {
-  // Per-query timeouts are 30-60s each depending on backend and there was no
-  // ceiling above them, so a slow provider could hold a turn for minutes with the
-  // user watching a spinner. The deadline must degrade the answer, not fail it.
-  it('returns partial results when the budget runs out', async () => {
-    const stub = gatedSearch();
-    const batch = runSearchBatch(
-      QUERIES,
-      { search: (q, _i, signal) => (q === 'alpha' ? stub.search(q) : new Promise<string>((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))))) },
-      { concurrency: 4, budgetMs: 25 }
-    );
-
-    await settle();
-    stub.gates[0].resolve('answer:alpha');
-
-    const entries = await batch;
-    expect(entries[0].value).toBe('answer:alpha');
-    expect(entries[0].error).toBeNull();
-    for (const entry of entries.slice(1)) {
-      expect(entry.value).toBeUndefined();
-      expect(entry.error).toMatch(/budget/i);
+  // Per-query timeouts are 30-60s each depending on backend and a routed query
+  // may try several, so without a ceiling a slow provider could hold a turn for
+  // minutes with the user watching a spinner.
+  it('gives every auto query a deadline that keeps a 4-query call within two minutes', async () => {
+    const { home, file } = await writtenConfig();
+    try {
+      const routing = file.searchRouting as { timeoutMs?: number };
+      expect(routing.timeoutMs).toBeGreaterThan(0);
+      // Four queries at CAP a time is two waves.
+      expect(Math.ceil(QUERIES.length / CAP) * routing.timeoutMs!).toBeLessThanOrEqual(120_000);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
-  });
-
-  it('accounts for queries the deadline never let start', async () => {
-    const entries = await runSearchBatch(
-      ['a', 'b', 'c'],
-      { search: (_q, _i, signal) => new Promise<string>((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))) },
-      { concurrency: 1, budgetMs: 25 }
-    );
-    expect(entries).toHaveLength(3);
-    // Silence here would let the model believe it searched all three.
-    for (const entry of entries) expect(entry.error).toMatch(/budget/i);
-  });
-
-  it('still fails the whole call when the user cancels the turn', async () => {
-    const controller = new AbortController();
-    const batch = runSearchBatch(
-      QUERIES,
-      { search: (_q, _i, signal) => new Promise<string>((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))) },
-      { concurrency: 4, signal: controller.signal }
-    );
-    await settle();
-    controller.abort();
-    await expect(batch).rejects.toThrow();
-  });
-
-  it('keeps the defaults inside what a turn can absorb', () => {
-    expect(DEFAULT_SEARCH_CONCURRENCY).toBeGreaterThanOrEqual(3);
-    // A user is watching a spinner for this long. 4 queries x 60s serial was 4min.
-    expect(DEFAULT_SEARCH_BUDGET_MS).toBeLessThanOrEqual(120_000);
   });
 });
 
@@ -203,87 +176,62 @@ describe('the call as a whole is bounded', () => {
 // "four queries take four times as long"; it did nothing about "one query costs a
 // whole model inference".
 //
-// pi-web-access's `auto` chain tried the OpenAI backend second, right after a
-// self-hosted SearXNG — so on any machine signed into a ChatGPT subscription,
-// every search spun up a SECOND model (not the one in the picker) whose entire job
-// was to run the query and quote back what came out. Measured against the same
-// queries: 4-12s for that, versus ~0.4s for Exa's keyless index lookup, which needs
-// no subscription and no API key and therefore works identically for Claude,
-// OpenRouter, Ollama and LM Studio users — who got no benefit from the OpenAI
-// detour at all, only its position in the chain.
+// pi-web-access's `auto` chain tries the OpenAI backend early — right after a
+// self-hosted SearXNG whenever the chat model is a ChatGPT one — so on any machine
+// signed into a ChatGPT subscription, every search spins up a SECOND model (not the
+// one in the picker) whose entire job is to run the query and quote back what came
+// out. Measured against the same queries: 4-12s for that, versus ~0.4s for Exa's
+// keyless index lookup, which needs no subscription and no API key and therefore
+// works identically for Claude, OpenRouter, Ollama and LM Studio users.
 //
-// The rule this pins: in `auto`, no backend that runs an inference may be reached
-// before one that just queries an index. It is a property of the vendored chain,
-// so an upstream bump that reshuffles it fails here rather than in a stopwatch.
+// The rule this pins: in Stem's `auto`, no backend that runs an inference may be
+// reached before one that just queries an index. It runs the vendored router on
+// the config Stem writes, so either side drifting fails here.
 describe('auto never pays for an inference it does not need', () => {
-  const chain = [
-    'searxng',
-    'brave',
-    'parallel',
-    'tinyfish',
-    'tavily',
-    'serpdive',
-    'exa',
-    'openai',
-    'perplexity',
-    'gemini'
-  ] as const;
+  const stubbed = {
+    searxng: ['searxng', 'isSearXNGAvailable', 'searchWithSearXNG'],
+    brave: ['brave', 'isBraveAvailable', 'searchWithBrave'],
+    parallel: ['parallel', 'isParallelAvailable', 'searchWithParallel'],
+    tinyfish: ['tinyfish', 'isTinyFishAvailable', 'searchWithTinyFish'],
+    tavily: ['tavily', 'isTavilyAvailable', 'searchWithTavily'],
+    serpdive: ['serpdive', 'isSerpdiveAvailable', 'searchWithSerpdive'],
+    perplexity: ['perplexity', 'isPerplexityAvailable', 'searchWithPerplexity'],
+    exa: ['exa', 'isExaAvailable', 'searchWithExa'],
+    openai: ['openai-search', 'isOpenAISearchAvailable', 'searchWithOpenAI']
+  } as const;
+  type Backend = keyof typeof stubbed;
+  const LLM = new Set<Backend>(['openai']);
 
-  /**
-   * Load the vendored auto chain with every backend stubbed, so `search()` returns
-   * the id of whichever one the chain reached first.
-   */
-  async function pickedBackend(available: Partial<Record<(typeof chain)[number], boolean>>) {
+  let home = '';
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ home } = await writtenConfig());
+    // The router reads web-search.json from here at module load.
+    process.env.PI_CODING_AGENT_DIR = home;
+  });
+  afterEach(() => {
+    for (const [file] of Object.values(stubbed)) vi.doUnmock(`pi-web-access/${file}.ts`);
+    delete process.env.PI_CODING_AGENT_DIR;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  /** Run one auto search with every listed backend stubbed; returns who answered. */
+  async function pickedBackend(available: Partial<Record<Backend, boolean>>) {
     const called: string[] = [];
-    const stub = (id: string, availableName: string, searchName: string) => {
-      vi.doMock(`pi-web-access/${id === 'openai' ? 'openai-search' : id}.ts`, () => ({
-        [availableName]: () => available[id as (typeof chain)[number]] ?? false,
+    for (const [id, [file, availableName, searchName]] of Object.entries(stubbed)) {
+      vi.doMock(`pi-web-access/${file}.ts`, async (importOriginal) => ({
+        ...(await importOriginal<Record<string, unknown>>()),
+        [availableName]: () => available[id as Backend] ?? false,
         [searchName]: async () => {
           called.push(id);
-          return { answer: id, results: [] };
+          return { answer: id, results: [{ title: id, url: `https://${id}.example`, snippet: id }] };
         }
       }));
-    };
-    stub('searxng', 'isSearXNGAvailable', 'searchWithSearXNG');
-    stub('brave', 'isBraveAvailable', 'searchWithBrave');
-    stub('parallel', 'isParallelAvailable', 'searchWithParallel');
-    stub('tinyfish', 'isTinyFishAvailable', 'searchWithTinyFish');
-    stub('tavily', 'isTavilyAvailable', 'searchWithTavily');
-    stub('serpdive', 'isSerpdiveAvailable', 'searchWithSerpdive');
-    stub('exa', 'isExaAvailable', 'searchWithExa');
-    // The OpenAI backend's availability check is async, and it is the one under test.
-    vi.doMock('pi-web-access/openai-search.ts', () => ({
-      isOpenAISearchAvailable: async () => available.openai ?? false,
-      searchWithOpenAI: async () => {
-        called.push('openai');
-        return { answer: 'openai', results: [] };
-      }
-    }));
-    vi.doMock('pi-web-access/perplexity.ts', () => ({
-      isPerplexityAvailable: () => available.perplexity ?? false,
-      searchWithPerplexity: async () => {
-        called.push('perplexity');
-        return { answer: 'perplexity', results: [] };
-      }
-    }));
-
-    const { search } = await import('pi-web-access/gemini-search.ts');
+    }
+    const { search } = (await vendored('gemini-search.ts')) as { search: Search };
     const result = await search('anything', {});
     return { provider: result.provider, called };
   }
-
-  const emptyPiHome = mkdtempSync(join(tmpdir(), 'stem-websearch-chain-'));
-
-  beforeEach(() => {
-    vi.resetModules();
-    // No web-search.json => provider `auto`, nothing configured. The chain caches
-    // its config per module, so the reset above matters.
-    process.env.PI_CODING_AGENT_DIR = emptyPiHome;
-  });
-  afterEach(() => {
-    vi.doUnmock('pi-web-access/gemini-search.ts');
-    delete process.env.PI_CODING_AGENT_DIR;
-  });
 
   it('reaches the keyless index instead of a model, on a subscription machine', async () => {
     // The exact shipped situation: signed into ChatGPT, no search keys configured.
@@ -303,14 +251,32 @@ describe('auto never pays for an inference it does not need', () => {
   });
 
   it('orders every no-LLM backend ahead of every LLM-mediated one', async () => {
-    // Read as a property of the chain rather than of one lookup: whichever backends
-    // happen to be available, the first one reached is never an inference while a
-    // plain index lookup is still on the table.
-    const llm = new Set(['openai', 'perplexity', 'gemini']);
-    for (const candidate of chain.filter((c) => !llm.has(c))) {
+    for (const candidate of (Object.keys(stubbed) as Backend[]).filter((c) => !LLM.has(c))) {
       vi.resetModules();
-      const { provider } = await pickedBackend({ [candidate]: true, openai: true, perplexity: true });
+      const { provider } = await pickedBackend({ [candidate]: true, openai: true });
       expect(provider, `${candidate} lost to an LLM-mediated backend`).toBe(candidate);
+    }
+  });
+
+  it('only routes to Gemini with an API key, so a search never scans browser cookies', async () => {
+    const without = await writtenConfig();
+    const withKey = await writtenConfig({ credentials: { geminiApiKey: 'k' } });
+    try {
+      expect((without.file.searchRouting as { providers: string[] }).providers).not.toContain('gemini');
+      expect((withKey.file.searchRouting as { providers: string[] }).providers.at(-1)).toBe('gemini');
+    } finally {
+      rmSync(without.home, { recursive: true, force: true });
+      rmSync(withKey.home, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a picked backend to the package', async () => {
+    const { home: picked, file } = await writtenConfig({ provider: 'brave' });
+    try {
+      expect(file.provider).toBe('brave');
+      expect(file).not.toHaveProperty('searchRouting');
+    } finally {
+      rmSync(picked, { recursive: true, force: true });
     }
   });
 });
@@ -322,17 +288,14 @@ describe('the search model is discovered, not pinned', () => {
   // Leaving the field out lets pi-web-access pick a model the signed-in credential
   // can run, from pi's registry.
   it('writes no model override into the file the extension reads', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'stem-websearch-perf-'));
-    vi.doMock('../../src/server/workspace/paths', () => ({ piHome: () => home }));
-    const { writeWebSearchConfig, webSearchConfigPath } = await import('../../src/server/pi/web-search');
+    const { home, file } = await writtenConfig();
     try {
-      await writeWebSearchConfig({ main: true, quickChat: true, provider: 'auto', credentials: {} });
-      const file = JSON.parse(readFileSync(webSearchConfigPath(), 'utf8')) as Record<string, unknown>;
       expect(file).not.toHaveProperty('openaiSearchModel');
       expect(file.workflow).toBe('none');
+      // Stem gates the tools by name per turn; a web_enable loader would hide them.
+      expect(file.toolActivation).toBe('eager');
     } finally {
       rmSync(home, { recursive: true, force: true });
-      vi.doUnmock('../../src/server/workspace/paths');
     }
   });
 });
