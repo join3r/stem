@@ -427,8 +427,25 @@ describe('local provider settings', () => {
     });
   });
 
+  it('round-trips the openai-responses flavor on a custom endpoint', async () => {
+    await updateLocalProvider('custom', {
+      enabled: true,
+      baseUrl: 'http://proxy.example:9999/openai/v1',
+      api: 'openai-responses',
+      apiKey: 'sk-secret',
+      models: ['gpt-6']
+    });
+    expect((await readSettings()).localProviders.custom).toEqual({
+      enabled: true,
+      baseUrl: 'http://proxy.example:9999/openai/v1',
+      api: 'openai-responses',
+      apiKey: 'sk-secret',
+      models: ['gpt-6']
+    });
+  });
+
   it('strips the api field for ollama/lmstudio (hand-edited settings.json cannot force it)', async () => {
-    // Only `custom` may opt into anthropic-messages; a hand-edited settings.json
+    // Only `custom` may opt into another protocol; a hand-edited settings.json
     // trying to set it on ollama must round-trip without the field.
     await updateLocalProvider('ollama', {
       enabled: true,

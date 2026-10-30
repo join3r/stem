@@ -54,10 +54,10 @@ const DEVICE_PROBE_TIMEOUT_MS = 10_000;
  * trailing /v1 (users paste both forms; the API-specific client appends the
  * versioned path itself).
  *
- * Both flavors strip trailing /v1: for openai-completions Stem appends /v1
- * before writing (pi then hits /v1/chat/completions), and for anthropic-messages
- * pi hands the URL to @anthropic-ai/sdk which appends /v1/messages verbatim.
- * Leaving /v1 in either case would double-version the request.
+ * All flavors strip trailing /v1. Stem re-appends it for OpenAI Chat
+ * Completions and Responses; for anthropic-messages pi hands the root to
+ * @anthropic-ai/sdk, which appends /v1/messages verbatim. Leaving /v1 in the
+ * Anthropic case would double-version the request.
  */
 export function normalizeLocalBaseUrl(raw: string): string {
   let url = raw.trim().replace(/\/+$/, '');
@@ -110,11 +110,10 @@ async function isToolCapable(base: string, id: string, timeoutMs: number): Promi
 }
 
 /**
- * Which chat/messages routes this endpoint exposes. Called by auto-detect to
- * pick between openai-completions and anthropic-messages: both flavors serve
- * `GET /v1/models` under the same route, so the listing can't tell them apart
- * — the real signal is which of `/v1/chat/completions` (OpenAI) and
- * `/v1/messages` (Anthropic) the proxy actually implements.
+ * Which completion/response/messages routes this endpoint exposes. Called by
+ * auto-detect to pick an API flavor: all flavors serve `GET /v1/models` under
+ * the same route, so the listing can't tell them apart — the real signal is
+ * which request route the proxy implements.
  *
  * Uses OPTIONS to keep the probe cost-free (no completion tokens spent). A
  * 404 = route absent; anything else (200/400/401/405/…) = route present and
@@ -125,29 +124,30 @@ async function isToolCapable(base: string, id: string, timeoutMs: number): Promi
  * very thing being classified, and a header the server doesn't recognize is
  * ignored rather than rejected.
  */
-async function classifyChatRoutes(
+async function classifyApiRoutes(
   base: string,
   apiKey: string | undefined,
   timeoutMs: number
-): Promise<{ oc: boolean; am: boolean }> {
+): Promise<{ oc: boolean; or: boolean; am: boolean }> {
   const key = apiKey?.trim();
   const headers = { ...probeHeaders('openai-completions', key), ...probeHeaders('anthropic-messages', key) };
   const options = { method: 'OPTIONS', headers, signal: AbortSignal.timeout(timeoutMs) };
-  const [oc, am] = await Promise.allSettled([
+  const [oc, or, am] = await Promise.allSettled([
     fetch(`${base}/v1/chat/completions`, options),
+    fetch(`${base}/v1/responses`, options),
     fetch(`${base}/v1/messages`, options)
   ]);
   return {
     oc: oc.status === 'fulfilled' && oc.value.status !== 404,
+    or: or.status === 'fulfilled' && or.value.status !== 404,
     am: am.status === 'fulfilled' && am.value.status !== 404
   };
 }
 
 /**
  * Single-flavor probe: hits GET {base}/v1/models under the flavor's protocol
- * expectations (Ollama capability filter for openai-completions, no filter for
- * anthropic-messages). Success carries the `api` back so an auto-detect caller
- * can attribute the answer.
+ * expectations (Ollama capability filter only for openai-completions). Success
+ * carries the `api` back so an auto-detect caller can attribute the answer.
  */
 async function probeOneFlavor(
   baseUrl: string,
@@ -170,10 +170,10 @@ async function probeOneFlavor(
       .map((m) => (typeof m.id === 'string' ? m.id.trim() : ''))
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b));
-    // Ollama is keyless and OpenAI-flavored, so any of {bearer key, anthropic
-    // flavor} means this isn't Ollama — skip the per-model capability probe.
+    // Ollama is keyless and Chat Completions-flavored, so a bearer key or any
+    // other API flavor means this isn't Ollama — skip its capability probe.
     const capable =
-      key || api === 'anthropic-messages'
+      key || api !== 'openai-completions'
         ? all.map(() => true)
         : await Promise.all(all.map((id) => isToolCapable(base, id, timeoutMs)));
     const models = all.filter((_, i) => capable[i]);
@@ -194,15 +194,13 @@ async function probeOneFlavor(
  * returned as-is; on success the result carries `api` back so a caller can
  * confirm.
  *
- * `api` omitted (auto-detect): first classify which chat route the endpoint
- * exposes (OPTIONS on /v1/chat/completions and /v1/messages — non-404 wins),
- * then probe GET /v1/models under that flavor's downstream expectations.
- * openai-completions wins ties (a proxy that serves both routes is a matter of
- * downstream preference; the current default matches Stem's pre-existing
- * behavior). If neither chat route resolves, fall back to a plain
- * openai-completions probe of /v1/models — some servers only expose the
- * listing and refuse OPTIONS entirely; the user can still enable and test in
- * a real turn.
+ * `api` omitted (auto-detect): first classify which API route the endpoint
+ * exposes (OPTIONS on /v1/chat/completions, /v1/responses, and /v1/messages —
+ * non-404 counts as present), then probe GET /v1/models if exactly one flavor
+ * is detected. Multiple routes require an explicit flavor selection: route
+ * presence cannot establish which protocol a particular model supports.
+ * If no route resolves, retain the pre-existing openai-completions listing
+ * fallback; the user can select another flavor and test in a real turn.
  *
  * Never throws — failures come back as `{ ok:false, error }`.
  */
@@ -215,17 +213,19 @@ export async function probeLocalProvider(
   if (api) return probeOneFlavor(baseUrl, apiKey, api, timeoutMs);
   const base = normalizeLocalBaseUrl(baseUrl);
   if (!/^https?:\/\//i.test(base)) return { ok: false, error: 'Enter a URL like http://localhost:11434.' };
-  const routes = await classifyChatRoutes(base, apiKey, timeoutMs);
-  // openai-completions wins ties: pre-existing default and more common.
-  const detected: LocalProviderApi | null = routes.oc
-    ? 'openai-completions'
-    : routes.am
-      ? 'anthropic-messages'
-      : null;
-  if (detected) return probeOneFlavor(baseUrl, apiKey, detected, timeoutMs);
-  // Neither OPTIONS resolved (server rejects OPTIONS, or both 404). Fall back
-  // to a plain openai-completions listing probe — same behavior as pre-flavor.
-  return probeOneFlavor(baseUrl, apiKey, 'openai-completions', timeoutMs);
+  const routes = await classifyApiRoutes(base, apiKey, timeoutMs);
+  const detected: LocalProviderApi[] = [];
+  if (routes.oc) detected.push('openai-completions');
+  if (routes.or) detected.push('openai-responses');
+  if (routes.am) detected.push('anthropic-messages');
+  if (detected.length > 1) {
+    return {
+      ok: false,
+      error: `The endpoint exposes multiple API routes (${detected.join(', ')}). Select an API flavor explicitly and test again.`
+    };
+  }
+  // Keep the legacy listing fallback when no route can be classified.
+  return probeOneFlavor(baseUrl, apiKey, detected[0] ?? 'openai-completions', timeoutMs);
 }
 
 /**
@@ -278,18 +278,17 @@ function localProviderBlock(
   modelOverrides: Record<string, ModelOverride>
 ): PiProviderConfig {
   const normalized = normalizeLocalBaseUrl(baseUrl);
-  // openai-completions: append /v1 so pi hits /v1/chat/completions (matches the
-  // Ollama/LM Studio flow that always did it).
+  // OpenAI flavors: append /v1 so pi hits /v1/chat/completions or /v1/responses
+  // (matches the Ollama/LM Studio flow that always did it).
   // anthropic-messages: leave the normalized root as-is — pi's Anthropic client
   // (@anthropic-ai/sdk) appends /v1/messages verbatim to whatever baseURL it
   // receives. Appending /v1 here would produce /v1/v1/messages at request time.
   const finalBaseUrl = api === 'anthropic-messages' ? normalized : `${normalized}/v1`;
-  // Per-flavor compat: OpenAI-compat servers get the local-server defaults;
-  // anthropic-messages providers get an empty block so pi's Anthropic defaults
-  // (eager tool streaming, cache retention, …) apply. Users needing proxy-
-  // specific overrides can hand-edit models.json.
+  // Chat Completions servers get conservative local-server defaults. Responses
+  // and Anthropic providers use pi's native protocol defaults; proxy-specific
+  // changes can still be supplied through per-model compat overrides.
   const compat: Record<string, unknown> =
-    api === 'anthropic-messages' ? {} : { supportsDeveloperRole: false, supportsReasoningEffort: false };
+    api === 'openai-completions' ? { supportsDeveloperRole: false, supportsReasoningEffort: false } : {};
   return {
     baseUrl: finalBaseUrl,
     api,
@@ -484,9 +483,13 @@ export function syncModelsConfig(): Promise<boolean> {
       const parsed = parseModelOverrides(settings[id].modelOverrides);
       if (!parsed.ok) log('pi', `ignoring invalid model overrides for ${id}`, { errors: parsed.errors });
       const overrides = parsed.ok ? parsed.value : {};
-      // Only custom endpoints may speak anthropic-messages; the coercion enforces this too,
-      // this is defense in depth against a hand-edited settings.json.
-      const api: LocalProviderApi = isCustomProviderId(id) && rawApi === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions';
+      // Only custom endpoints may select Responses or Anthropic Messages; the
+      // coercion enforces this too, and this is defense in depth against a
+      // hand-edited settings.json.
+      const api: LocalProviderApi =
+        isCustomProviderId(id) && (rawApi === 'openai-responses' || rawApi === 'anthropic-messages')
+          ? rawApi
+          : 'openai-completions';
       // Hand-entered ids are authoritative: an endpoint that names its models has
       // opted out of discovery, so don't probe it (and don't let a listing endpoint
       // it happens to serve override the user's choice).
