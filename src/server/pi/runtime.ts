@@ -110,6 +110,7 @@ import {
   saveOAuthTokenIfServerMatches,
   writeNativeSearchGate,
   writeServiceTierGate,
+  writeSystemPromptFile,
   writeTurnContextGate
 } from './mcp-config';
 import { authorizeMcp } from './oauth';
@@ -3987,6 +3988,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // before the child reads it; seed the search gate open so a worker that has
     // not run a turn yet matches the bridge's own default.
     await mkdir(worker.gateDir, { recursive: true });
+    // Built per spawn: it names the machine the assistant is running on, and
+    // carries the MDX syntax card only on an MDX worker. A
+    // persona worker appends its role prompt here — spawn-time state, which
+    // is why a persona owns a whole worker rather than a per-turn block.
+    const systemPromptPath = await writeSystemPromptFile(
+      worker.personaPrompt
+        ? `${stemAssistantInstructions(worker.format)}\n\n${worker.personaPrompt}`
+        : stemAssistantInstructions(worker.format),
+      worker.gateDir
+    );
     this.ensureMcpStatusWatcher();
     // Refresh the local-provider catalog (models.json) before the spawn: pi's RPC
     // mode reads the file once at startup and never again.
@@ -4051,13 +4062,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         '--model',
         modelId,
         '--append-system-prompt',
-        // Built per spawn: it names the machine the assistant is running on, and
-        // carries the MDX syntax card only on an MDX worker. A
-        // persona worker appends its role prompt here — spawn-time state, which
-        // is why a persona owns a whole worker rather than a per-turn block.
-        worker.personaPrompt
-          ? `${stemAssistantInstructions(worker.format)}\n\n${worker.personaPrompt}`
-          : stemAssistantInstructions(worker.format)
+        // A file path, never the text: argv is readable by anyone on a Linux
+        // host (see writeSystemPromptFile).
+        systemPromptPath
       ]
     });
     worker.spawnedPersonaPrompt = worker.personaPrompt;

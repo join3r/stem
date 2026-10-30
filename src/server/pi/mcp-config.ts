@@ -366,6 +366,32 @@ export async function writeServiceTierGate(tier: string | null, gateDir?: string
 }
 
 /**
+ * The worker's appended system prompt, handed to pi as a PATH rather than as
+ * the text itself: argv is world-readable on Linux (/proc/<pid>/cmdline, and
+ * the host sees a container's processes) and a single argument is capped at
+ * 128 KB, while a persona's role prompt is the user's own writing. pi reads
+ * `--append-system-prompt` from a file when the value names an existing one
+ * (resolvePromptInput), and re-reads it when resources reload, so the file
+ * lives in the worker's gate dir for the worker's whole life. Owner-only.
+ */
+const SYSTEM_PROMPT_FILE = 'system-prompt.md';
+
+export function piSystemPromptPath(gateDir: string): string {
+  return join(gateDir, SYSTEM_PROMPT_FILE);
+}
+
+/** Write the spawn prompt (0600) and return the path to pass pi. Rewritten on
+ * every spawn, so a respawn after a persona edit picks up the new text. */
+export async function writeSystemPromptFile(text: string, gateDir: string): Promise<string> {
+  await mkdir(gateDir, { recursive: true });
+  const path = piSystemPromptPath(gateDir);
+  await writeFile(path, text, { encoding: 'utf8', mode: 0o600 });
+  // `mode` applies only when the file is created; tighten one left by an older build.
+  await chmod(path, 0o600);
+  return path;
+}
+
+/**
  * Per-turn gate carrying what kind of turn this is: a mail delivery, an
  * autonomous scheduled run, or a live chat (both false). The bridge's
  * card-raising tools (set_custom_instructions) read it so that in a turn nobody
