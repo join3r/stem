@@ -16,7 +16,8 @@ import type { ChatBackend } from '../../src/server/backend';
 import type { TaskBridge } from '../../src/server/backend/types';
 import { initTaskScheduler } from '../../src/server/startup/scheduler';
 import { createConversation, mailConversationFor, setConversationSession } from '../../src/server/workspace/mail';
-import { mailStorePath } from '../../src/server/workspace/paths';
+import { setChatPrivate } from '../../src/server/workspace/chats';
+import { chatStorePath, mailStorePath } from '../../src/server/workspace/paths';
 import { readTasks } from '../../src/server/workspace/tasks';
 
 class FakeRuntime extends EventEmitter {
@@ -71,13 +72,16 @@ function wire(
 const settled = (runtime: FakeRuntime) => new Promise<void>((r) => setTimeout(r, 30)).then(() => runtime);
 
 const mailPath = mailStorePath();
+const chatPath = chatStorePath();
 beforeEach(() => {
   mkdirSync(dirname(mailPath), { recursive: true });
   rmSync(mailPath, { force: true });
+  rmSync(chatPath, { force: true });
   rmSync(STORE, { force: true });
 });
 afterEach(() => {
   rmSync(mailPath, { force: true });
+  rmSync(chatPath, { force: true });
   rmSync(STORE, { force: true });
 });
 
@@ -163,10 +167,10 @@ describe('schedule_task through the bridge', () => {
     });
     const res = await runtime.bridge!.schedule({ prompt: 'watch', cron: '0 8 * * *' }, 'plain-chat');
     if (!res.ok) throw new Error(res.error);
-    expect(await runtime.bridge!.cancel(res.task.id)).toEqual({ ok: true });
+    expect(await runtime.bridge!.cancel(res.task.id, { thread: 'plain-chat', anyThread: true })).toEqual({ ok: true });
     expect(asked).toEqual([res.task.id]);
     expect(runtime.deleted.sort()).toEqual(['run-a', 'run-b']);
-    expect(await runtime.bridge!.cancel(res.task.id)).toMatchObject({ ok: false });
+    expect(await runtime.bridge!.cancel(res.task.id, ANY)).toMatchObject({ ok: false });
     scheduler.stop();
   });
 
@@ -189,5 +193,82 @@ describe('schedule_task through the bridge', () => {
       expect(runtime.deleted).toEqual(landed ? [] : ['run-1']);
       scheduler.stop();
     }
+  });
+});
+
+// update_task / cancel_task: a chat the user types in may edit a task scheduled
+// from any other chat (null owner); an unattended run is held to its own thread.
+const ANY = { thread: 'other-chat', anyThread: true };
+
+describe('update_task and cancel_task through the bridge', () => {
+  it('edits the prompt, schedule and paused state in place, keeping the id', async () => {
+    const runtime = new FakeRuntime();
+    const scheduler = wire(runtime);
+    const res = await runtime.bridge!.schedule({ prompt: 'Draft replies. Sign as Vladimír.', cron: '0 6 * * *' }, 'morning-chat');
+    if (!res.ok) throw new Error(res.error);
+
+    const upd = await runtime.bridge!.update(
+      res.task.id,
+      { prompt: 'Draft replies. Sign as Stem on behalf of Vladimír.', cron: '30 6 * * *', enabled: false },
+      ANY
+    );
+    expect(upd.ok).toBe(true);
+    const [task] = await readTasks();
+    expect(task.id).toBe(res.task.id);
+    expect(task.threadId).toBe('morning-chat');
+    expect(task.prompt).toBe('Draft replies. Sign as Stem on behalf of Vladimír.');
+    expect(task.schedule).toEqual({ kind: 'cron', expr: '30 6 * * *' });
+    expect(task.enabled).toBe(false);
+    // Not the user's words: the old prompt stays behind Revert in the Tasks tab.
+    expect(task.rewritten).toMatchObject({ kind: 'edit', original: 'Draft replies. Sign as Vladimír.' });
+    expect((await runtime.bridge!.listReachable(ANY)).map((t) => t.id)).toEqual([res.task.id]);
+    scheduler.stop();
+  });
+
+  it('applies nothing when any part is invalid', async () => {
+    const runtime = new FakeRuntime();
+    const scheduler = wire(runtime);
+    const res = await runtime.bridge!.schedule({ prompt: 'original', cron: '0 6 * * *' }, 'morning-chat');
+    if (!res.ok) throw new Error(res.error);
+    expect((await runtime.bridge!.update(res.task.id, { prompt: 'changed', cron: 'nope' }, ANY)).ok).toBe(false);
+    expect((await runtime.bridge!.update(res.task.id, { prompt: '   ' }, ANY)).ok).toBe(false);
+    expect((await runtime.bridge!.update(res.task.id, {}, ANY)).ok).toBe(false);
+    expect((await readTasks())[0].prompt).toBe('original');
+    scheduler.stop();
+  });
+
+  it("holds an owner-scoped caller to its own thread's tasks", async () => {
+    const runtime = new FakeRuntime();
+    const scheduler = wire(runtime);
+    const res = await runtime.bridge!.schedule({ prompt: 'original', cron: '0 6 * * *' }, 'morning-chat');
+    if (!res.ok) throw new Error(res.error);
+    expect((await runtime.bridge!.update(res.task.id, { prompt: 'hijacked' }, { thread: 'run-7', anyThread: false })).ok).toBe(false);
+    expect((await runtime.bridge!.cancel(res.task.id, { thread: 'run-7', anyThread: false })).ok).toBe(false);
+    expect((await readTasks())[0].prompt).toBe('original');
+    expect((await runtime.bridge!.cancel(res.task.id, ANY)).ok).toBe(true);
+    expect(await readTasks()).toEqual([]);
+    scheduler.stop();
+  });
+
+  it("keeps a private chat's or private mail's tasks out of every other chat", async () => {
+    const runtime = new FakeRuntime();
+    const scheduler = wire(runtime);
+    await setChatPrivate('secret-chat');
+    const fromChat = await runtime.bridge!.schedule({ prompt: 'private chat task', cron: '0 6 * * *' }, 'secret-chat');
+    const conversation = await createConversation('Private errand', ['secretary'], '', { private: true });
+    await setConversationSession(conversation.id, 'secretary', 'private-session');
+    const fromMail = await runtime.bridge!.schedule({ prompt: 'private mail task', cron: '0 7 * * *' }, 'private-session');
+    const open = await runtime.bridge!.schedule({ prompt: 'ordinary task', cron: '0 8 * * *' }, 'morning-chat');
+    if (!fromChat.ok || !fromMail.ok || !open.ok) throw new Error('schedule failed');
+    expect(fromMail.task.mailConversationId).toBe(conversation.id);
+
+    expect((await runtime.bridge!.listReachable(ANY)).map((t) => t.id)).toEqual([open.task.id]);
+    expect((await runtime.bridge!.update(fromChat.task.id, { enabled: false }, ANY)).ok).toBe(false);
+    expect((await runtime.bridge!.cancel(fromMail.task.id, ANY)).ok).toBe(false);
+    // The private chat itself still reaches its own task.
+    const own = { thread: 'secret-chat', anyThread: true };
+    expect((await runtime.bridge!.listReachable(own)).map((t) => t.id)).toContain(fromChat.task.id);
+    expect((await runtime.bridge!.update(fromChat.task.id, { enabled: false }, own)).ok).toBe(true);
+    scheduler.stop();
   });
 });

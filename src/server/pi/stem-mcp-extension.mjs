@@ -2405,7 +2405,7 @@ function registerInstructionsTool(pi, turnContext) {
     name: 'set_custom_instructions',
     label: 'Set custom instructions',
     description:
-      "Update the user's standing custom instructions — durable, high-priority directives that shape EVERY reply (response length, tone, output format, language style, component usage), kept separate from recalled facts. Use this when the user asks you to adopt a STANDING BEHAVIORAL RULE (\"always answer briefly\", \"from now on reply in plain markdown\", \"stop using callouts\") — NOT for one-off requests, and NOT for facts about the user (those are remembered automatically). The user must approve in a card where they edit the final text and CHOOSE THE SURFACE — do not assume the surface yourself. Surfaces: \"main\" applies everywhere including Quick Chat; \"quickChat\" is an extra layered only on the Quick Chat overlay (Quick Chat inherits main). Actions: \"append\" adds a line, \"replace\" overwrites that surface's text, \"clear\" empties it. Pass `surface` only as a hint when the user clearly meant one; the card lets them change it.",
+      "Update the user's standing custom instructions — durable, high-priority directives that shape EVERY reply (response length, tone, output format, language style, component usage), kept separate from recalled facts. Call it ONLY when the user explicitly asks to change how you reply in general, across all chats (\"always answer briefly\", \"from now on reply in plain markdown\", \"stop using callouts\", \"add that to your instructions\"). Rarely right: NOT for one-off requests, NOT for facts about the user (remembered automatically), and NOT for preferences about one thing — a scheduled task, a persona, a kind of mail or document; change that thing itself (e.g. update_task). A user agreeing with your suggestion (\"ok, let's do it\") is not a request to save it here. When unsure, ask instead of calling. The user must approve in a card where they edit the final text and CHOOSE THE SURFACE — do not assume the surface yourself. Surfaces: \"main\" applies everywhere including Quick Chat; \"quickChat\" is an extra layered only on the Quick Chat overlay (Quick Chat inherits main). Actions: \"append\" adds a line, \"replace\" overwrites that surface's text, \"clear\" empties it. Pass `surface` only as a hint when the user clearly meant one; the card lets them change it.",
     parameters: {
       type: 'object',
       properties: {
@@ -2703,24 +2703,58 @@ function registerTaskTools(pi) {
   pi.registerTool({
     name: 'list_tasks',
     label: 'List scheduled tasks',
-    description: 'List the scheduled tasks attached to the CURRENT conversation, with their ids and schedules.',
+    description:
+      'List the user\'s scheduled tasks with their ids, schedules and full prompts. In a chat with the user this covers every task, wherever it was scheduled from (those from this conversation are marked); in an unattended run, only the tasks scheduled from this thread.',
     parameters: { type: 'object', properties: {} },
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       const res = await taskBridge(ctx, { op: 'list' });
       if (!res.ok) return taskErr(res.error || 'Could not list tasks.');
       const tasks = res.tasks || [];
-      if (!tasks.length) return taskOk('No scheduled tasks for this conversation.');
-      const lines = tasks.map(
-        (t) => `- ${t.id} — ${describeSchedule(t)}${t.enabled ? '' : ' (paused)'}: ${t.title}`
+      if (!tasks.length) return taskOk('No scheduled tasks.');
+      const blocks = tasks.map(
+        (t) =>
+          `- ${t.id} — ${describeSchedule(t)}${t.enabled ? '' : ' (paused)'}${t.here ? ' (this conversation)' : ''}: ${t.title}\n  Prompt: ${t.prompt}`
       );
-      return taskOk(`Scheduled tasks for this conversation:\n${lines.join('\n')}`);
+      return taskOk(`Scheduled tasks:\n${blocks.join('\n')}`);
+    }
+  });
+
+  pi.registerTool({
+    name: 'update_task',
+    label: 'Update scheduled task',
+    description:
+      'Edit an existing scheduled task in place — keeps its id, history and mail thread. Pass only what changes: `prompt` REPLACES the whole prompt (start from the current one in list_tasks and change just the part the user asked about; it must stay fully self-contained), `cron` or `at` replaces the schedule (same rules as schedule_task), `enabled` pauses (false) or resumes (true). Use list_tasks first to find the id. Prefer this over cancelling and re-creating a task.',
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'The exact task id to edit.' },
+        prompt: { type: 'string', description: 'The complete new prompt, replacing the old one.' },
+        cron: { type: 'string', description: 'A new 5-field cron expression.' },
+        at: { type: 'string', description: 'A new future ISO 8601 local datetime, without "Z", for a one-time task.' },
+        enabled: { type: 'boolean', description: 'false pauses the task, true resumes it.' }
+      },
+      required: ['taskId']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const res = await taskBridge(ctx, {
+        op: 'update',
+        taskId: params?.taskId,
+        prompt: params?.prompt,
+        cron: params?.cron,
+        at: params?.at,
+        enabled: params?.enabled
+      });
+      if (!res.ok) return taskErr(res.error || 'Could not update the task.');
+      return taskOk(
+        `Task updated: ${describeSchedule(res.task)}${res.task.enabled ? '' : ' (paused)'} — ${res.task.title}. It can also be edited in the Tasks tab.`
+      );
     }
   });
 
   pi.registerTool({
     name: 'cancel_task',
     label: 'Cancel scheduled task',
-    description: 'Cancel (delete) a scheduled task by its id. Use list_tasks first to find the id.',
+    description: 'Cancel (delete) a scheduled task by its id. Use list_tasks first to find the id. To change a task, use update_task instead.',
     parameters: {
       type: 'object',
       properties: { taskId: { type: 'string', description: 'The exact task id to cancel.' } },

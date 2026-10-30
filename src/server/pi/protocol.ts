@@ -41,7 +41,7 @@ export const INSTRUCTIONS_APPROVAL_TITLE = 'stem-instructions-approval';
 
 /**
  * Scheduled-task tool round-trip (`input`): schedule_task / notify_user /
- * list_tasks / cancel_task. The op payload rides in `placeholder`; PiRuntime
+ * list_tasks / update_task / cancel_task. The op payload rides in `placeholder`; PiRuntime
  * answers with a JSON result string.
  */
 export const TASK_BRIDGE_TITLE = 'stem-task-bridge';

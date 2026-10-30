@@ -106,7 +106,7 @@ function coerce(raw: unknown): ScheduledTask | null {
     title: typeof r.title === 'string' && r.title ? r.title : titleFromPrompt(r.prompt),
     runsAs: coerceRunsAs(r.runsAs) ?? legacyRunsAs(r),
     ...(r.rewritten && typeof r.rewritten === 'object' && typeof r.rewritten.at === 'string' && typeof r.rewritten.original === 'string'
-      ? { rewritten: { at: r.rewritten.at, original: r.rewritten.original } }
+      ? { rewritten: { at: r.rewritten.at, original: r.rewritten.original, ...(r.rewritten.kind === 'edit' ? { kind: 'edit' as const } : {}) } }
       : {}),
     ...(typeof r.lastRunAt === 'string' ? { lastRunAt: r.lastRunAt } : {}),
     ...(typeof r.nextRunAt === 'string' || r.nextRunAt === null ? { nextRunAt: r.nextRunAt } : {}),

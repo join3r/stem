@@ -467,6 +467,24 @@ export class TaskScheduler {
   }
 
   /**
+   * Replace the prompt from the assistant's update_task. Unlike the Tasks tab
+   * edit, the words are not the user's, so the old prompt is kept behind the
+   * rewrite mark: the Tasks tab shows the edit and offers Revert.
+   */
+  async editPromptFromChat(id: string, prompt: string): Promise<ScheduledTask[]> {
+    const next = prompt.trim();
+    if (!next) throw new Error('A task needs a prompt to run.');
+    const task = this.tasks.find((t) => t.id === id);
+    if (task && task.prompt !== next) {
+      task.rewritten = { at: new Date().toISOString(), original: task.prompt, kind: 'edit' };
+      task.prompt = next;
+      task.title = titleFromPrompt(next);
+      await this.persistAndArm();
+    }
+    return this.snapshot();
+  }
+
+  /**
    * Replace who/what this task's runs execute as (Tasks tab). One choice, not
    * three fields: a persona, a pinned model, or the app default. Rejects a
    * malformed value and a persona that does not exist. No validation against

@@ -3808,17 +3808,24 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private handleTaskBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
     const respond = (value: unknown): void =>
       worker.proc?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
-    const threadId = worker.currentTurn?.threadId;
+    const turn = worker.currentTurn;
+    const threadId = turn?.threadId;
+    // Only a chat the user is typing in reaches tasks scheduled elsewhere. A
+    // scheduled run or mail delivery reads content nobody vetted (mail, web
+    // pages), so it keeps to the tasks of its own thread.
+    const anyThread = !!turn && !turn.isScheduled && !turn.external;
     void (async () => {
       try {
         const bridge = this.taskBridge;
         if (!bridge) return respond({ ok: false, error: 'Scheduled tasks are unavailable.' });
         if (!threadId) return respond({ ok: false, error: 'No active conversation to attach the task to.' });
+        const scope = { thread: threadId, anyThread };
         const req = JSON.parse(payload ?? '{}') as {
           op?: string;
           prompt?: string;
           cron?: string;
           at?: string;
+          enabled?: boolean;
           personaId?: string;
           taskId?: string;
           title?: string;
@@ -3833,12 +3840,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             return respond(res);
           }
           case 'list': {
-            const tasks = await bridge.listForThread(threadId);
-            return respond({ ok: true, tasks });
+            const tasks = await bridge.listReachable(scope);
+            return respond({ ok: true, tasks: tasks.map((t) => ({ ...t, here: t.threadId === threadId })) });
           }
           case 'cancel': {
-            const res = await bridge.cancel(req.taskId ?? '');
+            const res = await bridge.cancel(req.taskId ?? '', scope);
             return respond(res);
+          }
+          case 'update': {
+            const patch = {
+              ...(typeof req.prompt === 'string' ? { prompt: req.prompt } : {}),
+              ...(typeof req.cron === 'string' ? { cron: req.cron } : {}),
+              ...(typeof req.at === 'string' ? { at: req.at } : {}),
+              ...(typeof req.enabled === 'boolean' ? { enabled: req.enabled } : {})
+            };
+            return respond(await bridge.update(req.taskId ?? '', patch, scope));
           }
           case 'notify': {
             await bridge.notify({ title: req.title, message: req.message ?? '' }, threadId);

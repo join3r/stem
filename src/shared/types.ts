@@ -1179,7 +1179,7 @@ export interface ScheduledTask {
   /**
    * The conversation this task was scheduled FROM — a chat, or a mail persona's
    * hidden session when a persona scheduled it. Used only for the clock badge
-   * on that chat's row and to scope `list_tasks`/`cancel_task` called there.
+   * on that chat's row and to keep an unattended run's task tools to its own thread.
    * No run ever writes to it: each firing gets a thread of its own.
    */
   threadId: string;
@@ -1219,7 +1219,12 @@ export interface ScheduledTask {
    * and a blind run needs everything spelled out. `original` is the prompt as
    * it stood, for Revert; cleared by Revert or by the user's own prompt edit.
    */
-  rewritten?: { at: string; original: string };
+  rewritten?: {
+    at: string;
+    original: string;
+    /** 'edit': the assistant's update_task changed it in a chat; absent: the stand-alone rewrite pass. */
+    kind?: 'edit';
+  };
   /**
    * The last few firings, newest first (at most TASK_RECENT_RUNS). The run
    * thread itself is deleted when it sent no mail, so this is the only trace a
@@ -1265,6 +1270,14 @@ export interface ScheduleTaskRequest {
   at?: string;
   /** Run the task as this persona (validated to exist when the task is created). */
   personaId?: string;
+}
+
+/** The assistant's update_task edit: any subset, at most one of cron/at. */
+export interface UpdateTaskRequest {
+  prompt?: string;
+  cron?: string;
+  at?: string;
+  enabled?: boolean;
 }
 
 /** Editable fields when updating a task's schedule from the Tasks tab. */

@@ -1,4 +1,6 @@
-import type { ParkRequest } from '../backend/types';
+import type { ParkRequest, TaskScope } from '../backend/types';
+import { getPrivateChats } from '../workspace/chats';
+import { readMailConversation } from '../workspace/mail';
 import { TaskScheduler } from '../scheduler';
 import { rewriteTaskPrompt } from '../scheduler/rewrite';
 import { reflectOnDelivery } from '../mail/reflect';
@@ -7,7 +9,7 @@ import { pushTaskAlert } from '../push';
 import { readSettings } from '../workspace/settings';
 import { dropChatThread } from '../chatsearch/index-sync';
 import type { ChatBackend } from '../backend';
-import type { GeneratedImageRef, ScheduledRunReport } from '../../shared/types';
+import type { GeneratedImageRef, ScheduledRunReport, ScheduledTask, TaskSchedule } from '../../shared/types';
 
 /**
  * Scheduled tasks: re-run a prompt as an autonomous turn on a cron/once
@@ -213,6 +215,23 @@ export function initTaskScheduler(deps: {
         }
       : {})
   });
+  // What a task tool call may touch: its own thread's tasks, and — from a chat
+  // the user is typing in — every other one except a private chat's or a
+  // private mail conversation's, which stay out of every other chat.
+  const reachableTasks = async (scope: TaskScope): Promise<ScheduledTask[]> => {
+    const tasks = scheduler.snapshot();
+    if (!scope.anyThread) return tasks.filter((t) => t.threadId === scope.thread);
+    const privateChats = await getPrivateChats();
+    const reachable: ScheduledTask[] = [];
+    for (const t of tasks) {
+      if (t.threadId !== scope.thread) {
+        if (privateChats.has(t.threadId)) continue;
+        if (t.mailConversationId && (await readMailConversation(t.mailConversationId)).conversation?.private) continue;
+      }
+      reachable.push(t);
+    }
+    return reachable;
+  };
   deps.runtime.setTaskBridge({
     // schedule_task binds the task to wherever it was called — a chat or a mail
     // persona's hidden session. Either works: no run ever writes there.
@@ -230,10 +249,41 @@ export function initTaskScheduler(deps: {
     },
     listForThread: async (threadId) => scheduler.listForThread(threadId),
     originThread: (taskId) => scheduler.snapshot().find((t) => t.id === taskId)?.threadId ?? null,
-    cancel: async (taskId) => {
-      const before = scheduler.snapshot().length;
+    listReachable: (scope) => reachableTasks(scope),
+    cancel: async (taskId, scope) => {
+      if (!(await reachableTasks(scope)).some((t) => t.id === taskId)) return { ok: false, error: 'No such task.' };
       await scheduler.remove(taskId);
-      return scheduler.snapshot().length < before ? { ok: true } : { ok: false, error: 'No such task.' };
+      return { ok: true };
+    },
+    // update_task: the same scheduler edits the Tasks tab makes, validated
+    // before any is applied so a bad cron does not leave a half-edited task.
+    update: async (taskId, patch, scope) => {
+      if (!(await reachableTasks(scope)).some((t) => t.id === taskId)) return { ok: false, error: 'No such task.' };
+      if (patch.cron !== undefined && patch.at !== undefined) {
+        return { ok: false, error: 'Give either cron or at, not both.' };
+      }
+      const prompt = patch.prompt?.trim();
+      if (patch.prompt !== undefined && !prompt) return { ok: false, error: 'A task needs a prompt to run.' };
+      const schedule: TaskSchedule | null =
+        patch.cron !== undefined
+          ? { kind: 'cron', expr: patch.cron }
+          : patch.at !== undefined
+            ? { kind: 'once', at: patch.at }
+            : null;
+      if (schedule) {
+        const valid = await scheduler.validate(
+          schedule.kind === 'cron' ? { prompt: 'x', cron: schedule.expr } : { prompt: 'x', at: schedule.at }
+        );
+        if (!valid.ok) return valid;
+      }
+      if (!prompt && !schedule && patch.enabled === undefined) {
+        return { ok: false, error: 'Nothing to change: give a prompt, a cron or at, or enabled.' };
+      }
+      if (prompt) await scheduler.editPromptFromChat(taskId, prompt);
+      if (schedule) await scheduler.updateSchedule(taskId, schedule);
+      if (patch.enabled !== undefined) await scheduler.setEnabled(taskId, patch.enabled);
+      const updated = scheduler.snapshot().find((t) => t.id === taskId);
+      return updated ? { ok: true, task: updated } : { ok: false, error: 'No such task.' };
     },
     // notify_user: how loudly this lands is the user's call (settings.tasks.notify).
     // `alert`, the default, is the full treatment — raise + focus the main window,
