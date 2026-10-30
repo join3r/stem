@@ -166,6 +166,16 @@ export function placeOverlay(win: BrowserWindow, reset: boolean): void {
 
 /** Height the window chip adds to the compact bar ("Ask about this window"). */
 const WINDOW_CHIP_HEIGHT = 58;
+/**
+ * Height the tab strip adds to the compact bar when a window has more than one
+ * conversation open. The expanded panel carries the tabs in its own header.
+ */
+const TAB_STRIP_HEIGHT = 37;
+
+/** The compact bar's height: the chip and the tab strip each add a row. */
+function compactHeight(chip: boolean, tabs: boolean): number {
+  return QUICK_CHAT_HEIGHT + (chip ? WINDOW_CHIP_HEIGHT : 0) + (tabs ? TAB_STRIP_HEIGHT : 0);
+}
 /** Space between the panel and the window it docks against. */
 const DOCK_GAP = 12;
 
@@ -203,9 +213,10 @@ export function dockBeside(target: DockRect, panel: { width: number; height: num
 
 /**
  * Place the overlay beside the window it was summoned for (see dockBeside),
- * on that window's display. `chip`: the compact bar carries the window chip.
+ * on that window's display. `chip`: the compact bar carries the window chip;
+ * `tabs`: it carries the tab strip.
  */
-export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expanded: boolean, chip: boolean): void {
+export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expanded: boolean, chip: boolean, tabs = false): void {
   const { workArea } = screen.getDisplayMatching({
     x: Math.round(target.x),
     y: Math.round(target.y),
@@ -213,7 +224,7 @@ export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expande
     height: Math.max(1, Math.round(target.height))
   });
   const w = QUICK_CHAT_WIDTH;
-  const h = expanded ? QUICK_CHAT_PANEL_HEIGHT : QUICK_CHAT_HEIGHT + (chip ? WINDOW_CHIP_HEIGHT : 0);
+  const h = expanded ? QUICK_CHAT_PANEL_HEIGHT : compactHeight(chip, tabs);
   const { x, y } = dockBeside(target, { width: w, height: h }, workArea);
   win.setBounds(overlayOuterBounds({ x, y, width: w, height: h }));
 }
@@ -222,10 +233,11 @@ export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expande
  * Shrink a visible overlay back to the compact bar where it stands (New thread,
  * or a deleted thread, empties the panel). Keeps the top edge, so the bar stays
  * where the panel's head was rather than jumping to the cursor's display.
- * `chip`: the bar carries a window chip ("Ask about this window").
+ * `chip`: the bar carries a window chip ("Ask about this window"); `tabs`: the
+ * tab strip of a window with several conversations.
  */
-export function compactOverlay(win: BrowserWindow, chip = false): void {
-  const outer = overlayOuterBounds({ x: 0, y: 0, width: QUICK_CHAT_WIDTH, height: QUICK_CHAT_HEIGHT + (chip ? WINDOW_CHIP_HEIGHT : 0) });
+export function compactOverlay(win: BrowserWindow, chip = false, tabs = false): void {
+  const outer = overlayOuterBounds({ x: 0, y: 0, width: QUICK_CHAT_WIDTH, height: compactHeight(chip, tabs) });
   const { x, y, width } = win.getBounds();
   win.setBounds({ x, y, width, height: outer.height });
 }

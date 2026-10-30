@@ -56,6 +56,7 @@ import type {
   QuickChatSettings,
   QuickChatSessionStarted,
   QuickChatStatus,
+  QuickChatTabs,
   MailComposeInput,
   Persona,
   ScheduledTask,
@@ -732,6 +733,19 @@ const api: StemApi = {
   openQuickChatPrivacy: (which: 'screen' | 'accessibility') => ipcRenderer.invoke('quickchat:openPrivacy', which),
   openManageFromQuickChat: (tab: ManageTabId, intent?: ManageIntent) => ipcRenderer.invoke('quickchat:openManage', tab, intent),
   compactQuickChat: (chip?: boolean) => ipcRenderer.invoke('quickchat:compact', chip === true),
+  newQuickChatTab: () => ipcRenderer.invoke('quickchat:newTab'),
+  switchQuickChatTab: (id: string) => ipcRenderer.invoke('quickchat:switchTab', id),
+  closeQuickChatTab: (id: string) => ipcRenderer.invoke('quickchat:closeTab', id),
+  onQuickChatTabs: (listener: (tabs: QuickChatTabs) => void) => {
+    const handler = (_e: unknown, tabs: QuickChatTabs) => listener(tabs);
+    ipcRenderer.on('quickchat:tabs', handler);
+    return () => ipcRenderer.removeListener('quickchat:tabs', handler);
+  },
+  onQuickChatCloseTab: (listener: (request: { id: string }) => void) => {
+    const handler = (_e: unknown, request: { id: string }) => listener(request);
+    ipcRenderer.on('quickchat:closeTabRequest', handler);
+    return () => ipcRenderer.removeListener('quickchat:closeTabRequest', handler);
+  },
   onQuickChatFocus: (listener: (focus: QuickChatFocus) => void) => {
     const handler = (_e: unknown, focus: QuickChatFocus) => listener(focus);
     ipcRenderer.on('quickchat:focus', handler);

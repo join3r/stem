@@ -4878,6 +4878,32 @@ export interface QuickChatFocus {
   window?: QuickChatWindow;
 }
 
+/** One conversation about a window: a tab in that window's panel. */
+export interface QuickChatTab {
+  id: string;
+  /** The first question asked in it; null while nothing has been asked. */
+  label: string | null;
+  /** The tab whose window is on screen. */
+  active: boolean;
+  /** An answer is being written. */
+  running: boolean;
+  /** An answer finished while the tab was out of sight. */
+  unread: boolean;
+}
+
+/**
+ * Main → overlay: the tabs of the window panel this overlay belongs to, sent
+ * whenever one opens, closes, switches, starts or finishes an answer. The plain
+ * Quick Chat panel never gets one.
+ */
+export interface QuickChatTabs {
+  tabs: QuickChatTab[];
+  /** Which of `tabs` the receiving overlay is. */
+  self: string;
+  /** Another tab may still be opened (a window has a few at most). */
+  canAdd: boolean;
+}
+
 /** The window "Ask about this window" captured, as the overlay shows it. */
 export interface QuickChatWindow {
   /** The window server's id, which main keys the window's text by. */
@@ -5934,6 +5960,16 @@ export interface StemApi {
   /** Shrink the visible overlay to the compact bar (its session just emptied). */
   /** `chip`: the bar is showing an "Ask about this window" chip. */
   compactQuickChat(chip?: boolean): Promise<void>;
+  /** Window panel: a new tab with a fresh capture of the same window. */
+  newQuickChatTab(): Promise<void>;
+  /** Window panel: bring another of this window's tabs forward. */
+  switchQuickChatTab(id: string): Promise<void>;
+  /** Window panel: close a tab. The tab itself stops its answer first (see onQuickChatCloseTab). */
+  closeQuickChatTab(id: string): Promise<void>;
+  /** Window panel: the tab list changed. */
+  onQuickChatTabs(listener: (tabs: QuickChatTabs) => void): () => void;
+  /** Window panel: this tab is being closed; stop its answer, then call closeQuickChatTab(own id). */
+  onQuickChatCloseTab(listener: (request: { id: string }) => void): () => void;
   /** Overlay: fired each time the overlay is summoned; `reset` => fresh session. */
   onQuickChatFocus(listener: (focus: QuickChatFocus) => void): () => void;
   /** HUD: fired with the current one-line status while the overlay is hidden. */

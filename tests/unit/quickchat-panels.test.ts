@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { QuickChatSettings, StartTurnInput } from '../../src/shared/types';
+import type { QuickChatSettings, QuickChatTabs, StartTurnInput } from '../../src/shared/types';
 
 // "Ask about this window" gives every window its own panel: two windows asked
 // about are two panels on screen, each running its own conversation.
@@ -136,5 +136,80 @@ describe('Ask about this window panels', () => {
     expect(second.visible).toBe(false);
     expect(first.visible).toBe(true);
     expect(await ask(2)).toBe(second);
+  });
+});
+
+describe('Ask about this window tabs', () => {
+  type Overlay = (typeof mock.overlays)[number];
+  const call = (name: string, sender: Overlay, ...args: unknown[]) => mock.handlers.get(name)!(sender.webContents, ...args);
+  const lastTabs = (o: Overlay) =>
+    o.webContents.send.mock.calls.filter(([channel]) => channel === 'quickchat:tabs').at(-1)?.[1] as QuickChatTabs;
+
+  it('opens another conversation about the same window in front of the first', async () => {
+    const { ask } = fixture();
+    const first = await ask(1);
+    await call('quickchat:newTab', first);
+    const second = mock.overlays.find((o) => o.focused)!;
+    expect(second).not.toBe(first);
+    expect(second.visible).toBe(true);
+    expect(first.visible).toBe(false);
+    const tabs = lastTabs(second);
+    expect(tabs.tabs).toHaveLength(2);
+    expect(tabs.tabs.find((t) => t.active)?.id).toBe(tabs.self);
+    // The new tab starts fresh, with a new picture of the window as its chip.
+    expect(second.webContents.send).toHaveBeenCalledWith('quickchat:focus', expect.objectContaining({ reset: true, window: expect.anything() }));
+  });
+
+  it('runs each tab in its own thread and flags an answer that finished out of sight', async () => {
+    const { ask, run, surface, startTurn } = fixture();
+    const first = await ask(1);
+    await run(first, 'first question');
+    await call('quickchat:newTab', first);
+    const second = mock.overlays.find((o) => o.focused)!;
+    await run(second, 'second question');
+    const threads = startTurn.mock.calls.map(([input]) => (input as StartTurnInput).threadId);
+    expect(new Set(threads).size).toBe(2);
+    first.webContents.send.mockClear();
+    surface.routeBackendEvent({ method: 'item/agentMessage/delta', receivedAt: '', params: { threadId: threads[0], turnId: 'first question' } });
+    expect(first.webContents.send).toHaveBeenCalledWith('backend:event', expect.anything());
+    expect(second.webContents.send).not.toHaveBeenCalledWith('backend:event', expect.objectContaining({ params: expect.objectContaining({ threadId: threads[0] }) }));
+    const labels = lastTabs(second).tabs.map((t) => t.label);
+    expect(labels).toEqual(['first question', 'second question']);
+  });
+
+  it('switches tabs in place and comes back on the last one used', async () => {
+    const { ask, surface } = fixture();
+    const first = await ask(1);
+    await call('quickchat:newTab', first);
+    const second = mock.overlays.find((o) => o.focused)!;
+    const firstId = lastTabs(second).tabs[0].id;
+    await call('quickchat:switchTab', second, firstId);
+    expect(first.visible).toBe(true);
+    expect(second.visible).toBe(false);
+    surface.askAboutWindow(); // pressed in the panel: put it away
+    expect(first.visible).toBe(false);
+    expect(await ask(1)).toBe(first);
+  });
+
+  it('closes the tab in front and brings the next one forward', async () => {
+    const { ask } = fixture();
+    const first = await ask(1);
+    await call('quickchat:newTab', first);
+    const second = mock.overlays.find((o) => o.focused)!;
+    await call('quickchat:closeTab', second, lastTabs(second).self);
+    expect(second.destroyed).toBe(true);
+    expect(first.visible).toBe(true);
+    expect(lastTabs(first).tabs).toHaveLength(1);
+  });
+
+  it('asks a background tab to close itself, so it can stop its own answer', async () => {
+    const { ask } = fixture();
+    const first = await ask(1);
+    await call('quickchat:newTab', first);
+    const second = mock.overlays.find((o) => o.focused)!;
+    const firstId = lastTabs(second).tabs[0].id;
+    await call('quickchat:closeTab', second, firstId);
+    expect(first.webContents.send).toHaveBeenCalledWith('quickchat:closeTabRequest', { id: firstId });
+    expect(first.destroyed).toBe(false);
   });
 });

@@ -86,6 +86,9 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   'quickchat:handoff': [a.object],
   // Whether the compact bar keeps room for the window chip ("Ask about this window").
   'quickchat:compact': [a.optional(a.boolean)],
+  // A window panel's tab, by the id main gave it.
+  'quickchat:switchTab': [a.string],
+  'quickchat:closeTab': [a.string],
   // The System Settings pane the chip's missing-permission link opens.
   'quickchat:openPrivacy': [a.oneOf(['screen', 'accessibility'])],
   // The chip's Connect / Set up: the panel tab to open, and where in it (checked again in the handler).

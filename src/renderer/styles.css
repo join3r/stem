@@ -3264,6 +3264,53 @@ body.platform-win32 .qc-card {
 .qc-act:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
 .qc-act:disabled { opacity: 0.4; cursor: default; }
 .qc-head .qc-esc { cursor: pointer; }
+/* A window's conversations as tabs: in the panel's header, or as a row above
+   the compact bar (fixed height: main sizes the bar by it, TAB_STRIP_HEIGHT). */
+.qc-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  -webkit-app-region: no-drag;
+}
+.qc-tabrow { box-sizing: border-box; height: 37px; padding-top: 0; padding-bottom: 0; }
+.qc-tab {
+  flex: 0 1 140px;
+  min-width: 52px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-1) 0 var(--sp-4);
+  border-radius: var(--radius);
+  font-size: var(--fs-12);
+  color: var(--muted);
+  cursor: pointer;
+}
+.qc-tab:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+.qc-tab.active { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink); cursor: default; }
+.qc-tab-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.qc-tab-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.qc-tab-dot.running { animation: stem-dot-pulse 1.2s ease-in-out infinite; }
+.qc-tab-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  visibility: hidden;
+}
+.qc-tab:hover .qc-tab-close,
+.qc-tab.active .qc-tab-close { visibility: visible; }
+.qc-tab-close:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink); }
+
 /* ChatView fills the panel below the header. */
 .qc-panel .chat { flex: 1; min-height: 0; }
 
