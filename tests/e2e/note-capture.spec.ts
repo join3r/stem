@@ -54,7 +54,7 @@ test('the /note prefix triggers too, but /notes and mid-message // do not', asyn
   await input.fill('');
 });
 
-test('Escape exits note mode without saving; the Note button toggles it', async ({ mainWindow }) => {
+test('Escape exits note mode without saving; the / menu enters it', async ({ mainWindow }) => {
   const input = composer(mainWindow);
   await input.pressSequentially('//not worth keeping');
   await expect(mainWindow.getByText('Note to memory')).toBeVisible();
@@ -66,10 +66,12 @@ test('Escape exits note mode without saving; the Note button toggles it', async 
   expect(await readNotes(mainWindow)).toHaveLength(0);
   await input.fill('');
 
-  // The discoverable toggle: same mode, no prefix typing.
-  await mainWindow.getByRole('button', { name: 'Note', exact: true }).click();
+  // The discoverable route: pick it from the `/` menu, no prefix to remember.
+  await input.pressSequentially('/no');
+  await input.press('Enter');
   await expect(mainWindow.getByText('Note to memory')).toBeVisible();
-  await mainWindow.getByRole('button', { name: 'Note', exact: true }).click();
+  await expect(input).toHaveValue('');
+  await input.press('Escape');
   await expect(mainWindow.getByText('Note to memory')).not.toBeVisible();
 });
 

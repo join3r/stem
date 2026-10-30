@@ -1245,15 +1245,15 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  width: 76px;
+  width: 56px;
   height: 22px;
   margin-left: var(--sp-2);
 }
 /* Rail inset by half a stop's width so its ends sit under the first and last dot. */
 .eff-rail {
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: 5.5px;
+  right: 5.5px;
   top: 50%;
   height: 3px;
   margin-top: -1.5px;
@@ -1275,7 +1275,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .eff-stop {
   position: relative;
   z-index: 1;
-  width: 15px;
+  width: 11px;
   height: 22px;
   display: flex;
   align-items: center;
@@ -1297,15 +1297,14 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 3px 7px 3px var(--sp-4);
+  padding: 3px 6px 3px var(--sp-3);
   border-radius: var(--radius);
   cursor: pointer;
   white-space: nowrap;
 }
 .eff-model:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .eff-model:disabled { opacity: 0.5; cursor: default; }
-.eff-model-effort { font-weight: 500; }
-.eff-model-name { color: var(--muted); max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.eff-model-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 .eff-model-chevron { color: var(--muted); flex: none; }
 
 /* ---- Keyboard-shortcut hints (hold ⌘ to reveal) ---- */

@@ -25,7 +25,7 @@ import { clearDraft, readDraft, writeDraft } from './draft-store';
 import { dismissLearnNotice, readLearn, startLearn, subscribeLearn } from './learn-store';
 import { dismissCompactNotice, readCompact, startCompact, subscribeCompact } from './compact-store';
 import { consumePrefill, consumeSheet, dismissRecorderError, dropPractice, readRecorder, subscribeRecorder } from './recorder-store';
-import { RECORDER_ALPHA_TITLE, RecordSheet } from './RecordSheet';
+import { RecordSheet } from './RecordSheet';
 import { DictateButton, useDictation } from './dictation';
 import { VoiceButton, type VoiceCall } from './voice';
 
@@ -249,7 +249,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [pendingRestore, draft, attachments, onRestoreConsumed]);
 
   // `/note` / `//` quick-note capture: saves the draft straight to memory, no turn.
-  const { noteMode, flash: noteFlash, enterNoteMode, exitNoteMode, toggleNoteMode, saveNote } = useNoteMode();
+  const { noteMode, flash: noteFlash, enterNoteMode, exitNoteMode, saveNote } = useNoteMode();
 
   // The `/` menu. Only commands this composer can run are offered: `/pin` needs
   // a board, `/learn` a thread. Escape hides it until the draft stops starting
@@ -577,37 +577,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             <Globe size={13} /> Web
           </button>
         </div>
-        <div className="seg-ctl compact" role="group" aria-label="Memory note">
-          <button
-            type="button"
-            className={noteMode ? 'active' : ''}
-            onClick={toggleNoteMode}
-            title="Save a note to memory — or type /note or //"
-          >
-            <NotebookPen size={13} /> Note
-          </button>
-        </div>
-        {/* Recording is the person's own work, not a turn: like Note it is not
-            disabled while a turn runs. While recording for this chat it stops. */}
-        {threadId && CAN_RECORD && (
+        {/* Note and Record live in the `/` menu (and ⌃⌥R) so the row fits on one
+            line in a narrow window; only a recording running for this chat earns
+            a chip here, as its Stop button. */}
+        {threadId && CAN_RECORD && recordingHere && (
           <div className="seg-ctl compact" role="group" aria-label="Record a skill">
             <button
               type="button"
-              className={recordingHere ? 'active record-chip' : 'record-chip'}
-              disabled={recorder.state.phase === 'authoring' || (recorder.state.phase !== 'idle' && !recordingHere)}
-              onClick={() => (recordingHere ? void window.stem.stopRecording() : setRecordSheet({ draftId: null }))}
-              title={
-                recordingHere
-                  ? 'Stop recording and write the skill (⌃⌥R)'
-                  : 'Show Stem a task on your Mac — it writes the skill (/record, ⌃⌥R)'
-              }
+              className="active record-chip"
+              onClick={() => void window.stem.stopRecording()}
+              title="Stop recording and write the skill (⌃⌥R)"
             >
-              <span className="record-dot" aria-hidden="true" /> {recordingHere ? 'Stop' : 'Record'}
-              {!recordingHere && (
-                <span className="beta-pill alpha-pill" aria-hidden="true" title={RECORDER_ALPHA_TITLE}>
-                  Alpha
-                </span>
-              )}
+              <span className="record-dot" aria-hidden="true" /> Stop
             </button>
           </div>
         )}
