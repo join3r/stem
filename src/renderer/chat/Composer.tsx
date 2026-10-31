@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -30,6 +31,8 @@ import { DictateButton, useDictation } from './dictation';
 import { VoiceButton, type VoiceCall } from './voice';
 
 const MAX_COMPOSER_HEIGHT = 180;
+/** Last `data-squeeze` step of the controls row; see `fitControls`. */
+const SQUEEZE_MAX = 5;
 
 // How long a `/learn` outcome stays up once its chat is on screen. Much longer
 // than the note flash: main writes these as full sentences explaining what was
@@ -203,6 +206,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     onInterrupt();
   }, [onInterrupt]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
 
   // Stem's offline mode is read-only by decision, not by accident: there is no
   // local brain to answer with and no outbox to hold what you typed, so a
@@ -487,6 +491,44 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (running) requestStop();
   });
 
+  // Keep the controls row on one line by giving things up in order rather than
+  // wrapping: the context meter goes first (its figures are a glance, not a
+  // control), then Fast/Web drop to bare icons, then the model name shortens and
+  // finally goes, leaving the chevron that still opens the picker. Only past the
+  // last step does the row wrap. Steps are tried smallest-first on every width
+  // change and whenever the row's content changes.
+  const fitControls = useCallback(() => {
+    const el = controlsRef.current;
+    if (!el) return;
+    for (let level = 0; level <= SQUEEZE_MAX; level++) {
+      el.dataset.squeeze = String(level);
+      if (el.scrollWidth <= el.clientWidth) return;
+    }
+  }, []);
+  useLayoutEffect(() => {
+    const el = controlsRef.current;
+    if (!el) return;
+    let width = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      // Squeezing changes heights too; only a new width is worth re-fitting.
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      fitControls();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fitControls]);
+  const messageCount = messages.length;
+  useLayoutEffect(fitControls, [
+    fitControls,
+    model?.id,
+    model?.displayName,
+    hasFast,
+    recordingHere,
+    showContextMeter,
+    messageCount
+  ]);
+
   // Hover labels carry their keycap — but only where the keycap is real. This is
   // also Quick Chat's composer, and that window mounts no shortcuts provider, so
   // the registrations above are no-ops there and a tooltip promising ⌘U would be
@@ -505,7 +547,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   return (
     <div className="composer">
-      <div className="composer-controls">
+      <div className="composer-controls" ref={controlsRef}>
         {/* The ⌘E keycap sits on the slider, not the stops: it cycles the whole
             control rather than selecting any one level, and the stops carry only
             their level name. The label beside it opens the model picker. */}
@@ -536,7 +578,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 'toggle-speed'
               )}
             >
-              <Zap size={13} /> Fast
+              <Zap size={13} />
+              <span className="ctl-label">Fast</span>
             </button>
           </div>
         )}
@@ -574,7 +617,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 : 'Web search off — Stem answers from what it already knows'
             }
           >
-            <Globe size={13} /> Web
+            <Globe size={13} />
+            <span className="ctl-label">Web</span>
           </button>
         </div>
         {/* Note and Record live in the `/` menu (and ⌃⌥R) so the row fits on one
