@@ -26,13 +26,13 @@ import { clearDraft, readDraft, writeDraft } from './draft-store';
 import { dismissLearnNotice, readLearn, startLearn, subscribeLearn } from './learn-store';
 import { dismissCompactNotice, readCompact, startCompact, subscribeCompact } from './compact-store';
 import { consumePrefill, consumeSheet, dismissRecorderError, dropPractice, readRecorder, subscribeRecorder } from './recorder-store';
-import { RecordSheet } from './RecordSheet';
+import { RECORDER_ALPHA_TITLE, RecordSheet } from './RecordSheet';
 import { DictateButton, useDictation } from './dictation';
 import { VoiceButton, type VoiceCall } from './voice';
 
 const MAX_COMPOSER_HEIGHT = 180;
 /** Last `data-squeeze` step of the controls row; see `fitControls`. */
-const SQUEEZE_MAX = 5;
+const SQUEEZE_MAX = 6;
 
 // How long a `/learn` outcome stays up once its chat is on screen. Much longer
 // than the note flash: main writes these as full sentences explaining what was
@@ -253,7 +253,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [pendingRestore, draft, attachments, onRestoreConsumed]);
 
   // `/note` / `//` quick-note capture: saves the draft straight to memory, no turn.
-  const { noteMode, flash: noteFlash, enterNoteMode, exitNoteMode, saveNote } = useNoteMode();
+  const { noteMode, flash: noteFlash, enterNoteMode, exitNoteMode, toggleNoteMode, saveNote } = useNoteMode();
 
   // The `/` menu. Only commands this composer can run are offered: `/pin` needs
   // a board, `/learn` a thread. Escape hides it until the draft stops starting
@@ -493,7 +493,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   // Keep the controls row on one line by giving things up in order rather than
   // wrapping: the context meter goes first (its figures are a glance, not a
-  // control), then Fast/Web drop to bare icons, then the model name shortens and
+  // control), then Fast/Web/Note/Record drop to bare icons, then Note and an idle
+  // Record go (both stay in the `/` menu), then the model name shortens and
   // finally goes, leaving the chevron that still opens the picker. Only past the
   // last step does the row wrap. Steps are tried smallest-first on every width
   // change and whenever the row's content changes.
@@ -524,6 +525,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     model?.id,
     model?.displayName,
     hasFast,
+    threadId,
     recordingHere,
     showContextMeter,
     messageCount
@@ -621,18 +623,40 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             <span className="ctl-label">Web</span>
           </button>
         </div>
-        {/* Note and Record live in the `/` menu (and ⌃⌥R) so the row fits on one
-            line in a narrow window; only a recording running for this chat earns
-            a chip here, as its Stop button. */}
-        {threadId && CAN_RECORD && recordingHere && (
-          <div className="seg-ctl compact" role="group" aria-label="Record a skill">
+        <div className="seg-ctl compact ctl-optional" role="group" aria-label="Memory note">
+          <button
+            type="button"
+            className={noteMode ? 'active' : ''}
+            onClick={toggleNoteMode}
+            title="Save a note to memory — or type /note or //"
+          >
+            <NotebookPen size={13} />
+            <span className="ctl-label">Note</span>
+          </button>
+        </div>
+        {/* Recording is the person's own work, not a turn: like Note it is not
+            disabled while a turn runs. While recording for this chat it stops,
+            and that Stop chip is never squeezed away. */}
+        {threadId && CAN_RECORD && (
+          <div className={`seg-ctl compact${recordingHere ? '' : ' ctl-optional'}`} role="group" aria-label="Record a skill">
             <button
               type="button"
-              className="active record-chip"
-              onClick={() => void window.stem.stopRecording()}
-              title="Stop recording and write the skill (⌃⌥R)"
+              className={recordingHere ? 'active record-chip' : 'record-chip'}
+              disabled={recorder.state.phase === 'authoring' || (recorder.state.phase !== 'idle' && !recordingHere)}
+              onClick={() => (recordingHere ? void window.stem.stopRecording() : setRecordSheet({ draftId: null }))}
+              title={
+                recordingHere
+                  ? 'Stop recording and write the skill (⌃⌥R)'
+                  : 'Show Stem a task on your Mac — it writes the skill (/record, ⌃⌥R)'
+              }
             >
-              <span className="record-dot" aria-hidden="true" /> Stop
+              <span className="record-dot" aria-hidden="true" />
+              <span className="ctl-label">{recordingHere ? 'Stop' : 'Record'}</span>
+              {!recordingHere && (
+                <span className="beta-pill alpha-pill ctl-label" aria-hidden="true" title={RECORDER_ALPHA_TITLE}>
+                  Alpha
+                </span>
+              )}
             </button>
           </div>
         )}

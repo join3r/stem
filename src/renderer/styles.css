@@ -1192,22 +1192,29 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .composer-controls { display: flex; flex-wrap: nowrap; gap: var(--sp-4); margin: 0 auto var(--sp-4); width: 100%; min-width: 0; }
 .composer-controls > * { flex: none; }
 /* Squeeze steps, set by the composer when the row would overflow (see fitControls):
-   1 drops the context meter, 2 strips Fast/Web to icons, 3 shortens the model
-   name, 4 hides it behind its chevron, 5 gives up and wraps. */
+   1 drops the context meter, 2 strips Fast/Web/Note/Record to icons, 3 drops Note
+   and an idle Record (both stay in the / menu), 4 shortens the model name, 5 hides
+   it behind its chevron, 6 gives up and wraps. */
 .composer-controls[data-squeeze='1'] .context-meter,
 .composer-controls[data-squeeze='2'] .context-meter,
 .composer-controls[data-squeeze='3'] .context-meter,
 .composer-controls[data-squeeze='4'] .context-meter,
-.composer-controls[data-squeeze='5'] .context-meter { display: none; }
+.composer-controls[data-squeeze='5'] .context-meter,
+.composer-controls[data-squeeze='6'] .context-meter { display: none; }
 .composer-controls[data-squeeze='2'] .ctl-label,
 .composer-controls[data-squeeze='3'] .ctl-label,
 .composer-controls[data-squeeze='4'] .ctl-label,
-.composer-controls[data-squeeze='5'] .ctl-label { display: none; }
+.composer-controls[data-squeeze='5'] .ctl-label,
+.composer-controls[data-squeeze='6'] .ctl-label { display: none; }
+.composer-controls[data-squeeze='3'] .ctl-optional,
+.composer-controls[data-squeeze='4'] .ctl-optional,
+.composer-controls[data-squeeze='5'] .ctl-optional,
+.composer-controls[data-squeeze='6'] .ctl-optional { display: none; }
 .ctl-label { margin-left: 4px; }
-.composer-controls[data-squeeze='3'] .eff-model-name { max-width: 64px; }
-.composer-controls[data-squeeze='4'] .eff-model-name,
-.composer-controls[data-squeeze='5'] .eff-model-name { display: none; }
-.composer-controls[data-squeeze='5'] { flex-wrap: wrap; }
+.composer-controls[data-squeeze='4'] .eff-model-name { max-width: 64px; }
+.composer-controls[data-squeeze='5'] .eff-model-name,
+.composer-controls[data-squeeze='6'] .eff-model-name { display: none; }
+.composer-controls[data-squeeze='6'] { flex-wrap: wrap; }
 
 /* Context-fill meter: pushed to the right edge of the controls row. Mini bar + compact
    token text; the fill color shifts neutral → amber → red via .warn/.danger as it nears

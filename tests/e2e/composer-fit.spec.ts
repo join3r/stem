@@ -1,5 +1,5 @@
 // The composer's controls row gives things up in order as the window narrows
-// (context meter, then Fast/Web labels, then the model name) instead of
+// (context meter, then button labels, then Note/Record, then the model name) instead of
 // wrapping onto a second line. Layout is a DOM fact a unit test cannot check.
 import { test, expect } from './electron';
 import type { ElectronApplication, Page } from '@playwright/test';
@@ -24,6 +24,9 @@ test('the controls row squeezes onto one line instead of wrapping', async ({ ele
   await setWidth(electronApp, 1400);
   await expect.poll(() => squeeze(mainWindow)).toBe('0');
   await expect(mainWindow.locator('.ctl-label').first()).toBeVisible();
+  // With room to spare, Note sits in the row with its label.
+  const note = mainWindow.getByRole('button', { name: 'Note', exact: true });
+  await expect(note).toBeVisible();
 
   // Narrow enough to lose the meter and the labels, but the row stays one line.
   for (const width of [1000, 900, 800, 720, 660, 620]) {
@@ -36,8 +39,12 @@ test('the controls row squeezes onto one line instead of wrapping', async ({ ele
   // Fast/Web still reachable as icons, by their tooltip.
   await expect(mainWindow.getByRole('button', { name: /Web search/ })).toBeVisible();
 
+  // Note gives way before the model name does; it stays in the `/` menu.
+  await expect(mainWindow.getByRole('button', { name: /Save a note to memory/ })).toBeHidden();
+
   // Widening brings everything back.
   await setWidth(electronApp, 1400);
   await expect.poll(() => squeeze(mainWindow)).toBe('0');
   await expect(mainWindow.locator('.ctl-label').first()).toBeVisible();
+  await expect(note).toBeVisible();
 });
