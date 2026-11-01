@@ -258,6 +258,6 @@ export function registerMemoryIpc(deps: IpcDeps): void {
       worked: r.updated,
       detail: r.updated ? 'Rewrote the summary' : 'Summary unchanged'
     }));
-    return { profile: getUserProfile(), updated: result.updated, ...(result.reason ? { reason: result.reason } : {}) };
+    return { profile: await getUserProfile(), updated: result.updated, ...(result.reason ? { reason: result.reason } : {}) };
   });
 }

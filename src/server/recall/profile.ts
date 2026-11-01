@@ -1,4 +1,5 @@
 import { degrade } from '../degrade';
+import { readStore } from '../workspace/connected-folders';
 import { isRecallEnabled } from '../workspace/memory';
 import type { LlmClient } from './llm';
 import { recallStore, type Fact, type StoredMessage } from './store';
@@ -16,7 +17,9 @@ import type { UserProfile } from '../../shared/types';
 // - The facts. Sensitive facts stay out: they reach a chat only when its
 //   message is about them, and a summary sent with every chat would undo that.
 //   Facts learned from connected folders stay out too — they describe
-//   documents, not the person.
+//   documents, not the person — except the Claude Code folder's: those come
+//   from the user's own sessions and memory notes there, so they are about
+//   the user's work like facts from chats are.
 // - The user's own recent chat messages, for what facts deliberately leave
 //   out: how they write (language, length, tone), how they work with the
 //   assistant, and what has been on their mind. Only role 'user' rows are
@@ -108,16 +111,26 @@ export function isUserProfileEnabled(): boolean {
   return recallStore.getMeta(ENABLED_KEY) !== 'false';
 }
 
-export function setUserProfileEnabled(enabled: boolean): UserProfile {
+export function setUserProfileEnabled(enabled: boolean): Promise<UserProfile> {
   recallStore.setMeta(ENABLED_KEY, enabled ? 'true' : 'false');
   return getUserProfile();
 }
 
 /** The facts the summary is written from — see the header for what stays out. */
-export function profileInputFacts(): Fact[] {
+export async function profileInputFacts(): Promise<Fact[]> {
+  const { folders } = await readStore();
+  claudeFolderSources = new Set(folders.filter((f) => f.kind === 'claude').map((f) => `folder:${f.id}`));
+  return knownInputFacts();
+}
+
+/** Fact sources of the Claude Code folders, as of the last folder-registry read. */
+let claudeFolderSources: ReadonlySet<string> = new Set();
+
+/** profileInputFacts without re-reading the folder registry, for writes that must not await. */
+function knownInputFacts(): Fact[] {
   return recallStore
     .getInjectableFacts()
-    .filter((f) => f.sensitivity !== 'sensitive' && !f.source.startsWith('folder:'));
+    .filter((f) => f.sensitivity !== 'sensitive' && (!f.source.startsWith('folder:') || claudeFolderSources.has(f.source)));
 }
 
 function changeCount(record: ProfileRecord, facts: Fact[]): number {
@@ -141,9 +154,9 @@ function enoughChat(afterId: number): boolean {
   return v.messages >= PROFILE_CHAT_MESSAGES || v.chars >= PROFILE_CHAT_CHARS;
 }
 
-export function getUserProfile(): UserProfile {
+export async function getUserProfile(): Promise<UserProfile> {
+  const facts = await profileInputFacts();
   const record = readRecord();
-  const facts = profileInputFacts();
   return {
     enabled: isUserProfileEnabled(),
     text: record?.text ?? '',
@@ -156,9 +169,9 @@ export function getUserProfile(): UserProfile {
 }
 
 /** True when the background pass should rewrite the summary now. */
-export function userProfileDue(): boolean {
+export async function userProfileDue(): Promise<boolean> {
   if (!isRecallEnabled() || !isUserProfileEnabled()) return false;
-  const facts = profileInputFacts();
+  const facts = await profileInputFacts();
   const record = readRecord();
   if (enoughChat(chatCursorOf(record))) return true;
   if (facts.length < MIN_PROFILE_FACTS) return false;
@@ -167,7 +180,7 @@ export function userProfileDue(): boolean {
 }
 
 /** Save the user's own wording. Empty clears the summary; the next pass writes a fresh one. */
-export function saveUserProfileText(text: string): UserProfile {
+export async function saveUserProfileText(text: string): Promise<UserProfile> {
   const trimmed = text.trim().slice(0, MAX_PROFILE_CHARS);
   const record = readRecord();
   if (!trimmed) {
@@ -181,7 +194,8 @@ export function saveUserProfileText(text: string): UserProfile {
     factsGeneration: recallStore.getFactsGeneration(),
     // A first summary typed by hand counts every current fact and message as
     // covered: the user wrote it knowing them, so the next rewrite only adds news.
-    facts: record?.facts ?? Object.fromEntries(profileInputFacts().map((f) => [String(f.id), f.text])),
+    // Written before anything awaits, so a reply already in flight sees the new rev (runBuild).
+    facts: record?.facts ?? Object.fromEntries(knownInputFacts().map((f) => [String(f.id), f.text])),
     chatCursor: record ? record.chatCursor : recallStore.userMessageVolumeAfter(0).latestId,
     episodicGeneration: record ? record.episodicGeneration : recallStore.getEpisodicGeneration(),
     rev: (record?.rev ?? 0) + 1
@@ -418,7 +432,7 @@ export function buildUserProfile(llm: LlmClient, opts: { full?: boolean } = {}):
 
 async function runBuild(llm: LlmClient, opts: { full?: boolean }): Promise<ProfileBuildResult> {
   if (!isRecallEnabled() || !isUserProfileEnabled()) return { updated: false, mode: 'skipped', reason: 'disabled' };
-  const facts = profileInputFacts();
+  const facts = await profileInputFacts();
   const generation = recallStore.getFactsGeneration();
   const episodicGeneration = recallStore.getEpisodicGeneration();
   const record = readRecord();

@@ -180,7 +180,7 @@ export function initRecallTasks(deps: {
         }
         // The user summary, last: it reads the facts this cycle just settled.
         // Rewritten only once enough of them changed (profile.ts).
-        if (userProfileDue()) {
+        if (await userProfileDue()) {
           const r = await activity.track('memory.profile', 'Updating your summary', () => buildUserProfile(recallLlm), (r) => ({
             worked: r.updated,
             detail: r.updated ? (r.mode === 'full' ? 'Wrote your summary' : 'Revised your summary') : 'Summary unchanged'
