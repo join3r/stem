@@ -1429,6 +1429,16 @@ export interface McpServerDetails {
 /** Stands in for a stored secret in McpServerDetails; see there. */
 export const MCP_SECRET_MASK = '••••••••';
 
+/**
+ * Whether a stored MCP env var or header holds a credential, by its name: a
+ * value cannot say what it is, and a name that says "token" is the one
+ * convention every MCP server's README follows. Values under other names
+ * (NODE_OPTIONS, PATH, a URL) are shown, because they change what runs.
+ */
+export function looksLikeMcpSecret(key: string): boolean {
+  return /token|secret|passw|credential|api[_-]?key|private|authorization|cookie|bearer/i.test(key);
+}
+
 export interface McpLoginResult {
   ok: boolean;
   error?: string;
@@ -2486,11 +2496,38 @@ export interface McpHostLocalState {
 export interface McpAdminProposal {
   id: number | string;
   threadId: string;
-  action: 'add' | 'remove';
+  action: 'add' | 'remove' | 'edit';
   /** Present for `add`: the server the assistant wants to configure. */
   input?: McpServerInput;
-  /** Present for `remove` (and as a label for `add`): the server name. */
+  /** The server name: what to remove or edit, and the label for an add. */
   name?: string;
+  /** Present for `edit`: only what changes. Everything it leaves out stays as stored. */
+  patch?: McpServerPatch;
+  /** Present for `edit`: how the server is reached now, so the card can show old → new. */
+  before?: {
+    command?: string;
+    args?: string[];
+    url?: string;
+    /** Names of stored env vars / headers (and the OAuth client secret) the edit keeps. */
+    keptKeys?: string[];
+  };
+}
+
+/**
+ * A change to one existing MCP server, made by the assistant's `edit_mcp_server`.
+ * An add replaces the whole entry, and the assistant cannot read a stored token
+ * back, so before this it could not change a command without wiping the token
+ * beside it. Omitted fields keep their stored values; `env` / `headers` set only
+ * the keys they name, and `removeEnv` / `removeHeaders` drop keys.
+ */
+export interface McpServerPatch {
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  removeEnv?: string[];
+  removeHeaders?: string[];
 }
 
 /**

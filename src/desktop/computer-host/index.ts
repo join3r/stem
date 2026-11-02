@@ -376,6 +376,26 @@ export function createComputerHost(deps: ComputerHostDeps): ComputerHost {
     };
   }
 
+  /**
+   * Every helper leaves Stem's own windows out (the agent must never click its
+   * own approval cards), and says nothing about it. A model reading the list then
+   * concludes Stem is not open — the Fio chat told the user "Stem has no window"
+   * while it was on screen, after an `open -a Stem` that did nothing. Say it.
+   */
+  function aboutStemItself(action: DeviceComputerRequest['action'], result: DeviceComputerResult): DeviceComputerResult {
+    const why =
+      "Stem's own windows are never listed and cannot be controlled with this tool, so this says nothing about whether " +
+      "Stem is open (it is: you are talking through it). Change Stem's settings with your own tools (for an MCP server, " +
+      'edit_mcp_server), or tell the user exactly what to click.';
+    if (action.kind === 'list_windows' && result.ok) {
+      return { ...result, text: result.text ? `${result.text}\n${why}` : why };
+    }
+    if (action.kind === 'select_window' && !result.ok && action.app !== undefined && /\bstem\b/i.test(action.app)) {
+      return { ok: false, error: why };
+    }
+    return result;
+  }
+
   /** A reply that names the run's window (or its absence) relabels the banner. */
   function noteTarget(r: Run, result: DeviceComputerResult): void {
     if (!result.ok || result.target === undefined || run !== r) return;
@@ -430,7 +450,7 @@ export function createComputerHost(deps: ComputerHostDeps): ComputerHost {
       };
       r!.inFlight = { requestId: request.requestId, fail: done };
       void r!.helper.call(cmd, fields, timeout).then((reply) => {
-        let result = fromReply(reply);
+        let result = aboutStemItself(request.action, fromReply(reply));
         noteTarget(r!, result);
         if (platformNote && result.ok && !r!.noted) {
           r!.noted = true;

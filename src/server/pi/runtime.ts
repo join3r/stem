@@ -27,6 +27,7 @@ import type {
   McpAdminProposal,
   McpLoginResult,
   McpServerInput,
+  McpServerPatch,
   MessageAttachment,
   MessageMeta,
   ModelServiceTier,
@@ -37,6 +38,7 @@ import type {
   StartTurnInput,
   StartTurnResult
 } from '../../shared/types';
+import { looksLikeMcpSecret } from '../../shared/types';
 import {
   API_KEY_PROVIDER_IDS,
   AUTH_PROVIDER_IDS,
@@ -4670,7 +4672,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * resolveAdminApproval answers it once the user decides (or a timeout declines).
    */
   private handleAdminApproval(worker: PiWorker, id: string, message: string | undefined): void {
-    let proposal: { action?: string; name?: string; input?: McpServerInput } | null = null;
+    let proposal: {
+      action?: string;
+      name?: string;
+      input?: McpServerInput;
+      patch?: McpServerPatch;
+      before?: McpAdminProposal['before'];
+    } | null = null;
     try {
       proposal = JSON.parse(message ?? '{}');
     } catch (e) {
@@ -4678,7 +4686,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // told — indistinguishable from the user having refused the change.
       degrade('pi.mcpAdmin', 'declined an MCP change whose proposal did not parse', e);
     }
-    if (!proposal || (proposal.action !== 'add' && proposal.action !== 'remove')) {
+    if (!proposal || (proposal.action !== 'add' && proposal.action !== 'remove' && proposal.action !== 'edit')) {
       worker.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
       return;
     }
@@ -4688,12 +4696,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       threadId: worker.currentTurn?.threadId ?? '',
       action: proposal.action,
       input: proposal.input,
-      name: proposal.name
+      name: proposal.name,
+      ...(proposal.action === 'edit' ? { patch: proposal.patch, before: proposal.before } : {})
     };
     // Keep the full mutation (including credentials) only in main-memory for the
     // accepted writer. Renderer approval cards need presence/keys, never values.
     const requestProcess = worker.proc;
     this.adminApprovalProposals.set(id, { proposal: card, process: requestProcess });
+    // Mask only what is named like a credential. Anything else is shown, because
+    // NODE_OPTIONS or PATH change what the approved command actually runs.
+    const masked = (values: Record<string, string> | undefined) =>
+      values
+        ? Object.fromEntries(Object.entries(values).map(([key, v]) => [key, looksLikeMcpSecret(key) ? '********' : v]))
+        : undefined;
     const displayInput = card.input
       ? {
           ...card.input,
@@ -4701,12 +4716,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           ...(card.input.headers
             ? { headers: Object.fromEntries(Object.keys(card.input.headers).map((key) => [key, '********'])) }
             : {}),
-          ...(card.input.env
-            ? { env: Object.fromEntries(Object.keys(card.input.env).map((key) => [key, '********'])) }
-            : {})
+          ...(card.input.env ? { env: masked(card.input.env) } : {})
         }
       : undefined;
-    this.emitEvent('mcp/admin/approvalRequest', { ...card, input: displayInput });
+    const displayPatch = card.patch
+      ? {
+          ...card.patch,
+          ...(card.patch.env ? { env: masked(card.patch.env) } : {}),
+          ...(card.patch.headers ? { headers: masked(card.patch.headers) } : {})
+        }
+      : undefined;
+    this.emitEvent('mcp/admin/approvalRequest', {
+      ...card,
+      input: displayInput,
+      ...(displayPatch ? { patch: displayPatch } : {})
+    });
     setTimeout(() => {
       if (this.settleAdminApproval(id)) {
         requestProcess?.send({ type: 'extension_ui_response', id, confirmed: false });

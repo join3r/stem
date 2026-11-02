@@ -1,9 +1,11 @@
 import { cleanAppList, mcpServersForApp, windowMcpSuggestion } from './app-match';
 import {
   MCP_SECRET_MASK,
+  looksLikeMcpSecret,
   type McpServerDetails,
   type McpServerInput,
   type McpServerLocation,
+  type McpServerPatch,
   type McpServerSummary,
   type WindowMcpSuggestion
 } from '../../shared/types';
@@ -258,14 +260,7 @@ export async function addMcpServer(input: McpServerInput): Promise<McpServerSumm
   });
 }
 
-/**
- * Whether a stored value under this name is one to keep off the wire. Names,
- * not values, because a value cannot say what it is — and a name that says
- * "token" is the one convention every MCP server's README follows.
- */
-function looksSecret(key: string): boolean {
-  return /token|secret|passw|credential|api[_-]?key|private|authorization|cookie|bearer/i.test(key);
-}
+const looksSecret = looksLikeMcpSecret;
 
 function masked(values: Record<string, string> | undefined): Record<string, string> {
   return Object.fromEntries(
@@ -351,6 +346,44 @@ export async function updateMcpServer(input: McpServerInput): Promise<McpServerS
     };
     if (mcpServerAuthIdentity(previous) !== mcpServerAuthIdentity(next)) await deleteOAuthToken(name);
     config.servers[name] = next;
+  });
+}
+
+/**
+ * Apply the assistant's `edit_mcp_server` patch (see McpServerPatch). Built on
+ * updateMcpServer so an edit keeps exactly what the panel's Edit keeps: name,
+ * location, apps, disabled, trust, and the OAuth token unless the URL, headers or
+ * OAuth client changed. Every stored env/header value the patch does not name is
+ * sent as MCP_SECRET_MASK, which updateMcpServer swaps for the stored value
+ * inside its config lock — so a token written between the card and the approval
+ * is the one kept, not a stale copy.
+ */
+export async function editMcpServer(name: string, patch: McpServerPatch): Promise<McpServerSummary[]> {
+  const current = (await readMcpConfig()).servers[name];
+  if (!current) throw new Error(`No MCP server named "${name}".`);
+  const kept = (
+    stored: Record<string, string> | undefined,
+    set: Record<string, string> | undefined,
+    remove: string[] | undefined
+  ): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const key of Object.keys(stored ?? {})) out[key] = MCP_SECRET_MASK;
+    Object.assign(out, set ?? {});
+    for (const key of remove ?? []) delete out[key];
+    return out;
+  };
+  const transport = current.url ? 'http' : 'stdio';
+  return updateMcpServer({
+    name,
+    transport,
+    command: patch.command ?? current.command,
+    args: patch.args ?? (Array.isArray(current.args) ? current.args : []),
+    url: patch.url ?? current.url,
+    env: kept(current.env, patch.env, patch.removeEnv),
+    headers: kept(current.headers, patch.headers, patch.removeHeaders),
+    oauthClientId: current.oauthClientId,
+    oauthClientSecret: current.oauthClientSecret ? MCP_SECRET_MASK : undefined,
+    oauthScope: current.oauthScope
   });
 }
 

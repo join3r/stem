@@ -118,11 +118,30 @@ describe('approval lifecycle', () => {
       runtime.resolveInstructionsApproval('already-expired', true, persistInstructions)
     ).resolves.toBe(false);
     expect(persistInstructions).toHaveBeenCalledOnce();
+    internal.handleAdminApproval(worker, 'edit-admin', JSON.stringify({
+      action: 'edit',
+      name: 'fio',
+      patch: { command: '/opt/fio-node', env: { FIO_API_TOKEN: 'renderer-must-not-see-this', NODE_OPTIONS: '--require=/x.js' } },
+      before: { command: '/usr/local/bin/node', args: [] }
+    }));
+    expect(events.filter((event) => event.method === 'mcp/admin/approvalRequest').at(-1)?.params).toEqual(
+      expect.objectContaining({
+        action: 'edit',
+        // A credential stays masked; a value that changes what runs is shown.
+        patch: { command: '/opt/fio-node', env: { FIO_API_TOKEN: '********', NODE_OPTIONS: '--require=/x.js' } },
+        before: { command: '/usr/local/bin/node', args: [] }
+      })
+    );
+    await expect(runtime.resolveAdminApproval('edit-admin', true, persistAdmin)).resolves.toBe(true);
+    expect(persistAdmin).toHaveBeenLastCalledWith(expect.objectContaining({
+      action: 'edit',
+      patch: expect.objectContaining({ env: expect.objectContaining({ FIO_API_TOKEN: 'renderer-must-not-see-this' }) })
+    }));
     internal.handleAdminApproval(worker, 'expired-admin', JSON.stringify({ action: 'remove', name: 'old-server' }));
     await vi.advanceTimersByTimeAsync(120_001);
 
     expect(events.filter((event) => event.method.endsWith('/approvalResolved')).map((event) => event.params))
-      .toEqual([{ id: 'answered-admin' }, { id: 'answered-instructions' }, { id: 'expired-admin' }]);
+      .toEqual([{ id: 'answered-admin' }, { id: 'answered-instructions' }, { id: 'edit-admin' }, { id: 'expired-admin' }]);
     expect(sent).toContainEqual({
       type: 'extension_ui_response',
       id: 'answered-instructions',

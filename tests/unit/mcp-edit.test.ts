@@ -9,7 +9,15 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { rmSync } from 'node:fs';
-import { addMcpServer, getMcpServer, mcpServersForAppName, setMcpServerApps, updateMcpServer } from '../../src/server/pi/mcp';
+import {
+  addMcpServer,
+  editMcpServer,
+  getMcpServer,
+  mcpServersForAppName,
+  setMcpServerApps,
+  setMcpServerEnabled,
+  updateMcpServer
+} from '../../src/server/pi/mcp';
 import {
   mcpServerAuthIdentity,
   piMcpOAuthPath,
@@ -207,5 +215,63 @@ describe('Works with apps ("Ask about this window")', () => {
     await addMcpServer({ name: 'slack', transport: 'http', url: 'https://mcp.slack.test/mcp' });
     expect(await mcpServersForAppName('Slack', null, ['slack'])).toEqual(['slack']);
     expect(await mcpServersForAppName('Slack', null, [])).toEqual([]);
+  });
+});
+
+// The assistant's edit_mcp_server. The case that needed it: a pinned Node binary
+// moved, the fix was a new command, and the only assistant tool was an add that
+// would have dropped the bank token stored beside it.
+describe("the assistant's edit (edit_mcp_server)", () => {
+  it('changes the command and keeps every stored env value it was not given', async () => {
+    await addMcpServer({
+      name: 'fio',
+      transport: 'stdio',
+      command: '/usr/local/bin/node',
+      args: ['launch.mjs', 'abc'],
+      env: { FIO_API_TOKEN: 'bank-secret', NODE_OPTIONS: '' }
+    });
+    await setMcpServerEnabled('fio', false);
+
+    await editMcpServer('fio', { command: '/var/lib/stem/state/tools/fio/fio-node' });
+
+    const stored = (await readMcpConfig()).servers.fio;
+    expect(stored.command).toBe('/var/lib/stem/state/tools/fio/fio-node');
+    expect(stored.args).toEqual(['launch.mjs', 'abc']);
+    expect(stored.env).toEqual({ FIO_API_TOKEN: 'bank-secret', NODE_OPTIONS: '' });
+    expect(stored.disabled).toBe(true);
+    expect(stored.trusted).toBe(true);
+  });
+
+  it('sets and removes single env keys', async () => {
+    await addMcpServer({ name: 'ha', transport: 'stdio', command: 'uvx', env: { A: '1', TOKEN: 's', B: '2' } });
+    await editMcpServer('ha', { env: { A: 'one', C: '3' }, removeEnv: ['B'] });
+    expect((await readMcpConfig()).servers.ha.env).toEqual({ A: 'one', TOKEN: 's', C: '3' });
+  });
+
+  it('keeps headers, the OAuth client and the signed-in token when only an unrelated field changes', async () => {
+    await addMcpServer({
+      name: 'slack',
+      transport: 'http',
+      url: 'https://mcp.slack.test/mcp',
+      headers: { Authorization: 'Bearer h' },
+      oauthClientId: 'client-1',
+      oauthClientSecret: 'client-secret'
+    });
+    await saveOAuthToken('slack', { access_token: 'live', token_type: 'Bearer' } as never);
+    await editMcpServer('slack', { headers: { 'X-Extra': 'v' } });
+    const stored = (await readMcpConfig()).servers.slack;
+    expect(stored.headers).toEqual({ Authorization: 'Bearer h', 'X-Extra': 'v' });
+    expect(stored.oauthClientSecret).toBe('client-secret');
+    // Headers are part of the auth identity, so a header change signs out — the
+    // same rule the panel's Edit applies.
+    expect((await readOAuthTokens()).slack).toBeUndefined();
+
+    await saveOAuthToken('slack', { access_token: 'live2', token_type: 'Bearer' } as never);
+    await editMcpServer('slack', { url: 'https://mcp.slack.test/mcp' });
+    expect((await readOAuthTokens()).slack).toBeDefined();
+  });
+
+  it('refuses a server that is not there', async () => {
+    await expect(editMcpServer('nope', { command: 'x' })).rejects.toThrow('No MCP server named "nope"');
   });
 });

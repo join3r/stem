@@ -2611,6 +2611,85 @@ function registerAdminTools(pi, cfgPath, turnContext) {
   });
 
   pi.registerTool({
+    name: 'edit_mcp_server',
+    label: 'Edit MCP server',
+    description:
+      'Change part of an existing MCP server and keep the rest — above all the tokens and headers already stored with it, which you cannot read back. Use this instead of add_mcp_server whenever the server already exists: an add replaces the whole entry and drops every env var and header you do not pass again. Pass only what changes; `env`/`headers` set just the keys you name, `removeEnv`/`removeHeaders` drop keys. Where the server runs, whether it is switched off, and a signed-in OAuth session (unless the URL or headers change) are kept. The user must approve the change in the app; after approval Stem reloads.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The exact name of the configured server to change.' },
+        command: { type: 'string', description: 'stdio only: the new executable to run.' },
+        args: { type: 'array', items: { type: 'string' }, description: 'stdio only: the new full argument list (replaces the old one).' },
+        url: { type: 'string', description: 'http only: the new endpoint.' },
+        env: { type: 'object', additionalProperties: { type: 'string' }, description: 'stdio only: environment variables to set or overwrite; others stay.' },
+        removeEnv: { type: 'array', items: { type: 'string' }, description: 'stdio only: environment variable names to delete.' },
+        headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'http only: request headers to set or overwrite; others stay.' },
+        removeHeaders: { type: 'array', items: { type: 'string' }, description: 'http only: header names to delete.' }
+      },
+      required: ['name']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const fail = (text) => ({ content: [{ type: 'text', text: `Cannot edit server: ${text}` }], details: {}, isError: true });
+      const name = String((params && params.name) || '').trim();
+      if (!name) return fail('provide the name of the server to change.');
+      if (ADMIN_RESERVED.has(name)) return fail(`"${name}" is a reserved Stem server.`);
+      let current;
+      try {
+        current = (readMcpJson(cfgPath).servers || {})[name];
+      } catch (e) {
+        return fail(e.message);
+      }
+      if (!current) return fail(`no MCP server named "${name}" is configured.`);
+      const remote = typeof current.url === 'string' && current.url !== '';
+      const strings = (v) => (Array.isArray(v) ? v.map(String).map((x) => x.trim()).filter(Boolean) : undefined);
+      const record = (v) =>
+        v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length
+          ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, String(x)]))
+          : undefined;
+      const patch = {};
+      const command = typeof params.command === 'string' ? params.command.trim() : '';
+      const url = typeof params.url === 'string' ? params.url.trim() : '';
+      if (command) patch.command = command;
+      if (Array.isArray(params.args)) patch.args = params.args.map(String);
+      if (url) patch.url = url;
+      const env = record(params.env);
+      const headers = record(params.headers);
+      const removeEnv = strings(params.removeEnv);
+      const removeHeaders = strings(params.removeHeaders);
+      if (env) patch.env = env;
+      if (headers) patch.headers = headers;
+      if (removeEnv && removeEnv.length) patch.removeEnv = removeEnv;
+      if (removeHeaders && removeHeaders.length) patch.removeHeaders = removeHeaders;
+      if (Object.keys(patch).length === 0) return fail('nothing to change was given.');
+      const wrongKind = remote
+        ? ['command', 'args', 'env', 'removeEnv'].filter((k) => k in patch)
+        : ['url', 'headers', 'removeHeaders'].filter((k) => k in patch);
+      if (wrongKind.length) {
+        return fail(
+          `"${name}" is a ${remote ? 'remote (http)' : 'local (stdio)'} server, so ${wrongKind.join(', ')} ${wrongKind.length === 1 ? 'does' : 'do'} not apply. Changing the transport needs remove + add.`
+        );
+      }
+      // Names only (never values) of what the stored entry carries and the edit
+      // keeps: when the command or URL changes, these go to the new destination,
+      // and the card has to say so.
+      const dropped = new Set([...(patch.removeEnv || []), ...(patch.removeHeaders || [])]);
+      const keptKeys = [
+        ...Object.keys((remote ? current.headers : current.env) || {}),
+        ...(remote && current.oauthClientSecret ? ['OAuth client secret'] : [])
+      ].filter((k) => !dropped.has(k) && !((remote ? patch.headers : patch.env) || {})[k]);
+      const before = remote
+        ? { url: current.url, keptKeys }
+        : { command: current.command, args: Array.isArray(current.args) ? current.args : [], keptKeys };
+      const approved = await requestAdminApproval(ctx, { action: 'edit', name, patch, before });
+      if (!approved) return { content: [{ type: 'text', text: `The user declined changing "${name}".` }], details: {} };
+      // Main merged the patch into the stored entry under its config lock before
+      // approving; this extension never writes mcp.json (see add_mcp_server).
+      return { content: [{ type: 'text', text: `Changed MCP server "${name}". The change applies after Stem reloads.` }], details: {} };
+    }
+  });
+
+  pi.registerTool({
     name: 'remove_mcp_server',
     label: 'Remove MCP server',
     description:
@@ -3627,7 +3706,7 @@ function registerComputerTool(pi, turnContext) {
       'guess them from memory of an earlier frame. Use `zoom` with a `region` to read small text (its picture is ' +
       'magnified: do not click from it, take a screenshot first). Prefer `run_command` with `device` set to this ' +
       'same computer for anything a shell does better (opening an app with `open -a` on a Mac, `start` on Windows or `gtk-launch` on Linux, files, git, scripts); click ' +
-      'only for what needs the GUI. Two modes. START WITH `list_windows`: it costs nothing and never interrupts ' +
+      'only for what needs the GUI. Stem\'s own windows are never listed or controllable; that does not mean Stem is closed. Two modes. START WITH `list_windows`: it costs nothing and never interrupts ' +
       'the user. WINDOW mode (the default for working on an app): `select_window` (by `window_id`, or `app` name ' +
       'plus optional `title` substring). From then on screenshots show that window wherever it is — another ' +
       'Space, behind other windows, another display — coordinates are pixels of the window picture, and clicks ' +

@@ -47,6 +47,11 @@ export function registerMcpIpc(deps: IpcDeps): void {
               await piMcp.addMcpServer(await piMcp.withStoredLocation(proposal.input));
               return;
             }
+            if (proposal.action === 'edit') {
+              if (!proposal.name || !proposal.patch) throw new Error('The MCP edit proposal is missing its server or its change.');
+              await piMcp.editMcpServer(proposal.name, proposal.patch);
+              return;
+            }
             if (!proposal.name) throw new Error('The MCP remove proposal is missing its server name.');
             await piMcp.removeMcpServer(proposal.name);
           }
