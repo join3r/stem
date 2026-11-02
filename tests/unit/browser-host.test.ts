@@ -16,7 +16,7 @@ import { relayKey } from '../../src/desktop/browser-host/relay';
 import { writeBrowserHostEnabled } from '../../src/desktop/browser-host/store';
 import { encodeFrame, FrameReader, type ServerHello, type ToExtension } from '../../src/shared/browser-native';
 import { handshakeProof, newNonce, proofMatches } from '../../src/desktop/browser-host/handshake';
-import { serverProved } from '../../src/desktop/browser-host/native-host-main';
+import { isReplaced, serverProved } from '../../src/desktop/browser-host/native-host-main';
 import type { DeviceBrowserRequest } from '../../src/shared/types';
 
 interface Peer {
@@ -97,6 +97,13 @@ describe('the native host', () => {
     expect(serverProved(token, nonce, hello(handshakeProof(token, 'stem', newNonce())))).toBe(false);
     expect(serverProved(token, nonce, hello(handshakeProof(token, 'host', nonce)))).toBe(false);
     expect(serverProved(token, nonce, Buffer.from('{"type":"request"}'))).toBe(false);
+  });
+
+  it('knows Stem’s word that a newer host has its profile, and nothing else', () => {
+    expect(isReplaced(Buffer.from('{"type":"replaced"}'))).toBe(true);
+    expect(isReplaced(Buffer.from('{"type":"host","connected":false}'))).toBe(false);
+    expect(isReplaced(Buffer.from('{"type":"request","id":"replaced"}'))).toBe(false);
+    expect(isReplaced(Buffer.from('not json'))).toBe(false);
   });
 });
 
@@ -415,6 +422,54 @@ describe('createBrowserHost', () => {
     peer.send({ type: 'result', id: 'r2', result: { ok: true, text: '0 open tabs.', urls: [] } });
     await until(() => !!result('r2'));
     expect(result('r2')!.text).toBe('0 open tabs.\n\nmacOS did not let Stem read Arc’s sidebar.');
+  });
+
+  describe('two native hosts claiming one profile', () => {
+    const PROFILE = 'cccccccc-3333-4333-8333-333333333333';
+    const ext = { ...LEGACY_HELLO, profileId: PROFILE };
+    const hostAt = (startedAt?: number) => ({ ...arc(), ...(startedAt ? { startedAt } : {}) });
+    const connected = () =>
+      (invoked.filter((c) => c.channel === 'browserHost:announce').at(-1)?.args[0] as
+        | { browsers: Array<{ connected: boolean }> }
+        | undefined)?.browsers.filter((b) => b.connected).length ?? 0;
+
+    // 2026-11-02: jbrow restarted the extension's worker but left its old
+    // native host running. The old host replayed its hello every two seconds,
+    // each hello threw the live connection off, and an action in flight failed
+    // as "jbrow disconnected" though the user had done nothing.
+    it('lets the newer host take over, tells the old one to quit, and keeps refusing it', async () => {
+      await writeBrowserHostEnabled(true);
+      const old = await connectPeer(socketPath, hostAt(1_000), ext);
+      peers.push(old);
+      await until(() => connected() === 1);
+      host.onRequest(request('r1', { kind: 'click', ref: 'e2' }));
+      await old.next('request');
+
+      const fresh = await connectPeer(socketPath, hostAt(2_000), ext);
+      peers.push(fresh);
+      await old.next('replaced');
+      await old.closed;
+      await until(() => !!result('r1'));
+      expect(result('r1')?.error).toContain('nothing the user did');
+
+      // The old host retries, as one from before 0.8.0 would: refused, and the newer one stays.
+      const retry = await connectPeer(socketPath, hostAt(1_000), ext);
+      peers.push(retry);
+      await retry.next('replaced');
+      await retry.closed;
+      const legacy = await connectPeer(socketPath, hostAt(), ext);
+      peers.push(legacy);
+      await legacy.next('replaced');
+      await legacy.closed;
+      expect(fresh.socket.destroyed).toBe(false);
+      expect(fresh.received.some((m) => m.type === 'replaced')).toBe(false);
+
+      host.onRequest(request('r2', { kind: 'click', ref: 'e2' }));
+      const req = (await fresh.next('request')) as Extract<ToExtension, { type: 'request' }>;
+      fresh.send({ type: 'result', id: req.id, result: { ok: true, text: 'clicked' } });
+      await until(() => !!result('r2'));
+      expect(result('r2')).toMatchObject({ ok: true, text: 'clicked' });
+    });
   });
 
   describe('several profiles of one browser', () => {

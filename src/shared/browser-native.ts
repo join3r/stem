@@ -204,7 +204,15 @@ export type ToExtension =
   /** What Stem calls this browser profile ("Work", "Arc 2"), for the popup. */
   | { type: 'profile'; name: string }
   /** From the native host only: whether it currently reaches the Stem app. */
-  | { type: 'host'; connected: boolean };
+  | { type: 'host'; connected: boolean }
+  /**
+   * Another native host of this profile holds the link to Stem now. The host
+   * stops retrying and exits; the extension skips its quick reconnects.
+   * Without this, a host the browser left running (its extension worker
+   * restarted) kept replaying its hello every two seconds, and each hello
+   * threw the live connection off (2026-11-02).
+   */
+  | { type: 'replaced' };
 
 /** extension → desktop */
 export type FromExtension =
@@ -237,6 +245,11 @@ export interface HostHello {
   appPath: string;
   /** Display name ("Arc"). */
   appName: string;
+  /**
+   * When this host process started (ms since epoch): of two hosts claiming one
+   * profile, the newer one is the extension's current port. Absent before 0.8.0.
+   */
+  startedAt?: number;
 }
 
 /** The desktop's answer to a host-hello: its proof, and a nonce for the host's. */

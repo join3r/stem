@@ -155,6 +155,10 @@ interface Conn {
   appPath: string;
   appName: string;
   version?: string;
+  /** HostHello.startedAt: which of two hosts claiming one profile is the newer. 0 when the host did not say. */
+  startedAt: number;
+  /** Another connection of the same profile took this one's place. */
+  replaced?: boolean;
   pending: Map<string, (result: ExtensionResult) => void>;
   /**
    * A sandboxed browser's relay (relay.ts), by its id: an upload's files go to
@@ -394,6 +398,8 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
    * remembered again, so its hellos are refused until Set up runs again.
    */
   const removed = new Set<string>();
+  /** Profiles a stale native host was already refused for, logged once each: an old one retries every two seconds. */
+  const staleLogged = new Set<string>();
 
   const send = (conn: Conn, message: ToExtension): boolean => {
     const frame = encodeFrame(message);
@@ -485,13 +491,34 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
       typeof message.profileId === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(message.profileId) ? message.profileId : null;
     // An extension from before 0.7.0 sends no profile id: one entry per app, as then.
     const key = profile ? `${conn.appPath}#${profile}` : conn.appPath;
+    const old = conns.get(key);
+    if (old && old !== conn && conn.startedAt < old.startedAt) {
+      // A native host older than the one connected for this profile: the
+      // browser left it running when the extension's worker restarted, and it
+      // replays the old worker's hello on every retry. Letting it in would
+      // throw the live connection off, whose host would then retry and throw
+      // this one off, every two seconds (2026-11-02). Told to quit instead.
+      if (!staleLogged.has(key)) {
+        staleLogged.add(key);
+        log('browser-host', 'refused a stale native host; a newer one has this profile', { browser: conn.appName });
+      }
+      conn.replaced = true;
+      send(conn, { type: 'replaced' });
+      conn.socket.end();
+      return;
+    }
     log('browser-host', 'the extension said hello', { browser: conn.appName, version: conn.version, profile: !!profile });
     if (conn.key !== key) {
       if (conn.key && conns.get(conn.key) === conn) conns.delete(conn.key);
-      // A browser that restarted connects again before the old socket is
-      // noticed gone: the new connection wins.
-      const old = conns.get(key);
-      if (old && old !== conn) old.socket.destroy();
+      // A browser that restarted, or an extension whose worker restarted,
+      // connects again before the old socket is noticed gone: the newer
+      // connection wins, and the old host is told to stop retrying.
+      if (old && old !== conn) {
+        old.replaced = true;
+        send(old, { type: 'replaced' });
+        old.socket.end();
+        setTimeout(() => old.socket.destroy(), 1_000).unref?.();
+      }
       conn.key = key;
       conns.set(key, conn);
     }
@@ -593,9 +620,13 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     for (const settle of conn.pending.values()) {
       settle({
         ok: false,
-        error:
-          `${conn.appName} disconnected from Stem during the action (it quit, or the extension reloaded). ` +
-          'The action may or may not have happened: check the page before repeating it.'
+        error: conn.replaced
+          ? `Stem's link to ${conn.appName} was handed to a newer one from the same profile during the action ` +
+            '(the extension restarted; nothing the user did, and the browser is still connected). ' +
+            'The action may or may not have happened: check the page, then carry on.'
+          : `Stem lost its link to ${conn.appName} during the action (the browser quit, or its Stem extension restarted). ` +
+            'The action may or may not have happened: check the page before repeating it, and try once more ' +
+            'before asking the user to do anything.'
       });
     }
     conn.pending.clear();
@@ -644,7 +675,15 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
         }
         clearTimeout(timer);
         socket.off('data', onText);
-        const conn: Conn = { socket, key: null, appPath: claimed.appPath, appName: claimed.appName, pending: new Map(), sandbox: claimed.appPath };
+        const conn: Conn = {
+          socket,
+          key: null,
+          appPath: claimed.appPath,
+          appName: claimed.appName,
+          startedAt: 0,
+          pending: new Map(),
+          sandbox: claimed.appPath
+        };
         socket.on('close', () => dropConn(conn));
         // What the Node host tells the extension once it reaches Stem.
         send(conn, { type: 'host', connected: true });
@@ -683,7 +722,7 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     const reader = new FrameReader();
     let conn: Conn | null = null;
     /** Between the host's hello and its proof: what it claimed, and the nonce it must answer. */
-    let pending: { appPath: string; appName: string; nonce: string } | null = null;
+    let pending: { appPath: string; appName: string; startedAt: number; nonce: string } | null = null;
     const hello = setTimeout(() => socket.destroy(), 5000);
     hello.unref?.();
     socket.on('data', (chunk: Buffer) => {
@@ -724,6 +763,7 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
           pending = {
             appPath: h.appPath,
             appName: typeof h.appName === 'string' && h.appName ? h.appName : 'Browser',
+            startedAt: typeof h.startedAt === 'number' && Number.isFinite(h.startedAt) && h.startedAt > 0 ? h.startedAt : 0,
             nonce: newNonce()
           };
           socket.write(encodeFrame({ type: 'server-hello', nonce: pending.nonce, proof: handshakeProof(config.token, 'stem', h.nonce) }));
@@ -737,11 +777,11 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
             return;
           }
           clearTimeout(hello);
-          const { appPath, appName } = pending;
+          const { appPath, appName, startedAt } = pending;
           pending = null;
           // Which profile this is arrives with the extension's own hello,
           // right behind (the native host replays it on every connection).
-          conn = { socket, key: null, appPath, appName, pending: new Map() };
+          conn = { socket, key: null, appPath, appName, startedAt, pending: new Map() };
           continue;
         }
         if (conn) onFrame(conn, message as FromExtension);

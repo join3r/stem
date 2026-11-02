@@ -33,6 +33,8 @@ let attempt = 0;
 let reconnectTimer = null;
 let hostConnected = null;
 let lastError = '';
+/** Stem said a newer native host of this profile has the link: no quick reconnects (the alarm still tries). */
+let replaced = false;
 /** What Stem calls this browser profile ("Work"), once it has said. */
 let profileName = '';
 
@@ -124,6 +126,10 @@ async function connect() {
     hostConnected = null;
     void endAllRuns();
     refreshBadge();
+    if (replaced) {
+      replaced = false;
+      return;
+    }
     scheduleReconnect();
   });
   post({
@@ -223,6 +229,10 @@ async function onNativeMessage(msg) {
       chrome.management.uninstallSelf().catch((e) => {
         lastError = String((e && e.message) || e);
       });
+      return;
+    case 'replaced':
+      replaced = true;
+      lastError = 'Another connection from this profile took over';
       return;
     case 'host':
       hostConnected = !!msg.connected;
