@@ -60,6 +60,8 @@ export interface ExecRequest {
   computerAnyDevice?: boolean;
   /** The originating conversation (null when no turn is live — shouldn't happen in practice). */
   threadId: string | null;
+  /** The live turn: a short reply earns one early approval card per turn (ExecService). */
+  turnId?: string;
   /** True for autonomous scheduled runs — manual approvals are rejected there. */
   isScheduled: boolean;
   /**

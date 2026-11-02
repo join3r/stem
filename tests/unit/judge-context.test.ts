@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isShortReply,
   capActions,
   capUserWords,
   JUDGE_ACTION_MAX_CHARS,
@@ -92,5 +93,15 @@ describe('withoutAttachments', () => {
     });
     const parsed = parseJudgeSession(text, { cleanUser: (c) => (c as Array<{ text: string }>)[0]!.text });
     expect(parsed.userWords).toEqual(['check it']);
+  });
+});
+
+describe('isShortReply', () => {
+  it('tells a short answer from a request', () => {
+    expect(isShortReply('Áno')).toBe(true);
+    expect(isShortReply('  yes, go ahead  ')).toBe(true);
+    expect(isShortReply('')).toBe(false);
+    expect(isShortReply(undefined)).toBe(false);
+    expect(isShortReply('Nainštaluj Node.js pre Fio do /var/lib/stem/state/tools/fio/ a uprav konfiguráciu.')).toBe(false);
   });
 });

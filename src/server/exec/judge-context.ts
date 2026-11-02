@@ -21,6 +21,25 @@ export interface JudgeContext {
   userWords: string[];
   /** The agent's commands, oldest first, already capped. */
   actions: JudgeAction[];
+  /**
+   * The user's own message that started this turn — a chat message, or the
+   * user's mail a delivery carries. Absent when nobody wrote to start it (a
+   * scheduled run, another persona's mail). Not shown to the judge: the exec
+   * gate reads it to tell a short reply ("yes", "Áno") from a request.
+   */
+  reply?: string;
+}
+
+/**
+ * A reply this short usually answers the assistant's question, which the judge
+ * never sees (agent text is left out on purpose), so a "yes" reads to it as no
+ * request at all. The first block after one goes to the user as a card instead.
+ */
+export const SHORT_REPLY_MAX_CHARS = 60;
+
+export function isShortReply(text: string | undefined): boolean {
+  const t = text?.trim() ?? '';
+  return t.length > 0 && t.length <= SHORT_REPLY_MAX_CHARS;
 }
 
 /** How much of the user's words the judge reads in all: the first one, then the newest that fit. */

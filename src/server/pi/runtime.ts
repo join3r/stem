@@ -2025,8 +2025,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         for (const tid of Object.values(conversation.sessions)) await readSession(tid, { words: false, actions: true });
       }
     };
+    let reply: string | undefined;
     if (input.mail) {
       await conversationWords(input.mail.conversationId, true);
+      // The delivery is the user's own mail: the newest of theirs is it.
+      if (input.mail.from === 'user') reply = words.at(-1);
     } else if (input.scheduled) {
       const origin = this.taskBridge?.originThread(input.scheduled.taskId) ?? null;
       if (origin) {
@@ -2040,8 +2043,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     } else {
       await readSession(threadId, { words: true, actions: true });
       words.push(input.input);
+      reply = input.input;
     }
-    return { userWords: capUserWords(words), actions: capActions(actions) };
+    return { userWords: capUserWords(words), actions: capActions(actions), ...(reply ? { reply } : {}) };
   }
 
   async learnEvidence(threadId: string): Promise<LearnTurn[] | null> {
@@ -3201,6 +3205,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             turn?.computerGrant?.kind === 'pin' ? turn.computerGrant.device : (turn?.computerGrant?.device ?? null),
           computerAnyDevice: turn?.computerGrant?.kind === 'chat' && turn.computerGrant.device === null,
           threadId: turn?.threadId ?? null,
+          turnId: turn?.turnId,
           isScheduled: turn?.isScheduled === true,
           userText: turn?.userText,
           judgeContext: turn?.judge,
@@ -3210,7 +3215,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // see an agent retrying a blocked step another way.
         if (turn?.judge && req.command) {
           turn.judge = {
-            userWords: turn.judge.userWords,
+            ...turn.judge,
             actions: capActions([...turn.judge.actions, { command: req.command, refused: !result.ok }])
           };
         }

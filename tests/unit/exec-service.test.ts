@@ -959,6 +959,39 @@ describe('ExecService blocking and escalation', () => {
     expect(approvals).toHaveLength(2);
   });
 
+  // The judge never sees the question a "yes" answers, so it refused what the
+  // user had just agreed to (the Fio chat and the Cloudfarms mail, 2026-11-01).
+  const yes = (turnId: string, reply = 'Áno') => ({ turnId, judgeContext: { userWords: ['Vieš to opraviť?', reply], actions: [], reply } });
+
+  it('asks the user on the first block after a short reply, once per turn', async () => {
+    await send('node -e 1', yes('turn-a'));
+    expect(approvals).toHaveLength(1);
+    // Denied: the same turn goes back to the ordinary count, not another card.
+    expect(await send('node -e 2', yes('turn-a'))).toMatchObject({ ok: false, blocked: true });
+    expect(approvals).toHaveLength(1);
+    // The next short reply is a new turn and gets its own card.
+    await send('node -e 3', yes('turn-b'));
+    expect(approvals).toHaveLength(2);
+  });
+
+  it('a long request is judged as before', async () => {
+    const long = 'Nainštaluj Node.js pre Fio do /var/lib/stem/state/tools/fio/ a uprav konfiguráciu Fio MCP.';
+    expect(await send('node -e 1', yes('turn-a', long))).toMatchObject({ ok: false, blocked: true });
+    expect(approvals).toHaveLength(0);
+  });
+
+  it('a turn nobody started with a reply gets no early card', async () => {
+    expect(
+      await send('node -e 1', { turnId: 'turn-a', judgeContext: { userWords: ['Áno'], actions: [] } })
+    ).toMatchObject({ ok: false, blocked: true });
+    expect(approvals).toHaveLength(0);
+  });
+
+  it('parks a mail run on the first block after a short reply', async () => {
+    const parked = await send('node -e 1', { ...yes('turn-a'), isScheduled: true });
+    expect(parked).toMatchObject({ ok: false, park: { kind: 'exec', command: 'node -e 1' } });
+  });
+
   it('parks an unattended run at the escalation point instead of a card', async () => {
     expect(await send('node -e 1', { isScheduled: true })).toMatchObject({ ok: false, blocked: true });
     await send('node -e 2', { isScheduled: true });
