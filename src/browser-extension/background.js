@@ -220,7 +220,9 @@ async function onNativeMessage(msg) {
       if (typeof msg.threadId === 'string') await endRun(msg.threadId);
       return;
     case 'reload':
-      await endAllRuns();
+      // Stem also sends this when the extension stopped answering: a debugger
+      // detach that never settles must not keep the restart from happening.
+      await Promise.race([endAllRuns(), new Promise((resolve) => setTimeout(resolve, 2_000))]);
       chrome.runtime.reload();
       return;
     case 'uninstall':

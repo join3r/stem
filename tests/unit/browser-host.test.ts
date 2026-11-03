@@ -351,6 +351,71 @@ describe('createBrowserHost', () => {
     expect(result('r1')?.error).toContain('may or may not have happened');
   });
 
+  describe('an action that runs out of time', () => {
+    const quick = () =>
+      createBrowserHost({
+        invoke: async (channel, args) => {
+          invoked.push({ channel, args });
+          return undefined;
+        },
+        uploadFile: async () => 'x',
+        downloadOutbox: async () => 'x',
+        installSource: () => ({ extensionSource: extSource, hostScript: '/dev/null', nodeCommand: '/bin/false' }),
+        home: join(root, 'home'),
+        launch: async () => undefined,
+        openWith: async () => undefined,
+        paths: browserInstallPaths(root),
+        platform: 'darwin',
+        launchWaitMs: 300,
+        actionTimeoutMs: 100,
+        aliveProbeMs: 100,
+        restartWaitMs: 1_000
+      });
+
+    beforeEach(async () => {
+      host.close();
+      host = quick();
+      await host.start();
+      await writeBrowserHostEnabled(true);
+    });
+
+    it('blames the page, without a restart, while the extension still answers', async () => {
+      const peer = await connectPeer(socketPath, arc());
+      peers.push(peer);
+      host.onRequest(request('r1', { kind: 'snapshot' }));
+      await peer.next('request');
+      const probe = (await peer.next('peek')) as { id: string };
+      peer.send({ type: 'result', id: probe.id, result: { ok: true } });
+      await until(() => !!result('r1'));
+      expect(result('r1')?.error).toContain('did not finish the action in time');
+      expect(peer.received.filter((m) => m.type === 'reload')).toEqual([]);
+    });
+
+    it('restarts an extension that stopped answering and says it is back', async () => {
+      const peer = await connectPeer(socketPath, arc());
+      host.onRequest(request('r1', { kind: 'snapshot' }));
+      await peer.next('request');
+      await peer.next('peek');
+      expect(await peer.next('reload')).toEqual({ type: 'reload' });
+      peer.socket.destroy();
+      await peer.closed;
+      const again = await connectPeer(socketPath, arc());
+      peers.push(again);
+      await until(() => !!result('r1'));
+      expect(result('r1')?.error).toContain('Stem restarted it, and it is connected again');
+    });
+
+    it('says so when the restarted extension does not come back', async () => {
+      const peer = await connectPeer(socketPath, arc());
+      peers.push(peer);
+      host.onRequest(request('r1', { kind: 'tabs' }));
+      await peer.next('request');
+      await peer.next('reload');
+      await new Promise((r) => setTimeout(r, 1_200));
+      expect(result('r1')?.error).toContain('did not come back');
+    });
+  });
+
   it('reloads each browser once when the extension files change, never on every hello', async () => {
     const peer = await connectPeer(socketPath, arc());
     await until(() => invoked.some((c) => JSON.stringify(c.args).includes('"connected":true')));

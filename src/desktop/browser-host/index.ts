@@ -105,6 +105,10 @@ export interface BrowserHostDeps {
   readArcSidebar?(): Promise<{ tabs: ArcSidebarTab[] } | { error: string }>;
   /** Tests shorten the launch wait. */
   launchWaitMs?: number;
+  /** Tests shorten every action's deadline, the liveness check after one runs out, and the wait for a restarted extension. */
+  actionTimeoutMs?: number;
+  aliveProbeMs?: number;
+  restartWaitMs?: number;
 }
 
 export interface BrowserHost {
@@ -132,6 +136,10 @@ export interface BrowserHost {
 
 /** How long a peek may hold "Ask about this window" up. */
 const PEEK_TIMEOUT_MS = 1_500;
+/** After an action ran out of time: how long the extension has to answer a cheap check that it still listens at all. */
+const ALIVE_PROBE_MS = 5_000;
+/** How long an extension Stem restarted has to connect again. */
+const RESTART_WAIT_MS = 15_000;
 
 /** A tab's title and its window's, one cut short or added to by the browser. */
 export function sameTitle(page: string, window: string): boolean {
@@ -371,6 +379,10 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
   const paths = deps.paths ?? browserInstallPaths();
   const launch = deps.launch ?? ((app: string) => defaultLaunch(app, platform));
   const launchWaitMs = deps.launchWaitMs ?? LAUNCH_WAIT_MS;
+  const aliveProbeMs = deps.aliveProbeMs ?? ALIVE_PROBE_MS;
+  const restartWaitMs = deps.restartWaitMs ?? RESTART_WAIT_MS;
+  /** One restart per stuck connection, however many of its actions ran out of time. */
+  const restarting = new WeakMap<Conn, Promise<string>>();
   const openWith = deps.openWith ?? ((app: string | null, target: string) => defaultOpenWith(app, target, platform));
   /** A browser Stem knows, or on Linux an AppImage that vouches for itself. */
   const mayLaunch = (app: string): boolean => launchableBrowser(app, platform) || (platform === 'linux' && launchableAppImage(app));
@@ -896,13 +908,8 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     return new Promise<ExtensionResult>((resolve) => {
       const timer = setTimeout(() => {
         conn.pending.delete(request.requestId);
-        resolve({
-          ok: false,
-          error:
-            `${conn.appName} did not finish the action in time. It may or may not have happened: check the page ` +
-            '(snapshot) before repeating it.'
-        });
-      }, actionTimeoutMs(action));
+        void timedOut(conn).then((error) => resolve({ ok: false, error }));
+      }, deps.actionTimeoutMs ?? actionTimeoutMs(action));
       conn.pending.set(request.requestId, (r) => {
         clearTimeout(timer);
         resolve(r);
@@ -914,6 +921,86 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
         resolve({ ok: false, error: 'The action is too large to hand to the browser (over 1 MB); shorten it.' });
       }
     });
+  }
+
+  /**
+   * An action ran out of time. A slow or stuck page is the usual reason, and
+   * the model checks the page and carries on. But when the extension does not
+   * even answer a peek, its worker is wedged: every action in that profile,
+   * a bare `tabs` included, would time out the same way (2026-11-03, a jbrow
+   * profile went quiet after twelve idle minutes and the model handed the
+   * form back to the user). Stem restarts the extension then, and says
+   * whether it came back.
+   */
+  async function timedOut(conn: Conn): Promise<string> {
+    const slow =
+      `${conn.appName} did not finish the action in time. It may or may not have happened: check the page ` +
+      '(snapshot) before repeating it.';
+    const key = conn.key;
+    if (!key || conn.replaced || conns.get(key) !== conn) return slow;
+    const pending = restarting.get(conn);
+    if (pending) return pending;
+    if (await answers(conn, aliveProbeMs)) return slow;
+    if (conns.get(key) !== conn) return slow;
+    const restart = restartStuck(conn, key);
+    restarting.set(conn, restart);
+    return restart;
+  }
+
+  /** Whether the extension answers a peek (whatever it says) within `ms`. */
+  function answers(conn: Conn, ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const id = `alive-${randomUUID()}`;
+      const timer = setTimeout(() => {
+        conn.pending.delete(id);
+        resolve(false);
+      }, ms);
+      conn.pending.set(id, () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+      if (!send(conn, { type: 'peek', id })) {
+        clearTimeout(timer);
+        conn.pending.delete(id);
+        resolve(false);
+      }
+    });
+  }
+
+  async function restartStuck(conn: Conn, key: string): Promise<string> {
+    log('browser-host', 'the extension stopped answering; restarting it', { browser: conn.appName });
+    const back = new Promise<boolean>((resolve) => {
+      const wake = (): void => {
+        const c = conns.get(key);
+        if (!c || c === conn) return;
+        cleanup();
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, restartWaitMs);
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        connectWaiters.delete(wake);
+      };
+      connectWaiters.add(wake);
+    });
+    send(conn, { type: 'reload' });
+    if (await back) {
+      log('browser-host', 'the restarted extension is back', { browser: conn.appName });
+      return (
+        `${conn.appName}'s Stem extension had stopped answering (nothing the user did), so Stem restarted it, and it ` +
+        'is connected again. The action did not finish: take a new snapshot of the tab (tab ids stay the same) and ' +
+        'carry on yourself.'
+      );
+    }
+    log('browser-host', 'the restarted extension did not come back', { browser: conn.appName });
+    return (
+      `${conn.appName}'s Stem extension stopped answering and did not come back after Stem restarted it. Try once ` +
+      'more. If it fails again and another browser profile is open, a page that needs no sign-in can be done ' +
+      `there; otherwise ask the user to quit and reopen ${conn.appName}.`
+    );
   }
 
   function peekConn(conn: Conn): Promise<{ url: string; title: string } | null> {
