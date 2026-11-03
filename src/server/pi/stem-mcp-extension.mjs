@@ -4133,7 +4133,8 @@ const IMAGE_REF_BRIDGE_TITLE = 'stem-image-ref-bridge';
 /** Ask main for the references this session cannot resolve itself. */
 async function imageRefBridge(ctx, refs) {
   if (!ctx || !ctx.ui || typeof ctx.ui.input !== 'function') return { ok: false, error: null };
-  const raw = await ctx.ui.input(IMAGE_REF_BRIDGE_TITLE, JSON.stringify({ refs }));
+  const payload = { refs };
+  const raw = await ctx.ui.input(IMAGE_REF_BRIDGE_TITLE, JSON.stringify(payload));
   try {
     return typeof raw === 'string' ? JSON.parse(raw) : { ok: false, error: 'No response from Stem.' };
   } catch {
