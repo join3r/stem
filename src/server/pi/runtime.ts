@@ -119,6 +119,7 @@ import { authorizeMcp } from './oauth';
 import { runDeviceMcpBridgeOp } from '../mcp-device/pi-bridge';
 import { execDeviceRouter } from '../exec-device/router';
 import { saveFiles, type SaveItem } from '../files/save-file';
+import { resolveImageRefs } from '../files/image-refs';
 import { providerIsSpawnable, syncModelsConfig } from './models-config';
 import {
   buildWebSearchContext,
@@ -127,7 +128,7 @@ import {
   webAccessVersion,
   writeWebSearchConfig
 } from './web-search';
-import { piMcpConfigPath, skillsRoot } from '../workspace/paths';
+import { piMcpConfigPath, skillsRoot, workspaceRoot as stemWorkspaceRoot } from '../workspace/paths';
 import { readUsage, recordGrades, recordInjections, recordUses } from '../skills/usage';
 import { formatSkillsBlock, selectSkills, type SkillUsageStat } from '../skills/inject';
 import { loadedSkillNames } from '../skills/thread-history';
@@ -184,6 +185,7 @@ import {
   EXEC_BRIDGE_TITLE,
   FILE_BRIDGE_TITLE,
   SAVE_BRIDGE_TITLE,
+  IMAGE_REF_BRIDGE_TITLE,
   BROWSER_BRIDGE_TITLE,
   CHAT_BRIDGE_TITLE,
   COMPUTER_BRIDGE_TITLE,
@@ -3229,6 +3231,57 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     })();
   }
 
+  /** An image in the thread, or one another persona made and mailed here (bytes in the sender's thread). */
+  private async findThreadOrMailedImage(threadId: string, imageId: string): Promise<{ mimeType: string; data: string } | null> {
+    const own = await this.findThreadImage(threadId, imageId);
+    if (own) return own;
+    const origin = await mailedImageThread(threadId, imageId);
+    return origin ? this.findThreadImage(origin, imageId) : null;
+  }
+
+  /**
+   * Handle generate_image's file-reference round-trip (sentinel
+   * IMAGE_REF_BRIDGE_TITLE): read the named pictures for the live turn's
+   * thread, from the same places save_file and browser uploads read.
+   */
+  private handleImageRefBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    const requestProcess = worker.proc;
+    const respond = (value: unknown): void => {
+      if (worker.proc !== requestProcess) return;
+      requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    };
+    const turn = worker.currentTurn;
+    void (async () => {
+      try {
+        if (turn?.external) return respond({ ok: false, error: EXTERNAL_TOOL_REFUSAL });
+        if (!turn?.threadId) return respond({ ok: false, error: 'File references are unavailable outside a conversation.' });
+        const req = JSON.parse(payload ?? '{}') as { refs?: unknown };
+        const refs = Array.isArray(req.refs) ? req.refs.filter((r): r is string => typeof r === 'string') : [];
+        const res = await resolveImageRefs(turn.threadId, refs, {
+          findThreadImage: (threadId, imageId) => this.findThreadOrMailedImage(threadId, imageId)
+        });
+        // A picture read from a memorize:false folder taints the turn, exactly as
+        // a `read` of it would: the new image is drawn from it.
+        if (res.ok && !turn.memoryTainted && turn.privateRoots?.length) {
+          const scratch = await ensureThreadScratch(turn.threadId);
+          const roots = turn.privateRoots;
+          // Relative names resolve as resolveImageRefs resolves them: Stem's
+          // workspace (where `files/` is), then this chat's scratch.
+          const ws = stemWorkspaceRoot();
+          const hit = refs.some((r) => {
+            const ref = r.trim();
+            if (!ref || /^img_[0-9a-f]{6,32}$/.test(ref)) return false;
+            return pathInsideAny(ref, roots, ws) || pathInsideAny(ref, roots, scratch);
+          });
+          if (hit) this.taintTurn(turn);
+        }
+        respond(res);
+      } catch (e) {
+        respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+  }
+
   /**
    * Handle the save_file tool's ctx.ui.input round-trip (sentinel
    * SAVE_BRIDGE_TITLE). Which conversation the `img_…` ids and the scratch
@@ -3248,14 +3301,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const req = JSON.parse(payload ?? '{}') as { files?: SaveItem[] };
         respond(
           await saveFiles(turn.threadId, Array.isArray(req.files) ? req.files : [], {
-            findThreadImage: async (threadId, imageId) => {
-              const own = await this.findThreadImage(threadId, imageId);
-              if (own) return own;
-              // A picture another persona made and mailed here: the bytes are
-              // in the sender's thread (same lookup as a browser upload).
-              const origin = await mailedImageThread(threadId, imageId);
-              return origin ? this.findThreadImage(origin, imageId) : null;
-            },
+            findThreadImage: (threadId, imageId) => this.findThreadOrMailedImage(threadId, imageId),
             folders: listConnectedFolders,
             devices: {
               hostFor: (deviceId) => execDeviceRouter().hostFor(deviceId),
@@ -4171,6 +4217,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // The save_file tool round-trip: the copy happens here (files/save-file.ts).
       if (ev.method === 'input' && ev.title === SAVE_BRIDGE_TITLE) {
         this.handleSaveBridgeRequest(worker, id, ev.placeholder as string | undefined);
+        return;
+      }
+      // generate_image references that are files: read here (files/image-refs.ts).
+      if (ev.method === 'input' && ev.title === IMAGE_REF_BRIDGE_TITLE) {
+        this.handleImageRefBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
       // The coding_agent tool round-trip: the whole harness turn runs in main

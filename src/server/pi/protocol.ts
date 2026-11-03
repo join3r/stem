@@ -69,6 +69,15 @@ export const EXEC_BRIDGE_TITLE = 'stem-exec-bridge';
 export const SAVE_BRIDGE_TITLE = 'stem-save-bridge';
 
 /**
+ * generate_image file-reference round-trip (`input`): `{ refs: string[] }`
+ * rides in `placeholder` — the references the session itself could not
+ * resolve (files, or `img_…` ids mailed in from another thread). PiRuntime
+ * reads them (files/image-refs.ts) for the live turn's thread and answers
+ * `{ ok, images: [{ ref, mimeType, data }] }` or `{ ok: false, error }`.
+ */
+export const IMAGE_REF_BRIDGE_TITLE = 'stem-image-ref-bridge';
+
+/**
  * Device-located MCP round-trip (`input`): `{ op: 'tools' | 'call', server, tool?,
  * args? }` rides in `placeholder`. PiRuntime resolves which device the server
  * belongs to from mcp.json — never from the payload — and hands the op to the

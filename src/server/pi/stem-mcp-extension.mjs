@@ -4126,6 +4126,21 @@ async function requestImage(ctx, { prompt, size, refs }, signal) {
   throw lastErr || new ImageGenError('http', 'The image could not be created.');
 }
 
+// Sentinel title for generate_image's file-reference round-trip (files/image-refs.ts
+// in main reads them, from the places save_file reads).
+const IMAGE_REF_BRIDGE_TITLE = 'stem-image-ref-bridge';
+
+/** Ask main for the references this session cannot resolve itself. */
+async function imageRefBridge(ctx, refs) {
+  if (!ctx || !ctx.ui || typeof ctx.ui.input !== 'function') return { ok: false, error: null };
+  const raw = await ctx.ui.input(IMAGE_REF_BRIDGE_TITLE, JSON.stringify({ refs }));
+  try {
+    return typeof raw === 'string' ? JSON.parse(raw) : { ok: false, error: 'No response from Stem.' };
+  } catch {
+    return { ok: false, error: 'Malformed response from Stem.' };
+  }
+}
+
 function registerImageTool(pi, turnContext) {
   pi.registerTool({
     name: IMAGE_TOOL_NAME,
@@ -4136,7 +4151,9 @@ function registerImageTool(pi, turnContext) {
       'specific prompt (subject, style, composition, text to render) rather than passing their words through. ' +
       'To edit or vary an existing image, or to start from a photo the user attached, pass its id in ' +
       '`references`: ids come from this tool\'s earlier results and from the "Images attached" line under a ' +
-      'user message. One call makes one image and takes 20–60 seconds; for several variations call it several ' +
+      'user message. A picture that is a file works too — pass its path as you would read it: `files/<name>`, a ' +
+      'path in this chat\'s scratch folder, or a file in a connected folder (e.g. a sprite in the user\'s project); ' +
+      'never ask the user to attach a file you can already read. One call makes one image and takes 20–60 seconds; for several variations call it several ' +
       'times. The user sees the picture in the chat as soon as it is made, so do not describe it back at length ' +
       '— a short line is enough.',
     parameters: {
@@ -4153,7 +4170,9 @@ function registerImageTool(pi, turnContext) {
         references: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Ids of images to start from or match (e.g. "img_3fa9c1d2e0"), in order of importance.'
+          description:
+            'Images to start from or match, in order of importance: ids (e.g. "img_3fa9c1d2e0") or file paths ' +
+            '(`files/…`, scratch, connected folders). PNG, JPEG, WebP or GIF.'
         }
       },
       required: ['prompt']
@@ -4173,17 +4192,28 @@ function registerImageTool(pi, turnContext) {
       } catch {
         entries = [];
       }
-      const refs = [];
-      for (const refId of refIds) {
-        const found = findImageInEntries(entries, refId);
-        if (!found) {
+      // In-session ids resolve here; files (and ids mailed in from another
+      // thread) are read by main, from the places save_file reads.
+      const refs = refIds.map((refId) => findImageInEntries(entries, refId));
+      const missing = refIds.filter((_r, i) => !refs[i]);
+      if (missing.length) {
+        const res = await imageRefBridge(ctx, missing);
+        if (!res || !res.ok || !Array.isArray(res.images)) {
           const known = knownImageIds(entries);
-          return taskErr(
-            `No image "${refId}" in this conversation.` +
-              (known.length ? ` Known ids: ${known.slice(-12).join(', ')}.` : ' It has no images you can reference yet.')
-          );
+          const idHint = missing.some((r) => /^img_/.test(r))
+            ? known.length
+              ? ` Known ids: ${known.slice(-12).join(', ')}.`
+              : ' It has no images you can reference by id yet.'
+            : '';
+          return taskErr(`${(res && res.error) || `No image "${missing[0]}" in this conversation.`}${idHint}`);
         }
-        refs.push(found);
+        const byRef = new Map(res.images.map((img) => [img.ref, img]));
+        for (let i = 0; i < refIds.length; i++) {
+          if (refs[i]) continue;
+          const img = byRef.get(refIds[i]);
+          if (!img) return taskErr(`The reference "${refIds[i]}" could not be read.`);
+          refs[i] = { mimeType: img.mimeType, data: img.data };
+        }
       }
       let out;
       try {

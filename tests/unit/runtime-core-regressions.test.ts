@@ -12,7 +12,7 @@ import { PiProcess, stderrReason } from '../../src/server/pi/rpc';
 import { updateDefaultModel } from '../../src/server/workspace/settings';
 import { removeChat, setChatPrivate } from '../../src/server/workspace/chats';
 import { INBOX_MDX_NOTE } from '../../src/server/workspace/bootstrap';
-import { chatStorePath, settingsStorePath } from '../../src/server/workspace/paths';
+import { chatStorePath, settingsStorePath, workspaceRoot } from '../../src/server/workspace/paths';
 import { recallStore } from '../../src/server/recall/store';
 import { addPin, dropThreadPins } from '../../src/server/pins/store';
 import * as factRetrieval from '../../src/server/recall/retrieval';
@@ -216,6 +216,36 @@ describe('connected-folder path policy', () => {
       args: { path: "curly-alias'/secret.md" }
     });
     expect(variantTurn.memoryTainted).toBe(true);
+  });
+});
+
+describe('generate_image file references', () => {
+  it('taints the turn when a reference is a picture inside a memorize:false folder', async () => {
+    const { runtime } = await tempRuntime();
+    const vault = join(workspaceRoot(), 'files', 'private-art');
+    await mkdir(vault, { recursive: true });
+    await writeFile(join(vault, 'sword.png'), Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(8)]));
+    const worker = workerOf(runtime);
+    const sent: Array<{ value: string }> = [];
+    worker.proc = { send: (message) => sent.push(message as { value: string }) };
+    const internal = runtime as unknown as {
+      handleImageRefBridgeRequest: (worker: FakeWorker, id: string, payload: string) => void;
+    };
+    const ask = async (turnId: string, ref: string, privateRoots: string[]) => {
+      const turn = newTurnContext('ref-thread', turnId);
+      turn.privateRoots = privateRoots;
+      worker.currentTurn = turn;
+      sent.length = 0;
+      internal.handleImageRefBridgeRequest(worker, 'q', JSON.stringify({ refs: [ref] }));
+      await vi.waitFor(() => expect(sent.length).toBe(1));
+      return { turn, res: JSON.parse(sent[0]!.value) as { ok: boolean } };
+    };
+    const hit = await ask('t-private', 'files/private-art/sword.png', [vault]);
+    expect(hit.res.ok).toBe(true);
+    expect(hit.turn.memoryTainted).toBe(true);
+    const clean = await ask('t-public', 'files/private-art/sword.png', [join(workspaceRoot(), 'elsewhere')]);
+    expect(clean.res.ok).toBe(true);
+    expect(clean.turn.memoryTainted).toBeFalsy();
   });
 });
 
