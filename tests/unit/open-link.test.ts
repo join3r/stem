@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { classifyLink } from '../../src/desktop/open-link';
+import { classifyLink, linkFilePath } from '../../src/desktop/open-link';
 
 // The paths below are POSIX; on Windows the same ones live on C:.
 const native = (p: string) => (process.platform === 'win32' ? `C:${p.replaceAll('/', '\\')}` : p);
@@ -35,5 +35,21 @@ describe('classifyLink', () => {
     for (const u of ['javascript:alert(1)', 'vscode://x', 'not a url', 'file://remote-host/share/x.csv', 'file://192.168.1.5/c$/x.pdf']) {
       expect(classifyLink(u)).toEqual({ kind: 'ignore' });
     }
+  });
+});
+
+describe('home-relative file links', () => {
+  const home = () => native('/Users/me');
+  it('expands file:///~/ to the home folder', () => {
+    expect(classifyLink('file:///~/Downloads/a%20b.csv', home)).toEqual({ kind: 'open', path: native('/Users/me/Downloads/a b.csv') });
+    expect(classifyLink('file:///~/Downloads/', home)).toEqual({ kind: 'reveal', path: native('/Users/me/Downloads/') });
+  });
+});
+
+describe('linkFilePath', () => {
+  it('names the file a link points at, without a trailing slash', () => {
+    expect(linkFilePath(fileUrl('/tmp/x.command'))).toBe(native('/tmp/x.command'));
+    expect(linkFilePath(fileUrl('/Users/me/Downloads/'))).toBe(native('/Users/me/Downloads'));
+    expect(linkFilePath('https://example.com/')).toBeUndefined();
   });
 });

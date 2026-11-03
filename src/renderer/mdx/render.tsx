@@ -5,6 +5,7 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkMdx from 'remark-mdx';
 import { stripCiteMarkers } from '../../shared/citations';
+import { filePathHref, findFilePaths } from '../../shared/file-paths';
 import { findPhoneNumbers } from '../../shared/phone-links';
 import { openStemLink, parseStemLink } from '../stemLinks';
 import { CodeBlock, TaskItem, componentMap } from './components';
@@ -86,16 +87,44 @@ function linkChildren(node: MdNode, key: string): ReactNode[] {
   }
 }
 
-/** Plain text with any phone numbers in it as tel: links (shared/phone-links.ts). */
+/** A file:// link: the main process opens or reveals it on this computer. */
+function FileLink({ href, children }: { href: string; children: ReactNode }) {
+  const open = (e: { preventDefault(): void }) => {
+    e.preventDefault();
+    void window.stem.openLink(href);
+  };
+  return <a href={href} title={decodeFileHref(href)} className="file-link" onClick={open}>{children}</a>;
+}
+
+function decodeFileHref(href: string): string {
+  try {
+    return decodeURI(href.replace(/^file:\/\/\/~\//i, '~/'));
+  } catch {
+    return href;
+  }
+}
+
+/**
+ * Plain text with phone numbers as tel: links (shared/phone-links.ts) and
+ * file paths as file:// links (shared/file-paths.ts).
+ */
 function renderText(value: string, key: string): ReactNode {
-  const phones = linkDepth ? [] : findPhoneNumbers(value);
-  if (!phones.length) return value;
+  if (linkDepth) return value;
+  const matches = [
+    ...findPhoneNumbers(value).map((m) => ({ ...m, file: false })),
+    ...findFilePaths(value).map((m) => ({ ...m, file: true })),
+  ].sort((a, b) => a.start - b.start);
+  if (!matches.length) return value;
   const out: ReactNode[] = [];
   let at = 0;
-  phones.forEach((p, i) => {
-    if (p.start > at) out.push(value.slice(at, p.start));
-    out.push(<a key={`${key}-tel${i}`} href={p.href}>{value.slice(p.start, p.end)}</a>);
-    at = p.end;
+  matches.forEach((m, i) => {
+    if (m.start < at) return; // overlapping (a digit run inside a path)
+    if (m.start > at) out.push(value.slice(at, m.start));
+    const text = value.slice(m.start, m.end);
+    out.push(m.file
+      ? <FileLink key={`${key}-file${i}`} href={m.href}>{text}</FileLink>
+      : <a key={`${key}-tel${i}`} href={m.href}>{text}</a>);
+    at = m.end;
   });
   if (at < value.length) out.push(value.slice(at));
   return <Fragment key={key}>{out}</Fragment>;
@@ -137,8 +166,11 @@ function renderNode(node: MdNode, key: string): ReactNode {
       return <em key={key}>{renderChildren(node, key)}</em>;
     case 'delete':
       return <del key={key}>{renderChildren(node, key)}</del>;
-    case 'inlineCode':
-      return <code key={key} className="inline-code">{node.value}</code>;
+    case 'inlineCode': {
+      const code = <code key={key} className="inline-code">{node.value}</code>;
+      const fileHref = linkDepth ? undefined : filePathHref(node.value ?? '');
+      return fileHref ? <FileLink key={key} href={fileHref}>{code}</FileLink> : code;
+    }
     case 'code':
       return <CodeBlock key={key} lang={node.lang ?? undefined} value={node.value ?? ''} />;
     case 'list': {
@@ -164,13 +196,7 @@ function renderNode(node: MdNode, key: string): ReactNode {
         return <a key={key} href={node.url} className="stem-link" onClick={open}>{linkChildren(node, key)}</a>;
       }
       const href = safeUrl(node.url, true);
-      if (href && /^file:/i.test(href)) {
-        const open = (e: { preventDefault(): void }) => {
-          e.preventDefault();
-          void window.stem.openLink(href);
-        };
-        return <a key={key} href={href} title={href} onClick={open}>{linkChildren(node, key)}</a>;
-      }
+      if (href && /^file:/i.test(href)) return <FileLink key={key} href={href}>{linkChildren(node, key)}</FileLink>;
       return href
         ? <a key={key} href={href} target="_blank" rel="noreferrer">{linkChildren(node, key)}</a>
         : <Fragment key={key}>{renderChildren(node, key)}</Fragment>;

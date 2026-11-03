@@ -1,4 +1,5 @@
-import { BrowserWindow, clipboard, Menu, type MenuItemConstructorOptions, type WebContents } from 'electron';
+import { BrowserWindow, clipboard, Menu, shell, type MenuItemConstructorOptions, type WebContents } from 'electron';
+import { linkFilePath, revealLabel, revealLink } from './open-link';
 import { saveImageToDownloads } from './save-image';
 
 // A native right-click menu for page content: links (open/copy), selected text,
@@ -26,7 +27,16 @@ export function installContextMenu(contents: WebContents, openExternalUrl: (url:
   contents.on('context-menu', (_event, params) => {
     const items: MenuItemConstructorOptions[] = [];
 
-    if (params.linkURL) {
+    const filePath = params.linkURL.startsWith('file:') ? linkFilePath(params.linkURL) : undefined;
+    if (filePath) {
+      // A file link from a reply (an agent naming the CSV it just wrote).
+      items.push(
+        { label: 'Open', click: () => openExternalUrl(params.linkURL) },
+        { label: revealLabel(), click: () => revealLink(shell, params.linkURL) },
+        { label: 'Copy Path', click: () => clipboard.writeText(filePath) },
+        { type: 'separator' }
+      );
+    } else if (params.linkURL) {
       items.push(
         { label: 'Open Link', click: () => openExternalUrl(params.linkURL) },
         { label: 'Copy Link Address', click: () => clipboard.writeText(params.linkURL) },

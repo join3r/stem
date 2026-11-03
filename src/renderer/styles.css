@@ -5213,3 +5213,7 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .mail-collab-body li { margin: 2px 0; }
 .mail-collab-body p { margin: 0; }
 .mail-collab-label { font-size: var(--fs-11); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* A file path in a reply that opens on click (shared/file-paths.ts). */
+a.file-link { cursor: pointer; }
+a.file-link .inline-code { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 2px; }

@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
-import { extname } from 'node:path';
+import { homedir } from 'node:os';
+import { extname, join } from 'node:path';
 import type { Shell } from 'electron';
 
 // How a link clicked in the renderer leaves the app. Web, mail and phone links
@@ -28,7 +29,7 @@ const DOCUMENT_EXTENSIONS = new Set([
   '.zip',
 ]);
 
-export function classifyLink(url: string): LinkAction {
+export function classifyLink(url: string, home: () => string = homedir): LinkAction {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -42,7 +43,15 @@ export function classifyLink(url: string): LinkAction {
   if (parsed.hostname) return { kind: 'ignore' };
   let path: string;
   try {
-    path = fileURLToPath(parsed);
+    // file:///~/… is the renderer's spelling of a home-relative path
+    // (shared/file-paths.ts): only this side knows where home is.
+    if (parsed.pathname === '/~' || parsed.pathname.startsWith('/~/')) {
+      const rest = decodeURIComponent(parsed.pathname.slice(3));
+      if (rest.split('/').includes('..')) return { kind: 'ignore' };
+      path = join(home(), rest); // keeps a trailing slash: still a folder
+    } else {
+      path = fileURLToPath(parsed);
+    }
   } catch {
     return { kind: 'ignore' };
   }
@@ -64,4 +73,22 @@ export function openLink(shell: Pick<Shell, 'openExternal' | 'openPath' | 'showI
   // missing, e.g. a link to another device's Downloads; nothing to open then.
   else if (action.kind === 'open') void shell.openPath(action.path);
   else if (action.kind === 'reveal') shell.showItemInFolder(action.path);
+}
+
+/** The file a file:// link names, for "Show in Finder" and "Copy Path". */
+export function linkFilePath(url: string): string | undefined {
+  const action = classifyLink(url);
+  return action.kind === 'open' || action.kind === 'reveal' ? action.path.replace(/(.)[/\\]+$/, '$1') : undefined;
+}
+
+/** Show a file:// link's file selected in Finder/Explorer, whatever its type. */
+export function revealLink(shell: Pick<Shell, 'showItemInFolder'>, url: string): void {
+  const path = linkFilePath(url);
+  if (path) shell.showItemInFolder(path);
+}
+
+export function revealLabel(platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'darwin') return 'Show in Finder';
+  if (platform === 'win32') return 'Show in Explorer';
+  return 'Show in Folder';
 }

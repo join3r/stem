@@ -78,6 +78,7 @@ function whereYouAreRunning(): string {
   if (host().kind() === 'desktop') {
     return `## Where you are running
 Stem is running on the user's own computer (${os}). Your shell and local files are there. MCP servers run there unless pinned to another computer; check \`list_mcp_servers\`.
+Link files you mention by absolute path so a click opens them: \`[a.csv](file:///Users/me/a.csv)\`.
 `;
   }
   return `## Where you are running
