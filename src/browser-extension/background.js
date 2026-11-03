@@ -315,6 +315,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onReplaced.addListener((added, removed) => {
   runs.replaceTab(removed, added);
+  cdp.tabReplaced(removed, added);
 });
 
 // ---- popup, badge ----

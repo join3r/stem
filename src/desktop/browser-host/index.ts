@@ -148,6 +148,13 @@ export function sameTitle(page: string, window: string): boolean {
   return a.length >= 3 && b.length >= 3 && (a.includes(b) || b.includes(a));
 }
 
+/** A connection's profile for the log: the extension's profile id, cut short ("none" for a pre-0.7.0 extension, which sends none). */
+export function profileTag(key: string | null): string | null {
+  if (!key) return null;
+  const at = key.lastIndexOf('#');
+  return at >= 0 ? key.slice(at + 1, at + 9) : 'none';
+}
+
 /** "Google Chrome" ~ "Chrome", "Brave Browser" ~ "Brave": the window's app and the host's name for it. */
 export function sameBrowser(windowApp: string, hostName: string): boolean {
   const norm = (s: string) => s.toLowerCase().replace(/\.app$|\.exe$/, '').replace(/[^a-z0-9]+/g, ' ').replace(/\b(google|microsoft|browser)\b/g, '').trim();
@@ -167,6 +174,9 @@ interface Conn {
   startedAt: number;
   /** Another connection of the same profile took this one's place. */
   replaced?: boolean;
+  /** When the extension said hello, and when it last sent anything: for the log when the link goes quiet or drops. */
+  helloAt?: number;
+  heardAt?: number;
   pending: Map<string, (result: ExtensionResult) => void>;
   /**
    * A sandboxed browser's relay (relay.ts), by its id: an upload's files go to
@@ -519,7 +529,8 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
       conn.socket.end();
       return;
     }
-    log('browser-host', 'the extension said hello', { browser: conn.appName, version: conn.version, profile: !!profile });
+    conn.helloAt = Date.now();
+    log('browser-host', 'the extension said hello', { browser: conn.appName, version: conn.version, profile: profileTag(key) });
     if (conn.key !== key) {
       if (conn.key && conns.get(conn.key) === conn) conns.delete(conn.key);
       // A browser that restarted, or an extension whose worker restarted,
@@ -552,6 +563,7 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
   }
 
   function onFrame(conn: Conn, message: FromExtension): void {
+    conn.heardAt = Date.now();
     if (message.type === 'hello') {
       void onHello(conn, message);
       return;
@@ -629,6 +641,17 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
   }
 
   function dropConn(conn: Conn): void {
+    // Unnoticed until 2026-11-03: a profile that went quiet left no trace of
+    // whether its link had dropped or stayed up with nobody answering.
+    if (conn.key) {
+      log('browser-host', 'a browser link closed', {
+        browser: conn.appName,
+        profile: profileTag(conn.key),
+        replaced: !!conn.replaced,
+        connectedS: conn.helloAt ? Math.round((Date.now() - conn.helloAt) / 1000) : null,
+        unfinishedActions: conn.pending.size
+      });
+    }
     for (const settle of conn.pending.values()) {
       settle({
         ok: false,
@@ -908,6 +931,12 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     return new Promise<ExtensionResult>((resolve) => {
       const timer = setTimeout(() => {
         conn.pending.delete(request.requestId);
+        log('browser-host', 'an action ran out of time', {
+          browser: conn.appName,
+          profile: profileTag(conn.key),
+          action: action.kind,
+          lastHeardS: conn.heardAt ? Math.round((Date.now() - conn.heardAt) / 1000) : null
+        });
         void timedOut(conn).then((error) => resolve({ ok: false, error }));
       }, deps.actionTimeoutMs ?? actionTimeoutMs(action));
       conn.pending.set(request.requestId, (r) => {
@@ -940,7 +969,10 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     if (!key || conn.replaced || conns.get(key) !== conn) return slow;
     const pending = restarting.get(conn);
     if (pending) return pending;
-    if (await answers(conn, aliveProbeMs)) return slow;
+    if (await answers(conn, aliveProbeMs)) {
+      log('browser-host', 'the extension still answers; the action itself was slow', { browser: conn.appName, profile: profileTag(key) });
+      return slow;
+    }
     if (conns.get(key) !== conn) return slow;
     const restart = restartStuck(conn, key);
     restarting.set(conn, restart);

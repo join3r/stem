@@ -94,7 +94,11 @@ function dialogText(d) {
 }
 
 async function getTab(tabId) {
-  return chrome.tabs.get(tabId);
+  const tab = await chrome.tabs.get(tabId);
+  // An Electron browser (jbrow before 2026-11-03) answers { id: -1 } for a tab
+  // that isn't open instead of failing, as Chrome does: Stem then reported "tab -1".
+  if (!tab || typeof tab.id !== 'number' || tab.id < 0) throw new Error(`No tab with id: ${tabId}.`);
+  return tab;
 }
 
 async function targetTab(run, action) {

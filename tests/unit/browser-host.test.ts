@@ -9,7 +9,7 @@ import { createConnection, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createBrowserHost, type BrowserHost } from '../../src/desktop/browser-host';
+import { createBrowserHost, profileTag, type BrowserHost } from '../../src/desktop/browser-host';
 import { parseArcTabs, type ArcSidebarTab } from '../../src/desktop/browser-host/arc-tabs';
 import { browserInstallPaths, ensureHostConfig } from '../../src/desktop/browser-host/install';
 import { relayKey } from '../../src/desktop/browser-host/relay';
@@ -954,5 +954,13 @@ describe.skipIf(!relayRuns)('createBrowserHost with a Snap browser, through the 
       expect(proofMatches(key, 'stem', nonce, proof)).toBe(true);
     }
     expect(JSON.stringify(invoked)).not.toContain('evil');
+  });
+});
+
+describe('profileTag', () => {
+  it('shortens the profile id of a connection key for the log', () => {
+    expect(profileTag('/Applications/jbrow.app#0f3c2a91-77aa-4c1e-9d0b-5a1e2f3d4c5b')).toBe('0f3c2a91');
+    expect(profileTag('/Applications/Google Chrome.app')).toBe('none');
+    expect(profileTag(null)).toBeNull();
   });
 });
