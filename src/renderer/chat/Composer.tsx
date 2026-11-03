@@ -21,7 +21,7 @@ import { useOffline } from '../hooks/useServerReachable';
 import { ShortcutHint, glyphsFor, useShortcut, useShortcutsBound, type ShortcutId } from '../shortcuts';
 import { EffortModelControl } from '../ui/EffortModelControl';
 import { slashMatches, type SlashCommand, type SlashCommandName } from './slashCommands';
-import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, noteBodyValid, useNoteMode } from '../noteMode';
+import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, noteBodyValid, pasteLandsInCommand, useNoteMode } from '../noteMode';
 import { clearDraft, readDraft, writeDraft } from './draft-store';
 import { dismissLearnNotice, readLearn, startLearn, subscribeLearn } from './learn-store';
 import { dismissCompactNotice, readCompact, startCompact, subscribeCompact } from './compact-store';
@@ -268,7 +268,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [onPinNote, threadId]);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
-  const slash = noteMode || offline || slashDismissed ? null : slashMatches(draft, slashAvailable);
+  // A draft whose leading `/` came from a paste is text, never a command: no
+  // note mode, no menu, sent as typed. `pasteRef` marks the change event a text
+  // paste produces; `literal` lasts while the draft still starts with `/`.
+  const pasteRef = useRef(false);
+  const [pastedLiteral, setLiteral] = useState(false);
+  const literal = pastedLiteral && draft.startsWith('/');
+  const slash = noteMode || offline || slashDismissed || literal ? null : slashMatches(draft, slashAvailable);
   const slashActive = slash ? Math.min(slashIndex, slash.length - 1) : 0;
   const pickSlash = (cmd: SlashCommand) => {
     setSlashIndex(0);
@@ -360,6 +366,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         if (draftKey) clearDraft(draftKey);
         if (onNoteSaved) window.setTimeout(onNoteSaved, NOTE_CONFIRM_MS);
       });
+      return;
+    }
+    if (literal) {
+      if ((!text && attachments.length === 0) || running) return;
+      setArmed(false);
+      setLiteral(false);
+      onSend(text, attachments);
+      setDraft('');
+      setAttachments([]);
+      if (draftKey) clearDraft(draftKey);
       return;
     }
     const pin = onPinNote ? detectPinCommand(text) : null;
@@ -455,7 +471,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(e.clipboardData.files);
     const images = files.filter((f) => f.type.startsWith('image/'));
-    if (!images.length) return; // let plain-text paste through untouched
+    if (!images.length) {
+      // Plain text goes through untouched; onChange takes it literally if it
+      // lands where a command would be read.
+      const el = e.currentTarget;
+      pasteRef.current = pasteLandsInCommand(el.value, el.selectionStart ?? 0);
+      return;
+    }
     e.preventDefault();
     const next = await Promise.all(images.map(fileToAttachment));
     setAttachments((prev) => [...prev, ...next]);
@@ -815,7 +837,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               // Typing `/note ` or `//` at the start flips into note mode; the
               // prefix is consumed (the chip replaces it in the UI). Strip
               // before setDraft so the fact preview never sees the prefix.
-              const trigger = noteMode ? null : detectNoteTrigger(value);
+              const pasted = pasteRef.current;
+              pasteRef.current = false;
+              const isLiteral = (pasted || literal) && value.startsWith('/');
+              if (isLiteral !== pastedLiteral) setLiteral(isLiteral);
+              const trigger = noteMode || isLiteral ? null : detectNoteTrigger(value);
               if (trigger) {
                 enterNoteMode();
                 setDraft(trigger.body);

@@ -9,7 +9,7 @@ import { SkillApprovalCard } from '../manage/SkillApprovalCard';
 import { ApprovalCard, MissedApprovalDialog } from '../manage/ApprovalCard';
 import { approvalKey, approvalsElsewhere, approvalsForThread } from '../manage/approvalQueue';
 import { useApprovals } from '../manage/approvalStore';
-import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, useNoteMode } from '../noteMode';
+import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, pasteLandsInCommand, useNoteMode } from '../noteMode';
 import { EMPTY_STATE, appendSystemMessage, type ThreadState } from '../chatState';
 import {
   attachBackendEvents,
@@ -113,6 +113,10 @@ export function QuickChat() {
   // `/note` / `//` quick-note capture in the compact bar (the expanded panel gets
   // its own instance inside ChatView).
   const { noteMode, flash: noteFlash, enterNoteMode, exitNoteMode, toggleNoteMode, saveNote } = useNoteMode();
+  // Pasted `//…` or `/note …` is text, not a switch into note mode (same rule
+  // as the Composer): the flag lasts while the input still starts with `/`.
+  const pasteRef = useRef(false);
+  const literalRef = useRef(false);
 
   // Ref so the event subscription (registered once) reads the current thread id.
   const threadIdRef = useRef(threadId);
@@ -724,13 +728,21 @@ export function QuickChat() {
             placeholder={noteMode ? 'Save a note to memory…' : windowChip ? `Ask about this ${windowChip.app} window…` : 'Ask Stem anything…'}
             onChange={(e) => {
               const value = e.target.value;
-              const trigger = noteMode ? null : detectNoteTrigger(value);
+              const pasted = pasteRef.current;
+              pasteRef.current = false;
+              // Checked against the previous input too, so a cleared input never keeps a stale flag.
+              literalRef.current = (pasted || (literalRef.current && input.startsWith('/'))) && value.startsWith('/');
+              const trigger = noteMode || literalRef.current ? null : detectNoteTrigger(value);
               if (trigger) {
                 enterNoteMode();
                 setInput(trigger.body);
               } else {
                 setInput(value);
               }
+            }}
+            onPaste={(e) => {
+              const el = e.currentTarget;
+              pasteRef.current = pasteLandsInCommand(el.value, el.selectionStart ?? 0);
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {

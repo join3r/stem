@@ -24,6 +24,18 @@ export function detectNoteTrigger(text: string): { body: string } | null {
   return null;
 }
 
+/**
+ * Pasted text is never a command. True when a paste at `cursor` lands inside
+ * the draft's command token — the start of the draft, or right after a `/` with
+ * no space yet — so the composer must take the result literally: no note mode,
+ * no `/` menu, no `/learn` / `/compact` / `/pin` / `/record` at submit. A paste
+ * after a typed `/pin ` lands past the token and stays the command's argument.
+ */
+export function pasteLandsInCommand(draft: string, cursor: number): boolean {
+  const before = draft.slice(0, cursor);
+  return before === '' || (before.startsWith('/') && !/\s/.test(before));
+}
+
 /** A note needs some content — the bare prefix isn't a saveable note. An
  *  attached image counts as content: the picture can be the whole note. */
 export function noteBodyValid(body: string, attachmentCount = 0): boolean {

@@ -54,6 +54,54 @@ test('the /note prefix triggers too, but /notes and mid-message // do not', asyn
   await input.fill('');
 });
 
+// A paste as the browser does it: the paste event first (the composer reads
+// where it lands), then the text goes in. Leaves the real clipboard alone.
+const paste = (w: Page, text: string) =>
+  w.evaluate((t) => {
+    const el = document.activeElement as HTMLTextAreaElement;
+    const data = new DataTransfer();
+    data.setData('text/plain', t);
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    document.execCommand('insertText', false, t);
+  }, text);
+
+test('pasted // or /note text is never a note or a command', async ({ mainWindow }) => {
+  const input = composer(mainWindow);
+  await input.focus();
+  await paste(mainWindow, '//usr/lib comment');
+  await expect(mainWindow.getByText('Note to memory')).not.toBeVisible();
+  await expect(input).toHaveValue('//usr/lib comment');
+  // Typing on after the paste keeps it literal.
+  await input.press('End');
+  await input.pressSequentially(' x');
+  await expect(mainWindow.getByText('Note to memory')).not.toBeVisible();
+  await input.fill('');
+
+  await input.focus();
+  await paste(mainWindow, '/note something');
+  await expect(mainWindow.getByText('Note to memory')).not.toBeVisible();
+  await expect(input).toHaveValue('/note something');
+  await input.fill('');
+
+  // A pasted `/no` gets no menu; after a typed `/` the paste is literal too.
+  await input.focus();
+  await paste(mainWindow, '/no');
+  await expect(mainWindow.locator('#composer-slash-menu')).toHaveCount(0);
+  await input.fill('');
+  await input.pressSequentially('/');
+  await paste(mainWindow, 'note hi');
+  await expect(mainWindow.getByText('Note to memory')).not.toBeVisible();
+  await expect(input).toHaveValue('/note hi');
+  await input.fill('');
+
+  // Once cleared, typing the prefix by hand works again.
+  await input.pressSequentially('//typed by hand');
+  await expect(mainWindow.getByText('Note to memory')).toBeVisible();
+  await input.press('Escape');
+  await input.fill('');
+  expect(await readNotes(mainWindow)).toHaveLength(0);
+});
+
 test('Escape exits note mode without saving; the / menu enters it', async ({ mainWindow }) => {
   const input = composer(mainWindow);
   await input.pressSequentially('//not worth keeping');
