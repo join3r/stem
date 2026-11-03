@@ -317,6 +317,7 @@ Rules:
   - "style": how they write and how they work with the assistant, judged from THEIR OWN messages — languages they write in, how long and how formal their messages are, shorthand or typos, how they give instructions, what they push back on, how they make decisions, what kind of answers they respond well to. Describe only patterns seen across several messages, never one moment's mood. Describe; never phrase it as rules for the assistant.
   - "topOfMind": what they are working on or dealing with lately — lean on the newest facts and messages and give approximate dates.
   - "history": how they got here — earlier projects, moves, changes, with approximate dates.
+- Some facts are about other people in the user's life (a colleague's tools, a friend's diet). They belong in the summary only as who those people are to the user; leave their own details out.
 - Prefer concrete specifics (names, places, products, numbers, dates) over generalities. Merge related points into flowing sentences; do not list facts one by one.
 - Use only what the input supports. Never guess, never pad. Facts marked "uncertain" may be mentioned only as uncertain, or left out.
 - Facts with an "until" date stopped being true; describe them in the past tense (they belong in history).

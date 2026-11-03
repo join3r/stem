@@ -8,6 +8,7 @@ import { processPendingRelationChecks, relationSweepBackfillDone, stepRelationSw
 import { MAX_ADJUDICATE_ATTEMPTS, adjudicateOpenConflicts } from '../recall/adjudicate';
 import { consolidateFacts, fullTidyDue } from '../recall/consolidate';
 import { buildUserProfile, userProfileDue, userWritingStyle } from '../recall/profile';
+import { peopleSuggestDue, suggestPeople } from '../recall/people-suggest';
 import { getMemoryRebuildStatus, runMemoryRebuildStep } from '../recall/rebuild';
 import { summarizeFactTexts } from '../recall/audit';
 import { recallStore } from '../recall/store';
@@ -186,6 +187,14 @@ export function initRecallTasks(deps: {
             detail: r.updated ? (r.mode === 'full' ? 'Wrote your summary' : 'Revised your summary') : 'Summary unchanged'
           }));
           if (r.updated) deps.emit('memory:profileChanged', {});
+        }
+        // People memory keeps naming who are not in Manage → People yet: offer
+        // them, once enough new facts have landed (people-suggest.ts).
+        if (peopleSuggestDue()) {
+          await activity.track('memory.people', 'Suggesting people', () => suggestPeople(recallLlm), (n) => ({
+            worked: n > 0,
+            detail: `Suggested ${n} ${n === 1 ? 'person' : 'people'}`
+          }));
         }
         // Skills acquisition used to run here as a backlog pass over the same new
         // messages. It's gone: the recall DB stores only prose, so it was

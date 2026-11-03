@@ -2960,6 +2960,7 @@ export type ActivityKind =
   | 'memory.adjudicate'
   | 'memory.consolidate'
   | 'memory.profile'
+  | 'memory.people'
   | 'memory.deepCheck'
   | 'memory.episodicEmbed'
   | 'memory.factEmbed'
@@ -3143,6 +3144,49 @@ export interface PersonaBrowserPin {
    * every profile, including ones added later.
    */
   profiles?: string[];
+}
+
+/**
+ * Someone in the user's life Stem should know about (Manage → People). Facts
+ * belong to a person by name: a fact whose text names them (name, alias, email
+ * or Stem address) is theirs — see server/recall/people-match.ts.
+ */
+export interface Person {
+  id: string;
+  name: string;
+  /** Other names the user uses for them: a nickname, first name only. */
+  aliases: string[];
+  /** Who they are to the user: "colleague at Awantech", "sister". */
+  relation: string;
+  /** Their Stem address, when they have one (inter-Stem mail). Empty when none. */
+  stemAddress: string;
+  emails: string[];
+  /** Other places to reach them, free-form: "Slack: @peter", "+421 900 …". */
+  handles: string[];
+  /** The user's own notes, shown to the assistant whenever this person comes up. */
+  notes: string;
+  /** 'suggested': proposed from memory, not used until the user accepts it. */
+  status: 'active' | 'suggested';
+  /** Why it was suggested (suggested people only). */
+  reason?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A fact that names a person, as the People editor lists it. */
+export interface PersonFact {
+  id: number;
+  text: string;
+  source: string;
+  sensitivity: FactSensitivity;
+  pinned: boolean;
+}
+
+/** What a People "Suggest" pass did. */
+export interface PeopleSuggestResult {
+  /** New suggestions added. */
+  added: number;
+  people: Person[];
 }
 
 export interface Persona {
@@ -5451,6 +5495,19 @@ export interface StemApi {
   onMailChanged(listener: () => void): () => void;
   /** Fired after any persona is saved or deleted, on every connected client. */
   onPersonasChanged(listener: () => void): () => void;
+
+  // People (Manage → People). Mutations return the fresh list.
+  listPeople(): Promise<Person[]>;
+  /** Create or update a person (upsert by id; accepting a suggestion is a save with status 'active'). */
+  savePerson(person: Person): Promise<Person[]>;
+  /** Delete a person; a deleted suggestion is not suggested again. */
+  deletePerson(id: string): Promise<Person[]>;
+  /** The live facts that name this person. */
+  personFacts(id: string): Promise<PersonFact[]>;
+  /** Ask the model for people named in memory who are not in the list yet. */
+  suggestPeople(): Promise<PeopleSuggestResult>;
+  /** Fired after any person is saved, deleted or suggested, on every connected client. */
+  onPeopleChanged(listener: () => void): () => void;
 
   listMcpServers(): Promise<McpServerSummary[]>;
   /** Live per-server connection status (keyed by name) from the running app-server. */

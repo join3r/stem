@@ -379,7 +379,7 @@ function replyError(id: number | string | undefined, code: number, message: stri
 const FACTS_TOOL = {
   name: 'search_facts',
   description:
-    'Search the durable facts Stem has learned about the user (family, vehicles, home, health, preferences, plans). Only the facts most relevant to the current message are pre-injected, so when a request depends on personal context that might not be in view — planning, purchases, recommendations, anything where family members, ages, vehicle, budget or preferences would change the answer — search here first. Matching is keyword plus semantic (multilingual); if a search misses, retry with the key terms in the other language (e.g. add English to a Slovak query).',
+    'Search the durable facts Stem has learned about the user and the people in their life (family, colleagues, clients, vehicles, home, health, preferences, plans). Only the facts most relevant to the current message are pre-injected, so when a request depends on personal context that might not be in view — planning, purchases, recommendations, writing to someone, anything where family members, colleagues, ages, vehicle, budget or preferences would change the answer — search here first. To learn about a person, search their name. Matching is keyword plus semantic (multilingual); if a search misses, retry with the key terms in the other language (e.g. add English to a Slovak query).',
   inputSchema: {
     type: 'object',
     properties: {

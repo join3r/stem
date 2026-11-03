@@ -5,11 +5,13 @@ import { MemoryTab } from './tabs/MemoryTab';
 import { McpSkillsTab } from './tabs/McpTab';
 import { SourcesTab } from './tabs/FoldersTab';
 import { PersonasTab } from './tabs/PersonasTab';
+import { PeopleTab } from './tabs/PeopleTab';
+import { useRememberedTab } from '../hooks/useRememberedTab';
 import { TasksTab } from './tabs/TasksTab';
 import { SettingsTab } from './tabs/settings/SettingsTab';
 import { useRetrievalHealth } from '../hooks/useRetrievalHealth';
 import type { ModelTabProps, ActiveFactsViewProps } from './tabs/shared';
-import type { ManageTabId } from '../../shared/types';
+import type { ManageTabId, ModelSummary } from '../../shared/types';
 
 type Tab = ManageTabId;
 
@@ -22,7 +24,7 @@ const TABS: { id: Tab; label: string; icon: typeof Brain }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'mcp', label: 'Tools — MCP & skills', icon: Plug },
-  { id: 'personas', label: 'Personas', icon: Users },
+  { id: 'personas', label: 'Personas & people', icon: Users },
   { id: 'folders', label: 'Sources — files & connected folders', icon: FolderTree },
   { id: 'tasks', label: 'Scheduled tasks', icon: CalendarClock },
   { id: 'settings', label: 'Settings', icon: Settings }
@@ -140,7 +142,7 @@ function ManagePanelImpl({
           />
         )}
         {tab === 'mcp' && <McpSkillsTab models={models} />}
-        {tab === 'personas' && <PersonasTab models={models} />}
+        {tab === 'personas' && <PersonasAndPeople models={models} />}
         {tab === 'folders' && <SourcesTab models={models} />}
         {tab === 'tasks' && (
           <TasksTab
@@ -178,3 +180,23 @@ function ManagePanelImpl({
 // stable at streaming time (see threadStatuses/useShallowStable in App), so the
 // memo actually holds during a reply.
 export const ManagePanel = memo(ManagePanelImpl);
+
+const WHO_SUBS = ['personas', 'people'] as const;
+
+/** Personas (agents you mail) and People (the humans in your life) under one icon, like Sources. */
+function PersonasAndPeople({ models }: { models: ModelSummary[] }) {
+  const [sub, setSub] = useRememberedTab('stem.personas.sub', WHO_SUBS, 'personas');
+  return (
+    <div>
+      <div className="seg-ctl">
+        <button className={sub === 'personas' ? 'active' : ''} onClick={() => setSub('personas')}>
+          Personas
+        </button>
+        <button className={sub === 'people' ? 'active' : ''} onClick={() => setSub('people')}>
+          People
+        </button>
+      </div>
+      {sub === 'personas' ? <PersonasTab models={models} /> : <PeopleTab />}
+    </div>
+  );
+}

@@ -18,7 +18,7 @@ const { applyAdjudication, bumpAdjudicationAttempts, getConflictsForAdjudication
 
 // Exported so tests dispatch fake-LLM replies on the constant instead of a
 // brittle regex over prompt wording.
-export const ADJUDICATE_PROMPT_HEADER = 'You are resolving a conflict between two remembered facts about the same user.';
+export const ADJUDICATE_PROMPT_HEADER = "You are resolving a conflict between two remembered facts in one user's memory.";
 // Sized against the relation-check pass, which can raise up to 25 conflicts per
 // cycle (reconcile.ts) — at 5 the backlog only ever grew. The producer is also
 // depth-gated (recall-tasks.ts), so the two bounds meet in the middle.
@@ -49,8 +49,8 @@ Today's date: ${today}.
 
 Decide:
 - "a_wins" / "b_wins": one statement is the current truth and the other is outdated or wrong.
-- "both_true": both can hold at once — different things (different invoices, contracts), or complementary details about the same thing. A statement bounded to a past period ("worked at X from 2022 to 2024", "used to") is history, not outdated: it stays true beside a different present, even one involving the same company or thing in a new role.
-- "rewrite": both are partially right, or a statement bundles several claims of which only some are contested. Replace BOTH with 1-${MAX_REWRITE_FACTS} short atomic third-person statements ("The user ..."), carrying over the natural identifiers and dates from the originals.
+- "both_true": both can hold at once — different people or things (different invoices, contracts), or complementary details about the same thing. A statement bounded to a past period ("worked at X from 2022 to 2024", "used to") is history, not outdated: it stays true beside a different present, even one involving the same company or thing in a new role.
+- "rewrite": both are partially right, or a statement bundles several claims of which only some are contested. Replace BOTH with 1-${MAX_REWRITE_FACTS} short atomic third-person statements, each keeping its subject ("The user ..." for the user, the name for anyone else), carrying over the natural identifiers and dates from the originals.
 - "unclear": you cannot tell — leave the conflict for the user.
 
 Return ONLY JSON {"outcome":"a_wins"|"b_wins"|"both_true"|"rewrite"|"unclear","facts":[]} ("facts" only for rewrite).`;

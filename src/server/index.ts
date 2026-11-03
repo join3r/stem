@@ -37,6 +37,9 @@ import { MailRouter } from './mail/router';
 import { answerMemoryCheck } from './recall/deep-check';
 import { nameAfterFirstReply, runMailSubjectPass, type MailSubjectDeps } from './mail/subject';
 import { getPersona, onPersonasChanged, resolveClientPersona } from './workspace/personas';
+import { listPeople, onPeopleChanged } from './workspace/people';
+import { registerPeopleIpc } from './ipc/people';
+import { setPeopleContactsSource } from './recall/people-suggest';
 import { contactMemoryScheduler } from './interstem/contact-memory';
 import { personaTurnFields } from './workspace/persona-turn';
 import { initTaskScheduler } from './startup/scheduler';
@@ -421,6 +424,11 @@ function registerIpc(): void {
   // migrations alike — so every connected client's
   // persona list (the composer's To: field included) stays current.
   onPersonasChanged(() => emit('personas:changed', undefined));
+  registerPeopleIpc({ runtime: () => runtime! });
+  onPeopleChanged(() => emit('people:changed', undefined));
+  // Fill the per-turn snapshot (recall/people-context.ts) before the first turn.
+  void listPeople();
+  setPeopleContactsSource(async () => (interStem ? (await interStem.status()).contacts : []));
   registerMailIpc({ router: () => mailRouter, runtime: () => runtime! });
   registerInterStemIpc({ service: () => interStem, router: () => mailRouter });
   registerShareIpc({ runtime: () => runtime!, interStem: () => interStem });

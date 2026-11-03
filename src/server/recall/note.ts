@@ -29,7 +29,7 @@ export const LONG_NOTE_THRESHOLD = 500;
 
 function rewritePrompt(text: string): string {
   const today = new Date().toISOString().slice(0, 10);
-  return `A user typed a quick note for a personal assistant's long-term memory. Rewrite it as ONE short third-person English statement about the user ("The user ...").
+  return `A user typed a quick note for a personal assistant's long-term memory. Rewrite it as ONE short third-person English statement — about the user ("The user ..."), or, when the note is about someone or something else in their life, about that subject by name ("Peter, the user's colleague, uses Linux.").
 
 Note: ${text}
 Today's date: ${today}
@@ -38,8 +38,9 @@ Rules:
 - Write in ENGLISH; keep proper names, place names, and quoted identifiers as-is.
 - Resolve relative dates ("tomorrow", "next Friday") to absolute dates using today's date.
 - Do not add, infer, or drop information; preserve every specific (names, dates, amounts).
+- Never turn a note about someone else into a statement about the user.
 - If the note is already a clean third-person English statement, return it unchanged.
-Return ONLY JSON {"text":"The user ..."}.`;
+Return ONLY JSON {"text":"..."}.`;
 }
 
 /**
@@ -158,7 +159,7 @@ function extractPrompt(text: string, known: Array<{ id: number; text: string }>)
   const knownBlock = known.length
     ? `\n\nKnown facts (do not restate):\n${known.map((f) => `[${f.id}] ${f.text}`).join('\n')}`
     : '';
-  return `A user pasted a long note for a personal assistant's long-term memory. Break it into separate DURABLE facts about the user.
+  return `A user pasted a long note for a personal assistant's long-term memory. Break it into separate DURABLE facts about the user and the people, organizations and things in their life.
 
 Note:
 ${text}
@@ -166,13 +167,13 @@ ${text}
 Today's date: ${today}${knownBlock}
 
 Rules:
-- Each fact is ONE short third-person ENGLISH statement ("The user ..."). Keep proper names, place names, and quoted identifiers as-is.
+- Each fact is ONE short third-person ENGLISH statement: "The user ..." for the user; for anyone or anything else, name the subject and how it relates to the user ("Peter, the user's colleague, uses Linux."). Never attribute someone else's details to the user. Keep proper names, place names, and quoted identifiers as-is.
 - Preserve the specifics worth remembering (names, dates, amounts, booking references); resolve relative dates ("tomorrow", "next Friday") to absolute dates using today's date.
 - Keep a coherent list together as a SINGLE fact (places to visit, a packing list, shopping items) — recalling half a list is worse than recalling none. Split only claims about unrelated topics.
 - Skip filler, formatting, and anything the known facts already cover.
 - Never include credentials, payment secrets, recovery phrases, or government identifiers. Addresses, contact details, health, and finance are allowed but must use sensitivity "sensitive".
 - Output ONLY {"claims":[...]} where each claim is:
-  {"text":"The user ...","category":"identity|preference|relationship|work|project|health|finance|location|schedule|other","sensitivity":"standard|sensitive","validUntil":"YYYY-MM-DD or null"}
+  {"text":"...","category":"identity|preference|relationship|work|project|health|finance|location|schedule|other","sensitivity":"standard|sensitive","validUntil":"YYYY-MM-DD or null"}
 If the note holds nothing durable, output {"claims":[]}.`;
 }
 

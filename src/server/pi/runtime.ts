@@ -4992,7 +4992,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         flags,
         injectedDocs,
         factReranker,
-        previousUserMessages: factReranker?.factQuery ? previousUserMessages : []
+        previousUserMessages: factReranker?.factQuery ? previousUserMessages : [],
+        earlierUserMessages: previousUserMessages
       });
       if (recall) blocks.push(recall);
       // Documents from a memorize:false folder were injected: taint the turn the

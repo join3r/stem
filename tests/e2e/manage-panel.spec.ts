@@ -97,6 +97,7 @@ test('the Files sub-tab lists a seeded Files folder and deletes through to disk'
 });
 
 test('the Personas editor round-trips the spawn flag, the send budget, and the clients flag', async ({ mainWindow }) => {
+  await mainWindow.getByRole('button', { name: 'Personas & people', exact: true }).click();
   await mainWindow.getByRole('button', { name: 'Personas', exact: true }).click();
 
   // Secretary ships with the spawn capability on; its editor's Access tab
@@ -125,6 +126,28 @@ test('the Personas editor round-trips the spawn flag, the send budget, and the c
       )
     )
     .toMatchObject({ sendBudget: 5, canSpawn: true, clients: true });
+});
+
+test('People shares the Personas icon; a new person saves, lists and is deleted', async ({ mainWindow }) => {
+  await mainWindow.getByRole('button', { name: 'Personas & people', exact: true }).click();
+  await mainWindow.getByRole('button', { name: 'People', exact: true }).click();
+  await expect(mainWindow.getByText('No people yet', { exact: false })).toBeVisible();
+
+  await mainWindow.getByRole('button', { name: 'New person' }).click();
+  await mainWindow.getByLabel('Name').fill('Peter Novák');
+  await mainWindow.getByLabel('Who they are to you').fill('colleague');
+  await mainWindow.getByLabel('Also called').fill('Peťo, Novák');
+  await mainWindow.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect
+    .poll(() => mainWindow.evaluate(() => (window as any).stem.listPeople()))
+    .toMatchObject([{ name: 'Peter Novák', relation: 'colleague', aliases: ['Peťo', 'Novák'], status: 'active' }]);
+
+  await mainWindow.getByRole('button', { name: 'Back to People' }).click();
+  await expect(mainWindow.getByText('Peter Novák', { exact: true })).toBeVisible();
+  await mainWindow.getByText('Peter Novák', { exact: true }).click();
+  await mainWindow.getByRole('button', { name: 'Delete person' }).click();
+  await mainWindow.getByRole('button', { name: 'Delete person?' }).click();
+  await expect(mainWindow.getByText('No people yet', { exact: false })).toBeVisible();
 });
 
 test('an MCP server pasted as JSON fills a draft, saves, reopens and is removed', async ({ mainWindow }) => {

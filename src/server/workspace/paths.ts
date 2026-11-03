@@ -328,6 +328,11 @@ export function personasStorePath(): string {
   return process.env.STEM_PERSONAS_STORE ?? join(userDataRoot(), 'personas.json');
 }
 
+/** Stem-owned people registry (Manage → People) — see workspace/people.ts. */
+export function peopleStorePath(): string {
+  return process.env.STEM_PEOPLE_STORE ?? join(userDataRoot(), 'people.json');
+}
+
 /**
  * Per-persona memory: one JSON file of work-expertise notes per persona id
  * (see workspace/persona-memory.ts). A directory of small files rather than a

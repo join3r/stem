@@ -3639,6 +3639,8 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .wizard-suggest { font-size: var(--fs-12); }
 .wizard-advice { margin: 0; color: var(--ink); }
 .ld-advice { display: flex; align-items: flex-start; gap: var(--sp-3); margin: 0 0 var(--sp-4); font-size: var(--fs-12); color: var(--muted); }
+.people-facts ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--sp-3); }
+.people-facts li { font-size: var(--fs-12); line-height: 1.45; padding: var(--sp-3) var(--sp-4); border: 0.5px solid var(--line); border-radius: var(--radius-sm); }
 .ld-advice svg { flex: none; margin-top: 2px; color: var(--accent); }
 /* The editor's Suggest button while the model looks at the folder. */
 .icon-action .suggesting { animation: activity-pulse 1.4s ease-in-out infinite; }

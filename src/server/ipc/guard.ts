@@ -216,6 +216,10 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'personas:notes:save': [a.string, a.object],
   'personas:notes:delete': [a.string, a.string],
   'personas:notes:consolidate': [a.string],
+  // People: save takes the whole person (reshaped in workspace/people.ts coercePerson).
+  'people:save': [a.object],
+  'people:delete': [a.string],
+  'people:facts': [a.string],
   // Mail: compose is reshaped where it lands (mail/router.ts). The triage
   // mutators take conversation-id lists, the inbox-mutator shape.
   // ('mail:list' and 'mail:summary' take no arguments, so they are absent.)

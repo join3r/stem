@@ -192,7 +192,7 @@ export function appMenuTemplate(
       tab('chats', 'Chats'),
       tab('memory', 'Memory'),
       tab('mcp', 'Tools'),
-      tab('personas', 'Personas'),
+      tab('personas', 'Personas & People'),
       tab('folders', 'Sources'),
       tab('tasks', 'Scheduled Tasks'),
       sep,

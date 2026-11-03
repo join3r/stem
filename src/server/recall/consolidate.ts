@@ -49,7 +49,7 @@ const MAX_DROP_FRACTION = 0.4;
 // this is a model gone wild, so the group is rejected (left for a later pass).
 const MAX_MERGE_GROUP = 8;
 
-const INSTRUCTIONS = `You are cleaning up a long-term memory of DURABLE facts about a single user. Each fact is listed as "[id] text". Some are reworded duplicates of each other; some have been superseded or contradicted by a later, more accurate fact. Your job is to propose a minimal set of edits that makes the memory accurate and non-redundant.
+const INSTRUCTIONS = `You are cleaning up a long-term memory of DURABLE facts about a single user and the people and things in their life. Each fact is listed as "[id] text". Some are reworded duplicates of each other; some have been superseded or contradicted by a later, more accurate fact. Your job is to propose a minimal set of edits that makes the memory accurate and non-redundant.
 
 Return ONLY a JSON object (no prose, no markdown fences) with this shape:
 {
@@ -66,7 +66,7 @@ Rules:
 - When two facts directly contradict, keep the one with the later evidence date — unless a date stated inside the text says otherwise (evidence dates are message times and can lie).
 - A fact annotated "(injected N×, never used)" has repeatedly been offered to the assistant without ever mattering to a reply. Treat that as SUPPORTING evidence when deciding whether it is redundant or stale — but usage alone is NEVER a reason to drop a fact that is unique and plausibly true.
 - NEVER drop, merge, or alter a fact marked PROTECTED — the user explicitly asked to remember it.
-- Keep wording as short third-person statements ("The user ...").
+- Keep wording as short third-person statements, and keep each fact's subject: "The user ..." for the user, the person's or thing's name for anyone or anything else. Facts about different subjects are never duplicates of each other.
 - If nothing needs changing, return {"merge":[],"correct":[],"drop":[]}.`;
 
 const EMPTY_OPS: ConsolidationOps = { merge: [], correct: [], drop: [] };

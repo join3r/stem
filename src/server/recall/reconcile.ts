@@ -40,7 +40,7 @@ export interface RelationSide {
 
 // Exported so tests dispatch fake-LLM replies on the constant instead of a
 // brittle regex over prompt wording.
-export const RELATION_PROMPT_HEADER = 'Two statements describe the same user. Decide how they relate.';
+export const RELATION_PROMPT_HEADER = "Two statements come from one user's memory, about the user or the people and things in their life. Decide how they relate.";
 
 /** Evidence timestamp → ISO date for the relation prompt. */
 export function isoDate(ts: number | null): string | null {
@@ -82,7 +82,7 @@ B (evidence dated ${b.evidenceDate ?? 'unknown'}): ${b.text}
 
 Classify:
 - "a_covers_b" / "b_covers_a": they state the SAME fact — a rewording, or one repeats the other plus more detail — and nothing changed over time. "a_covers_b" means A already says everything B says, so B adds nothing; if they say exactly the same, either is fine.
-- "compatible": EACH adds a detail the other lacks about the same subject (a payment, an interpreter, a companion), or they concern DIFFERENT things entirely (different invoice numbers, different contracts, different hosts, different policies). Both can be true at once. A statement bounded to a past period ("worked at X from 2022 to 2024", "used to live in Y", "until March") is history: it stays true when the other side describes a different present, so the pair is compatible — even when the present involves the same company, place, or thing in a new role or arrangement.
+- "compatible": EACH adds a detail the other lacks about the same subject (a payment, an interpreter, a companion), or they concern DIFFERENT things entirely (different people, different invoice numbers, different contracts, different hosts, different policies). Both can be true at once. A statement bounded to a past period ("worked at X from 2022 to 2024", "used to live in Y", "until March") is history: it stays true when the other side describes a different present, so the pair is compatible — even when the present involves the same company, place, or thing in a new role or arrangement.
 - "b_supersedes_a" / "a_supersedes_b": both state the same attribute of the SAME thing (the same domain, contract, policy, recurring fee) and one is clearly the newer state — a renewal, a price change, an update. Prefer dates stated INSIDE the statements over the evidence dates; evidence dates are file or message times and can lie.
 - "contradicts": they assert different values for the same attribute and there is no way to tell which is current.
 

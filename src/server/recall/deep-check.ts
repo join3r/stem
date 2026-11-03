@@ -254,7 +254,7 @@ A "folder" fact was condensed from a file in the user's connected folders. Many 
 Sort the problems you find into three buckets.
 
 "fixes" — errors you can PROVE from what is listed:
-  {"kind": "wrong_subject", "fact": id, "reason": "..."} the fact describes someone or something else as the user: a document's author, a person quoted in a pasted chat, a company merely named in a file.
+  {"kind": "wrong_subject", "fact": id, "reason": "..."} the fact describes someone or something else as the user: a document's author, a person quoted in a pasted chat, a company merely named in a file. A fact that names another person as its subject ("Peter, the user's colleague, uses Linux") is not wrong_subject.
   {"kind": "duplicate", "fact": id, "into": id, "reason": "..."} the fact says the same thing as fact "into", which is the one to keep (better worded or better evidenced).
   {"kind": "overruled", "fact": id, "quote": "...", "reason": "..."} the user's own words contradict it. "quote" must be copied VERBATIM from a user_message excerpt listed above, newer than any user_message evidence behind this fact.
 "proposals" — facts that look wrong, stale or about someone else but cannot be proven: {"fact": id, "reason": "...", "ongoing": false}. Accepting a proposal retires the fact.
@@ -684,7 +684,7 @@ Return ONLY JSON:
 {"reply": "...", "saves": [{"text": "...", "replaces": [ids], "question": "q-id"}], "retire": [{"fact": id, "reason": "...", "question": "q-id"}], "answered": ["q-ids"]}
 
 - "reply": a short plain answer to anything the user asked, or a one-line acknowledgement. When they asked about a question, explain where those facts came from using what is listed; do not change anything for that question.
-- "saves": the user's answer as a short third-person fact ("The user ..."); "replaces" lists the listed facts it makes wrong or redundant.
+- "saves": the user's answer as a short third-person fact ("The user ...", or the person's name when the answer is about someone else); "replaces" lists the listed facts it makes wrong or redundant.
 - "retire": listed facts the answer shows are wrong, with no replacement. When the user says something has ended ("not anymore", "finished", "stopped"), retire those facts and save nothing: a fact saying something ended is not worth remembering, unless the user adds something lasting.
 - "answered": questions the reply settled. A skipped question is not answered.
 - Act only on what the user clearly said. Use only the ids listed below.

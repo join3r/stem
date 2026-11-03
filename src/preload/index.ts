@@ -59,6 +59,7 @@ import type {
   QuickChatTabs,
   MailComposeInput,
   Persona,
+  Person,
   ScheduledTask,
   SkillProposal,
   SkillsMode,
@@ -511,6 +512,17 @@ const api: StemApi = {
     ipcRenderer.invoke('personas:notes:delete', personaId, noteId),
   consolidatePersonaNotes: (personaId: string) =>
     ipcRenderer.invoke('personas:notes:consolidate', personaId),
+
+  listPeople: () => ipcRenderer.invoke('people:list'),
+  savePerson: (person: Person) => ipcRenderer.invoke('people:save', person),
+  deletePerson: (id: string) => ipcRenderer.invoke('people:delete', id),
+  personFacts: (id: string) => ipcRenderer.invoke('people:facts', id),
+  suggestPeople: () => ipcRenderer.invoke('people:suggest'),
+  onPeopleChanged: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on('people:changed', handler);
+    return () => ipcRenderer.removeListener('people:changed', handler);
+  },
 
   listMail: () => ipcRenderer.invoke('mail:list'),
   getMailWork: (conversationId: string) => ipcRenderer.invoke('mail:work', conversationId),
