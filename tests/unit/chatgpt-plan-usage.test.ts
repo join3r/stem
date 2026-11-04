@@ -24,7 +24,7 @@ describe('ChatGPT plan usage', () => {
   it('reads both windows with what is spent and when they reset', async () => {
     const fetchImpl = respond(200, BODY);
     const u = await planUsage(TOKEN, fetchImpl, NOW);
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe(PLAN_USAGE_URL);
+    expect(fetchImpl).toHaveBeenCalledWith(PLAN_USAGE_URL, expect.anything());
     expect(u).toEqual({
       ok: true,
       plan: 'plus',
