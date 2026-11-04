@@ -4434,11 +4434,12 @@ function registerSkillTools(pi) {
       'A skill needs: a lowercase-hyphenated `name` of at most 64 characters, which is also its folder; a ONE-sentence `description` of at most 160 characters starting "Use when" and naming the one situation that calls for it, never restating the name (one skill is one job: two jobs on the same tool are two skills); ' +
       'and a `content` body of at most 4096 bytes with exactly the headings "## When to use", "## Steps", "## Verification", in that order. Write no front-matter. ' +
       'If the reply says the skill was rejected, it lists exactly what was wrong — fix those points and call again. ' +
-      'Use action "remove" to delete an auto-created skill that is no longer useful.',
+      'Use action "remove" to delete an auto-created skill that is no longer useful. ' +
+      'Use action "view" with just `name` to load a saved skill that the skills block listed by name only, when its description fits the request.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['save', 'remove'], description: 'save (add or replace) or remove a skill.' },
+        action: { type: 'string', enum: ['save', 'remove', 'view'], description: 'save (add or replace), remove, or view (load and read) a skill.' },
         name: { type: 'string', description: 'The skill slug: lowercase words joined by single hyphens, max 64 chars.' },
         initiated_by: {
           type: 'string',
@@ -4458,8 +4459,12 @@ function registerSkillTools(pi) {
       const action = String((params && params.action) || '').trim();
       // "create"/"patch" were the old action names; a model that reaches for one
       // means "save", and failing it on vocabulary would waste a whole turn.
-      const op = action === 'remove' ? 'remove' : action === 'save' || action === 'create' || action === 'patch' ? 'save' : '';
-      if (!op) return skillErr(`Unknown action "${action}". Use save or remove.`);
+      const op =
+        action === 'remove' ? 'remove'
+        : action === 'view' || action === 'load' || action === 'read' ? 'view'
+        : action === 'save' || action === 'create' || action === 'patch' ? 'save'
+        : '';
+      if (!op) return skillErr(`Unknown action "${action}". Use save, remove or view.`);
       try {
         const res = await skillBridge(ctx, {
           op,

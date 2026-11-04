@@ -33,7 +33,46 @@ export const SKILL_GATE_MIN_TOOL_CALLS = 5;
 
 export type SettleDecision =
   | { fire: false; reason: 'below-gate' | 'tainted' | 'scheduled' | 'mode-off' | 'imported' }
-  | { fire: true; existing?: { name: string; description: string; body: string }; issue?: string };
+  | {
+      fire: true;
+      existing?: { name: string; description: string; body: string };
+      issue?: string;
+      /** The turn wrote a message for the user to send; see `wroteMessageDraft`. */
+      writing?: boolean;
+    };
+
+/**
+ * Tool names that put a message in someone's outbox: a mail draft, a Slack
+ * draft, a sent message. Matched against the tool's own name and, for MCP calls
+ * routed through `invoke_tool`, the inner tool named in its arguments.
+ */
+const MESSAGE_TOOL = /draft|send_message|send_email|reply_email/i;
+const INVOKED_TOOL = /"tool"\s*:\s*"([^"]+)"/;
+
+/**
+ * Did this turn write a message for the user to send?
+ *
+ * Writing turns are the ones the tool-count gate was blind to. A draft takes one
+ * to six calls, and the corrections that make it worth a skill ("sign it as
+ * Stem, on behalf of me") arrive as a follow-up with no tools at all. Yet a
+ * draft is exactly where the user's conventions live: signature, tone, language,
+ * which address it goes out from. On 2026-11-04 the live library held 61
+ * skills and none said how the user's mail is written, after weeks of daily
+ * drafted replies and an explicit request to sign them "on behalf of" the user.
+ *
+ * Two signals, both deterministic: a draft or send tool in the trace, or a reply
+ * that is itself a draft, read off its To and Subject lines (the morning task
+ * falls back to drafts in the reply when the mailbox refuses a save).
+ */
+export function wroteMessageDraft(turn: Pick<SettledTurnTrace, 'trace' | 'assistantText'>): boolean {
+  for (const entry of turn.trace) {
+    if (entry.name && MESSAGE_TOOL.test(entry.name)) return true;
+    const inner = entry.name === 'invoke_tool' ? INVOKED_TOOL.exec(entry.args ?? '')?.[1] : undefined;
+    if (inner && MESSAGE_TOOL.test(inner)) return true;
+  }
+  const text = turn.assistantText ?? '';
+  return /^[\s>*_]*(To|Komu|Recipient)[*_]*\s*:/im.test(text) && /^[\s>*_]*(Subject|Predmet|Vec)[*_]*\s*:/im.test(text);
+}
 
 /**
  * Should this turn be offered to the author, and as a create or a patch?
@@ -59,7 +98,9 @@ export function decideSettle(turn: SettledTurnTrace, mode: SkillsMode): SettleDe
   const reported = routeReported(turn);
   if (reported) return importedSkill(reported.existing.name) ? { fire: false, reason: 'imported' } : { fire: true, ...reported };
 
-  if (turn.trace.length < SKILL_GATE_MIN_TOOL_CALLS) return { fire: false, reason: 'below-gate' };
+  // A message draft fires below the tool gate: see `wroteMessageDraft`.
+  const writing = wroteMessageDraft(turn);
+  if (turn.trace.length < SKILL_GATE_MIN_TOOL_CALLS && !writing) return { fire: false, reason: 'below-gate' };
 
   // The turn showed evidence of FOLLOWING a skill: improve that one rather than
   // adding a near-duplicate beside it. Where several graded used, take the first
@@ -82,7 +123,8 @@ export function decideSettle(turn: SettledTurnTrace, mode: SkillsMode): SettleDe
   // about), and a fresh skill beside it would be a near-duplicate of the import.
   const existing = firstExistingSkill(turn.skillsGradedUsed);
   if (existing && importedSkill(existing.name)) return { fire: false, reason: 'imported' };
-  return existing ? { fire: true, existing } : { fire: true };
+  const extra = writing ? { writing: true } : {};
+  return existing ? { fire: true, existing, ...extra } : { fire: true, ...extra };
 }
 
 /** Installed by the user as it is — off-limits to every automatic edit. */
@@ -177,6 +219,8 @@ export async function authorForTurn(
     earlier?: AuthorTurn[];
     /** `/learn`: the user asked, so the author decides what to save, not whether. */
     requested?: boolean;
+    /** The turn wrote a message for the user to send. */
+    writing?: boolean;
   } = {}
 ): Promise<AuthorOutcome> {
   const evidence = {
@@ -187,6 +231,7 @@ export async function authorForTurn(
     earlier: opts.earlier,
     requested: opts.requested,
     issue: opts.issue,
+    writing: opts.writing,
     machine: whereSkillsRun()
   };
   if (opts.existing) return authorSkill(llm, { ...evidence, existing: opts.existing });
@@ -238,6 +283,11 @@ export async function settleSkills(
 ): Promise<SettleOutcome> {
   const decision = decideSettle(turn, mode);
   if (!decision.fire) return { decision };
-  const author = await authorForTurn(turn, llm, { existing: decision.existing, issue: decision.issue, focus: opts.focus });
+  const author = await authorForTurn(turn, llm, {
+    existing: decision.existing,
+    issue: decision.issue,
+    writing: decision.writing,
+    focus: opts.focus
+  });
   return { decision, author };
 }

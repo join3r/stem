@@ -71,6 +71,8 @@ export interface AuthorInput {
   earlier?: AuthorTurn[];
   /** The user asked for this skill (`/learn`): what to save, not whether. */
   requested?: boolean;
+  /** The turn wrote a message for the user to send (settle.ts `wroteMessageDraft`). */
+  writing?: boolean;
   /**
    * Patch path only: what the assistant reported as wrong with `existing` in
    * its reply this turn (the `Skill issue [...]:` line the skills block asks
@@ -129,10 +131,12 @@ Save a skill only when ALL of these hold:
 - The procedure is general enough to run again with different particulars. If the steps only make sense for this exact person, this exact file, or this exact date, it is not a skill.
 
 Do NOT save:
-- Facts about the user, their preferences, or their data. Those are remembered separately and a skill file is the wrong place for them.
+- Lone facts about the user or their data (an address, an account number, a birthday). Those are remembered separately and a skill file is the wrong place for them.
 - A retelling of what happened. Nobody will read a transcript. If you find yourself writing "then I searched for", stop and write the instruction instead.
 - Anything the assistant already knows how to do without notes. Reading a file is not a skill.
 - The obvious restatement of a single tool call.
+
+One kind of preference IS a skill: how the user wants a recurring kind of work done for them. Drafting their email replies, writing their invoices, posting their status updates: the conventions they stated or corrected (the signature and who it is signed as, the tone, the language, which address it goes out from, what to always include or leave out) plus the tool steps that produce it. That is a procedure Stem will follow again, and nothing else carries it from one chat to the next. Name it after the kind of work, not the one recipient.
 
 Declining is the normal answer. Most turns contain nothing durable, and a library full of near-misses is worse than a small one: every skill costs context on every turn, and a bad skill will be followed. Decline freely and without justifying yourself at length.
 
@@ -188,6 +192,17 @@ export const SKILL_LEARN_INSTRUCTIONS = `The user asked for this one. They sent 
 The evidence below is the whole conversation, oldest turn first, not a single turn. A procedure is often spread across several turns: a first attempt, a correction from the user, a fix. Write the version that ended up working, with every correction the user made folded into the steps rather than told as history.
 
 A task the user repeats with their own particulars (the same client, the same folder, the same template, a monthly date) is exactly what they mean, whatever the rules above say about one person's particulars. Keep what stays the same from run to run, and write the parts that change (a date, a count, the next number in a sequence) as things the steps work out or ask for.`;
+
+/**
+ * Extra framing when the turn wrote a message for the user to send (settle.ts
+ * `wroteMessageDraft`). Those turns fire below the tool gate, so most of them
+ * are one-off errands and the author has to be told what makes one worth keeping.
+ */
+export const SKILL_WRITING_INSTRUCTIONS = `This turn wrote a message for the user to send: an email draft, a chat message, a reply. Drafting for the user recurs by nature, so the question is whether this turn shows how THEY want such messages written.
+
+Save or update a writing skill when the user stated or corrected a convention (a sign-off, a signature line, writing on their behalf, a tone, a language, the address to send from), or when getting the draft into their outbox took steps worth not rediscovering (which tool, which identity, reply versus new). Write the conventions as steps, quoted exactly where wording matters, for example the signature lines verbatim. If a skill for this kind of message is already in the library, name it so this turn is folded in rather than written beside it.
+
+Decline when the turn only wrote one message with nothing the user would want the same next time. The content of a single message (this appointment, this invoice number) is never the skill.`;
 
 const MAX_ATTEMPTS = 2;
 
@@ -256,6 +271,7 @@ export function renderEvidence(input: AuthorInput): string {
 export function buildAuthorPrompt(input: AuthorInput): string {
   const parts = [SKILL_AUTHORING_INSTRUCTIONS];
   if (input.requested) parts.push(SKILL_LEARN_INSTRUCTIONS);
+  if (input.writing) parts.push(SKILL_WRITING_INSTRUCTIONS);
   if (input.existing) parts.push(input.chosenTarget ? SKILL_TARGET_PATCH_INSTRUCTIONS : SKILL_PATCH_INSTRUCTIONS);
   // Only when there is actually a library to read: an empty list under "read what
   // is already there" invites a target the author cannot have seen.

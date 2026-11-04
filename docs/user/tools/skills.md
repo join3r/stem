@@ -15,6 +15,13 @@ Skills are reusable procedures: when to use a workflow, its steps, and how to ve
 the result. Not memories. They provide no accounts, tools, or permissions by
 themselves.
 
+A skill can also hold how you want a recurring job done for you. Tell Stem "sign my
+email drafts as Stem, on behalf of me" or "write to my doctors formally, from my Gmail
+address", and it saves that in a skill for drafting your mail rather than in your
+custom instructions. Every chat and scheduled task that drafts mail then follows it,
+and later corrections update the same skill. Stem also proposes one on its own after
+it drafts a message for you, under the **Saving skills** setting.
+
 Open **Tools → Skills**.
 
 <!-- TODO(screenshot): Skills list showing the four demo skills, an auto label, usage details, and enabled switches. -->

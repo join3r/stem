@@ -507,6 +507,19 @@ function fence(text: string): string {
  */
 export const SKILL_ISSUE_MARKER = 'Skill issue';
 
+/**
+ * One skill the model loaded itself with `manage_skill` action `view`: the same
+ * heading, provenance label and fencing as an inlined body, so a loaded skill
+ * reads exactly like one the ranking chose.
+ */
+export function formatLoadedSkill(skill: InlinedSkill): string {
+  return (
+    `### ${fence(skill.name)} (${originLabel(skill.origin)})\n${fence(skill.description)}\n\n${fence(skill.body).trim()}\n\n` +
+    `Follow these steps where they fit this request. If a step is wrong, say so on its own line starting ` +
+    `\`${SKILL_ISSUE_MARKER} [${fence(skill.slug)}]:\`, as for any loaded skill.`
+  );
+}
+
 export function formatSkillsBlock(selection: SkillSelection): string {
   const { inlined, indexed } = selection;
   if (inlined.length === 0 && indexed.length === 0) return '';
@@ -538,6 +551,7 @@ export function formatSkillsBlock(selection: SkillSelection): string {
     `believe is wrong just because it is written here, and never silently skip or substitute one: the user has to be ` +
     `able to see that a saved skill needs fixing. A skill marked "auto-saved, never reviewed" was written by you ` +
     `without anyone checking it, so weigh it accordingly. Skills listed by name only are not loaded — their steps ` +
-    `are not here, so do not guess at them; mention one only if the user would want it loaded.`
+    `are not here, so do not guess at them. When one's description fits the request, load it with \`manage_skill\` ` +
+    `action "view" before you start, and follow it.`
   );
 }

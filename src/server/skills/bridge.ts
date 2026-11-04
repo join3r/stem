@@ -2,6 +2,7 @@ import type { SkillsMode } from '../../shared/types';
 import { formatViolations, validateSkill, type SkillDraft } from './contract';
 import { findDuplicateSkill } from './dedup';
 import { listSkillRecords, readSkillRecord, removeSkill, saveSkill, type SkillOrigin } from './store';
+import { formatLoadedSkill, type InlinedSkill } from './inject';
 
 // The policy layer for every skill write the assistant asks for.
 //
@@ -45,12 +46,20 @@ export interface SkillRemoveRequest {
   name: string;
 }
 
-export type SkillBridgeRequest = SkillSaveRequest | SkillRemoveRequest;
+/** Load a skill the per-turn block listed by name only. Read-only, so no mode applies. */
+export interface SkillViewRequest {
+  op: 'view';
+  name: string;
+}
+
+export type SkillBridgeRequest = SkillSaveRequest | SkillRemoveRequest | SkillViewRequest;
 
 /** What the tool reports back to the model. `text` is written for the model to read. */
 export interface SkillBridgeResult {
   ok: boolean;
   text: string;
+  /** `view` only: the skill loaded, so the turn can grade and route it like an inlined one. */
+  loaded?: InlinedSkill;
 }
 
 export interface SkillApprovalOutcome {
@@ -107,7 +116,38 @@ export class SkillBridge {
     ctx: { isScheduled: boolean; isMail?: boolean; threadId?: string }
   ): Promise<SkillBridgeResult> {
     if (req.op === 'remove') return this.handleRemove(req);
+    if (req.op === 'view') return this.handleView(req);
     return this.handleSave(req, ctx);
+  }
+
+  /**
+   * The per-turn block inlines at most two bodies and lists the rest by name.
+   * Before this the model could only mention a listed skill, never read it, so a
+   * skill that lost the ranking by a little was as good as absent. A disabled
+   * skill stays unreadable: it was archived so it would not be followed.
+   */
+  private handleView(req: SkillViewRequest): SkillBridgeResult {
+    const slug = String(req.name ?? '').trim();
+    if (!slug) return { ok: false, text: 'Specify which skill to load.' };
+    const record = readSkillRecord(slug);
+    if (!record || !record.enabled) {
+      const names = listSkillRecords()
+        .filter((r) => r.enabled)
+        .map((r) => r.slug)
+        .slice(0, 60);
+      return {
+        ok: false,
+        text: `No skill "${slug}".${names.length ? ` Saved skills: ${names.join(', ')}.` : ' No skills are saved.'}`
+      };
+    }
+    const loaded: InlinedSkill = {
+      slug: record.slug,
+      name: record.name,
+      description: record.description,
+      body: record.body,
+      origin: record.origin
+    };
+    return { ok: true, text: formatLoadedSkill(loaded), loaded };
   }
 
   private handleRemove(req: SkillRemoveRequest): SkillBridgeResult {

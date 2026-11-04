@@ -3695,7 +3695,23 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const bridge = this.skillBridge;
         if (!bridge) return respond({ ok: false, text: 'Saving skills is unavailable right now.' });
         const req = JSON.parse(payload ?? '{}') as Record<string, unknown>;
-        const op = req.op === 'remove' ? 'remove' : 'save';
+        const op = req.op === 'remove' ? 'remove' : req.op === 'view' ? 'view' : 'save';
+        if (op === 'view') {
+          const result = await bridge.handleRequest({ op: 'view', name: String(req.name ?? '') }, { isScheduled, isMail, threadId });
+          // A skill the model loaded itself counts as injected into this turn,
+          // so settle grades it, routes a patch to it, and reads a "Skill issue"
+          // report about it the same as for one the ranking inlined.
+          const turn = worker.currentTurn;
+          if (result.loaded && turn && turn.threadId === threadId) {
+            const already = turn.skillsInjected ?? [];
+            if (!already.some((s) => s.slug === result.loaded!.slug)) {
+              turn.skillsInjected = [...already, result.loaded];
+              recordInjections([result.loaded.slug]);
+            }
+          }
+          log('skills', 'skill loaded by the model', { threadId, skill: String(req.name ?? ''), ok: result.ok });
+          return respond({ ok: result.ok, text: result.text });
+        }
         const result = await bridge.handleRequest(
           op === 'remove'
             ? { op: 'remove', name: String(req.name ?? '') }
@@ -3949,7 +3965,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // graded set before that set is recorded or routed on.
       const reported = reportedSkillIssues(turn.assistantText, injected);
       const failedSlugs = new Set(reported.map((i) => i.slug));
-      const used = gradeSkillUse(injected, turn.trace).filter((slug) => !failedSlugs.has(slug));
+      const used = gradeSkillUse(injected, turn.trace, turn.assistantText).filter((slug) => !failedSlugs.has(slug));
       // The same verdicts route authoring: `snapshotTurnTrace` in settleTurn
       // reads these off the turn, so the settle pass gets the graded set
       // without a second pass over the trace. They must be assigned to `turn`
