@@ -474,6 +474,7 @@ const api: StemApi = {
   compactChat: (threadId: string, instructions?: string) => ipcRenderer.invoke('chats:compact', threadId, instructions),
   voiceConnect: (offerSdp: string) => ipcRenderer.invoke('voice:connect', offerSdp),
   voiceCheck: () => ipcRenderer.invoke('voice:check'),
+  chatgptPlanUsage: () => ipcRenderer.invoke('providers:chatgptUsage'),
   listPins: (threadId: string) => ipcRenderer.invoke('pins:list', threadId),
   addPin: (threadId: string, input: ChatPinInput) => ipcRenderer.invoke('pins:add', threadId, input),
   updatePin: (threadId: string, pinId: string, patch: ChatPinPatch) =>

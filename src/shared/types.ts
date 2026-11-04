@@ -4236,6 +4236,21 @@ export interface HarnessSettings {
 /** Whether a voice call may start or go on; `reason` is shown to the user. */
 export type VoiceAllowance = { ok: true } | { ok: false; reason: string };
 
+/** One usage window of a ChatGPT plan (the 5-hour one, the weekly one). */
+export interface PlanUsageWindow {
+  /** Window length in seconds, when ChatGPT says (18000 = 5 h, 604800 = a week). */
+  windowSeconds: number | null;
+  /** 0–100, how much of the window is spent. */
+  usedPercent: number;
+  /** When the window resets, epoch ms; null when not given. */
+  resetsAt: number | null;
+}
+
+/** How much of the ChatGPT plan's usage windows is left (Settings → Models). */
+export type PlanUsage =
+  | { ok: true; plan: string | null; limitReached: boolean; windows: PlanUsageWindow[] }
+  | { ok: false; reason: string };
+
 /**
  * Coding agents and computer control in chats that run as NO persona
  * (2026-09-27). Personas keep their pins as the whole story — a persona chat
@@ -5723,6 +5738,8 @@ export interface StemApi {
   voiceConnect(offerSdp: string): Promise<{ sdp: string }>;
   /** Voice chat: is a call still allowed (switch, sign-in, plan usage left)? Polled during a call. */
   voiceCheck(): Promise<VoiceAllowance>;
+  /** The ChatGPT subscription's 5-hour and weekly usage windows (Settings → Models). */
+  chatgptPlanUsage(): Promise<PlanUsage>;
   listPins(threadId: string): Promise<ChatPin[]>;
   addPin(threadId: string, input: ChatPinInput): Promise<ChatPin[]>;
   updatePin(threadId: string, pinId: string, patch: ChatPinPatch): Promise<ChatPin[]>;

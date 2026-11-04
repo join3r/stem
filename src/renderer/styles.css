@@ -4654,6 +4654,15 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .prov-dot.unknown { background: var(--muted); }
 /* A provider's page (Settings → Models → a tile): the Manage editor's header over settings rows. */
 .prov-detail { display: flex; flex-direction: column; gap: var(--sp-5); margin-bottom: var(--sp-5); }
+/* ChatGPT plan usage on its provider page: a bar of what is left in each window. */
+.plan-usage { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-12); color: var(--muted); flex: none; }
+.plan-usage-bar { width: 72px; height: 5px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--ink) 10%, var(--surface)); overflow: hidden; }
+.plan-usage-fill { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--success); }
+.plan-usage.warn .plan-usage-fill { background: var(--warn); }
+.plan-usage.danger .plan-usage-fill { background: var(--danger); }
+.plan-usage.warn .plan-usage-text { color: var(--warn); }
+.plan-usage.danger .plan-usage-text { color: var(--danger); }
+.plan-usage-text { white-space: nowrap; font-variant-numeric: tabular-nums; min-width: 5.5em; text-align: right; }
 .set-vrow .vval .prov-dot { display: inline-block; width: 6px; height: 6px; vertical-align: 1px; margin-right: 2px; }
 .set-vrow .vval.mono, .set-vbody .mono { font-family: var(--font-mono); font-size: var(--fs-11); }
 .set-vbody .mono { color: var(--muted); overflow-wrap: anywhere; }
