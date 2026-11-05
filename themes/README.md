@@ -18,6 +18,8 @@ optional `style` block sets fonts, the type/space/shadow multipliers, radii and 
 - `tokyonight-storm.json` — TokyoNight Storm (dark). Palette from the
   [folke/tokyonight.nvim](https://github.com/folke/tokyonight.nvim) Storm variant.
 - `catppuccin.json` — Catppuccin (Latte / Mocha). [catppuccin/catppuccin](https://github.com/catppuccin/catppuccin)
+- `cotton-candy.json` — Cotton Candy (light / dark), Stem's own: bubblegum pink on sugar-pink paper, pastel
+  charts, rounded type (SF Pro Rounded on macOS) and soft corners.
 - `dracula.json` — Dracula (dark). [draculatheme.com](https://draculatheme.com/contribute)
 - `everforest.json` — Everforest (light / dark, medium). [sainnhe/everforest](https://github.com/sainnhe/everforest)
 - `gruvbox.json` — Gruvbox (light / dark), tighter corners and lighter shadows. [morhetz/gruvbox](https://github.com/morhetz/gruvbox)
