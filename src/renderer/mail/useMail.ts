@@ -46,8 +46,8 @@ export interface MailApi {
   compose: (input: MailComposeInput) => Promise<MailListResult>;
   /** Inter-Stem: start a conversation with another Stem's owner. */
   composeExternal: (input: { to: string; subject?: string; body: string }) => Promise<MailListResult>;
-  /** Never rejects: a failure stays in `pending` as a failed send. */
-  reply: (conversationId: string, body: string, attachments?: TurnAttachment[]) => Promise<void>;
+  /** Never rejects: a failure stays in `pending` as a failed send. Resolves true once sent. */
+  reply: (conversationId: string, body: string, attachments?: TurnAttachment[]) => Promise<boolean>;
   pending: PendingSend[];
   retrySend: (id: string) => void;
   dropSend: (id: string) => void;
@@ -173,15 +173,17 @@ export function useMail(ready: boolean): MailApi {
     [applyServer]
   );
   const deliver = useCallback(
-    async (send: PendingSend) => {
+    async (send: PendingSend): Promise<boolean> => {
       try {
         const list = await window.stem.replyMail(send.conversationId, send.body, send.attachments);
         // One batch: the real item lands as the placeholder leaves.
         applyServer(list);
         setPending((prev) => prev.filter((p) => p.id !== send.id));
+        return true;
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         setPending((prev) => prev.map((p) => (p.id === send.id ? { ...p, status: 'failed', error } : p)));
+        return false;
       }
     },
     [applyServer]
@@ -197,7 +199,7 @@ export function useMail(ready: boolean): MailApi {
         status: 'sending'
       };
       setPending((prev) => [...prev, send]);
-      await deliver(send);
+      return deliver(send);
     },
     [deliver]
   );

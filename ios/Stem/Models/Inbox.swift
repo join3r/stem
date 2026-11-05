@@ -153,17 +153,3 @@ enum MailThread {
         return "Consulted \(others.map(name).joined(separator: ", ")) · \(exchange.count) \(exchange.count == 1 ? "mail" : "mails")"
     }
 }
-
-extension MailSections {
-    /// Mail you sent that personas are still working: shown above the Inbox so a
-    /// fresh send doesn't vanish into Sent, but never unread or "waiting on you".
-    static func working(_ mail: MailListResult, now: Double = Inbox.nowMs()) -> [MailConversation] {
-        mail.conversations
-            .filter { c in
-                c.status == "working"
-                    && !c.waitingOnUser
-                    && Inbox.placement(id: c.id, updatedAt: c.userUpdatedAt, state: mail.inbox, now: now) == .inbox
-            }
-            .sorted { ($0.userSentAt ?? 0) > ($1.userSentAt ?? 0) }
-    }
-}

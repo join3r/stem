@@ -21,9 +21,8 @@ import { readComposeDraft, subscribeMailDrafts } from './mail-drafts';
 import { useInterStem } from './useInterStem';
 
 // The Inbox tab's list: mail conversations, email-style. An unsent New mail
-// draft sits first, then the mail waiting on you (unread bold), then Working
-// (mail you sent that personas are still on — visible, but never unread or
-// "waiting on you"), with what you've dealt with collapsed underneath — Snoozed,
+// draft sits first, then the mail waiting on you (unread bold), with what
+// you've dealt with collapsed underneath — Snoozed,
 // Archived, and Sent (every conversation, newest send first; the sent "copy" of
 // a mail is its conversation). Placement and unread reuse the shared inbox
 // derivations, fed each conversation's userUpdatedAt, so persona-internal
@@ -89,7 +88,6 @@ export function MailList(props: MailListProps) {
       !!c.external && interStem.status?.contacts.find((x) => x.address === c.external!.address)?.state === 'request';
     const requests: MailConversation[] = [];
     const inbox: MailConversation[] = [];
-    const working: MailConversation[] = [];
     const snoozed: MailConversation[] = [];
     const archived: MailConversation[] = [];
     for (const c of mail.conversations) {
@@ -101,15 +99,13 @@ export function MailList(props: MailListProps) {
       // reply into it — is dealt with: it lives under Sent (spinner included)
       // until new mail addressed to the user lands, like email. A stopped
       // conversation surfaces here too: no reply ever lands to pull it in, and
-      // the Inbox row is where the abort shows.
+      // the Inbox row is where the abort shows. Mail the personas are still
+      // working on is sent mail like any other: it waits under Sent (its row
+      // spinning there) and comes back up when their answer lands.
       else if (isRequest(c) && hasMailWaiting(c)) requests.push(c);
       else if (hasMailWaiting(c) || c.status === 'aborted') inbox.push(c);
-      // Sent and still being worked: shown above the Inbox so a fresh send
-      // doesn't vanish into the folded Sent section while the personas work.
-      else if (c.status === 'working') working.push(c);
     }
     inbox.sort((a, b) => b.updatedAt - a.updatedAt);
-    working.sort((a, b) => b.userSentAt - a.userSentAt);
     snoozed.sort(
       (a, b) =>
         (mail.inbox.entries[a.id]?.snoozedUntil ?? 0) - (mail.inbox.entries[b.id]?.snoozedUntil ?? 0)
@@ -126,7 +122,7 @@ export function MailList(props: MailListProps) {
       .filter((c) => lastSent.has(c.id))
       .sort((a, b) => (lastSent.get(b.id) ?? 0) - (lastSent.get(a.id) ?? 0));
     requests.sort((a, b) => b.updatedAt - a.updatedAt);
-    return { requests, inbox, working, snoozed, archived, sent };
+    return { requests, inbox, snoozed, archived, sent };
   }, [mail, now, interStem.status]);
 
   /** The two-line body under a subject: the latest mail addressed to the user,
@@ -156,17 +152,7 @@ export function MailList(props: MailListProps) {
 
   const fromLabel = (ids: string[]): string => [...new Set(ids.map((p) => personaName(personas, p)))].join(', ');
 
-  /** The latest step of a working conversation: the newest persona-to-persona mail, if any. */
-  const workingPreview = (c: MailConversation): string => {
-    let latest: { at: number; body: string } | null = null;
-    for (const item of mail.items) {
-      if (item.conversationId !== c.id || item.from === 'user') continue;
-      if (!latest || item.at > latest.at) latest = item;
-    }
-    return latest && latest.at > c.userSentAt ? mailPreviewText(latest.body) : 'Working on it…';
-  };
-
-  const renderRow = (c: MailConversation, variant: 'inbox' | 'working' | 'snoozed' | 'archived' | 'sent') => {
+  const renderRow = (c: MailConversation, variant: 'inbox' | 'snoozed' | 'archived' | 'sent') => {
     const unread = isUnread(subjectOf(c), mail.inbox);
     const wake = mail.inbox.entries[c.id]?.snoozedUntil;
     return (
@@ -216,11 +202,11 @@ export function MailList(props: MailListProps) {
             )}
             {c.subject}
           </strong>
-          <span className="chat-preview">{variant === 'working' ? workingPreview(c) : previewOf(c)}</span>
+          <span className="chat-preview">{previewOf(c)}</span>
         </span>
         {variant === 'snoozed' && wake != null && <span className="chat-wake">{formatWake(wake, now)}</span>}
         <span className="chat-actions">
-          {(variant === 'inbox' || variant === 'working') && (
+          {variant === 'inbox' && (
             <button
               className="chat-action"
               title="Snooze"
@@ -312,15 +298,11 @@ export function MailList(props: MailListProps) {
       </span>
     </div>
   );
-  const grouped = sections.working.length > 0;
 
   return (
     <>
       {draftRow}
-      {grouped && sections.inbox.length > 0 && (
-        <div className="mail-list-group">Waiting on you ({sections.inbox.length})</div>
-      )}
-      {sections.inbox.length === 0 && !grouped && !draft && (
+      {sections.inbox.length === 0 && !draft && (
         <div className="group-row">
           <span className="row-main">
             <em>
@@ -332,8 +314,6 @@ export function MailList(props: MailListProps) {
         </div>
       )}
       {sections.inbox.map((c) => renderRow(c, 'inbox'))}
-      {grouped && <div className="mail-list-group">Working ({sections.working.length})</div>}
-      {sections.working.map((c) => renderRow(c, 'working'))}
       {sections.requests.length > 0 && (
         <div className="mail-list-group" title="First mail from people on other Stems you haven't accepted yet">
           Requests ({sections.requests.length})

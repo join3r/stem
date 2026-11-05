@@ -46,22 +46,14 @@ struct MailListView: View {
                                 }
                             }
                     }
-                } header: {
-                    if folder == .inbox, !working.isEmpty, !rows.isEmpty { Text("Waiting on you") }
                 }
-                if folder == .inbox, !working.isEmpty {
-                    // Sent and still being worked: visible here, never unread or "waiting on you".
-                    Section("Working") {
-                        ForEach(working) { c in
-                            NavigationLink(value: Route.mail(c.id)) { MailRow(conversation: c) }
-                        }
-                    }
-                }
+                // Mail the personas are still working on waits under Sent, like
+                // email, and comes back up when their answer lands.
             }
             .listStyle(.plain)
             .overlay {
                 if !session.mail.loaded { ProgressView() }
-                else if rows.isEmpty && (folder != .inbox || working.isEmpty) {
+                else if rows.isEmpty {
                     ContentUnavailableView("No mail in \(folder.rawValue)", systemImage: "tray")
                 }
             }
@@ -84,8 +76,8 @@ struct MailListView: View {
                 }
             }
             .sheet(isPresented: $composing) {
-                MailComposeView { id in app.mailPath = [.mail(id)] }
-                    .environment(session)
+                // Sending closes the sheet and stays on the list: nothing working shows.
+                MailComposeView().environment(session)
             }
             .task { if !session.mail.loaded { await session.mail.reload() } }
         }
@@ -97,7 +89,6 @@ struct MailListView: View {
     private var requests: [MailConversation] {
         folder == .inbox ? (session.mail.sections[.inbox] ?? []).filter { session.interStem.isRequest($0) } : []
     }
-    private var working: [MailConversation] { MailSections.working(session.mail.mail) }
 }
 
 struct MailRow: View {
@@ -435,6 +426,7 @@ struct ReplyRequest: Identifiable {
 /// answering quoted beneath it. Cancel keeps the draft.
 struct MailReplySheet: View {
     @Environment(Session.self) private var session
+    @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     let conversationId: String
     /// Above zero: the caret goes into the reply at once (a form's Ask).
@@ -510,6 +502,8 @@ struct MailReplySheet: View {
             let uploads = try await Uploads.upload(files, client: session.client)
             try await session.mail.reply(conversationId, body: text, attachments: uploads)
             dismiss()
+            // Sent: back to the list, like email — the answer brings it up again.
+            if app.mailPath.last == .mail(conversationId) { app.mailPath.removeLast() }
             return true
         } catch {
             // The sheet stays open with the text kept, so nothing is lost.
@@ -943,7 +937,6 @@ struct MailApprovalView: View {
 struct MailComposeView: View {
     @Environment(Session.self) private var session
     @Environment(\.dismiss) private var dismiss
-    var onSent: (String) -> Void
     @State private var draft = DraftStore.load("mail:new")
     @State private var error: String?
     @State private var reach: InterStemReach?
@@ -1076,14 +1069,11 @@ struct MailComposeView: View {
             let input = MailComposeInput(
                 to: draft.to, subject: draft.subject.isEmpty ? nil : draft.subject, body: text,
                 attachments: uploads.isEmpty ? nil : uploads, private: draft.isPrivate ? true : nil)
-            let before = Set(session.mail.mail.conversations.map(\.id))
-            let r = try await session.mail.compose(input)
-            let created = r.conversations.filter { !before.contains($0.id) }.max { $0.createdAt < $1.createdAt }
+            _ = try await session.mail.compose(input)
             draft.subject = ""
             draft.isPrivate = false
             DraftStore.clear("mail:new", draft)
             dismiss()
-            if let created { onSent(created.id) }
             return true
         } catch {
             self.error = error.localizedDescription
@@ -1094,16 +1084,13 @@ struct MailComposeView: View {
     private func sendToPerson(_ text: String, _ files: [DraftAttachment]) async -> Bool {
         guard outSendable else { return false }
         do {
-            let before = Set(session.mail.mail.conversations.map(\.id))
             let uploads = try await Uploads.upload(files, client: session.client)
             try await session.interStem.compose(to: outAddress, from: from, subject: draft.subject, body: text, attachments: uploads)
             await session.mail.reload()
-            let created = session.mail.mail.conversations.filter { !before.contains($0.id) }.max { $0.createdAt < $1.createdAt }
             draft.subject = ""
             draft.outTo = nil
             DraftStore.clear("mail:new", draft)
             dismiss()
-            if let created { onSent(created.id) }
             return true
         } catch {
             self.error = error.localizedDescription

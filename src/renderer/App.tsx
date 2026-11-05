@@ -1490,20 +1490,25 @@ export default function App() {
     },
     [mailApi]
   );
-  /** Send from the compose form, then open the new conversation: the mail you
-   *  just sent stays in view, with the personas' progress on it, instead of
-   *  vanishing into a folded Sent section. */
+  /** Send from the compose form and close it, like email: the mail goes to
+   *  Sent and the answer comes back to the Inbox. A failed send throws, so the
+   *  form stays open with its text and the error. */
   const onComposeSend = useCallback(
     async (input: Parameters<typeof mailApi.compose>[0] | ExternalComposeInput) => {
-      const before = new Set(mailRef.current.conversations.map((c) => c.id));
-      const list = 'external' in input ? await mailApi.composeExternal(input) : await mailApi.compose(input);
-      const created = list.conversations
-        .filter((c) => !before.has(c.id))
-        .sort((a, b) => b.createdAt - a.createdAt)[0];
-      if (created) openMail(created.id);
-      else setMailView(null);
+      if ('external' in input) await mailApi.composeExternal(input);
+      else await mailApi.compose(input);
+      setMailView((v) => (v?.kind === 'compose' ? null : v));
     },
-    [mailApi, openMail]
+    [mailApi]
+  );
+  /** A reply, sent, closes its conversation the same way; a failed one keeps
+   *  it open so the failed send (with Retry) stays in view. */
+  const onMailReply = useCallback(
+    async (conversationId: string, body: string, attachments?: TurnAttachment[]) => {
+      if (!(await mailApi.reply(conversationId, body, attachments))) return;
+      setMailView((v) => (v?.kind === 'conversation' && v.id === conversationId ? null : v));
+    },
+    [mailApi]
   );
   const onShareMessage = useCallback((turnId: string) => {
     const threadId = activeThreadIdRef.current;
@@ -1989,9 +1994,7 @@ export default function App() {
                   items={mail.items}
                   currentSys={mail.sys}
                   personas={mailApi.personas}
-                  onReply={(body, attachments) =>
-                    void mailApi.reply(conversation.id, body, attachments)
-                  }
+                  onReply={(body, attachments) => void onMailReply(conversation.id, body, attachments)}
                   pending={mailApi.pending.filter((p) => p.conversationId === conversation.id)}
                   onRetrySend={mailApi.retrySend}
                   onDropSend={mailApi.dropSend}

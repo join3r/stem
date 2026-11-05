@@ -19,12 +19,26 @@ async function compose(win: Page, subject: string, body: string): Promise<void> 
   await win.getByPlaceholder(/Stem names it/).fill(subject);
   await win.getByPlaceholder(/Write the task/).fill(body);
   await win.getByRole('button', { name: /^Send/ }).click();
-  // Sending opens the new conversation; the persona's reply (the fake's echo)
-  // lands in it, and the row sits in the Inbox.
+  // Sending closes the form, like email: nothing working shows in its place.
+  await expect(win.getByPlaceholder(/Write the task/)).toHaveCount(0);
+  await expect(win.locator('.mail-view')).toHaveCount(0);
+  // The persona's reply (the fake's echo) brings the row into the Inbox;
+  // opening it shows the reply.
+  await expect(mailRow(win, subject)).toBeVisible({ timeout: 15_000 });
+  await mailRow(win, subject).click();
+  await expect(win.locator('.mail-view .mail-item').filter({ hasText: `Echo: ${body}` })).toBeVisible();
+}
+
+/** Reply in the open conversation: the view closes on send; reopen it once the answer lands. */
+async function reply(win: Page, subject: string, body: string): Promise<void> {
+  await win.getByPlaceholder(/Reply to/).fill(body);
+  await win.getByRole('button', { name: 'Send' }).click();
+  await expect(win.locator('.mail-view')).toHaveCount(0);
+  await expect(mailRow(win, subject)).toBeVisible({ timeout: 15_000 });
+  await mailRow(win, subject).click();
   await expect(win.locator('.mail-view .mail-item').filter({ hasText: `Echo: ${body}` })).toBeVisible({
     timeout: 15_000
   });
-  await expect(mailRow(win, subject)).toBeVisible();
 }
 
 async function sendChat(win: Page, text: string): Promise<void> {
@@ -68,8 +82,10 @@ test('the To: field builds a multi-persona conversation with the first name lead
   await mainWindow.getByPlaceholder(/Stem names it/).fill('Team errand');
   await mainWindow.getByPlaceholder(/Write the task/).fill('check it twice');
   await mainWindow.getByRole('button', { name: 'Send to Normal' }).click();
-  // Sending opens the conversation. It lists BOTH participants; only the lead
-  // replied (the fake echo).
+  // The answer brings it into the Inbox. It lists BOTH participants; only the
+  // lead replied (the fake echo).
+  await expect(mailRow(mainWindow, 'Team errand')).toBeVisible({ timeout: 15_000 });
+  await mailRow(mainWindow, 'Team errand').click();
   await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Verifier');
   await expect(
     mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: check it twice' })
@@ -78,13 +94,7 @@ test('the To: field builds a multi-persona conversation with the first name lead
 
 test('replying resumes the same conversation and the exchange stays threaded', async ({ mainWindow }) => {
   await compose(mainWindow, 'Errand', 'first ask');
-
-  const reply = mainWindow.getByPlaceholder(/Reply to/);
-  await reply.fill('follow-up ask');
-  await mainWindow.getByRole('button', { name: 'Send' }).click();
-  await expect(
-    mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: follow-up ask' })
-  ).toBeVisible({ timeout: 15_000 });
+  await reply(mainWindow, 'Errand', 'follow-up ask');
   // Four mails: the newest open, the rest folded to one line each.
   await expect(mainWindow.locator('.mail-view .mail-item, .mail-view .mail-fold')).toHaveCount(4);
   // Still ONE conversation in the list.
@@ -118,12 +128,7 @@ test('archiving moves a conversation out and a new reply resurrects it', async (
   // A reply into the archived conversation pulls it back into the Inbox — the
   // email rule, derived from the reply's own timestamp.
   await mailRow(mainWindow, 'Watch this').click();
-  const reply = mainWindow.getByPlaceholder(/Reply to/);
-  await reply.fill('one more thing');
-  await mainWindow.getByRole('button', { name: 'Send' }).click();
-  await expect(
-    mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: one more thing' })
-  ).toBeVisible({ timeout: 15_000 });
+  await reply(mainWindow, 'Watch this', 'one more thing');
   await expect(mainWindow.getByRole('button', { name: /Archived/ })).toHaveCount(0);
   await expect(mailRow(mainWindow, 'Watch this')).toBeVisible();
 });
@@ -329,4 +334,20 @@ test('a reply read on another device drops the unread dot here too', async ({ ma
   await mainWindow.evaluate((id) => window.stem.setInboxRead([id!], true).then(() => undefined), threadA);
   await expect(row).not.toHaveClass(/unread/);
   await expect(row.locator('.chat-status.done')).toHaveCount(0);
+});
+
+test('a sent mail closes and waits under Sent, not as a Working row', async ({ mainWindow }) => {
+  await tab(mainWindow, 'Inbox').click();
+  await mainWindow.getByTitle('New mail', { exact: true }).click();
+  await mainWindow.getByPlaceholder(/Stem names it/).fill('Slow errand');
+  await mainWindow.getByPlaceholder(/Write the task/).fill('[e2e:slow] take your time');
+  await mainWindow.getByRole('button', { name: /^Send/ }).click();
+  await expect(mainWindow.getByPlaceholder(/Write the task/)).toHaveCount(0);
+  await expect(mainWindow.locator('.mail-view')).toHaveCount(0);
+  // While the persona works, nothing in the list says Working.
+  await expect(mainWindow.locator('.mail-list-group', { hasText: 'Working' })).toHaveCount(0);
+  await expect(mainWindow.locator('.mail-row')).toHaveCount(0);
+  await expect(group(mainWindow, /Sent \(1\)/)).toBeVisible();
+  // The answer brings it up into the Inbox.
+  await expect(mailRow(mainWindow, 'Slow errand')).toBeVisible({ timeout: 15_000 });
 });
