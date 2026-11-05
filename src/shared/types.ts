@@ -3939,6 +3939,13 @@ export interface QuickChatSettings {
    * stays visible. Hidden again when the main window regains focus.
    */
   followAcrossSpaces: boolean;
+  /**
+   * "Ask about this window" panels keep to their window (macOS): stacked just
+   * above it instead of over everything, and hidden while it is minimised,
+   * hidden or on another Space. Off: the panel floats on top and only follows
+   * the window's position.
+   */
+  stayWithWindow: boolean;
   /** Play a macOS chime when a turn finishes while the progress pill is visible. */
   finishSound: boolean;
 }
@@ -3993,7 +4000,7 @@ export interface QuickChatShortcutStatus {
  */
 export type ClientQuickChatSettings = Pick<
   QuickChatSettings,
-  'shortcut' | 'windowShortcut' | 'showOnAllDisplays' | 'followAcrossSpaces'
+  'shortcut' | 'windowShortcut' | 'showOnAllDisplays' | 'followAcrossSpaces' | 'stayWithWindow'
 >;
 
 /**

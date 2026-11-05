@@ -359,7 +359,9 @@ while let line = readLine(strippingNewline: true) {
       emit(["id": id, "ok": true, "text": WindowPeek.text(windowId: windowId, maxChars: maxChars) ?? NSNull()])
     case "window-bounds":
       let windowId = CGWindowID(Int(number(obj["windowId"]) ?? 0))
-      emit(["id": id, "ok": true, "bounds": WindowPeek.bounds(windowId: windowId) ?? NSNull()])
+      // onScreen is false while the window is minimised, its app hidden, or it
+      // sits on another Space: the docked panel steps aside with it.
+      emit(["id": id, "ok": true, "bounds": WindowPeek.bounds(windowId: windowId) ?? NSNull(), "onScreen": Windows.isOnScreen(windowId)])
     case "watch":
       let on = obj["on"] as? Bool ?? true
       if on {

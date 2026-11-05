@@ -99,6 +99,40 @@ export function setOverlayWorkspaceVisibility(win: BrowserWindow, onAllWorkspace
 }
 
 /**
+ * Whether a window panel can live in the asked-about window's stacking order
+ * instead of floating over everything: macOS orders a window relative to any
+ * other app's window by its window-server id. Elsewhere the panel stays
+ * always-on-top and only follows the window's position.
+ */
+export const overlayStacksWithWindow = process.platform === 'darwin';
+
+/**
+ * A window panel's level. Stacked (the "Keep with its window" setting): an
+ * ordinary level, so the window it was asked about (and anything stacked over
+ * that) can cover it. Otherwise above everything, like the plain panel.
+ */
+export function stackOverlayWithWindows(win: BrowserWindow, stacked: boolean): void {
+  if (!overlayStacksWithWindow) return;
+  if (stacked) win.setAlwaysOnTop(false);
+  else win.setAlwaysOnTop(true, 'screen-saver');
+}
+
+/**
+ * Put the panel directly above `windowId` — not above everything: when another
+ * window covers the asked-about one, it covers the panel too, and when the
+ * asked-about window comes forward the panel comes with it. Never makes the
+ * panel key or activates Stem.
+ */
+export function orderOverlayAbove(win: BrowserWindow, windowId: number): void {
+  if (!overlayStacksWithWindow) return;
+  try {
+    win.moveAbove(`window:${windowId}:0`);
+  } catch {
+    // The window closed between the check and the call.
+  }
+}
+
+/**
  * The status HUD: a tiny, non-focusable, always-on-top pill in the bottom-left.
  * `focusable: false` is critical — showing it must never steal focus from the app
  * the user is working in.

@@ -26,6 +26,7 @@ const mock = vi.hoisted(() => {
     window,
     overlays: [] as ReturnType<typeof window>[],
     front: { windowId: 1, app: 'Slack' },
+    state: null as { bounds: { x: number; y: number; width: number; height: number }; onScreen: boolean } | null,
     handlers: new Map<string, (...args: unknown[]) => unknown>()
   };
 });
@@ -37,12 +38,13 @@ vi.mock('../../src/desktop/quickchat/windows', () => ({
     return win;
   },
   placeHud: vi.fn(), placeOverlay: vi.fn(), placeOverlayBeside: vi.fn(), compactOverlay: vi.fn(),
-  setOverlayWorkspaceVisibility: vi.fn()
+  setOverlayWorkspaceVisibility: vi.fn(),
+  overlayStacksWithWindow: true, stackOverlayWithWindows: vi.fn(), orderOverlayAbove: vi.fn()
 }));
 vi.mock('../../src/desktop/quickchat/window-peek', () => ({
   windowPeekSupported: true,
   warmWindowPeek: vi.fn(), stopWindowPeek: vi.fn(),
-  windowBounds: async () => null,
+  windowState: async () => mock.state,
   readWindowText: async () => 'text',
   peekFrontWindow: async () => ({
     bounds: { x: 0, y: 0, width: 800, height: 600 },
@@ -66,15 +68,16 @@ import { createQuickChat } from '../../src/desktop/quickchat';
 
 const settings: QuickChatSettings = {
   shortcut: null, windowShortcut: null, defaultModel: null, defaultEffort: 'medium', defaultServiceTier: null,
-  showOnAllDisplays: true, newThreadTimeoutMs: 300000, followAcrossSpaces: true, finishSound: false
+  showOnAllDisplays: true, newThreadTimeoutMs: 300000, followAcrossSpaces: true, stayWithWindow: true, finishSound: false
 };
 
 beforeEach(() => {
   mock.overlays.length = 0;
   mock.handlers.clear();
+  mock.state = null;
 });
 
-function fixture() {
+function fixture(overrides: Partial<QuickChatSettings> = {}) {
   let threads = 0;
   const startTurn = vi.fn();
   const surface = createQuickChat({
@@ -87,7 +90,7 @@ function fixture() {
       return { threadId: input.threadId, turnId: input.turnId };
     }
   });
-  surface.start(settings);
+  surface.start({ ...settings, ...overrides });
   surface.registerIpc();
   const ask = async (windowId: number) => {
     mock.front = { windowId, app: `App ${windowId}` };
@@ -101,6 +104,54 @@ function fixture() {
 }
 
 describe('Ask about this window panels', () => {
+  it('goes away with its window and comes back with it, and stacks just above it', async () => {
+    const windows = await import('../../src/desktop/quickchat/windows');
+    const { ask, surface } = fixture();
+    const bounds = { x: 0, y: 0, width: 800, height: 600 };
+    mock.state = { bounds, onScreen: true };
+    const panel = await ask(1);
+    await vi.waitFor(() => expect(windows.orderOverlayAbove).toHaveBeenCalledWith(panel, 1));
+    mock.state = { bounds, onScreen: false }; // minimised
+    await vi.waitFor(() => expect(panel.visible).toBe(false));
+    mock.state = { bounds, onScreen: true }; // restored
+    await vi.waitFor(() => expect(panel.visible).toBe(true));
+    expect(panel.focused).toBe(false); // back in view, the keyboard stays with the window
+    surface.stop();
+  });
+
+  it('floats on top and ignores its window going away when "Keep with its window" is off', async () => {
+    const windows = await import('../../src/desktop/quickchat/windows');
+    vi.mocked(windows.orderOverlayAbove).mockClear();
+    const { ask, surface } = fixture({ stayWithWindow: false });
+    const bounds = { x: 0, y: 0, width: 800, height: 600 };
+    mock.state = { bounds, onScreen: false };
+    const panel = await ask(1);
+    expect(windows.stackOverlayWithWindows).toHaveBeenLastCalledWith(panel, false);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(panel.visible).toBe(true);
+    expect(windows.orderOverlayAbove).not.toHaveBeenCalled();
+    surface.stop();
+  });
+
+  it('stays up when its pill brings it back while its window is still away', async () => {
+    const { ask, run, surface, startTurn } = fixture();
+    const bounds = { x: 0, y: 0, width: 800, height: 600 };
+    mock.state = { bounds, onScreen: true };
+    surface.reconcileHud('mac', []);
+    const panel = await ask(1);
+    surface.submitHudTurn({ turnId: 'a' } as StartTurnInput);
+    await run(panel, 'a');
+    const threadId = (startTurn.mock.calls[0][0] as StartTurnInput).threadId;
+    mock.state = { bounds, onScreen: false };
+    await vi.waitFor(() => expect(panel.visible).toBe(false));
+    surface.routeBackendEvent({ method: 'turn/completed', receivedAt: '', params: { threadId, turnId: 'a' } });
+    mock.handlers.get('quickchat:reveal')!(); // the "Answer ready" pill is clicked
+    expect(panel.visible).toBe(true);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(panel.visible).toBe(true);
+    surface.stop();
+  });
+
   it('opens a separate panel per window and keeps the first one on screen', async () => {
     const { ask } = fixture();
     const first = await ask(1);

@@ -22,10 +22,13 @@ import {
   compactOverlay,
   placeOverlay,
   placeOverlayBeside,
+  orderOverlayAbove,
+  overlayStacksWithWindow,
   setOverlayWorkspaceVisibility,
+  stackOverlayWithWindows,
   type DockRect
 } from './windows';
-import { peekFrontWindow, readWindowText, stopWindowPeek, warmWindowPeek, windowBounds, windowPeekSupported } from './window-peek';
+import { peekFrontWindow, readWindowText, stopWindowPeek, warmWindowPeek, windowPeekSupported, windowState } from './window-peek';
 import { eventTurnId } from '../../shared/settledTurns';
 import { isBrowserApp } from '../../shared/browser-apps';
 import { PillTurns, type PillEventParams } from './pill-turns';
@@ -165,7 +168,18 @@ interface Panel {
    * when the screen has room) and follows it while shown, and the first prompt
    * sent with its chip carries its text. Null for the plain panel.
    */
-  peek: { window: QuickChatWindow; bounds: DockRect; text: Promise<string | null> } | null;
+  peek: {
+    window: QuickChatWindow;
+    bounds: DockRect;
+    text: Promise<string | null>;
+    /** Last seen minimised, hidden or on another Space (absent: on screen). */
+    away?: boolean;
+  } | null;
+  /**
+   * Hidden because its window went out of sight (minimised, app hidden, other
+   * Space), not dismissed: it comes back when the window does. macOS only.
+   */
+  parked: boolean;
   /** Thread ownership and turn state — see OverlaySession. */
   readonly overlay: OverlaySession;
   readonly handoffBarrier: QuickChatHandoffBarrier;
@@ -206,6 +220,7 @@ function newPanel(win: BrowserWindow | null): Panel {
     resetBarrier: new QuickChatResetBarrier(),
     turnId: null,
     followTimer: null,
+    parked: false,
     lastShown: 0
   };
 }
@@ -296,6 +311,9 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
   // running, the pill mirrors that progress so you don't lose sight of it.
   /** Show the pill for main threads when the main window loses focus. */
   let followAcrossSpaces = true;
+  /** Window panels keep to their window's stacking and visibility (macOS). */
+  let stayWithWindow = false;
+  const stacking = () => overlayStacksWithWindow && stayWithWindow;
   /** Play a chime when a turn finishes while the pill is visible. */
   let finishSound = false;
   /** Locally initiated interactive turns shared by both HUD paths. */
@@ -405,6 +423,8 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     }
     const win = live(spare) ? spare : createPanelWindow();
     spare = null;
+    // Lives in its window's stacking order rather than over everything, when set so.
+    stackOverlayWithWindows(win, stayWithWindow);
     const panel = newPanel(win);
     if (group) group.tabs.push(panel);
     else {
@@ -646,6 +666,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     if (hud.owner !== 'quickchat' || hudPanel === panel || (!!panel.group && hudPanel?.group === panel.group)) hideHud();
     deps.beginSummon();
     panel.lastShown = Date.now();
+    panel.parked = false;
     const group = panel.group;
     if (group) {
       const before = group.active;
@@ -669,29 +690,64 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
   }
 
   /**
-   * Keep a docked panel beside its window while both are on screen: the window
-   * may be dragged or resized with the panel open. Stops itself once the panel
-   * hides or the window closes.
+   * Keep a docked panel with its window while the panel is on screen: beside it
+   * when the window is dragged or resized, and (macOS) directly above it in the
+   * stacking order — whatever covers the window covers the panel, and when the
+   * window comes forward the panel comes with it. A window that is minimised,
+   * hidden or moved to another Space takes its panel along, and brings it back
+   * on return. Only the change is acted on: a panel the user brings back while
+   * its window is still away stays up. Stops once the panel is dismissed or the
+   * window closes.
    */
   function followWindow(panel: Panel): void {
     if (panel.followTimer) return;
+    const following = (win: BrowserWindow | null): win is BrowserWindow => live(win) && (win.isVisible() || panel.parked);
     panel.followTimer = setInterval(() => {
       const win = panel.win;
       const anchored = panel.peek;
-      if (!live(win) || !win.isVisible() || !anchored) {
+      if (!following(win) || !anchored) {
         stopFollowing(panel);
         return;
       }
-      void windowBounds(anchored.window.windowId)
-        .then((b) => {
-          if (!b || panel.peek !== anchored || win.isDestroyed() || !win.isVisible()) return;
+      void windowState(anchored.window.windowId)
+        .then((state) => {
+          if (panel.peek !== anchored || !following(win)) return;
+          if (!state) {
+            // Closed (or, off macOS, minimised): the panel stays where it is,
+            // and one parked with it is let go.
+            if (panel.parked) {
+              panel.parked = false;
+              stopFollowing(panel);
+            }
+            return;
+          }
+          const wasAway = !!anchored.away;
+          anchored.away = !state.onScreen;
+          if (stacking() && anchored.away !== wasAway) {
+            if (anchored.away) {
+              if (win.isVisible()) {
+                panel.parked = true;
+                win.hide();
+              }
+              return;
+            }
+            if (panel.parked) {
+              panel.parked = false;
+              win.showInactive();
+              if (hudShows(panel)) hideHud();
+            }
+          }
+          if (anchored.away) return;
+          const b = state.bounds;
           const p = anchored.bounds;
-          if (b.x === p.x && b.y === p.y && b.width === p.width && b.height === p.height) return;
-          anchored.bounds = b;
-          place(panel);
+          if (b.x !== p.x || b.y !== p.y || b.width !== p.width || b.height !== p.height) {
+            anchored.bounds = b;
+            place(panel);
+          }
+          if (stacking()) orderOverlayAbove(win, anchored.window.windowId);
         })
         .catch(() => undefined);
-    }, 400);
+    }, stacking() ? 250 : 400);
   }
 
   function stopFollowing(panel: Panel): void {
@@ -825,6 +881,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
    */
   function dismissQuickChat(panel: Panel): void {
     stopFollowing(panel);
+    panel.parked = false;
     if (onScreen(panel)) panel.win!.hide();
   }
 
@@ -1217,6 +1274,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       overlayOnAllDisplays = settings.showOnAllDisplays;
       newThreadTimeoutMs = settings.newThreadTimeoutMs;
       followAcrossSpaces = settings.followAcrossSpaces;
+      stayWithWindow = settings.stayWithWindow;
       finishSound = settings.finishSound;
       // Pre-create the windows (hidden) so the shortcut summons instantly, and
       // bind the global accelerators from the saved settings.
@@ -1372,6 +1430,24 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
         if (!followAcrossSpaces && hud.owner === 'main') hideHud();
       }
       if ('finishSound' in patch) finishSound = next.finishSound;
+      if ('stayWithWindow' in patch && next.stayWithWindow !== stayWithWindow) {
+        stayWithWindow = next.stayWithWindow;
+        for (const panel of panels()) {
+          if (!panel.group || !live(panel.win)) continue;
+          stackOverlayWithWindows(panel.win, stayWithWindow);
+          // A panel parked with its window comes back once the binding is off.
+          if (!stayWithWindow && panel.parked) {
+            panel.parked = false;
+            panel.win.showInactive();
+            if (hudShows(panel)) hideHud();
+          }
+          // The poll rate follows the setting.
+          if (panel.followTimer) {
+            stopFollowing(panel);
+            followWindow(panel);
+          }
+        }
+      }
     },
 
     shortcutStatus: quickChatShortcutStatus,

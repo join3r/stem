@@ -219,6 +219,20 @@ export function QuickChatSection({ models }: { models: ModelSummary[] }) {
             >
               <ShortcutRecorder value={qc.windowShortcut} onChange={updateWindowShortcut} />
             </ValueRow>
+            {window.stem.platform === 'darwin' && (
+              <ValueRow
+                label="Keep with its window"
+                hint="The panel sits just above the window it's about: other windows can cover it, it comes forward with the window, and it hides while the window is minimised or on another Space"
+              >
+                <button
+                  className={`switch${qc.stayWithWindow ? ' on' : ''}`}
+                  role="switch"
+                  aria-checked={qc.stayWithWindow}
+                  aria-label="Keep with its window"
+                  onClick={() => update({ stayWithWindow: !qc.stayWithWindow })}
+                />
+              </ValueRow>
+            )}
             {qc.windowShortcut && shortcutStatus && !shortcutStatus.windowRegistered && (
               <div className="set-vbody">
                 <span className="retrieval-test-status err">

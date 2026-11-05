@@ -119,11 +119,17 @@ export async function readWindowText(windowId: number): Promise<string | null> {
   }
 }
 
-/** Where the window is now, or null once it has closed. */
-export async function windowBounds(windowId: number): Promise<Rect | null> {
+/**
+ * Where the window is now and whether it is on screen (false while minimised,
+ * its app hidden, or on another Space; helpers that cannot tell say nothing and
+ * count as on screen). Null once it has closed — or, on helpers that report
+ * minimised windows as gone, while minimised.
+ */
+export async function windowState(windowId: number): Promise<{ bounds: Rect; onScreen: boolean } | null> {
   if (!helper?.alive) return null;
-  const reply = (await helper.call('window-bounds', { windowId }, 2_000)) as unknown as { ok: boolean; bounds?: unknown };
-  return reply.ok ? asRect(reply.bounds) : null;
+  const reply = (await helper.call('window-bounds', { windowId }, 2_000)) as unknown as { ok: boolean; bounds?: unknown; onScreen?: unknown };
+  const bounds = reply.ok ? asRect(reply.bounds) : null;
+  return bounds ? { bounds, onScreen: reply.onScreen !== false } : null;
 }
 
 export function stopWindowPeek(): void {
