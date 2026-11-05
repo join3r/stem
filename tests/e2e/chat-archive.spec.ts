@@ -44,10 +44,17 @@ test('archiving a chat folds it away, and it comes back by menu, by shortcut, or
   await expect(archivedToggle(win)).toHaveCount(0);
   await expect(chatRow(win, 'old plans')).toBeVisible();
 
-  // ⌘⇧A archives the chat you are reading and leaves it open.
+  // ⌘⇧A archives the chat you are reading and opens the next one in the list.
   await chatRow(win, 'current work').click();
+  await expect(win.locator('.message-body').filter({ hasText: 'Echo: current work' })).toBeVisible();
   await win.keyboard.press('ControlOrMeta+Shift+A');
   await expect(archivedToggle(win)).toHaveText('Archived (1)');
+  await expect(win.locator('.message-body').filter({ hasText: 'Echo: current work' })).toHaveCount(0);
+  await expect(win.locator('.message-body').filter({ hasText: 'Echo: old plans' })).toBeVisible();
+
+  // Opened again from the Archived section, it is still whole.
+  if ((await chatRow(win, 'current work').count()) === 0) await archivedToggle(win).click();
+  await chatRow(win, 'current work').click();
   await expect(win.locator('.message-body').filter({ hasText: 'Echo: current work' })).toBeVisible();
 
   // The archive is a timestamp: a new turn in the chat lifts it back out.

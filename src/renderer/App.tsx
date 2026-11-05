@@ -22,6 +22,7 @@ import type {
   ManageTabId
 } from '../shared/types';
 import { AUTH_PROVIDER_IDS, providerName } from '../shared/providers';
+import { chatAfterArchive } from './chats/archive-next';
 import { emptyInboxState, isUnread, placement, withArchived, withRead, type InboxState } from '../shared/inbox';
 import { previewText } from '../shared/plain-text';
 import { resendAttachments } from './attachments';
@@ -224,6 +225,8 @@ export default function App() {
 
   // Navigation state the event pipeline and IPC continuations need synchronously.
   const activeThreadIdRef = useRef(activeThreadId);
+  // The Chats tab's rows top to bottom, written by ChatList on every render.
+  const chatOrderRef = useRef<readonly string[]>([]);
   activeThreadIdRef.current = activeThreadId;
   // Bumped every time the DRAFT slice is reset (New chat / Quick Chat). Captured
   // at send time so a turn that resolves late only adopts its real thread id when
@@ -1464,8 +1467,20 @@ export default function App() {
         (inbox) => withArchived(inbox, threadIds, archived, now),
         () => window.stem.setInboxArchived(threadIds, archived)
       );
+      // Archiving the open chat opens the next one in the list (the one above
+      // when it was the last), so a run of chats can be answered or archived one
+      // after another. Nothing left: the draft, any typed text kept.
+      const active = activeThreadIdRef.current;
+      if (archived && active && threadIds.includes(active)) {
+        const next = chatAfterArchive(chatOrderRef.current, active, threadIds);
+        if (next) void openChat(next);
+        else {
+          openGateRef.current.invalidate();
+          setActiveThreadId(null);
+        }
+      }
     },
-    [mutateInbox]
+    [mutateInbox, openChat]
   );
 
   // ---- mail actions the rail and centre pane share ----
@@ -1600,8 +1615,8 @@ export default function App() {
       setMailView(null);
       return;
     }
-    // The chat stays open: archiving tidies the list, it doesn't close what you
-    // are reading. Pressed again on an archived chat, it brings it back.
+    // Archiving moves on to the next chat (onSetArchived). Pressed on an
+    // archived chat opened from the Archived section, it brings it back.
     const id = activeThreadIdRef.current;
     if (!id) return;
     const chat = displayList.chats.find((c) => c.threadId === id);
@@ -2090,6 +2105,7 @@ export default function App() {
               onMoveChat={onMoveChat}
               onSetRead={onSetRead}
               onSetArchived={onSetArchived}
+              chatOrderRef={chatOrderRef}
               onWriteSubject={onWriteSubject}
               mail={mail}
               personas={mailApi.personas}

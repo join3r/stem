@@ -71,6 +71,8 @@ export interface ChatListProps {
   onSetRead: (threadIds: string[], read: boolean) => void;
   /** Archive (or bring back) chats: out of the tree, into the folded Archived section. */
   onSetArchived: (threadIds: string[], archived: boolean) => void;
+  /** Filled with the chat rows in on-screen order, so archiving the open chat can open its neighbour. */
+  chatOrderRef?: { current: readonly string[] };
   /** Have a model write this thread's subject from its conversation, now. */
   onWriteSubject: (threadId: string) => void;
 
@@ -370,6 +372,7 @@ export function ChatList(props: ChatListProps) {
     [treeChatIds, archivedChats, archivedOpen]
   );
   const numberedChatIds = useMemo(() => treeChatIds.slice(0, 9), [treeChatIds]);
+  if (props.chatOrderRef) props.chatOrderRef.current = visibleChatIds;
 
   // ---- multi-selection ----
   const clearPicked = useCallback(() => {
