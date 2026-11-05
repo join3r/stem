@@ -934,6 +934,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (idle.length) {
         const unbound = idle.filter((w) => ![...this.threadWorkers.values()].includes(w));
         const chosen = unbound[0] ?? idle.sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
+        // The evicted thread really loses its binding. Left in place, rule 1
+        // would queue that thread's next send behind THIS turn — another chat's,
+        // possibly many minutes long — while the pool had room to spare.
+        for (const [id, w] of this.threadWorkers) if (w === chosen && id !== threadId) this.threadWorkers.delete(id);
         if (threadId) this.bindThread(threadId, chosen);
         return reserve(chosen);
       }

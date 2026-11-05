@@ -143,6 +143,39 @@ describe('runtime worker pool', () => {
     settle(harness, worker);
   });
 
+  it('a thread whose idle worker was lent to another chat never queues behind that chat', async () => {
+    // Live incident 2026-11-05: chat A went quiet, chat B's long turn took A's
+    // idle worker, and A's next send sat at "Working…" behind B's turn for
+    // minutes although the pool had two free slots.
+    const harness = await poolRuntime();
+    const { runtime, internal } = harness;
+
+    const a = await runtime.startTurn({ input: 'chat a' });
+    const w1 = internal.workers[0];
+    settle(harness, w1);
+
+    const b = await runtime.startTurn({ input: 'chat b, long turn' });
+    expect(w1.currentTurn?.threadId).toBe(b.threadId);
+    expect(internal.threadWorkers.get(a.threadId!)).not.toBe(w1);
+
+    let started = false;
+    const next = runtime.startTurn({ input: 'chat a again', threadId: a.threadId! }).then((r) => {
+      started = true;
+      return r;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(started).toBe(true);
+    await next;
+    expect(internal.workers).toHaveLength(2);
+    const w2 = internal.workers.find((w) => w !== w1)!;
+    // A's send runs on a fresh worker (the fake proc can't resume a session
+    // file, so it reports a new id); B's turn is untouched on w1.
+    expect(w2.currentTurn).toBeTruthy();
+    expect(w1.currentTurn?.threadId).toBe(b.threadId);
+    settle(harness, w1);
+    settle(harness, w2);
+  });
+
   it('holds a start past the pool bound until a worker settles', async () => {
     const harness = await poolRuntime();
     const { runtime, internal } = harness;
