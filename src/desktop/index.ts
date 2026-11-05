@@ -43,6 +43,7 @@ import { createPresenceHeartbeat, type PresenceHeartbeat } from './presence';
 import { createServerProxy, type ServerProxy } from './proxy';
 import { clientCredentials, resolveServerUrl } from './server-endpoint';
 import { readClientSettings, seedReleaseNotesMarker } from './settings';
+import { applyZoom, installZoom } from './zoom';
 import { currentThemeState, resolveWindowBackground, watchThemes } from './themes';
 import { createUpdates } from './updates';
 import { createQuickChat } from './quickchat';
@@ -264,6 +265,7 @@ function createWindow(hidden = false): void {
   if (BACKGROUND && !hidden) mainWindow.showInactive();
 
   installNavigationGuards(mainWindow);
+  installZoom(mainWindow, isMac);
 
   // The renderer's HTML <title>Stem</title> otherwise clobbers the window title on
   // load; when running an alternate profile, keep the label pinned so the demo
@@ -491,7 +493,8 @@ app.whenReady().then(async () => {
     {
       command: runMenuCommand,
       toggleQuickChat: () => quickChat.toggle(),
-      checkForUpdates: () => void checkForUpdatesFromMenu()
+      checkForUpdates: () => void checkForUpdatesFromMenu(),
+      zoom: applyZoom
     },
     { canCheckForUpdates: updates.status().mode !== 'none' }
   );

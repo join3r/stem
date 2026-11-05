@@ -27,7 +27,8 @@ function noopActions(): AppMenuActions & { commands: MenuCommand[] } {
     commands,
     command: (c) => commands.push(c),
     toggleQuickChat: vi.fn(),
-    checkForUpdates: vi.fn()
+    checkForUpdates: vi.fn(),
+    zoom: vi.fn()
   };
 }
 
@@ -103,14 +104,14 @@ describe('appMenuTemplate', () => {
       { threadId: 't2', title: 'x'.repeat(80) }
     ];
     const t = appMenuTemplate(true, { ...STATE, chats }, actions);
-    const rows = items(t).filter((i) => /^CmdOrCtrl\+\d$/.test(String(i.accelerator)));
+    const rows = items(t).filter((i) => /^CmdOrCtrl\+[1-9]$/.test(String(i.accelerator)));
     expect(rows.map((r) => r.accelerator)).toEqual(['CmdOrCtrl+1', 'CmdOrCtrl+2']);
     expect(rows[1].label!.length).toBeLessThanOrEqual(50);
     click(rows[1]);
     expect(actions.commands).toEqual([{ kind: 'open-chat', threadId: 't2' }]);
 
     const none = appMenuTemplate(true, STATE, actions);
-    expect(items(none).some((i) => /^CmdOrCtrl\+\d$/.test(String(i.accelerator)))).toBe(false);
+    expect(items(none).some((i) => /^CmdOrCtrl\+[1-9]$/.test(String(i.accelerator)))).toBe(false);
   });
 
   it('prints the Quick Chat key only when one is bound', () => {

@@ -57,6 +57,8 @@ export interface AppMenuActions {
   command(command: MenuCommand): void;
   toggleQuickChat(): void;
   checkForUpdates(): void;
+  /** Step the main window's page zoom (see zoom.ts, which also owns the keys). */
+  zoom(action: 'in' | 'out' | 'reset'): void;
 }
 
 /**
@@ -199,9 +201,11 @@ export function appMenuTemplate(
       shortcut('toggle-inspector', 'Toggle Side Panel'),
       shortcut('toggle-format'),
       sep,
-      { role: 'resetZoom' },
-      { role: 'zoomIn' },
-      { role: 'zoomOut' },
+      // Not the zoom roles: their ⌘+ needs Shift on a US keyboard. zoom.ts
+      // catches the keys before the menu sees them; these only print them.
+      { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', ...display, click: () => actions.zoom('reset') },
+      { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', ...display, click: () => actions.zoom('in') },
+      { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', ...display, click: () => actions.zoom('out') },
       sep,
       { role: 'togglefullscreen' },
       sep,
