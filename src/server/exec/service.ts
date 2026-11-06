@@ -83,7 +83,7 @@ export const PARKED_ERROR =
   'now: do not reply, retry or work around it — Stem resumes you with their answer.';
 
 /** Concurrent command cap; further tool calls queue rather than forking shells. */
-const MAX_CONCURRENT = 2;
+const MAX_CONCURRENT = 8;
 
 export interface ExecServiceDeps {
   runtime: () => ChatBackend;
