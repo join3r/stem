@@ -24,6 +24,9 @@ import {
   placeOverlayBeside,
   orderOverlayAbove,
   overlayStacksWithWindow,
+  parkOverlay,
+  restoreOverlayOpacity,
+  unparkOverlay,
   setOverlayWorkspaceVisibility,
   stackOverlayWithWindows,
   type DockRect
@@ -682,6 +685,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     // so it receives keystrokes (typing, Escape) — without activating Stem, so the
     // previous app stays active underneath and the main window is never pulled
     // forward. The macOS ordering is subtle; see presentOverlayWindow.
+    restoreOverlayOpacity(win);
     presentOverlayWindow(win);
     if (group) {
       for (const tab of group.tabs) if (tab !== panel) dismissQuickChat(tab);
@@ -727,13 +731,13 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
             if (anchored.away) {
               if (win.isVisible()) {
                 panel.parked = true;
-                win.hide();
+                parkOverlay(win);
               }
               return;
             }
             if (panel.parked) {
               panel.parked = false;
-              win.showInactive();
+              unparkOverlay(win);
               if (hudShows(panel)) hideHud();
             }
           }
@@ -1438,7 +1442,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
           // A panel parked with its window comes back once the binding is off.
           if (!stayWithWindow && panel.parked) {
             panel.parked = false;
-            panel.win.showInactive();
+            unparkOverlay(panel.win);
             if (hudShows(panel)) hideHud();
           }
           // The poll rate follows the setting.

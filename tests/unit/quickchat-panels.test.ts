@@ -39,7 +39,10 @@ vi.mock('../../src/desktop/quickchat/windows', () => ({
   },
   placeHud: vi.fn(), placeOverlay: vi.fn(), placeOverlayBeside: vi.fn(), compactOverlay: vi.fn(),
   setOverlayWorkspaceVisibility: vi.fn(),
-  overlayStacksWithWindow: true, stackOverlayWithWindows: vi.fn(), orderOverlayAbove: vi.fn()
+  overlayStacksWithWindow: true, stackOverlayWithWindows: vi.fn(), orderOverlayAbove: vi.fn(),
+  parkOverlay: vi.fn((win: { hide(): void }) => win.hide()),
+  unparkOverlay: vi.fn((win: { showInactive(): void }) => win.showInactive()),
+  restoreOverlayOpacity: vi.fn()
 }));
 vi.mock('../../src/desktop/quickchat/window-peek', () => ({
   windowPeekSupported: true,
@@ -113,8 +116,10 @@ describe('Ask about this window panels', () => {
     await vi.waitFor(() => expect(windows.orderOverlayAbove).toHaveBeenCalledWith(panel, 1));
     mock.state = { bounds, onScreen: false }; // minimised
     await vi.waitFor(() => expect(panel.visible).toBe(false));
+    expect(windows.parkOverlay).toHaveBeenCalledWith(panel); // hidden at once, no fade-out
     mock.state = { bounds, onScreen: true }; // restored
     await vi.waitFor(() => expect(panel.visible).toBe(true));
+    expect(windows.unparkOverlay).toHaveBeenCalledWith(panel);
     expect(panel.focused).toBe(false); // back in view, the keyboard stays with the window
     surface.stop();
   });

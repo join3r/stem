@@ -133,6 +133,28 @@ export function orderOverlayAbove(win: BrowserWindow, windowId: number): void {
 }
 
 /**
+ * Hide a window panel whose window just went away (minimised, app hidden, other
+ * Space) at once. macOS fades a panel out on hide, which next to the window's
+ * own minimise animation looks like a second, lagging one; a panel already at
+ * zero opacity has nothing to fade. unparkOverlay puts the opacity back.
+ */
+export function parkOverlay(win: BrowserWindow): void {
+  win.setOpacity(0);
+  win.hide();
+}
+
+/** Bring a parked panel back without taking focus, at once rather than fading in. */
+export function unparkOverlay(win: BrowserWindow): void {
+  win.showInactive();
+  restoreOverlayOpacity(win);
+}
+
+/** Undo parkOverlay's zero opacity; any show of a panel goes through this. */
+export function restoreOverlayOpacity(win: BrowserWindow): void {
+  if (win.getOpacity() !== 1) win.setOpacity(1);
+}
+
+/**
  * The status HUD: a tiny, non-focusable, always-on-top pill in the bottom-left.
  * `focusable: false` is critical — showing it must never steal focus from the app
  * the user is working in.
