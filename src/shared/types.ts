@@ -863,6 +863,8 @@ export interface SkillSummary {
   failCount?: number;
   /** The most recent such report. */
   lastFailure?: { at: string; reason: string };
+  /** Tools whose first call in a turn hands this skill over (`server.tool`, `server.*`, or a tool name). */
+  tools?: string[];
 }
 
 // ---- Files (the persistent drop-place the assistant can read) ----

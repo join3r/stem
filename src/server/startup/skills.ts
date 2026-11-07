@@ -4,7 +4,7 @@ import { readSettings, skillsRunFor } from '../workspace/settings';
 import { log } from '../log';
 import { degrade } from '../degrade';
 import { isChatPrivate } from '../workspace/chats';
-import { mailSessionThreadIds } from '../workspace/mail';
+import { mailSessionThreadIds, threadsClosedToLearning } from '../workspace/mail';
 import { pickLearnTurns } from '../skills/thread-evidence';
 import type { PiRuntime } from '../pi/runtime';
 import type { SettledTurnTrace } from '../pi/normalize';
@@ -40,6 +40,7 @@ export function initSkills(deps: {
     return null;
   }
   learnRuntime = runtime;
+  learnBusyWithin = deps.busyWithin;
 
   const bridge = new SkillBridge({
     mode: async () => (await readSettings()).skills.mode,
@@ -111,6 +112,7 @@ function scheduleEndOfTurnPass(
 // threaded through IpcDeps: both are created once at bootstrap and never replaced.
 let learnBridge: SkillBridge | null = null;
 let learnRuntime: (Partial<PiRuntime> & ChatBackend) | null = null;
+let learnBusyWithin: (idleMs: number) => boolean = () => false;
 
 /** The bridge and runtime `/learn` writes through, for the recorder's drafts (startup/record-skills.ts). */
 export function userSkillWriter(): { bridge: SkillBridge | null; runtime: (Partial<PiRuntime> & ChatBackend) | null } {
@@ -165,7 +167,12 @@ interface LearnOutcome {
   patched?: boolean;
 }
 
-async function learnOutcome(threadId: string, focus?: string): Promise<LearnOutcome> {
+async function learnOutcome(threadId: string, focus?: string, conventions?: string[], earlier = false): Promise<LearnOutcome> {
+  // The convention pass (learnConventions) runs this same path as Stem's own
+  // idea rather than the user's request: the author may decline, the write is
+  // initiatedBy 'assistant' (so `ask` shows a card), and mail conversations are
+  // in scope, because drafting for the user is where most conventions live.
+  const convention = (conventions?.length ?? 0) > 0;
   const bridge = learnBridge;
   const runtime = learnRuntime;
   if (!bridge || !runtime?.learnEvidence) {
@@ -185,7 +192,7 @@ async function learnOutcome(threadId: string, focus?: string): Promise<LearnOutc
   // A thread behind a mail conversation or a scheduled run is not a chat, and
   // its privacy is not on the chat store: a private mail conversation marks its
   // deliveries, not their threads. /learn is a chat command, so it stays out.
-  const mailOwned = await mailSessionThreadIds().catch((error: unknown) => {
+  const mailOwned = await (convention ? threadsClosedToLearning() : mailSessionThreadIds()).catch((error: unknown) => {
     degrade('skills.learn', 'refused /learn because the mail store could not be read', error);
     return null;
   });
@@ -243,7 +250,8 @@ async function learnOutcome(threadId: string, focus?: string): Promise<LearnOutc
     issue: reported?.issue,
     focus,
     earlier: kept.slice(0, -1),
-    requested: true
+    requested: !convention,
+    conventions
   });
   if (!author.ok) {
     return {
@@ -267,17 +275,18 @@ async function learnOutcome(threadId: string, focus?: string): Promise<LearnOutc
   const result = await bridge.handleRequest(
     {
       op: 'save',
-      initiatedBy: 'user',
+      initiatedBy: convention ? 'assistant' : 'user',
       name: author.draft.name,
       description: author.draft.description,
       body: author.draft.body,
+      tools: author.draft.tools,
       // A patch — routed by grading or chosen by the author — writes with
       // `expect_existing`, so a skill that vanished between the model call and the
       // write refuses instead of quietly creating itself from a patch-shaped draft.
       expectExisting: author.patched,
-      origin: 'learn'
+      origin: convention ? 'turn' : 'learn'
     },
-    { isScheduled: false }
+    { isScheduled: false, ...(convention && !earlier ? { threadId } : {}) }
   );
   return {
     result: { ok: result.ok, slug: author.draft.name, saved: result.ok, message: result.text } as LearnResult,
@@ -287,6 +296,78 @@ async function learnOutcome(threadId: string, focus?: string): Promise<LearnOutc
     patched: author.patched,
     ...counts
   };
+}
+
+/**
+ * The convention pass: memory just learned how the user wants something done
+ * (preference facts from a distill pass), so offer each conversation's new
+ * preferences to the skill author, which folds a way-of-working into the skill
+ * for that work and declines tastes and one-offs (author.ts
+ * SKILL_CONVENTION_INSTRUCTIONS).
+ *
+ * This is how corrections become skills on turns the end-of-turn pass never
+ * sees: "sign it as Stem, on behalf of me" arrives with no tool calls at all.
+ * Detection is the distiller's, which already reads every turn and was already
+ * told to record exactly these ("a stated correction like 'you didn't check X;
+ * I want that included in the future'"), so it costs no extra call per turn,
+ * only one authoring call per conversation that produced a preference.
+ *
+ * One conversation at a time, after the end-of-turn pass and while the user is
+ * quiet, for the same reasons that pass waits (see scheduleEndOfTurnPass).
+ */
+export function learnConventions(byThread: Map<string, string[]>, opts: { earlier?: boolean } = {}): Promise<void> {
+  for (const [threadId, texts] of byThread) {
+    const pending = conventionQueue.get(threadId);
+    // `earlier`: preferences from before this pass existed (the backfill). Their
+    // card, in ask mode, is not tied to that old chat, where nobody would see it.
+    conventionQueue.set(threadId, { texts: [...(pending?.texts ?? []), ...texts], earlier: (pending?.earlier ?? true) && opts.earlier === true });
+  }
+  conventionsDrain ??= drainConventions().finally(() => {
+    conventionsDrain = null;
+    // Queued after the loop's last look: start again rather than strand it.
+    if (conventionQueue.size > 0) void learnConventions(new Map());
+  });
+  return conventionsDrain;
+}
+
+const conventionQueue = new Map<string, { texts: string[]; earlier: boolean }>();
+let conventionsDrain: Promise<void> | null = null;
+const CONVENTION_IDLE_MS = 8_000;
+const CONVENTION_WAIT_MS = 10_000;
+/** How long to wait for quiet before running anyway; a convention is never dropped for being busy. */
+const CONVENTION_MAX_WAITS = 30;
+
+async function drainConventions(): Promise<void> {
+  while (conventionQueue.size > 0) {
+    if ((await readSettings()).skills.mode === 'off') {
+      conventionQueue.clear();
+      return;
+    }
+    // Never alongside the end-of-turn pass (they share its flag below, taken with
+    // no await after this check); past the cap, a user who never goes quiet no
+    // longer holds it back.
+    for (let waits = 0; settleRunning || (learnBusyWithin(CONVENTION_IDLE_MS) && waits < CONVENTION_MAX_WAITS); waits++) {
+      await new Promise((resolve) => setTimeout(resolve, CONVENTION_WAIT_MS));
+    }
+    // Taken only now, so preferences learned while it waited join the same call.
+    const [threadId, { texts, earlier }] = conventionQueue.entries().next().value as [string, { texts: string[]; earlier: boolean }];
+    conventionQueue.delete(threadId);
+    const started = Date.now();
+    // Holding the settle flag keeps the curator from merging away a skill
+    // this pass is about to patch (see isSettlePassRunning).
+    settleRunning = true;
+    try {
+      // quiet: the log line below is the signal; nobody is waiting on this.
+      const { result, ...detail } = await learnOutcome(threadId, undefined, texts, earlier).catch((error: unknown) => ({
+        result: { ok: false, message: '' } as LearnResult,
+        reason: 'error',
+        detail: error instanceof Error ? error.message : String(error)
+      }));
+      log('skills', 'convention pass', { threadId, conventions: texts.length, ok: result.ok, ...detail, ms: Date.now() - started });
+    } finally {
+      settleRunning = false;
+    }
+  }
 }
 
 /**
@@ -350,6 +431,7 @@ async function runEndOfTurnPass(turn: SettledTurnTrace, bridge: SkillBridge, run
         name: outcome.author.draft.name,
         description: outcome.author.draft.description,
         body: outcome.author.draft.body,
+        tools: outcome.author.draft.tools,
         // See `/learn` above: every patch write is guarded, so a skill deleted or
         // merged away while the author was thinking degrades to a refusal rather
         // than reappearing as a create. After this step patches are the primary

@@ -27,7 +27,7 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
   const { running: tidying, msg: tidyMsg } = useJob(tidyJob);
   // null => skills work follows the model you chat with (see Settings → Models).
   const [skillsModel, setSkillsModel] = useState<string | null>(null);
-  const [mode, setMode] = useState<SkillsMode>('ask');
+  const [mode, setMode] = useState<SkillsMode>('auto');
   // Select a row, then act on it from the gutter below the list — the same
   // vocabulary as the MCP servers tab one segment to the left. The row itself
   // carries no delete button: it is already carrying a name, an origin label, a
@@ -135,6 +135,13 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
     return d.toLocaleDateString(undefined, opts);
   }
 
+  // `fastmail.draft_email` → "fastmail · draft_email", `busycal.*` → "any busycal tool".
+  function toolLabel(tool: string): string {
+    if (tool.endsWith('.*')) return `any ${tool.slice(0, -2)} tool`;
+    const dot = tool.indexOf('.');
+    return dot > 0 ? `${tool.slice(0, dot)} · ${tool.slice(dot + 1)}` : tool;
+  }
+
   function usageLabel(s: SkillSummary): string {
     const used = s.useCount
       ? `used ${s.useCount}×${s.lastUsedAt ? ` · last ${formatDay(s.lastUsedAt)}` : ''}`
@@ -195,6 +202,8 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
                   </span>
                 </strong>
                 <em>{plainLine(s.description)}</em>
+                {/* Why this skill can show up even when the request is worded nothing like it. */}
+                {s.tools?.length ? <em>Read before {s.tools.map(toolLabel).join(', ')}</em> : null}
               </span>
               <button
                 className={`switch${s.enabled ? ' on' : ''}`}

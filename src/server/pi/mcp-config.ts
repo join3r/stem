@@ -26,6 +26,7 @@ import {
   NATIVE_SEARCH_GATE_FILE,
   SECRET_ENVELOPE_KEY,
   SERVICE_TIER_GATE_FILE,
+  TOOL_SKILLS_GATE_FILE,
   TURN_CONTEXT_GATE_FILE
 } from './protocol';
 import { decryptSecretValue, encryptSecretValue, secretKeyAvailable } from './secrets';
@@ -401,6 +402,19 @@ export async function writeSystemPromptFile(text: string, gateDir: string): Prom
  */
 export function piTurnContextPath(gateDir?: string): string {
   return join(gateDir ?? piHome(), TURN_CONTEXT_GATE_FILE);
+}
+
+/**
+ * The skills this turn hands over at a tool call (protocol.ts
+ * TOOL_SKILLS_GATE_FILE). Written on every turn, empty included, so a worker
+ * never holds a call back for the previous turn's skill.
+ */
+export async function writeToolSkillsGate(
+  gate: { turnId: string; skills: ReadonlyArray<{ slug: string; tools: readonly string[]; text: string }> },
+  gateDir?: string
+): Promise<void> {
+  await mkdir(gateDir ?? piHome(), { recursive: true });
+  await writeFile(join(gateDir ?? piHome(), TOOL_SKILLS_GATE_FILE), JSON.stringify(gate), 'utf8');
 }
 
 export async function writeTurnContextGate(

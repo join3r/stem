@@ -219,6 +219,19 @@ describe('onboarding + default-model settings', () => {
     expect(junk.skills.effort).toBeNull();
   });
 
+  it('keeps every saved skills mode, and gives a missing or unknown one the default', async () => {
+    // The default moved from ask to auto on 2026-11-06. A user who picked ask
+    // must keep it: only a fresh install, or a value that is not a mode, gets auto.
+    for (const mode of ['off', 'ask', 'auto'] as const) {
+      writeFileSync(path, JSON.stringify({ skills: { mode } }));
+      expect((await readSettings()).skills.mode).toBe(mode);
+    }
+    writeFileSync(path, JSON.stringify({ skills: { mode: 'sometimes' } }));
+    expect((await readSettings()).skills.mode).toBe('auto');
+    writeFileSync(path, JSON.stringify({}));
+    expect((await readSettings()).skills.mode).toBe('auto');
+  });
+
   it('rejects an effort level that is not one of the known ones', async () => {
     // A level pi would refuse is worse than none: the job runs at the model's
     // own depth either way, but a stored one reads as a choice that took effect.

@@ -962,6 +962,21 @@ export async function mailSessionThreadIds(): Promise<Set<string>> {
 }
 
 /**
+ * Mail threads no background learning pass may read: scheduled runs (one per
+ * mail-sending firing; nobody watched them) and every thread of a private
+ * conversation. Ordinary mail conversations are not in it.
+ */
+export async function threadsClosedToLearning(): Promise<Set<string>> {
+  const { items, conversations } = await readMail();
+  const ids = new Set<string>();
+  for (const item of items) if (item.runThreadId) ids.add(item.runThreadId);
+  // A private conversation's threads count as out of bounds too: its deliveries
+  // capture nothing, so nothing should learn from them by another route.
+  for (const c of conversations) if (c.private) for (const threadId of Object.values(c.sessions)) ids.add(threadId);
+  return ids;
+}
+
+/**
  * The threads a scheduled task's runs left behind (one per mail-sending
  * firing), for deletion when the TASK goes. The mail stays, and so does its
  * Work record — only the transcript nobody can reach any more is dropped. The

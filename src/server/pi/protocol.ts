@@ -151,6 +151,19 @@ export const SERVICE_TIER_GATE_FILE = 'service-tier.json';
  * propose by reply instead of raising a card nobody is watching.
  */
 export const TURN_CONTEXT_GATE_FILE = 'turn-context.json';
+/**
+ * `{ turnId, skills: [{ slug, tools, text }] }` — skills to hand over when this
+ * turn first calls a tool they govern (skills/inject.ts toolSkillsForTurn).
+ * Rewritten before every prompt, empty when there are none.
+ */
+export const TOOL_SKILLS_GATE_FILE = 'tool-skills.json';
+/**
+ * Opening tag of a skill handed over at a tool call (the held-back call's
+ * result). The `trigger` attribute names the skill by slug: settle credits it
+ * from the trace (skills/inject.ts toolSkillsHandedOver), and normalize.ts
+ * shows the held call as a skill hold rather than a failure.
+ */
+export const TOOL_SKILL_MARKER = '<stem_skills version="1" trigger="';
 /** `{ roots: string[] }` — absolute roots of read-only connected folders. */
 export const PROTECTED_ROOTS_FILE = 'protected-roots.json';
 /** OAuth tokens for remote MCP servers, keyed by server name. */

@@ -31,6 +31,8 @@ export interface SkillSaveRequest {
   body: string;
   /** True when the model means to change an existing skill, not add one. */
   expectExisting?: boolean;
+  /** Tools whose calls hand this skill over (contract.ts SkillDraft.tools). Absent = keep. */
+  tools?: string[];
   /**
    * Provenance override for surfaces that know better than the initiatedBy flag
    * can say: `/learn` is user-initiated but not the same thing as the user
@@ -168,7 +170,8 @@ export class SkillBridge {
     const draft: SkillDraft = {
       name: String(req.name ?? '').trim(),
       description: String(req.description ?? '').trim(),
-      body: String(req.body ?? '').trim()
+      body: String(req.body ?? '').trim(),
+      ...(Array.isArray(req.tools) ? { tools: req.tools.map((t) => String(t ?? '').trim()) } : {})
     };
 
     // Validate before policy, always. A rejected draft costs the model one retry
@@ -231,7 +234,8 @@ export class SkillBridge {
     }
     // The user may have edited the text in the card, so re-validate what they
     // actually accepted rather than what the model proposed.
-    const edited = outcome.skill ?? draft;
+    // The card edits the text only; the tools ride along with the draft.
+    const edited: SkillDraft = outcome.skill ? { ...outcome.skill, ...(draft.tools ? { tools: draft.tools } : {}) } : draft;
     const editedViolations = validateSkill(edited);
     if (editedViolations.length > 0) {
       return { ok: false, text: `The edited skill no longer meets the contract, so nothing was saved:\n${formatViolations(editedViolations)}` };

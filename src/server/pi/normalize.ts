@@ -12,7 +12,7 @@ import type {
 } from '../../shared/types';
 import { stripCiteMarkers } from '../../shared/citations';
 import { WEB_ACCESS_TOOL_NAMES } from '../../shared/activity';
-import { SECRET_ENVELOPE_KEY, toolArgsOf } from './protocol';
+import { SECRET_ENVELOPE_KEY, TOOL_SKILL_MARKER, toolArgsOf } from './protocol';
 import type { InlinedSkill } from '../skills/inject';
 import type { BrowserGrant, CodingGrant, ComputerGrant } from '../harness/chat-grants';
 import type { SkillIssue } from '../skills/grade';
@@ -121,6 +121,12 @@ export interface TurnContext {
    * what we put in front of the model, not what the model followed.
    */
   skillsInjected?: InlinedSkill[];
+  /**
+   * Slugs this turn's tool-skills gate offered (skills/inject.ts
+   * toolSkillsForTurn). Settle credits a handed-over skill only when it is one
+   * of these: the marker it reads off the trace is text any tool could return.
+   */
+  toolSkillsOffered?: string[];
   /**
    * The graded subset of `skillsInjected` — the slugs this turn showed evidence
    * of actually following. Written by PiRuntime.settleTurn from the
@@ -718,6 +724,15 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
       if (!entry) break; // an end without a tracked start (or unkeyed) — nothing to flip
       const result = ev.result as { isError?: boolean; content?: unknown; details?: unknown } | undefined;
       entry.status = ev.isError === true || result?.isError === true ? 'error' : 'ok';
+      // Held back once so the model reads a saved skill first (the bridge's
+      // toolSkillHold): nothing failed, and the model makes the call again. The
+      // trace below still records it as an error result, which is how settle
+      // finds the handed-over skill.
+      const heldForSkill = entry.status === 'error' && resultText(result).startsWith(TOOL_SKILL_MARKER);
+      if (heldForSkill) {
+        entry.status = 'ok';
+        entry.detail = `${entry.detail ?? entry.name ?? 'tool'} · read saved skill first`;
+      }
       // A picture generate_image made: only its ref travels (and is kept on the
       // activity row); the bytes stay in the session file.
       if (entry.status === 'ok' && entry.type === 'imageGeneration') {
@@ -729,7 +744,7 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
       // dead end — so errors are kept even once the budget is spent.
       const traced = ctx.trace.find((t) => t.id === id);
       if (traced) {
-        traced.isError = entry.status === 'error';
+        traced.isError = entry.status === 'error' || heldForSkill;
         const text = resultText(result).trim();
         if (text && (traced.isError || ctx.traceChars < TRACE_TURN_MAX_CHARS)) {
           traced.result = truncate(text, TRACE_RESULT_MAX_CHARS);

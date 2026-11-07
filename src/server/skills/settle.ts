@@ -221,6 +221,8 @@ export async function authorForTurn(
     requested?: boolean;
     /** The turn wrote a message for the user to send. */
     writing?: boolean;
+    /** Preferences memory just learned from this conversation (the convention pass). */
+    conventions?: string[];
   } = {}
 ): Promise<AuthorOutcome> {
   const evidence = {
@@ -232,6 +234,7 @@ export async function authorForTurn(
     requested: opts.requested,
     issue: opts.issue,
     writing: opts.writing,
+    conventions: opts.conventions,
     machine: whereSkillsRun()
   };
   if (opts.existing) return authorSkill(llm, { ...evidence, existing: opts.existing });

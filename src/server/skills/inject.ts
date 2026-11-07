@@ -6,6 +6,7 @@ import { dot, magnitude } from '../recall/vector';
 import { ensureSkillExampleVectors, ensureSkillVectors, skillVectorText, type SkillEmbedder } from './vectors';
 import { readSkillExamples } from './examples';
 import { DEFAULT_SHORTLIST_SIZE, countWords, queryHasSignal, selectCut, type CutReason, type CutResult } from './gate';
+import { TOOL_SKILL_MARKER } from '../pi/protocol';
 
 // Per-turn skill selection: which saved procedures the model gets, and in what
 // depth. This is the half of the skills rebuild that takes retrieval away from
@@ -518,6 +519,65 @@ export function formatLoadedSkill(skill: InlinedSkill): string {
     `Follow these steps where they fit this request. If a step is wrong, say so on its own line starting ` +
     `\`${SKILL_ISSUE_MARKER} [${fence(skill.slug)}]:\`, as for any loaded skill.`
   );
+}
+
+// thread-history.ts finds the headings inside a handed-over skill the same as in
+// a per-turn block, so the chat never gets one twice.
+export { TOOL_SKILL_MARKER };
+
+/**
+ * Skills to hand over at a tool call this turn: the ones that govern a tool
+ * (`tools` in the front-matter) and are not already in front of the model,
+ * inlined by this turn's ranking or earlier in the chat.
+ *
+ * This is the half of selection that does not depend on the message's wording.
+ * The ranking misses about half the turns that need a skill (gold-v3: 51 of 81
+ * served at the 2026-11-06 floors), and the user's conventions for an action —
+ * how their mail is signed, which calendar gets which prefix — matter most
+ * exactly when the action happens, whatever the request said.
+ */
+export function toolSkillsForTurn(
+  records: readonly (SkillRecordish & { tools?: readonly string[] })[],
+  inlined: readonly string[],
+  alreadyLoaded: ReadonlySet<string>
+): { slug: string; tools: string[]; text: string }[] {
+  const skip = new Set(inlined);
+  return records
+    .filter((r) => r.enabled !== false && (r.tools?.length ?? 0) > 0 && !skip.has(r.slug) && !alreadyLoaded.has(r.slug) && !alreadyLoaded.has(r.name))
+    .map((r) => ({
+      slug: r.slug,
+      tools: [...(r.tools ?? [])],
+      text:
+        `${TOOL_SKILL_MARKER}${fence(r.slug)}">\n` +
+        `Your saved skill for this kind of work, held for the call you just made.\n\n` +
+        `### ${fence(r.name)} (${originLabel(r.origin)})\n${fence(r.description)}\n\n${fence(r.body).trim()}\n</stem_skills>\n` +
+        `This call was held back once, and did not run, so you can read the skill above first: it is YOUR OWN saved know-how for ` +
+        `this tool, including how the user wants this done. Make the call again, following it (change the arguments if the skill ` +
+        `says so). If a step does not fit or is wrong, say so plainly in your reply on its own line starting exactly ` +
+        `\`${SKILL_ISSUE_MARKER} [${fence(r.slug)}]:\`, and do the right thing instead.`
+    }));
+}
+
+/**
+ * Slugs of the skills a turn was handed at a tool call, read off its trace: the
+ * held-back call's result opens with TOOL_SKILL_MARKER. Kept in the trace's
+ * first 2,000 characters of a result, so it survives truncation; a turn past
+ * the trace's overall budget loses the credit, never the skill.
+ */
+export function toolSkillsHandedOver(trace: readonly { result?: string; isError?: boolean }[]): string[] {
+  const slugs: string[] = [];
+  for (const entry of trace) {
+    const text = entry.result ?? '';
+    // Several skills held for one call arrive joined, each under its own marker.
+    if (!entry.isError || !text.startsWith(TOOL_SKILL_MARKER)) continue;
+    for (let at = 0; (at = text.indexOf(TOOL_SKILL_MARKER, at)) >= 0; at += TOOL_SKILL_MARKER.length) {
+      const start = at + TOOL_SKILL_MARKER.length;
+      const end = text.indexOf('"', start);
+      const slug = end > start ? text.slice(start, end) : '';
+      if (slug && !slugs.includes(slug)) slugs.push(slug);
+    }
+  }
+  return slugs;
 }
 
 export function formatSkillsBlock(selection: SkillSelection): string {

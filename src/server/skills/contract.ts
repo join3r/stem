@@ -38,10 +38,22 @@ export interface SkillDraft {
   name: string;
   description: string;
   body: string;
+  /**
+   * Tools whose calls this skill governs, as `server.tool` for an MCP tool (what
+   * `invoke_tool` takes), `server.*` for every tool on a server, or a built-in
+   * tool's own name. Stem hands the skill over the first time a turn calls one
+   * (stem-mcp-extension.mjs `toolSkillHold`), whatever the request's wording
+   * made the ranking pick. Absent on a patch means "keep what the skill had".
+   */
+  tools?: string[];
 }
 
+/** One `tools` entry: `server.tool`, `server.*`, or a bare tool name. */
+export const SKILL_TOOL_RE = /^[A-Za-z0-9_-]+(?:\.(?:[A-Za-z0-9_.-]+|\*))?$/;
+export const MAX_SKILL_TOOLS = 6;
+
 export interface SkillViolation {
-  field: 'name' | 'description' | 'body';
+  field: 'name' | 'description' | 'body' | 'tools';
   message: string;
   /** Set on the size violation, which a shortening pass can repair on its own. */
   tooLong?: true;
@@ -191,6 +203,14 @@ export function validateSkill(draft: SkillDraft, opts: { authored?: boolean } = 
     }
   }
 
+  if (draft.tools !== undefined) {
+    const bad = draft.tools.filter((t) => !SKILL_TOOL_RE.test(String(t ?? '').trim()));
+    if (bad.length > 0) {
+      violations.push({ field: 'tools', message: `each entry must be "server.tool", "server.*" or a tool's own name; not ${bad.map((t) => JSON.stringify(t)).join(', ')}.` });
+    } else if (draft.tools.length > MAX_SKILL_TOOLS) {
+      violations.push({ field: 'tools', message: `at most ${MAX_SKILL_TOOLS} tools; list only the ones whose calls this skill decides how to make.` });
+    }
+  }
   return violations;
 }
 
@@ -232,7 +252,7 @@ One or two lines naming the situation, and the situations that look similar but 
 ## Steps
 Numbered, imperative, concrete. Name the exact tool and the exact arguments that worked — real URLs, real flags, real file paths. Include the dead ends worth avoiding and say why they failed. Do not narrate what happened in a conversation; write what to do next time.
 
-If the procedure only works on one machine, say which and why, in its own line before the steps. A skill outlives the machine it was written on: the user may move Stem to a server, and steps that quietly assumed their own computer — a program only it has, an address on their home network, a site that treats a home connection differently from a datacenter — then fail with nothing to explain them. Name the way in that worked (\`run_command\` with its \`device\` parameter, an MCP server pinned to that computer), not just the machine's nickname. A procedure that runs anywhere needs no such line: this is for the ones that do not.
+If the procedure only works on one machine, say which and why, in its own line before the steps. A skill outlives the machine it was written on: the user may move Stem to a server, and steps that quietly assumed their own computer — a program only it has, an address on their home network, a site that treats a home connection differently from a datacenter — then fail with nothing to explain them. Name the way in that worked (\`run_command\` with its \`device\` parameter, an MCP server pinned to that computer), not just the machine's nickname. Say which computer by what it is ("the user's Mac"), not by its current name: the user renames computers, and a step that passes yesterday's name as \`device\` fails; the assistant always has the current names of the paired computers to pick from. A procedure that runs anywhere needs no such line: this is for the ones that do not.
 
 ## Verification
 How to tell it worked — the specific output, file, or state to check for. Not "confirm success".

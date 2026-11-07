@@ -20,8 +20,8 @@ import {
   type LearnTurn,
   type ThreadEvidenceOptions
 } from '../../src/server/skills/thread-evidence';
-import { SKILL_LEARN_INSTRUCTIONS, buildAuthorPrompt, renderEvidence } from '../../src/server/skills/author';
-import { initSkills, learnFromChat } from '../../src/server/startup/skills';
+import { SKILL_CONVENTION_INSTRUCTIONS, SKILL_LEARN_INSTRUCTIONS, buildAuthorPrompt, renderEvidence } from '../../src/server/skills/author';
+import { initSkills, learnConventions, learnFromChat } from '../../src/server/startup/skills';
 import { addConnectedFolders, updateConnectedFolder } from '../../src/server/workspace/connected-folders';
 import { copyChatPrivacyToFork, isChatPrivate, markTurnTainted, removeChat, setChatPrivate, taintedTurns } from '../../src/server/workspace/chats';
 import { createConversation, setConversationSession } from '../../src/server/workspace/mail';
@@ -383,5 +383,95 @@ The new PDF shows the hours and the total.`;
   it('answers plainly for a chat with nothing in it yet', async () => {
     evidence = null;
     expect(await learnFromChat('thread-empty')).toEqual({ ok: false, message: 'There is nothing in this chat to learn from yet.' });
+  });
+});
+
+// The convention pass: preferences the distiller just learned are offered to the
+// author through the same whole-conversation path as /learn, but as Stem's own
+// idea. The 2026-11-06 VPS store held the "drop the KROS mention" kind of
+// correction only as a fact; this is what turns it into a step of the skill.
+describe('learnConventions', () => {
+  const KROS = 'The user wants future invoices prepared without mentions of kros.sk.';
+  let prompts: string[];
+  let answer: string;
+  let approvals: unknown[];
+
+  beforeEach(() => {
+    prompts = [];
+    approvals = [];
+    answer = JSON.stringify({ skill: null, reason: 'a taste, not a way of working' });
+    const evidence = parseThreadEvidence(invoiceChat, opts()).map((t, i) => ({ ...t, turnId: `turn-${i}` }));
+    const runtime = {
+      setSkillBridge: () => undefined,
+      setTurnSettledHook: () => undefined,
+      requestSkillApproval: async (proposal: unknown) => {
+        approvals.push(proposal);
+        return { approved: true };
+      },
+      learnEvidence: async () => evidence,
+      recentTurnTrace: () => null,
+      complete: async (prompt: string) => {
+        prompts.push(prompt);
+        return answer;
+      }
+    } as unknown as ChatBackend;
+    initSkills({ runtime, onChanged: () => undefined, busyWithin: () => false });
+  });
+
+  it('asks the author where the convention belongs, as its own call, not the user\'s', async () => {
+    await learnConventions(new Map([['thread-convention', [KROS]]]));
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain(SKILL_CONVENTION_INSTRUCTIONS);
+    expect(prompts[0]).toContain(`What memory recorded:\n- ${KROS}`);
+    // Not the /learn framing: here declining is a normal answer.
+    expect(prompts[0]).not.toContain(SKILL_LEARN_INSTRUCTIONS);
+    expect(prompts[0]).toContain('--- Latest turn ---');
+    await logFlushed();
+    expect(await readFile(process.env.STEM_LOG_FILE!, 'utf8')).toMatch(
+      /\[skills\] convention pass \{"threadId":"thread-convention","conventions":1,"ok":false,"reason":"declined"/
+    );
+  });
+
+  it('writes the skill the author returns', async () => {
+    answer = JSON.stringify({
+      skill: {
+        name: 'monthly-invoice-without-kros',
+        description: 'Use when the user gives the hours for the monthly invoice.',
+        body: `## When to use\nWhen the user asks for the monthly invoice.\n\n## Steps\n1. Copy last month's invoice and change the hours.\n2. Leave out any mention of kros.sk.\n\n## Verification\nThe PDF shows the hours and no kros.sk text.`
+      }
+    });
+    await learnConventions(new Map([['thread-convention-save', [KROS]]]));
+    const saved = await readFile(join(skillsDir, 'monthly-invoice-without-kros', 'SKILL.md'), 'utf8');
+    expect(saved).toContain('Leave out any mention of kros.sk');
+  });
+
+  it('learns from mail conversations, which /learn leaves alone', async () => {
+    const conversation = await createConversation('Drafts', ['persona-b'], '', {});
+    await setConversationSession(conversation.id, 'persona-b', 'thread-mail-convention');
+    await learnConventions(new Map([['thread-mail-convention', [KROS]]]));
+    expect(prompts).toHaveLength(1);
+  });
+
+  it('never reads a private mail conversation', async () => {
+    const conversation = await createConversation('Private drafts', ['persona-c'], '', { private: true });
+    await setConversationSession(conversation.id, 'persona-c', 'thread-private-mail-convention');
+    await learnConventions(new Map([['thread-private-mail-convention', [KROS]]]));
+    expect(prompts).toHaveLength(0);
+  });
+
+  it('never reads a private chat', async () => {
+    await setChatPrivate('thread-private-convention');
+    await learnConventions(new Map([['thread-private-convention', [KROS]]]));
+    expect(prompts).toHaveLength(0);
+  });
+
+  it('takes one conversation at a time, each with all of its new preferences', async () => {
+    await Promise.all([
+      learnConventions(new Map([['thread-a', ['first']]])),
+      learnConventions(new Map([['thread-a', ['second']], ['thread-b', ['third']]]))
+    ]);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain('- first\n- second');
+    expect(prompts[1]).toContain('- third');
   });
 });

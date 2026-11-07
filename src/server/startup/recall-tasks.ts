@@ -1,4 +1,7 @@
-import { memoryRunOf, skillsRunOf } from '../workspace/settings';
+import { memoryRunOf, readSettings, skillsRunOf } from '../workspace/settings';
+import { skillsRoot } from '../workspace/paths';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { isRecallEnabled } from '../workspace/memory';
 import * as activity from '../activity';
 import { embedNewMessages } from '../recall/embed-episodic';
@@ -19,7 +22,7 @@ import { migrateSkillProvenance } from '../skills/provenance';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { applyAutomaticTransitions } from '../skills/lifecycle';
-import { isSettlePassRunning } from './skills';
+import { isSettlePassRunning, learnConventions } from './skills';
 import { getEmbeddingsClient } from '../recall/retrieval';
 import type { LlmClient } from '../recall/llm';
 import type { ChatBackend } from '../backend';
@@ -135,6 +138,14 @@ export function initRecallTasks(deps: {
             ? `Learned ${n} fact${n === 1 ? '' : 's'}: ${summarizeFactTexts(recallStore.getFactsCreatedSince(distillFrom, 'distilled'), n)}`
             : 'Learned 0 facts'
         }));
+        // Preferences about how a kind of work should be done go on to the skill
+        // author, which folds each into the skill for that work (startup/skills.ts
+        // learnConventions). Grouped by the conversation they were learned in,
+        // since that conversation is the evidence the author reads.
+        queueConventions(distillFrom);
+        // And, one batch per pass, the preferences learned before that pass
+        // existed (backfillConventions).
+        void backfillConventions();
         // Rolling thread summaries (Level 1.5): revise the summaries of the
         // just-active threads from the same new messages. Own watermark, so a
         // failure here never blocks fact extraction (and vice versa).
@@ -359,4 +370,83 @@ export function initRecallTasks(deps: {
   setInterval(() => scheduleEpisodicEmbed(), 10 * 60_000);
 
   return { scheduleMemoryRebuild, scheduleDistill, scheduleEpisodicEmbed, scheduleCurateAfterCreate };
+}
+
+/**
+ * New preference facts since `since`, by the chat they were learned in. A fact
+ * with evidence in several chats is offered to each; one learned from a
+ * document alone has no conversation to show how the work is done, so it stays
+ * a fact.
+ */
+function queueConventions(since: number): void {
+  try {
+    const byThread = new Map<string, string[]>();
+    for (const fact of recallStore.getFactsCreatedSince(since, 'distilled')) {
+      if (fact.category !== 'preference' || fact.status !== 'active') continue;
+      const threads = new Set(recallStore.getFactEvidence(fact.id).map((e) => e.threadId).filter((t): t is string => !!t));
+      for (const threadId of threads) byThread.set(threadId, [...(byThread.get(threadId) ?? []), fact.text]);
+    }
+    if (byThread.size > 0) learnConventions(byThread);
+  } catch (error) {
+    degrade('skills.conventions', 'skipped offering new preferences to the skill author', error);
+  }
+}
+
+/**
+ * The preferences memory learned before the convention pass existed, offered to
+ * the skill author once, CONVENTION_BACKFILL_BATCH facts after each distill pass
+ * (paced by use, like the fact tidy). Progress is a fact-id watermark in the
+ * skills folder, so a restart resumes and a finished install never looks again.
+ *
+ * Ask mode included: the pacing keeps it to a card or two per pass, most
+ * preferences being tastes the author declines, and those cards are not tied to
+ * the old chat they came from. Off mode skips it until the user turns skills on.
+ */
+const CONVENTION_BACKFILL_BATCH = 20;
+const CONVENTION_BACKFILL_FILE = '.conventions-backfill.json';
+let backfilling = false;
+
+export async function backfillConventions(): Promise<void> {
+  if (backfilling) return;
+  backfilling = true;
+  try {
+    if ((await readSettings()).skills.mode === 'off') return;
+    const stateFile = join(skillsRoot(), CONVENTION_BACKFILL_FILE);
+    let through = 0;
+    let upTo: number | null = null;
+    try {
+      const state = JSON.parse(readFileSync(stateFile, 'utf8')) as { through?: unknown; upTo?: unknown; done?: unknown };
+      if (state.done === true) return;
+      if (typeof state.through === 'number') through = state.through;
+      if (typeof state.upTo === 'number') upTo = state.upTo;
+    } catch (error) {
+      // quiet: a missing file is a backfill that has not started.
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    }
+    const facts = recallStore.getAllFacts();
+    // Pinned on the first run: everything newer is the forward pass's
+    // (queueConventions), which has been running since this build started.
+    if (upTo === null) upTo = facts.reduce((max, f) => Math.max(max, f.id), 0);
+    const limit = upTo;
+    // Oldest first, so the watermark only moves forward.
+    const pending = facts
+      .filter((f) => f.id > through && f.id <= limit && f.category === 'preference' && f.status === 'active' && f.source.startsWith('distilled'))
+      .sort((a, b) => a.id - b.id);
+    const batch = pending.slice(0, CONVENTION_BACKFILL_BATCH);
+    const byThread = new Map<string, string[]>();
+    for (const fact of batch) {
+      const threads = new Set(recallStore.getFactEvidence(fact.id).map((e) => e.threadId).filter((t): t is string => !!t));
+      for (const threadId of threads) byThread.set(threadId, [...(byThread.get(threadId) ?? []), fact.text]);
+    }
+    if (byThread.size > 0) await learnConventions(byThread, { earlier: true });
+    const next = batch.length > 0 ? batch[batch.length - 1].id : through;
+    const done = pending.length <= CONVENTION_BACKFILL_BATCH;
+    mkdirSync(skillsRoot(), { recursive: true });
+    writeFileSync(stateFile, JSON.stringify({ through: next, upTo: limit, done, at: new Date().toISOString() }));
+    log('skills', 'convention backfill', { facts: batch.length, conversations: byThread.size, through: next, upTo: limit, done });
+  } catch (error) {
+    degrade('skills.conventions', 'paused offering earlier preferences to the skill author', error);
+  } finally {
+    backfilling = false;
+  }
 }

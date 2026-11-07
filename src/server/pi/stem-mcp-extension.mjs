@@ -1927,6 +1927,10 @@ export default async function stemMcpBridge(pi) {
   const turnContextGate = makeTurnContextGate(
     join(process.env[ENV_GATE_DIR] || dirname(cfgPath), TURN_CONTEXT_GATE_FILE)
   );
+  // Skills to hand over when this turn first calls a tool they govern (main's
+  // skills/inject.ts toolSkillsForTurn), and which this turn already got.
+  const toolSkillsGate = makeToolSkillsGate(join(process.env[ENV_GATE_DIR] || dirname(cfgPath), TOOL_SKILLS_GATE_FILE));
+  const toolSkillsDelivered = { turnId: '', slugs: new Set() };
 
   // Register tools on THIS session's pi (cheap, no network). Recall stays eager
   // (native tools, used every turn); everything else is behind the router.
@@ -2122,6 +2126,10 @@ export default async function stemMcpBridge(pi) {
       // before the filesystem rules even look (see codeRelayRefusal).
       const relayRefusal = event ? codeRelayRefusal(event.toolName, turnContextGate()) : null;
       if (relayRefusal) return { block: true, reason: relayRefusal };
+      // The user's saved way of doing this, before the call runs (not after:
+      // a sent mail cannot take a signature back).
+      const hold = event ? toolSkillHold(event, toolSkillsGate(), toolSkillsDelivered) : null;
+      if (hold) return { block: true, reason: hold };
       const kind = event ? FS_TOOL_KIND[event.toolName] : undefined;
       if (!kind) return undefined;
       const p = event.input && typeof event.input.path === 'string' ? event.input.path : null;
@@ -2230,6 +2238,70 @@ const INSTRUCTIONS_APPROVAL_TITLE = 'stem-instructions-approval';
 
 /** Name of the per-turn `{ mail, scheduled }` gate file (protocol.ts). */
 const TURN_CONTEXT_GATE_FILE = 'turn-context.json';
+/** Name of the per-turn tool-skills gate file (protocol.ts TOOL_SKILLS_GATE_FILE). */
+const TOOL_SKILLS_GATE_FILE = 'tool-skills.json';
+
+/**
+ * Reader for the tool-skills gate: `{ turnId, skills: [{ slug, tools, text }] }`.
+ * Missing or unreadable reads as no skills (an older main never writes it).
+ */
+export function makeToolSkillsGate(path) {
+  return () => {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8'));
+      const skills = Array.isArray(parsed.skills)
+        ? parsed.skills.filter(
+            (s) => s && typeof s.slug === 'string' && typeof s.text === 'string' && Array.isArray(s.tools) && s.tools.length > 0
+          )
+        : [];
+      return { turnId: typeof parsed.turnId === 'string' ? parsed.turnId : '', skills };
+    } catch {
+      return { turnId: '', skills: [] };
+    }
+  };
+}
+
+/** What a skill's `tools` entry is matched against: `server.tool` for an MCP call, else the tool's own name. */
+function toolSkillKey(event) {
+  if (event.toolName === 'invoke_tool') {
+    const input = event.input || {};
+    const server = typeof input.server === 'string' ? input.server : '';
+    const tool = typeof input.tool === 'string' ? input.tool : '';
+    return server && tool ? `${server}.${tool}` : null;
+  }
+  return typeof event.toolName === 'string' ? event.toolName : null;
+}
+
+function toolSkillMatches(entry, key) {
+  if (entry === key) return true;
+  return entry.endsWith('.*') && key.startsWith(entry.slice(0, -1));
+}
+
+/**
+ * Hold a tool call back once per turn per skill when a saved skill governs it,
+ * with the skill's text as the reason: the model reads it and calls again.
+ * Returns the reason, or null to let the call through. `delivered` is this
+ * process's memory of what the current turn already got; a new turnId in the
+ * gate resets it.
+ *
+ * Why a hold and not a note on the result: the user's conventions for an
+ * action (who a mail is signed as, which calendar, which prefix) have to be
+ * read before the action, and the per-turn ranking only brings the skill up
+ * when the request's wording resembles it.
+ */
+export function toolSkillHold(event, gate, delivered) {
+  if (!gate || gate.skills.length === 0) return null;
+  if (delivered.turnId !== gate.turnId) {
+    delivered.turnId = gate.turnId;
+    delivered.slugs = new Set();
+  }
+  const key = toolSkillKey(event);
+  if (!key) return null;
+  const due = gate.skills.filter((s) => !delivered.slugs.has(s.slug) && s.tools.some((t) => typeof t === 'string' && toolSkillMatches(t, key)));
+  if (due.length === 0) return null;
+  for (const s of due) delivered.slugs.add(s.slug);
+  return due.map((s) => s.text).join('\n\n');
+}
 
 /**
  * Reader for the per-turn context gate: what kind of turn is running on THIS
@@ -4451,6 +4523,12 @@ function registerSkillTools(pi) {
         expect_existing: {
           type: 'boolean',
           description: 'save: true when you mean to change a skill that already exists (fails if it does not).'
+        },
+        tools: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'save, optional: tools whose calls this skill decides how to make for the user (e.g. their conventions for drafting mail), as "server.tool" (what invoke_tool takes), "server.*", or a built-in tool name. Stem then shows the skill the first time a turn calls one. Omit to keep the current list.'
         }
       },
       required: ['action', 'name']
@@ -4473,7 +4551,8 @@ function registerSkillTools(pi) {
           description: params && params.description,
           content: params && params.content,
           // "patch" carried the same intent the flag now carries explicitly.
-          expect_existing: (params && params.expect_existing === true) || action === 'patch'
+          expect_existing: (params && params.expect_existing === true) || action === 'patch',
+          ...(params && Array.isArray(params.tools) ? { tools: params.tools } : {})
         });
         return res && res.ok ? skillOk(res.text || 'Done.') : skillErr((res && res.text) || 'The skill could not be saved.');
       } catch (e) {

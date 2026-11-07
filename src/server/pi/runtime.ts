@@ -113,6 +113,7 @@ import {
   writeNativeSearchGate,
   writeServiceTierGate,
   writeSystemPromptFile,
+  writeToolSkillsGate,
   writeTurnContextGate
 } from './mcp-config';
 import { authorizeMcp } from './oauth';
@@ -130,14 +131,14 @@ import {
 } from './web-search';
 import { piMcpConfigPath, skillsRoot, workspaceRoot as stemWorkspaceRoot } from '../workspace/paths';
 import { readUsage, recordGrades, recordInjections, recordUses } from '../skills/usage';
-import { formatSkillsBlock, selectSkills, type SkillUsageStat } from '../skills/inject';
+import { formatSkillsBlock, selectSkills, toolSkillsForTurn, toolSkillsHandedOver, type SkillUsageStat } from '../skills/inject';
 import { loadedSkillNames } from '../skills/thread-history';
 import { AmbientBlocks, liveUserTexts } from './context-dedupe';
 import { formatPracticeBlock } from '../skills/record';
 import { formatWindowBlock, isBrowserWindow } from './window-context';
 import { mcpServersForAppName, windowSuggestionFor } from './mcp';
 import { readDevices } from '../transport/auth';
-import { listSkillRecords } from '../skills/store';
+import { listSkillRecords, readSkillRecord } from '../skills/store';
 import { gradeSkillUse, reportedSkillIssues } from '../skills/grade';
 import { parseThreadEvidence, type LearnTurn } from '../skills/thread-evidence';
 import { resolvePi, type PiInvocation } from './locate';
@@ -195,6 +196,7 @@ import {
   SKILL_BRIDGE_TITLE,
   SKILLS_REV_FILE,
   TASK_BRIDGE_TITLE,
+  TOOL_SKILLS_GATE_FILE,
   toolArgsOf
 } from './protocol';
 import { recallStore, type Fact, type FactTier, type InjectedDocRef } from '../recall/store';
@@ -3731,7 +3733,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                 name: String(req.name ?? ''),
                 description: String(req.description ?? ''),
                 body: String(req.content ?? req.body ?? ''),
-                expectExisting: req.expect_existing === true
+                expectExisting: req.expect_existing === true,
+                ...(Array.isArray(req.tools) ? { tools: req.tools.map((t) => String(t)) } : {})
               },
           { isScheduled, isMail, threadId }
         );
@@ -3962,6 +3965,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // pendingSkillReload, since pi ignores non-skill files.
     if (turn.skillsSettled) return;
     turn.skillsSettled = true;
+    // A skill handed over at a tool call (the bridge held the call back once with
+    // its text) went into this turn as surely as an inlined one: count, grade and
+    // route it the same way.
+    const offered = new Set(turn.toolSkillsOffered ?? []);
+    for (const slug of toolSkillsHandedOver(turn.trace).filter((s) => offered.has(s))) {
+      const already = turn.skillsInjected ?? [];
+      const record = already.some((s) => s.slug === slug) ? null : readSkillRecord(slug);
+      if (!record) continue;
+      turn.skillsInjected = [...already, { slug: record.slug, name: record.name, description: record.description, body: record.body, origin: record.origin }];
+      recordInjections([slug]);
+    }
     const injected = turn.skillsInjected ?? [];
     if (injected.length > 0) {
       // The model's own verdict first: a skill it reported as wrong is not one
@@ -5102,12 +5116,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Ranked against this message, top bodies inlined, the rest listed by name.
     // Sits after recall and before files so the model reads "what I remember" and
     // "how I do this" together, ahead of the ambient context blocks.
+    let toolSkills: ReturnType<typeof toolSkillsForTurn> = [];
     try {
-      const selection = await selectSkills(input.input, listSkillRecords(), {
+      const records = listSkillRecords();
+      const alreadyLoaded = loadedSkillNames(historySnapshot);
+      const selection = await selectSkills(input.input, records, {
         usage: skillUsageLookup(),
         previousUserMessages,
-        alreadyLoaded: loadedSkillNames(historySnapshot)
+        alreadyLoaded
       });
+      toolSkills = toolSkillsForTurn(records, selection.inlined.map((s) => s.slug), alreadyLoaded);
+      if (turn?.threadId === threadId) turn.toolSkillsOffered = toolSkills.map((s) => s.slug);
       // Log the cut on EVERY turn, including — especially — the turns that
       // inline nothing. The regression this replaced was invisible precisely
       // because a stage returning nothing and a stage with nothing to say
@@ -5138,6 +5157,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // be ranked.
       log('pi', 'skill selection failed; sending the turn without skills', {
         error: error instanceof Error ? error.message : String(error)
+      });
+    }
+    // Every turn, empty included: the file is this worker's, and a stale one
+    // would hold a call back for the previous turn's skill.
+    if (worker) {
+      const gateDir = worker.gateDir;
+      await writeToolSkillsGate({ turnId: turnId ?? '', skills: toolSkills }, gateDir).catch((error) => {
+        degrade('pi.gates', 'sent the turn without handing skills over at tool calls', error);
+        // quiet: the degrade above is the signal; a missing file holds nothing back.
+        return unlink(join(gateDir, TOOL_SKILLS_GATE_FILE)).catch(() => undefined);
       });
     }
     // A practice run of a recorded draft (the draft card's "Practice run"):

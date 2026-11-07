@@ -11,6 +11,7 @@
 // session-manager): the active branch only, and after a compaction only the
 // entries from the compaction's firstKeptEntryId onward. A skill that was
 // summarised away is no longer in front of the model and may load again.
+import { TOOL_SKILL_MARKER } from '../pi/protocol';
 
 const SKILLS_OPEN = '<stem_skills';
 const SKILLS_CLOSE = '</stem_skills>';
@@ -78,6 +79,14 @@ export function loadedSkillNames(snapshot: unknown): Set<string> {
     } else if (entry.type === 'message') {
       const message = record(entry.message);
       if (message?.role === 'user') inlinedNames(messageText(message), names);
+      // A skill handed over at a tool call (inject.ts toolSkillsForTurn) is the
+      // held call's error result, opening with the marker. Only that shape
+      // counts: any tool can return text, and one that quoted a skills block
+      // would otherwise keep a skill from loading for the rest of the chat.
+      else if (message?.role === 'toolResult' && message.isError === true) {
+        const text = messageText(message);
+        if (text.startsWith(TOOL_SKILL_MARKER)) inlinedNames(text, names);
+      }
     }
     if (keepUntil !== null && id === keepUntil) break;
     id = entry.parentId;

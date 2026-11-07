@@ -13,6 +13,7 @@ interface FrontMatter {
   source?: 'agent' | 'user';
   version?: number;
   updated?: string;
+  tools?: string[];
 }
 
 /** Parse the leading `---` YAML front-matter block of a SKILL.md. */
@@ -28,7 +29,8 @@ function parseFrontMatter(text: string): FrontMatter {
       description: typeof data?.description === 'string' ? data.description : undefined,
       source: stem.source === 'agent' ? 'agent' : 'user',
       version: typeof stem.version === 'number' ? stem.version : undefined,
-      updated: typeof stem.updated === 'string' ? stem.updated : undefined
+      updated: typeof stem.updated === 'string' ? stem.updated : undefined,
+      tools: Array.isArray(stem.tools) ? stem.tools.filter((t): t is string => typeof t === 'string') : undefined
     };
   } catch (error) {
     // Front matter that will not parse leaves the skill in the panel under its
@@ -75,7 +77,8 @@ export async function listSkills(): Promise<SkillSummary[]> {
         useCount: usage.skills[slug]?.count ?? 0,
         lastUsedAt: usage.skills[slug]?.lastUsedAt,
         failCount: usage.skills[slug]?.failed ?? 0,
-        lastFailure: usage.skills[slug]?.lastFailure
+        lastFailure: usage.skills[slug]?.lastFailure,
+        ...(fm.tools?.length ? { tools: fm.tools } : {})
       });
     } catch (error) {
       // No SKILL.md — not a skill directory; skip. A SKILL.md that is there and

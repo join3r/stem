@@ -55,6 +55,8 @@ export interface SkillRecord {
   updated: string;
   /** No `.disabled` marker (see skills/ignore.ts). */
   enabled: boolean;
+  /** Tools whose calls hand this skill over (contract.ts SkillDraft.tools); [] = none. */
+  tools: string[];
 }
 
 export type WriteResult =
@@ -70,6 +72,7 @@ export interface SkillFront {
   version?: number;
   created?: string;
   updated?: string;
+  tools?: string[];
 }
 
 /**
@@ -88,6 +91,7 @@ export function composeSkillMd(input: {
   created: string;
   /** Defaults to now; passed explicitly so a caller can report what it wrote. */
   updated?: string;
+  tools?: readonly string[];
 }): string {
   const fm = [
     '---',
@@ -100,6 +104,7 @@ export function composeSkillMd(input: {
     `    version: ${input.version}`,
     `    created: ${JSON.stringify(input.created)}`,
     `    updated: ${JSON.stringify(input.updated ?? new Date().toISOString())}`,
+    ...(input.tools?.length ? [`    tools: ${JSON.stringify(input.tools)}`] : []),
     '---'
   ].join('\n');
   return `${fm}\n\n${input.body.trim()}\n`;
@@ -128,7 +133,8 @@ export function parseSkillMd(text: string): SkillFront {
     origin: typeof stem.origin === 'string' && SKILL_ORIGINS.includes(stem.origin) ? (stem.origin as SkillOrigin) : undefined,
     version: typeof stem.version === 'number' ? stem.version : undefined,
     created: str(stem.created),
-    updated: str(stem.updated)
+    updated: str(stem.updated),
+    tools: Array.isArray(stem.tools) ? stem.tools.filter((t): t is string => typeof t === 'string') : undefined
   };
 }
 
@@ -175,7 +181,8 @@ function readRecordIn(root: string, slug: string): SkillRecord | null {
     version: fm.version ?? 1,
     created: fm.created ?? '',
     updated: fm.updated ?? fm.created ?? '',
-    enabled: !existsSync(join(root, slug, DISABLED_MARKER))
+    enabled: !existsSync(join(root, slug, DISABLED_MARKER)),
+    tools: fm.tools ?? []
   };
 }
 
@@ -265,7 +272,10 @@ export function saveSkill(draft: SkillDraft, opts: { origin: SkillOrigin; expect
     version: existing ? existing.version + 1 : 1,
     created: existing?.created || now,
     updated: now,
-    enabled: existing?.enabled ?? true
+    enabled: existing?.enabled ?? true,
+    // A patch that does not mention tools keeps the skill's; the author is shown
+    // them, so leaving them out is not a decision to drop them.
+    tools: draft.tools ? draft.tools.map((t) => t.trim()) : (existing?.tools ?? [])
   };
 
   try {
