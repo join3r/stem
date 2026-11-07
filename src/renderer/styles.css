@@ -3480,11 +3480,11 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   box-shadow: 0 18px 50px -12px color-mix(in srgb, var(--drop-chat) 40%, transparent);
 }
 
-/* right region: Files bands stacked horizontally (one per subfolder + root) */
-.drop-files { flex: 1; display: flex; flex-direction: column; align-items: stretch; }
+/* right region: a fixed "Top level" zone on top, subfolder tiles below */
+.drop-files { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: stretch; }
 .drop-band {
   position: relative;
-  flex: 1;
+  flex: 0 0 34%;
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -3494,12 +3494,101 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   padding: var(--sp-7) 26px;
   transition: background var(--motion-med) ease;
 }
-.drop-band + .drop-band { border-top: 1px dashed var(--line); }
+
+/* Subfolder tiles: sized by drop-layout.ts so every tile fits without scrolling
+   (keep its TILE_MIN_H / GAP / PAD / FOOT in step with these values). */
+.drop-tiles {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-auto-rows: minmax(44px, 1fr);
+  align-content: start;
+  gap: 8px;
+  padding: 24px 24px 80px;
+  border-top: 1px dashed var(--line);
+}
+.drop-tiles.roomy { grid-auto-rows: minmax(44px, 96px); }
+.drop-tile {
+  min-width: 0;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  align-content: center;
+  row-gap: 2px;
+  column-gap: var(--sp-5);
+  padding: 0 var(--sp-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--drop-files);
+  transition: background var(--motion-med) ease, border-color var(--motion-med), transform 0.14s ease;
+}
+.drop-tile-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--ink);
+}
+.drop-tile-sub { grid-column: 2; font-size: var(--fs-12); color: var(--muted); }
+.drop-tile.other { border-style: dashed; }
+.drop-tile.other .drop-tile-name { color: var(--muted); font-weight: 500; }
+.drop-tile.active {
+  border-color: var(--drop-files);
+  background: color-mix(in srgb, var(--drop-files) 16%, var(--surface));
+  box-shadow: 0 10px 28px -12px color-mix(in srgb, var(--drop-files) 45%, transparent);
+  transform: translateY(-1px);
+}
+
+/* "Other folder…" picker after the drop */
+.drop-picker-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--content, var(--surface));
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-13);
+  outline: none;
+}
+.drop-picker-search:focus { border-color: var(--drop-files); }
+.drop-picker-list {
+  max-height: min(48vh, 360px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--sp-6);
+}
+.drop-picker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-13);
+  cursor: pointer;
+}
+.drop-picker-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drop-picker-row svg { flex: none; color: var(--drop-files); }
+.drop-picker-row.sel { background: color-mix(in srgb, var(--drop-files) 14%, transparent); }
 .drop-band .dz-text { display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start; }
 .drop-band h4 { margin: 0; font-size: var(--fs-16); font-weight: 660; letter-spacing: -0.01em; color: var(--ink); }
 .drop-band p { max-width: 300px; }
 
 /* single Files zone (no subfolders) — match the chat side's big centered look */
+.drop-files.single .drop-band { flex: 1; }
 .drop-files.single .drop-band { flex-direction: column; gap: var(--sp-6); text-align: center; padding: var(--sp-10) var(--sp-8); }
 .drop-files.single .drop-band .dz-text { align-items: center; }
 .drop-files.single .drop-band .dz-glyph.sm { width: 84px; height: 84px; border-radius: 22px; }
@@ -3533,7 +3622,7 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .drop-overlay, .dz-glyph, .drop-zone, .drop-band { animation: none; transition: none; }
+  .drop-overlay, .dz-glyph, .drop-zone, .drop-band, .drop-tile { animation: none; transition: none; }
 }
 
 /* ---- Compact icon button (e.g. Sources → reveal a folder in Finder) ---- */
