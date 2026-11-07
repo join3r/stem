@@ -116,6 +116,8 @@ export interface ActivityItem {
   startedAt?: number;
   /** A generate_image row that finished: the picture it made (no bytes). */
   image?: GeneratedImageRef;
+  /** A share_audio row that finished: the sound it put in the chat (no bytes). */
+  audio?: ChatAudioRef;
   /**
    * A coding_agent call that asked for a brand-new agent conversation
    * (`fresh_session`) — shown on the row so a wrong new-vs-continue call is
@@ -140,6 +142,23 @@ export interface GeneratedImageRef {
   /** The prompt the assistant wrote, and the one OpenAI actually used. */
   prompt?: string;
   revisedPrompt?: string;
+}
+
+/**
+ * A sound the assistant put in a chat with `share_audio` (a clip it cut, a
+ * recording it made). The bytes live in Stem's private audio store under
+ * `threadId` (files/chat-audio.ts), never in the session file or the event
+ * stream; clients fetch them on demand with `chats:audio`.
+ */
+export interface ChatAudioRef {
+  /** `aud_` + 10 hex; unique within its thread. */
+  id: string;
+  threadId: string;
+  mime: string;
+  /** What the card shows as its name ("Datacentrá · 03:50–07:30"). */
+  title?: string;
+  /** The file's size in bytes. */
+  bytes?: number;
 }
 
 /** A web source the model consulted, parsed out of a web_search result. */
@@ -204,6 +223,8 @@ export interface ChatMessage {
   sources?: SourceRef[];
   /** Assistant messages only: pictures generate_image made this turn (refs; bytes via `chats:image`). */
   images?: GeneratedImageRef[];
+  /** Assistant messages only: sounds share_audio put in the chat this turn (refs; bytes via `chats:audio`). */
+  audio?: ChatAudioRef[];
   /**
    * ISO timestamp the message was authored. Surfaced as a hover-revealed label on
    * user bubbles (mirroring the assistant model/timing reveal). Read from the pi
@@ -767,6 +788,8 @@ export interface BackendItem {
   startedAt?: number;
   /** A finished generate_image call: the picture it made (a ref, never bytes). */
   image?: GeneratedImageRef;
+  /** A finished share_audio call: the sound it put in the chat (a ref, never bytes). */
+  audio?: ChatAudioRef;
   /** A coding_agent call on `item/started` that asked for a new agent conversation. */
   freshSession?: true;
 }
@@ -5736,8 +5759,12 @@ export interface StemApi {
   readChatHistory(threadId: string): Promise<ChatHistory>;
   /** One image a thread holds (see GeneratedImageRef), as a data URL; null when gone. */
   getChatImage(threadId: string, imageId: string): Promise<{ dataUrl: string; mime: string } | null>;
+  /** One sound a thread holds (see ChatAudioRef), as a data URL; null when gone. */
+  getChatAudio(threadId: string, audioId: string): Promise<{ dataUrl: string; mime: string } | null>;
   /** Desktop only: write an image (data URL) straight into Downloads; answers the path. */
   saveImageToDownloads(dataUrl: string, name: string): Promise<string>;
+  /** Desktop only: write a sound (data URL) straight into Downloads; answers the path. */
+  saveAudioToDownloads(dataUrl: string, name: string): Promise<string>;
   /** Desktop only: put an image (data URL) on the clipboard. */
   copyImage(dataUrl: string): Promise<void>;
   /** Drop the given turn and every later turn from the thread (retry/edit re-run). */

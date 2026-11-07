@@ -2,6 +2,7 @@ import { workDetail } from '../../shared/work-detail';
 import type { PiEvent } from './rpc';
 import type {
   ActivityItem,
+  ChatAudioRef,
   GeneratedImageRef,
   PersonaBrowserPin,
   PersonaComputerPin,
@@ -529,6 +530,32 @@ export function generatedImageRef(details: unknown, threadId: string): Generated
   return ref;
 }
 
+/** `aud_` + 10 hex: the id share_audio gives a sound (files/chat-audio.ts). */
+export const CHAT_AUDIO_ID = /^aud_[0-9a-f]{10}$/;
+
+const CHAT_AUDIO_MIMES = new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/wav', 'audio/ogg', 'audio/flac', 'audio/webm']);
+
+/** A sound's card name: one line, at most 120 characters, or undefined. */
+export function cleanAudioTitle(title: unknown): string | undefined {
+  if (typeof title !== 'string') return undefined;
+  const t = title.replace(/\s+/g, ' ').trim().slice(0, 120);
+  return t || undefined;
+}
+
+/** The display ref of a share_audio result's `details.stemAudio`, or null. */
+export function chatAudioRef(details: unknown, threadId: string): ChatAudioRef | null {
+  const raw = details && typeof details === 'object' ? (details as { stemAudio?: unknown }).stemAudio : null;
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.id !== 'string' || !CHAT_AUDIO_ID.test(r.id)) return null;
+  const mime = typeof r.mime === 'string' && CHAT_AUDIO_MIMES.has(r.mime) ? r.mime : 'audio/mpeg';
+  const ref: ChatAudioRef = { id: r.id, threadId, mime };
+  const title = cleanAudioTitle(r.title);
+  if (title) ref.title = title;
+  if (typeof r.bytes === 'number' && Number.isFinite(r.bytes)) ref.bytes = r.bytes;
+  return ref;
+}
+
 /**
  * Flatten a pi tool result's content blocks to plain text. The result shape is
  * MCP-ish (`{ content: [{ type: 'text', text }] }`) but PiEvent is deliberately
@@ -739,6 +766,11 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
         const made = generatedImageRef(result?.details, threadId);
         if (made) entry.image = made;
       }
+      // A sound share_audio put in the chat: the same, with its bytes in the audio store.
+      if (entry.status === 'ok') {
+        const sound = chatAudioRef(result?.details, threadId);
+        if (sound) entry.audio = sound;
+      }
       // Retain the outcome for skill authoring. A failure is worth more than a
       // success here — it is what turns a list of steps into a warning about the
       // dead end — so errors are kept even once the budget is spent.
@@ -777,7 +809,8 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
             name: entry.name,
             detail: entry.detail,
             status: entry.status,
-            ...(entry.image ? { image: entry.image } : {})
+            ...(entry.image ? { image: entry.image } : {}),
+            ...(entry.audio ? { audio: entry.audio } : {})
           },
           threadId,
           turnId

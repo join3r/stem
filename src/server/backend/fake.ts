@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { deflateSync } from 'node:zlib';
+import { writeFile } from 'node:fs/promises';
+import { storeChatAudio } from '../files/chat-audio';
 import type {
   ApprovalId,
   ChatBackend,
@@ -16,6 +18,7 @@ import type {
   ChatSummary,
   CompactChatResult,
   GeneratedImageRef,
+  ChatAudioRef,
   McpAdminProposal,
   McpLoginResult,
   ModelSummary,
@@ -32,6 +35,31 @@ import { computerDeviceRouter } from '../computer-device/router';
 import { turnFailureMessage } from '../../shared/chatState';
 
 const E2E_IMAGE_ID = 'img_e2e0000001';
+
+/** A 16-bit mono WAV: a tone whose loudness swells and fades, so the waveform has a shape. */
+function testToneWav(seconds: number): Buffer {
+  const rate = 8000;
+  const n = Math.floor(rate * seconds);
+  const out = Buffer.alloc(44 + n * 2);
+  out.write('RIFF', 0, 'ascii');
+  out.writeUInt32LE(36 + n * 2, 4);
+  out.write('WAVEfmt ', 8, 'ascii');
+  out.writeUInt32LE(16, 16);
+  out.writeUInt16LE(1, 20);
+  out.writeUInt16LE(1, 22);
+  out.writeUInt32LE(rate, 24);
+  out.writeUInt32LE(rate * 2, 28);
+  out.writeUInt16LE(2, 32);
+  out.writeUInt16LE(16, 34);
+  out.write('data', 36, 'ascii');
+  out.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) {
+    const t = i / rate;
+    const level = 0.15 + 0.85 * Math.abs(Math.sin(t * 2.3) * Math.sin(t * 0.7 + 1));
+    out.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * t) * level * 12000), 44 + i * 2);
+  }
+  return out;
+}
 
 /** A small RGB gradient PNG, built by hand so the fake needs no image fixture. */
 function testPatternPng(width: number, height: number): Buffer {
@@ -169,6 +197,8 @@ interface ActiveTurn {
   stepMs: number;
   /** Pictures an `[e2e:image]` turn made, recorded with its reply. */
   images?: GeneratedImageRef[];
+  /** Sounds an `[e2e:audio]` turn shared, recorded with its reply. */
+  audio?: ChatAudioRef[];
   /** Settled tool rows of an `[e2e:tools]` turn, recorded with its reply. */
   activity?: ActivityItem[];
 }
@@ -529,6 +559,28 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
         });
       });
     }
+    // [e2e:audio]: a share_audio call — a tone written to the real audio store,
+    // so chats:audio serves it exactly as it serves a clip the model cut.
+    if (!fail && !turn.hang && text.includes('[e2e:audio]')) {
+      const callId = `e2e-audio-${turnId}`;
+      steps.push(() =>
+        this.emitEvent('item/started', {
+          item: { type: 'mcpToolCall', id: callId, name: 'share_audio', startedAt: Date.now() },
+          threadId,
+          turnId
+        })
+      );
+      steps.push(async () => {
+        const wav = testToneWav(6);
+        const audio = await storeChatAudio(threadId, 'audio/wav', wav.length, 'Test tone · 00:00–00:06', (dest) => writeFile(dest, wav));
+        turn.audio = [...(turn.audio ?? []), audio];
+        this.emitEvent('item/completed', {
+          item: { type: 'mcpToolCall', id: callId, name: 'share_audio', status: 'ok', audio },
+          threadId,
+          turnId
+        });
+      });
+    }
     // [e2e:tools]: a command row, an empty text block settling while it runs
     // (which creates the turn's bubble before any words), then a file read.
     if (!fail && !turn.hang && text.includes('[e2e:tools]')) {
@@ -720,6 +772,7 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
       turnId: turn.turnId,
       createdAt: new Date().toISOString(),
       ...(turn.images?.length ? { images: turn.images } : {}),
+      ...(turn.audio?.length ? { audio: turn.audio } : {}),
       ...(turn.activity?.length ? { activity: turn.activity } : {})
     });
   }

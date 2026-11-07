@@ -23,6 +23,7 @@ import type {
   CompactChatResult,
   ChatSummary,
   GeneratedImageRef,
+  ChatAudioRef,
   InstructionsProposal,
   McpAdminProposal,
   McpLoginResult,
@@ -120,6 +121,7 @@ import { authorizeMcp } from './oauth';
 import { runDeviceMcpBridgeOp } from '../mcp-device/pi-bridge';
 import { execDeviceRouter } from '../exec-device/router';
 import { saveFiles, type SaveItem } from '../files/save-file';
+import { deleteChatAudio, shareAudio } from '../files/chat-audio';
 import { resolveImageRefs } from '../files/image-refs';
 import { providerIsSpawnable, syncModelsConfig } from './models-config';
 import {
@@ -154,6 +156,7 @@ import {
   spawnReadyCompleteChild
 } from './complete-worker';
 import {
+  chatAudioRef,
   generatedImageRef,
   newTurnContext,
   normalizePiEvent,
@@ -186,6 +189,7 @@ import {
   EXEC_BRIDGE_TITLE,
   FILE_BRIDGE_TITLE,
   SAVE_BRIDGE_TITLE,
+  AUDIO_BRIDGE_TITLE,
   IMAGE_REF_BRIDGE_TITLE,
   BROWSER_BRIDGE_TITLE,
   CHAT_BRIDGE_TITLE,
@@ -2419,12 +2423,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // details; the bytes stay in this file) and how many a bubble already has.
     let turnImages: GeneratedImageRef[] = [];
     let placedImages = 0;
+    // Sounds share_audio put in the chat, the same way (bytes in the audio store).
+    let turnAudio: ChatAudioRef[] = [];
+    let placedAudio = 0;
+    const turnMedia = () => ({
+      ...(turnImages.length ? { images: [...turnImages] } : {}),
+      ...(turnAudio.length ? { audio: [...turnAudio] } : {})
+    });
     // A turn that ended right after an image (stopped, or no closing words)
     // still shows it: onto the turn's bubble, or a bubble of its own.
     const flushTurnImages = () => {
-      if (turnImages.length <= placedImages) return;
+      if (turnImages.length <= placedImages && turnAudio.length <= placedAudio) return;
       if (aggregateIndex >= 0) {
-        messages[aggregateIndex] = { ...messages[aggregateIndex], images: [...turnImages] };
+        messages[aggregateIndex] = { ...messages[aggregateIndex], ...turnMedia() };
       } else {
         const turnId = runtimeTurnId ?? lastUserId;
         messages.push({
@@ -2433,10 +2444,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           content: '',
           turnId: lastUserId,
           ...(runtimeTurnId ? { runtimeTurnId } : {}),
-          images: [...turnImages]
+          ...turnMedia()
         });
       }
       placedImages = turnImages.length;
+      placedAudio = turnAudio.length;
     };
     // Which model/effort produced each reply (the hover label next to "Stem").
     // Assistant entries persist provider+model directly; effort comes from the
@@ -2521,6 +2533,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           turnImages.push(made);
           if (hit) hit.image = made;
         }
+        const sound = entry.message.isError === true ? null : chatAudioRef(entry.message.details, threadId);
+        if (sound) {
+          turnAudio.push(sound);
+          if (hit) hit.audio = sound;
+        }
         continue;
       }
       const { text: content, images, scheduled } = this.contentToParts(entry.message.content);
@@ -2528,6 +2545,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         flushTurnImages();
         turnImages = [];
         placedImages = 0;
+        turnAudio = [];
+        placedAudio = 0;
         if (pendingFailure) messages.push(pendingFailure);
         pendingFailure = undefined;
         lastUserId = entry.id ?? lastUserId;
@@ -2562,7 +2581,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             pendingActivity.push(item);
           }
         }
-        if (content.trim() || turnImages.length > placedImages) {
+        if (content.trim() || turnImages.length > placedImages || turnAudio.length > placedAudio) {
           const turnKey = lastUserId || entry.id;
           const timing = turnKey ? timings.get(turnKey) : undefined;
           const usage = toTurnUsage(entry.message.usage);
@@ -2598,9 +2617,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             ...(entry.timestamp ? { createdAt: entry.timestamp } : {}),
             ...(activity ? { activity } : {}),
             ...(sources ? { sources } : {}),
-            ...(turnImages.length ? { images: [...turnImages] } : {})
+            ...turnMedia()
           };
           placedImages = turnImages.length;
+          placedAudio = turnAudio.length;
           if (runtimeTurnId) {
             answer.content = committedText && content.trim() ? `${committedText}\n\n${content}` : committedText || content;
             if (entry.message.stopReason !== 'error' && entry.message.stopReason !== 'aborted') committedText = answer.content;
@@ -2614,7 +2634,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                 ...answer,
                 activity: answer.activity ?? previous.activity,
                 sources: answer.sources ?? previous.sources,
-                images: answer.images ?? previous.images
+                images: answer.images ?? previous.images,
+                audio: answer.audio ?? previous.audio
               };
             }
           } else {
@@ -2757,6 +2778,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // messages still on disk, which is the part they meant to be rid of.
         degrade('pi.sessions', 'left a deleted chat on disk, where the next list finds it again', e)
       );
+      await deleteChatAudio(threadId).catch((e) => degrade('chat-audio', 'left a deleted chat\'s sounds on disk', e));
     });
   }
 
@@ -3319,6 +3341,41 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             }
           })
         );
+      } catch (e) {
+        respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+  }
+
+  /**
+   * Handle the share_audio tool's ctx.ui.input round-trip (sentinel
+   * AUDIO_BRIDGE_TITLE). The sound goes into the live turn's thread, never the
+   * payload's. A sound from a memorize:false folder taints the turn, as a
+   * `read` of it would.
+   */
+  private handleAudioBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    const requestProcess = worker.proc;
+    const respond = (value: unknown): void => {
+      if (worker.proc !== requestProcess) return;
+      requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    };
+    const turn = worker.currentTurn;
+    void (async () => {
+      try {
+        if (turn?.external) return respond({ ok: false, error: EXTERNAL_TOOL_REFUSAL });
+        if (!turn?.threadId) return respond({ ok: false, error: 'Sharing a sound is unavailable outside a conversation.' });
+        const req = JSON.parse(payload ?? '{}') as { from?: unknown; title?: unknown };
+        const res = await shareAudio(turn.threadId, req, {
+          findThreadImage: (threadId, imageId) => this.findThreadOrMailedImage(threadId, imageId)
+        });
+        if (res.ok && !turn.memoryTainted && turn.privateRoots?.length && typeof req.from === 'string') {
+          const scratch = await ensureThreadScratch(turn.threadId);
+          const ref = req.from.trim();
+          if (pathInsideAny(ref, turn.privateRoots, stemWorkspaceRoot()) || pathInsideAny(ref, turn.privateRoots, scratch)) {
+            this.taintTurn(turn);
+          }
+        }
+        respond(res);
       } catch (e) {
         respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
       }
@@ -4251,6 +4308,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // The save_file tool round-trip: the copy happens here (files/save-file.ts).
       if (ev.method === 'input' && ev.title === SAVE_BRIDGE_TITLE) {
         this.handleSaveBridgeRequest(worker, id, ev.placeholder as string | undefined);
+        return;
+      }
+      // The share_audio tool round-trip: the copy happens here (files/chat-audio.ts).
+      if (ev.method === 'input' && ev.title === AUDIO_BRIDGE_TITLE) {
+        this.handleAudioBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
       // generate_image references that are files: read here (files/image-refs.ts).
@@ -5510,11 +5572,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     let committedText = '';
     let aggregateIndex = -1;
     let turnImages: GeneratedImageRef[] = [];
+    let turnAudio: ChatAudioRef[] = [];
     const threadId = worker.activeThreadId ?? '';
     for (const m of raw) {
       if (m.role === 'toolResult') {
         const made = stemImageOf(m) ? generatedImageRef((m as { details?: unknown }).details, threadId) : null;
         if (made) turnImages.push(made);
+        const sound = (m as { isError?: boolean }).isError === true ? null : chatAudioRef((m as { details?: unknown }).details, threadId);
+        if (sound) turnAudio.push(sound);
         continue;
       }
       const { text: content, images, scheduled } = this.contentToParts(m.content);
@@ -5526,6 +5591,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         committedText = '';
         aggregateIndex = -1;
         turnImages = [];
+        turnAudio = [];
         messages.push({
           id: `user-${messages.length}`,
           role: 'user',
@@ -5543,14 +5609,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           model || worker.currentThinking
             ? { ...(model ? { model } : {}), ...(worker.currentThinking ? { effort: worker.currentThinking } : {}) }
             : undefined;
-        if (content.trim() || turnImages.length) {
+        if (content.trim() || turnImages.length || turnAudio.length) {
           const answer: ChatMessage = {
             id: `assistant-${runtimeTurnId ?? messages.length}`,
             role: 'assistant',
             content,
             ...(meta ? { meta } : {}),
             ...(runtimeTurnId ? { runtimeTurnId } : {}),
-            ...(turnImages.length ? { images: [...turnImages] } : {})
+            ...(turnImages.length ? { images: [...turnImages] } : {}),
+            ...(turnAudio.length ? { audio: [...turnAudio] } : {})
           };
           if (runtimeTurnId) {
             answer.content = committedText && content.trim() ? `${committedText}\n\n${content}` : committedText || content;

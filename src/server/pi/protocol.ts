@@ -69,6 +69,14 @@ export const EXEC_BRIDGE_TITLE = 'stem-exec-bridge';
 export const SAVE_BRIDGE_TITLE = 'stem-save-bridge';
 
 /**
+ * share_audio tool round-trip (`input`): `{ from, title? }` rides in
+ * `placeholder`; PiRuntime copies the sound into the chat's audio store
+ * (files/chat-audio.ts) for the live turn's thread and answers
+ * `{ ok, audio, text }` or `{ ok: false, error }`.
+ */
+export const AUDIO_BRIDGE_TITLE = 'stem-audio-bridge';
+
+/**
  * generate_image file-reference round-trip (`input`): `{ refs: string[] }`
  * rides in `placeholder` — the references the session itself could not
  * resolve (files, or `img_…` ids mailed in from another thread). PiRuntime

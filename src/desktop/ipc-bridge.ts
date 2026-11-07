@@ -37,6 +37,7 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   'files:download': [a.string],
   'link:open': [a.string],
   'image:saveToDownloads': [a.string, a.string],
+  'audio:saveToDownloads': [a.string, a.string],
   'image:copy': [a.string],
   'cfolders:reveal': [a.string],
   'client:pair': [a.string, a.string],

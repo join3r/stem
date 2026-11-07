@@ -1976,6 +1976,9 @@ export default async function stemMcpBridge(pi) {
   // a writable connected folder (on its own computer when it lives on one).
   registerSaveTool(pi);
 
+  // share_audio: a sound file Stem holds, shown in the chat as a player card.
+  registerAudioTool(pi);
+
   // Coding agents: delegate coding work to an external harness (Claude Code,
   // OpenCode, ...). The tool only forwards the request — the main process owns
   // the settings gate, session continuity, approval cards and the acpx runtime,
@@ -3363,6 +3366,53 @@ function registerSaveTool(pi) {
         res = { ok: false, error: 'Malformed response from Stem.' };
       }
       return res.ok ? taskOk(res.text || 'Saved.') : taskErr(res.error || 'Nothing was saved.');
+    }
+  });
+}
+
+// ---- share_audio: a player card for a sound file, under the reply ----
+
+const AUDIO_BRIDGE_TITLE = 'stem-audio-bridge';
+
+function registerAudioTool(pi) {
+  pi.registerTool({
+    name: 'share_audio',
+    label: 'Share audio',
+    description:
+      'Put a sound file in this chat as a player the user can play, scrub and download — the way a ' +
+      'generate_image picture shows up. Use it whenever the answer IS a sound: a clip you cut from a podcast or ' +
+      'video, a recording, speech or music a script made. Make the file first (for example with ffmpeg via ' +
+      'run_command in your scratch folder), then pass its path as `from`: a path in this chat\'s scratch folder, ' +
+      '`files/<name>`, or a file in a connected folder. MP3, M4A/AAC, WAV, OGG/Opus, FLAC and WebM play; 50 MB at ' +
+      'most. The player appears under your reply, so do not paste the path or a link to the file in the reply. ' +
+      'Call it once per sound.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'The sound file: a scratch path, `files/<name>`, or a connected-folder path.' },
+        title: {
+          type: 'string',
+          description: 'A short name the player shows, in the user\'s language — e.g. "Datacenters · 03:50–07:30".'
+        }
+      },
+      required: ['from']
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const from = params && typeof params.from === 'string' ? params.from.trim() : '';
+      if (!from) return taskErr('Pass `from`: the sound file to share.');
+      if (!ctx || !ctx.ui || typeof ctx.ui.input !== 'function') return taskErr('Sharing a sound is unavailable in this context.');
+      const payload = { from, ...(params && typeof params.title === 'string' ? { title: params.title } : {}) };
+      const raw = await ctx.ui.input(AUDIO_BRIDGE_TITLE, JSON.stringify(payload));
+      let res;
+      try {
+        res = typeof raw === 'string' ? JSON.parse(raw) : { ok: false, error: 'No response from Stem.' };
+      } catch {
+        res = { ok: false, error: 'Malformed response from Stem.' };
+      }
+      if (!res.ok || !res.audio) return taskErr(res.error || 'The sound was not shared.');
+      // The ref rides in details (like generate_image's stemImage): the session
+      // keeps it, and Stem rebuilds the player from it on every history read.
+      return { content: [{ type: 'text', text: res.text || 'Shared.' }], details: { stemAudio: res.audio } };
     }
   });
 }

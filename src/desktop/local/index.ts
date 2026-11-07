@@ -13,7 +13,7 @@ import { readClientIdentity, storedServerUrl } from '../client-store';
 import { cancelDictation, dictationAudio, dictationLanguages, startDictation, stopDictation } from '../dictation';
 import { downloadFile } from '../file-transfer';
 import { markReleaseNotesRead, releaseNotesSnapshot } from '../release-notes';
-import { downloadsDir, saveImageToDownloads } from '../save-image';
+import { downloadsDir, saveAudioToDownloads, saveImageToDownloads } from '../save-image';
 import { pairWithServer, useBuiltInServer, type ServerCredentials } from '../server-endpoint';
 import { updateClientReleaseNotes, updateClientTheme, updateClientUpdates, withClientSettings } from '../settings';
 import { currentThemeState, ensureThemesDir, listThemes } from '../themes';
@@ -403,6 +403,7 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
 
   /** Save a chat image (the data URL the renderer is already showing) straight into Downloads. */
   handleLocal('image:saveToDownloads', (_e, dataUrl: string, name: string) => saveImageToDownloads(dataUrl, name));
+  handleLocal('audio:saveToDownloads', (_e, dataUrl: string, name: string) => saveAudioToDownloads(dataUrl, name));
 
   handleLocal('image:copy', (_e, dataUrl: string) => {
     const img = nativeImage.createFromDataURL(dataUrl);

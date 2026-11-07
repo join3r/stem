@@ -39,6 +39,7 @@ import type {
 import { formatSystemVersion } from '../../shared/sys-version';
 import { ActivityRows, SourcesList } from './ActivityRows';
 import { GeneratedImages } from './GeneratedImage';
+import { ChatAudioList } from './ChatAudio';
 import type { VoiceCall } from './voice';
 import { Composer, type ComposerHandle } from './Composer';
 import { RecordingDraftCard } from './RecordingDraftCard';
@@ -735,6 +736,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
               live={liveTurn}
             />
           )}
+          {m.role === 'assistant' && !isEditing && <ChatAudioList audio={m.audio} />}
           {m.role === 'assistant' && !isEditing && (m.sources?.length ?? 0) > 0 && (
             <SourcesList sources={m.sources!} />
           )}

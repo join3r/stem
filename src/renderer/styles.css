@@ -1057,6 +1057,48 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 }
 .note-flash.ok { color: var(--accent); }
 .note-flash > svg { flex: none; }
+/* Sounds share_audio put in the chat, under the assistant reply: a player card
+   with a waveform that seeks on click or drag. */
+.chat-audio-list { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }
+.chat-audio {
+  display: flex; align-items: center; gap: var(--sp-3);
+  width: min(560px, 100%); box-sizing: border-box;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.chat-audio-play {
+  flex: none; width: 40px; height: 40px; border-radius: 50%; border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: var(--accent-ink);
+}
+.chat-audio-play:disabled { opacity: 0.5; cursor: default; }
+.chat-audio-play:not(:disabled):hover { filter: brightness(1.08); }
+.chat-audio-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.chat-audio-title { font-weight: 600; font-size: var(--fs-13); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-audio-row { display: flex; align-items: center; gap: var(--sp-3); }
+.chat-audio-wave {
+  flex: 1; min-width: 0; height: 28px; cursor: pointer; touch-action: none;
+  display: flex; align-items: center; gap: 1px; border-radius: var(--radius);
+}
+.chat-audio-wave:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chat-audio-wave > span {
+  flex: 1; min-width: 1px; border-radius: 1px;
+  background: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+.chat-audio-wave > span.played { background: var(--accent); }
+.chat-audio-time { flex: none; font-size: var(--fs-12); color: var(--muted); font-variant-numeric: tabular-nums; }
+.chat-audio-save {
+  flex: none; width: 28px; height: 28px; border: none; background: none; cursor: pointer;
+  border-radius: var(--radius); color: var(--muted);
+  display: flex; align-items: center; justify-content: center;
+}
+.chat-audio-save:not(:disabled):hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
+.chat-audio-error { font-size: var(--fs-12); color: var(--muted); }
+.chat-audio-loading .chat-audio-wave { animation: gen-image-breathe 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .chat-audio-loading .chat-audio-wave { animation: none; } }
+.chat-audio-failed { color: var(--muted); font-size: var(--fs-13); }
+
 /* Pictures generate_image made, under the assistant reply. The button keeps the
    image's own aspect ratio so the layout does not jump when the bytes arrive. */
 .gen-images { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-3); }

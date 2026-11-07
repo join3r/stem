@@ -31,6 +31,7 @@ import { log } from './log';
 import { ensureWorkspace } from './workspace/bootstrap';
 import { publishProtectedRootsNow } from './workspace/connected-folders';
 import { transportedRawPath } from './files/staging';
+import { readChatAudio } from './files/chat-audio';
 import { piHome } from './workspace/paths';
 import type { TaskScheduler } from './scheduler';
 import { MailRouter } from './mail/router';
@@ -610,6 +611,13 @@ function registerIpc(): void {
   registerServer('chats:image', async (_e, threadId: string, imageId: string) => {
     const hit = await runtime!.findThreadImage(threadId, imageId);
     return hit ? { dataUrl: `data:${hit.mimeType};base64,${hit.data}`, mime: hit.mimeType } : null;
+  });
+
+  // One sound a chat shows (share_audio), as a data URL, fetched on demand
+  // like a picture. The bytes live in the audio store, not the session file.
+  registerServer('chats:audio', async (_e, threadId: string, audioId: string) => {
+    const hit = await readChatAudio(threadId, audioId);
+    return hit ? { dataUrl: `data:${hit.mime};base64,${hit.data.toString('base64')}`, mime: hit.mime } : null;
   });
 
 
