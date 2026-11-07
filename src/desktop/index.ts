@@ -13,7 +13,8 @@ import {
   shell
 } from 'electron';
 import { dirname, join } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import { IN_WINDOW_SHORTCUTS, installAppMenu, updateAppMenu } from './app-menu';
 import { installContextMenu } from './context-menu';
 import { openLink } from './open-link';
@@ -21,7 +22,7 @@ import { electronHost } from './host';
 import { setHost } from '../server/host';
 import { startServer, type ServerHandle } from '../server';
 import { log } from '../server/log';
-import { resolveProfileOverride } from '../server/workspace/paths';
+import { logFilePath, resolveProfileOverride } from '../server/workspace/paths';
 import { bindServerChannels, handleLocal } from './ipc-bridge';
 import { registerLocalIpc } from './local';
 import { createMcpHost, type McpHost } from './mcp-host';
@@ -852,8 +853,10 @@ app.whenReady().then(async () => {
 // it a window to drain in-flight work, then we exit for real (shutdown has its
 // own SIGKILL backstop).
 let quitting = false;
+let quitWatchdog: NodeJS.Timeout | null = null;
 app.on('before-quit', (event) => {
   if (quitting) return;
+  armQuitWatchdog();
   updates.close();
   presence?.close();
   proxy?.close();
@@ -885,6 +888,77 @@ app.on('before-quit', (event) => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
+
+// A quit that never finishes leaves Stem half-alive: its hosts are closed but
+// the process stays, and the only way out is Force Quit. Seen on the Mac after
+// long uptimes, with the hosts' close lines in the log and nothing after — so
+// whatever holds the process is past our own teardown (a window that never
+// finishes closing, a native handle). Past the deadline, write down what is
+// still alive for the next diagnosis and exit anyway. The embedded server gets
+// longer: its drain is legitimate work with its own SIGKILL backstop.
+const QUIT_DEADLINE_MS = 8_000;
+const QUIT_DEADLINE_WITH_SERVER_MS = 30_000;
+
+function armQuitWatchdog(): void {
+  if (quitWatchdog) return;
+  const startedAt = Date.now();
+  log('app', 'quitting');
+  armQuitSentinel(server ? QUIT_DEADLINE_WITH_SERVER_MS : QUIT_DEADLINE_MS);
+  // Not unref'd: holding the loop open is what lets it fire when nothing else does.
+  quitWatchdog = setTimeout(
+    () => {
+      try {
+        const windows = BrowserWindow.getAllWindows().map((w) => ({
+          title: w.getTitle(),
+          visible: w.isVisible(),
+          url: w.webContents.isDestroyed() ? null : w.webContents.getURL().slice(0, 120),
+          crashed: w.webContents.isDestroyed() ? null : w.webContents.isCrashed()
+        }));
+        const line = `${new Date().toISOString()} [app] quit stalled, exiting anyway ${JSON.stringify({
+          waitedMs: Date.now() - startedAt,
+          windows,
+          resources: process.getActiveResourcesInfo()
+        })}\n`;
+        // Sync on purpose: the async logger's queue would die with the exit below.
+        appendFileSync(logFilePath(), line);
+      } catch {
+        // quiet: the report is a nicety; the exit below is the point.
+      }
+      app.exit(0);
+    },
+    server ? QUIT_DEADLINE_WITH_SERVER_MS : QUIT_DEADLINE_MS
+  );
+}
+
+// The timer above needs this process's main thread; a quit wedged in native
+// code (or a JS loop) never runs it. So a detached shell watches from outside:
+// a few seconds past the in-process deadline, if this pid is still here it
+// samples every thread's native stack into quit-stall-sample.txt beside
+// stem.log (macOS), notes it in stem.log, and kills the process — what the
+// user would otherwise do by hand with Force Quit, minus the evidence loss.
+function armQuitSentinel(deadlineMs: number): void {
+  if (process.platform === 'win32') return;
+  try {
+    const logFile = logFilePath();
+    const sampleFile = join(dirname(logFile), 'quit-stall-sample.txt');
+    const graceS = Math.ceil(deadlineMs / 1000) + 4;
+    const script = [
+      `sleep ${graceS}`,
+      'kill -0 "$P" 2>/dev/null || exit 0',
+      '[ -x /usr/bin/sample ] && /usr/bin/sample "$P" 3 -file "$SAMPLE" >/dev/null 2>&1',
+      'printf "%s [app] quit wedged, killed by the sentinel (native stacks in %s)\\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SAMPLE" >> "$LOG"',
+      'kill -9 "$P" 2>/dev/null'
+    ].join('; ');
+    const child = spawn('/bin/sh', ['-c', script], {
+      detached: true,
+      stdio: 'ignore',
+      env: { P: String(process.pid), LOG: logFile, SAMPLE: sampleFile, PATH: '/usr/bin:/bin' }
+    });
+    child.unref();
+  } catch {
+    // quiet: no sentinel just means a wedged quit needs Force Quit, as before.
+  }
+}
 
 app.on('window-all-closed', () => {
   // Dead-in-practice by design: the overlay + HUD windows are created at startup
