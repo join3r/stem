@@ -663,6 +663,41 @@ export class RecallStore {
         PRIMARY KEY (fact_id, model)
       );
 
+      -- Parent memories (fact-groups.ts): a broader memory over a few related
+      -- facts, injected next to them when it matches a turn. A fact may sit in up
+      -- to three groups. text_key names the member set the text was written
+      -- from; once the live members differ the text is stale and never injected
+      -- until the background pass rewrites it. NULL text = not written yet, or
+      -- wiped because a member was deleted.
+      CREATE TABLE IF NOT EXISTS fact_groups (
+        id         INTEGER PRIMARY KEY,
+        label      TEXT NOT NULL,
+        text       TEXT,
+        text_key   TEXT,
+        status     TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS fact_group_members (
+        group_id INTEGER NOT NULL,
+        fact_id  INTEGER NOT NULL,
+        PRIMARY KEY (group_id, fact_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_fact_group_members_fact ON fact_group_members(fact_id);
+      -- One vector per (group, model), tagged with the text it embeds.
+      CREATE TABLE IF NOT EXISTS fact_group_vectors (
+        group_id INTEGER NOT NULL,
+        model    TEXT NOT NULL,
+        text_key TEXT NOT NULL,
+        vec      BLOB NOT NULL,
+        PRIMARY KEY (group_id, model)
+      );
+      -- Facts the grouping pass has shown the model; ones left ungrouped aren't asked again.
+      CREATE TABLE IF NOT EXISTS fact_group_reviewed (
+        fact_id     INTEGER PRIMARY KEY,
+        reviewed_at INTEGER NOT NULL
+      );
+
       -- Cached embedding per (message, model) for semantic episodic this.search. Same
       -- contract as fact_vectors: model-keyed, pruned on model switch. Messages are
       -- append-only so vectors never go stale from edits, but deletions (episodic
@@ -2629,6 +2664,17 @@ export class RecallStore {
     handle.prepare(`DELETE FROM fact_conflicts WHERE fact_a = ? OR fact_b = ?`).run(id, id);
     handle.prepare(`DELETE FROM fact_relation_checks WHERE fact_a = ? OR fact_b = ?`).run(id, id);
     handle.prepare(`UPDATE facts SET superseded_by = NULL WHERE superseded_by = ?`).run(id);
+    // A deleted fact must leave no trace in a parent memory: wipe the text of
+    // every group it sat in (the grouping pass rewrites it from what is left).
+    handle.prepare(
+      `UPDATE fact_groups SET text = NULL, text_key = NULL, updated_at = ?
+       WHERE id IN (SELECT group_id FROM fact_group_members WHERE fact_id = ?)`
+    ).run(this.nowSeconds(), id);
+    handle.prepare(
+      `DELETE FROM fact_group_vectors WHERE group_id IN (SELECT group_id FROM fact_group_members WHERE fact_id = ?)`
+    ).run(id);
+    handle.prepare(`DELETE FROM fact_group_members WHERE fact_id = ?`).run(id);
+    handle.prepare(`DELETE FROM fact_group_reviewed WHERE fact_id = ?`).run(id);
     handle.prepare(`DELETE FROM facts WHERE id = ?`).run(id);
   };
 
@@ -3273,6 +3319,10 @@ export class RecallStore {
       handle.exec('DELETE FROM fact_images');
       handle.exec('DELETE FROM fact_conflicts');
       handle.exec('DELETE FROM fact_relation_checks');
+      handle.exec('DELETE FROM fact_group_vectors');
+      handle.exec('DELETE FROM fact_group_members');
+      handle.exec('DELETE FROM fact_group_reviewed');
+      handle.exec('DELETE FROM fact_groups');
       handle.exec('DELETE FROM facts');
       // Fact ids in the per-turn injected log are now dangling — drop it too.
       handle.exec('DELETE FROM turn_injected_facts');

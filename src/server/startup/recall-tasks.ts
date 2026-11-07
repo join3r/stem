@@ -10,6 +10,7 @@ import { distillNewMessages, shouldConsolidate } from '../recall/distill';
 import { processPendingRelationChecks, relationSweepBackfillDone, stepRelationSweepBackfill } from '../recall/reconcile';
 import { MAX_ADJUDICATE_ATTEMPTS, adjudicateOpenConflicts } from '../recall/adjudicate';
 import { consolidateFacts, fullTidyDue } from '../recall/consolidate';
+import { factGroupsDue, refreshFactGroups } from '../recall/fact-groups';
 import { buildUserProfile, userProfileDue, userWritingStyle } from '../recall/profile';
 import { peopleSuggestDue, suggestPeople } from '../recall/people-suggest';
 import { getMemoryRebuildStatus, runMemoryRebuildStep } from '../recall/rebuild';
@@ -188,6 +189,15 @@ export function initRecallTasks(deps: {
           await activity.track('memory.consolidate', 'Tidying memory', () => consolidateFacts(recallLlm, { scope }), (r) => ({
             worked: r.merged + r.corrected + r.dropped > 0,
             detail: `Merged ${r.merged}, corrected ${r.corrected}, dropped ${r.dropped}`
+          }));
+        }
+        // Parent memories: file the facts this cycle settled into groups and
+        // rewrite the groups whose members changed (fact-groups.ts). No new
+        // facts and no stale groups → no model call.
+        if (factGroupsDue()) {
+          await activity.track('memory.groups', 'Grouping memories', () => refreshFactGroups(recallLlm), (r) => ({
+            worked: r.filed + r.rewritten + r.retired > 0,
+            detail: `Filed ${r.filed} fact${r.filed === 1 ? '' : 's'} (${r.created} new group${r.created === 1 ? '' : 's'}), rewrote ${r.rewritten}, retired ${r.retired}`
           }));
         }
         // The user summary, last: it reads the facts this cycle just settled.

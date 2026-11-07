@@ -2961,6 +2961,7 @@ export type ActivityKind =
   | 'memory.relationSweepBackfill'
   | 'memory.adjudicate'
   | 'memory.consolidate'
+  | 'memory.groups'
   | 'memory.profile'
   | 'memory.people'
   | 'memory.deepCheck'
@@ -3029,6 +3030,8 @@ export interface ActiveFacts {
     disputed?: boolean;
   }>;
   tier: FactTier;
+  /** Parent memories (broader memories over related facts) chosen with the facts; draft preview only. */
+  parents?: Array<{ text: string; sensitive: boolean }>;
 }
 
 /** Outcome of saving a composer quick note (`/note` / `//`) as a durable fact. */

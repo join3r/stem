@@ -223,7 +223,7 @@ export function registerMemoryIpc(deps: IpcDeps): void {
     return { facts, tier: rec.tier };
   });
   registerServer('memory:previewFacts', async (_e, text: string): Promise<ActiveFacts> => {
-    const { facts, tier } = await previewFacts(text ?? '');
+    const { facts, tier, parents } = await previewFacts(text ?? '');
     return { facts: facts.map((f) => ({
       id: f.id,
       text: f.text,
@@ -231,7 +231,7 @@ export function registerMemoryIpc(deps: IpcDeps): void {
       sensitivity: f.sensitivity,
       reason: f.selectionReason,
       ...(f.disputed ? { disputed: true } : {})
-    })), tier };
+    })), tier, parents: parents.map((p) => ({ text: p.text, sensitive: p.sensitive })) };
   });
   registerServer('memory:setEpisodicLimit', (_e, bytes: number) => setEpisodicLimit(bytes));
   registerServer('memory:setTidyThreshold', (_e, n: number) => setTidyUpThreshold(n));
