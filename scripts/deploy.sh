@@ -20,9 +20,13 @@
 #   scripts/deploy.sh --only mac,vps  # ship these targets, changed or not
 #   scripts/deploy.sh --skip ios      # never ship these targets
 #   scripts/deploy.sh --source a --source b   # merge more than one branch
-#   scripts/deploy.sh --no-tests --yes
+#   scripts/deploy.sh --no-tests
+#
+# The script never asks a question. It ships the plan without a stop, and for
+# the Mac it quits Stem.app (force quits it if necessary), installs the new
+# build and starts it again.
 set -euo pipefail
-case " $* " in *" -h "*|*" --help "*) sed -n '2,24p' "$0"; exit 0 ;; esac
+case " $* " in *" -h "*|*" --help "*) sed -n '2,28p' "$0"; exit 0 ;; esac
 
 # ---------------------------------------------------------------- CONFIG
 ENV_FILE="${STEM_DEPLOY_ENV:-$HOME/.config/stem/deploy.env}"
@@ -62,7 +66,6 @@ ONLY=""
 SKIP=""
 DRY=0
 TESTS=1
-YES=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --source) SOURCES+=("$2"); shift 2 ;;
@@ -70,8 +73,8 @@ while [[ $# -gt 0 ]]; do
     --skip) SKIP="$2"; shift 2 ;;
     --dry-run|-n) DRY=1; shift ;;
     --no-tests) TESTS=0; shift ;;
-    --yes|-y) YES=1; shift ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    --yes|-y) shift ;;  # no effect: the script never asks
+    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -221,11 +224,7 @@ if [[ $TESTS -eq 1 ]]; then
   note "unit tests: $(grep -Eo 'Tests +[0-9]+ passed' "$LOG_DIR/unit.log" | tail -1)"
 fi
 
-if [[ $YES -eq 0 && -t 0 ]]; then
-  echo
-  read -r -p "Ship ${PLAN[*]} from $(short "$HEAD_SHA")? [y/N] " ans
-  [[ "$ans" == [yY]* ]] || { echo "Stopped. Nothing shipped."; exit 1; }
-fi
+say "Ship ${PLAN[*]} from $(short "$HEAD_SHA")"
 
 # ---------------------------------------------------------------- 5. LONG BUILDS
 # The dmg and the TestFlight upload take minutes; start them now.
@@ -314,11 +313,19 @@ install_mac() {
   [[ -n "$mnt" ]] || { res mac "FAILED: cannot mount $dmg"; return 1; }
   # Match the main process exactly: Chrome keeps Stem native-host helpers
   # alive, and the iOS Simulator's Stem app has the same name.
-  osascript -e 'tell application "Stem" to quit' >/dev/null 2>&1 || true
+  # Send SIGTERM, not an AppleScript quit: AppleScript can open a macOS
+  # automation permission dialog. Electron quits cleanly on SIGTERM. If Stem
+  # does not stop in 60 s, kill it.
+  pkill -TERM -fx "$main" 2>/dev/null || true
   for _ in $(seq 1 60); do pgrep -fxq "$main" || break; sleep 1; done
   if pgrep -fxq "$main"; then
+    note "Stem.app did not quit in 60 s; kill it"
+    pkill -KILL -fx "$main" 2>/dev/null || true
+    for _ in $(seq 1 10); do pgrep -fxq "$main" || break; sleep 1; done
+  fi
+  if pgrep -fxq "$main"; then
     hdiutil detach -quiet "$mnt" || true
-    res mac "NOT INSTALLED: Stem.app did not quit in 60 s (a dialog or a running task?). dmg: $dmg"
+    res mac "NOT INSTALLED: Stem.app did not stop, also after SIGKILL. dmg: $dmg"
     return 1
   fi
   if ! { rm -rf "$MAC_APP" && ditto "$mnt/Stem.app" "$MAC_APP"; }; then
