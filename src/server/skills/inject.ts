@@ -7,6 +7,7 @@ import { ensureSkillExampleVectors, ensureSkillVectors, skillVectorText, type Sk
 import { readSkillExamples } from './examples';
 import { DEFAULT_SHORTLIST_SIZE, countWords, queryHasSignal, selectCut, type CutReason, type CutResult } from './gate';
 import { TOOL_SKILL_MARKER } from '../pi/protocol';
+import { holdableSkillTools } from './contract';
 
 // Per-turn skill selection: which saved procedures the model gets, and in what
 // depth. This is the half of the skills rebuild that takes retrieval away from
@@ -543,10 +544,10 @@ export function toolSkillsForTurn(
 ): { slug: string; tools: string[]; text: string }[] {
   const skip = new Set(inlined);
   return records
-    .filter((r) => r.enabled !== false && (r.tools?.length ?? 0) > 0 && !skip.has(r.slug) && !alreadyLoaded.has(r.slug) && !alreadyLoaded.has(r.name))
+    .filter((r) => r.enabled !== false && holdableSkillTools(r.tools).length > 0 && !skip.has(r.slug) && !alreadyLoaded.has(r.slug) && !alreadyLoaded.has(r.name))
     .map((r) => ({
       slug: r.slug,
-      tools: [...(r.tools ?? [])],
+      tools: holdableSkillTools(r.tools),
       text:
         `${TOOL_SKILL_MARKER}${fence(r.slug)}">\n` +
         `Your saved skill for this kind of work, held for the call you just made.\n\n` +

@@ -64,7 +64,7 @@ import { browserChoicesText, codingChoicesText, computerChoicesText } from '../h
 import { resolveLoginPath } from '../exec/executor';
 import { resolveHostShell } from '../exec/git-bash';
 import { ensureThreadScratch } from '../exec/scratch';
-import { capActions, capUserWords, parseJudgeSession, type JudgeAction, type JudgeContext } from '../exec/judge-context';
+import { capActions, capUserWords, parseJudgeSession, savedFilesAction, type JudgeAction, type JudgeContext } from '../exec/judge-context';
 import { mailedImageThread, readMail } from '../workspace/mail';
 import { formatPastChat, pastChatLink } from './past-chat';
 import { clampPinnedCwd } from '../harness/pin';
@@ -3327,8 +3327,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         if (turn?.external) return respond({ ok: false, error: EXTERNAL_TOOL_REFUSAL });
         if (!turn?.threadId) return respond({ ok: false, error: 'Saving files is unavailable outside a conversation.' });
         const req = JSON.parse(payload ?? '{}') as { files?: SaveItem[] };
-        respond(
-          await saveFiles(turn.threadId, Array.isArray(req.files) ? req.files : [], {
+        const result = await saveFiles(turn.threadId, Array.isArray(req.files) ? req.files : [], {
             findThreadImage: (threadId, imageId) => this.findThreadOrMailedImage(threadId, imageId),
             folders: listConnectedFolders,
             devices: {
@@ -3339,8 +3338,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                 (await readDevices().catch(() => [])).find((d) => d.id === deviceId)?.label ?? 'its computer',
               save: (deviceId, request) => execDeviceRouter().save(deviceId, request)
             }
-          })
-        );
+          });
+        // The judge reads what this turn wrote, so it can let the agent delete
+        // its own files later in the same turn.
+        const saved = result.ok ? savedFilesAction(result.written) : undefined;
+        if (saved && turn.judge) turn.judge = { ...turn.judge, actions: capActions([...turn.judge.actions, saved]) };
+        respond(result);
       } catch (e) {
         respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
       }

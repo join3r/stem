@@ -5386,6 +5386,14 @@ export interface StemApi {
    * and show it there. Answers with where it landed.
    */
   downloadFile(rel: string): Promise<string>;
+  /**
+   * Fetch one file out of the Files folder into a temporary folder on this
+   * machine and open it there, or only show it when it is not a document
+   * (desktop/open-link.ts). For `files/…` links in replies.
+   */
+  openFilesItem?(rel: string): Promise<void>;
+  /** The same for a file in a chat's scratch folder (a `scratch/…` link in a reply). */
+  openScratchItem?(threadId: string, rel: string): Promise<void>;
   /** Read an on-disk image → `data:` URL for a bubble thumbnail (null if not an image). */
   previewImage(path: string): Promise<string | null>;
   /**

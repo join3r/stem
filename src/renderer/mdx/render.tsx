@@ -6,6 +6,8 @@ import remarkGfm from 'remark-gfm';
 import remarkMdx from 'remark-mdx';
 import { stripCiteMarkers } from '../../shared/citations';
 import { filePathHref, findFilePaths } from '../../shared/file-paths';
+import { filesPlaceRel, scratchRel } from '../../shared/files-links';
+import { useMdxThread } from './ActionContext';
 import { findPhoneNumbers } from '../../shared/phone-links';
 import { openStemLink, parseStemLink } from '../stemLinks';
 import { CodeBlock, TaskItem, componentMap } from './components';
@@ -94,6 +96,32 @@ function FileLink({ href, children }: { href: string; children: ReactNode }) {
     void window.stem.openLink(href);
   };
   return <a href={href} title={decodeFileHref(href)} className="file-link" onClick={open}>{children}</a>;
+}
+
+/** A file in the user's Files place (shared/files-links.ts): fetched to this computer and opened. */
+function FilesPlaceLink({ rel, children }: { rel: string; children: ReactNode }) {
+  const open = (e: { preventDefault(): void }) => {
+    e.preventDefault();
+    // quiet: a file that is gone or will not fetch leaves the click without effect, like a dead file: link.
+    void window.stem.openFilesItem?.(rel).catch(() => undefined);
+  };
+  return <a href={`files/${rel}`} title={`Files › ${rel}`} className="file-link" onClick={open}>{children}</a>;
+}
+
+/**
+ * A file in this chat's scratch folder (shared/files-links.ts), where the
+ * assistant keeps its own work. Outside a chat (mail, facts, a share page)
+ * there is no scratch folder to name, so the link is plain text.
+ */
+function ScratchLink({ rel, children }: { rel: string; children: ReactNode }) {
+  const threadId = useMdxThread();
+  if (!threadId || !window.stem?.openScratchItem) return <>{children}</>;
+  const open = (e: { preventDefault(): void }) => {
+    e.preventDefault();
+    // quiet: a file swept with old scratch, or one that will not fetch, leaves the click without effect.
+    void window.stem.openScratchItem!(threadId, rel).catch(() => undefined);
+  };
+  return <a href={`scratch/${rel}`} title={`This chat's scratch › ${rel}`} className="file-link" onClick={open}>{children}</a>;
 }
 
 function decodeFileHref(href: string): string {
@@ -195,6 +223,10 @@ function renderNode(node: MdNode, key: string): ReactNode {
         };
         return <a key={key} href={node.url} className="stem-link" onClick={open}>{linkChildren(node, key)}</a>;
       }
+      const filesRel = filesPlaceRel(node.url);
+      if (filesRel) return <FilesPlaceLink key={key} rel={filesRel}>{linkChildren(node, key)}</FilesPlaceLink>;
+      const scratch = scratchRel(node.url);
+      if (scratch) return <ScratchLink key={key} rel={scratch}>{linkChildren(node, key)}</ScratchLink>;
       const href = safeUrl(node.url, true);
       if (href && /^file:/i.test(href)) return <FileLink key={key} href={href}>{linkChildren(node, key)}</FileLink>;
       return href

@@ -801,9 +801,9 @@ async function bulkyNote(sinceMs: number): Promise<string | null> {
   if (found.length === 0) return null;
   const list = found.map((f) => `files/${f.rel} (${f.kind})`).join(', ');
   return (
-    `Note: this command put tooling into the user's Files place: ${list}. Files is for finished ` +
-    'deliverables and is never cleared. Move that work into your scratch folder (or delete it if ' +
-    'it is not needed), and keep only the finished result in files/.'
+    `Note: this command put tooling into the user's Files place: ${list}. Files is the user's own ` +
+    'folder and is never cleared. Move that work into your scratch folder (or delete it if it is ' +
+    'not needed); write to files/ only what the user asked to save there.'
   );
 }
 

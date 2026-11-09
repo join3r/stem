@@ -51,6 +51,35 @@ export interface SkillDraft {
 /** One `tools` entry: `server.tool`, `server.*`, or a bare tool name. */
 export const SKILL_TOOL_RE = /^[A-Za-z0-9_-]+(?:\.(?:[A-Za-z0-9_.-]+|\*))?$/;
 export const MAX_SKILL_TOOLS = 6;
+/**
+ * Built-in tools that a turn calls for any reason. A skill bound to one of them
+ * held the first such call of every turn: on 2026-11-09 a Docker-cleanup skill
+ * bound to `run_command` held a plain `gh repo list` in an unrelated chat. Such
+ * an entry is refused when a skill is written, and ignored at hold time for the
+ * skills that already have one.
+ */
+export const GENERAL_SKILL_TOOLS: ReadonlySet<string> = new Set([
+  'run_command',
+  'read',
+  'write',
+  'edit',
+  'ls',
+  'grep',
+  'find',
+  'bash',
+  'fetch_content',
+  'web_search',
+  'get_search_content',
+  'source_check',
+  'invoke_tool',
+  'find_tools',
+  'describe_tool'
+]);
+
+/** A skill's `tools` without the general ones, which never hold a call. */
+export function holdableSkillTools(tools: readonly string[] | undefined): string[] {
+  return (tools ?? []).map((t) => String(t ?? '').trim()).filter((t) => t && !GENERAL_SKILL_TOOLS.has(t));
+}
 
 export interface SkillViolation {
   field: 'name' | 'description' | 'body' | 'tools';
@@ -207,6 +236,12 @@ export function validateSkill(draft: SkillDraft, opts: { authored?: boolean } = 
     const bad = draft.tools.filter((t) => !SKILL_TOOL_RE.test(String(t ?? '').trim()));
     if (bad.length > 0) {
       violations.push({ field: 'tools', message: `each entry must be "server.tool", "server.*" or a tool's own name; not ${bad.map((t) => JSON.stringify(t)).join(', ')}.` });
+    } else if (draft.tools.some((t) => GENERAL_SKILL_TOOLS.has(String(t ?? '').trim()))) {
+      const general = draft.tools.filter((t) => GENERAL_SKILL_TOOLS.has(String(t ?? '').trim()));
+      violations.push({
+        field: 'tools',
+        message: `${general.map((t) => JSON.stringify(t)).join(', ')} ${general.length > 1 ? 'are general tools' : 'is a general tool'} that almost every turn calls; list only tools whose calls this skill decides, or leave "tools" out.`
+      });
     } else if (draft.tools.length > MAX_SKILL_TOOLS) {
       violations.push({ field: 'tools', message: `at most ${MAX_SKILL_TOOLS} tools; list only the ones whose calls this skill decides how to make.` });
     }

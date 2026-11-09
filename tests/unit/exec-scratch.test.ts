@@ -22,6 +22,9 @@ import {
   UNFILED_KEY
 } from '../../src/server/exec/scratch';
 import { execWorkspaceDir, filesRoot, isScratchId, threadWorkspaceDir } from '../../src/server/workspace/paths';
+import { scratchDownload as scratchFile } from '../../src/server/exec/scratch';
+import { resolveDownload } from '../../src/server/startup/transport';
+import { symlinkSync } from 'node:fs';
 import type { ChatSummary } from '../../src/shared/types';
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -283,5 +286,28 @@ describe('sweepScratch', () => {
     expect(await sweepScratch({ ttlDays: 0, chats: [], now: NOW })).toEqual([]);
     expect(await sweepScratch({ ttlDays: -1, chats: [], now: NOW })).toEqual([]);
     expect((await listScratchUsage()).map((r) => r.key).sort()).toEqual(['fresh', 'stale']);
+  });
+});
+
+describe('a scratch/ link in a reply downloads from that chat only', () => {
+  it('serves a file inside the chat folder, through the /files/ resolver too', async () => {
+    const dir = threadWorkspaceDir('t-1');
+    mkdirSync(join(dir, 'out'), { recursive: true });
+    writeFileSync(join(dir, 'out', 'report.html'), '<h1>hi</h1>');
+    expect(await scratchFile('t-1/out/report.html')).toMatchObject({ name: 'report.html', size: 11 });
+    expect(await resolveDownload('stem-scratch:t-1/out/report.html')).toMatchObject({ name: 'report.html' });
+  });
+
+  it('refuses the files link, outside links, climbing, other chats and folders', async () => {
+    const dir = threadWorkspaceDir('t-2');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(filesRoot(), 'private.txt'), 'secret');
+    symlinkSync(filesRoot(), join(dir, 'files'));
+    symlinkSync('/etc/hosts', join(dir, 'hosts'));
+    mkdirSync(join(dir, 'sub'));
+    writeFileSync(join(threadWorkspaceDir('t-3'), '..', 'loose.txt'), 'x');
+    for (const spec of ['t-2/files/private.txt', 't-2/hosts', 't-2/../loose.txt', 't-2/sub', '../t-2/x', 't-2/', 'nothing', 't-9/x.txt', 't-2/.hidden']) {
+      expect(await scratchFile(spec), spec).toBeNull();
+    }
   });
 });

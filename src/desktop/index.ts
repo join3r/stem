@@ -17,7 +17,9 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { IN_WINDOW_SHORTCUTS, installAppMenu, updateAppMenu } from './app-menu';
 import { installContextMenu } from './context-menu';
-import { openLink } from './open-link';
+import { openLink, setFileViewer } from './open-link';
+import { openInViewer, registerViewerScheme } from './viewer';
+import { imagePreviewDataUrl } from '../server/pi/attachments';
 import { electronHost } from './host';
 import { setHost } from '../server/host';
 import { startServer, type ServerHandle } from '../server';
@@ -151,6 +153,10 @@ if (process.env.ELECTRON_RENDERER_URL) {
 // Global shortcuts through the XDG portal on Linux — the only path that works in
 // a Wayland session. Must be set here: switches are read at Chromium startup.
 enableGlobalShortcutPortal();
+
+// Stem's file viewer serves its page on its own scheme (desktop/viewer.ts):
+// privileges can be granted only before the app is ready.
+registerViewerScheme();
 
 // Test seam: when STEM_E2E is set the server swaps in the hermetic FakeBackend.
 // On this side it only suppresses the tray, to keep the harness's window/process
@@ -469,6 +475,13 @@ function reportClientVersion(): void {
 }
 
 app.whenReady().then(async () => {
+  // A file a reply links opens in Stem's own viewer when it can show it.
+  setFileViewer((path) =>
+    openInViewer(path, {
+      heicToDataUrl: imagePreviewDataUrl,
+      anyWindow: () => mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
+    })
+  );
   // Strict CSP for the renderer in production: only self, no remote/inline
   // script. Skipped in dev so the Vite dev server / HMR can run. Installed
   // before any window is created, so nothing can load without it.

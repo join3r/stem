@@ -1,8 +1,11 @@
 import { clipboard, dialog, nativeImage, shell, type BrowserWindow } from 'electron';
-import { stat } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { handleLocal } from '../ipc-bridge';
-import { openLink } from '../open-link';
+import { openFilesItem, openLink } from '../open-link';
+import { filesPlaceRel, isSafeRel, SCRATCH_PREFIX } from '../../shared/files-links';
 import { ensureFilesRoot, filePathWithin } from '../../server/files/store';
 import { imagePreviewDataUrl, imagePreviewFromBytes } from '../../server/pi/attachments';
 import { connectedFolderPath } from '../../server/workspace/connected-folders';
@@ -400,6 +403,37 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     if (!process.env.STEM_BACKGROUND) shell.showItemInFolder(saved);
     return saved;
   });
+
+  /**
+   * A `files/…` link in a reply (shared/files-links.ts): fetch the file from the
+   * server's Files folder into a fresh temporary folder, then treat it as a
+   * clicked file: link, so a document opens and anything else is only shown.
+   * A temporary folder, not Downloads: a link clicked twice must not leave two
+   * copies where the user keeps their own files.
+   */
+  handleLocal('files:open', async (_e, rel: string): Promise<void> => {
+    // The renderer checked it too; this side is the one that has to hold.
+    const checked = filesPlaceRel(`files/${encodeURI(rel)}`);
+    if (!checked || checked !== rel) throw new Error('That is not a file in your Files folder.');
+    await fetchAndOpen(rel);
+  });
+  /** A `scratch/…` link: the same, from one chat's scratch folder (server/exec/scratch.ts scratchDownload). */
+  handleLocal('scratch:open', async (_e, threadId: string, rel: string): Promise<void> => {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(threadId) || !isSafeRel(rel)) throw new Error('That is not a file in this chat.');
+    await fetchAndOpen(`${SCRATCH_PREFIX}${threadId}/${rel}`);
+  });
+  async function fetchAndOpen(rel: string): Promise<void> {
+    const saved = await downloadFile(deps.credentials(), rel, await mkdtemp(join(tmpdir(), 'stem-files-')));
+    // Mark it as downloaded, as a browser would, so macOS applies its usual
+    // checks to whatever opens it. quiet: without xattr the file still opens
+    // under the document allowlist below.
+    if (process.platform === 'darwin') {
+      const flags = `0081;${Math.floor(Date.now() / 1000).toString(16)};Stem;`;
+      await new Promise<void>((done) => execFile('/usr/bin/xattr', ['-w', 'com.apple.quarantine', flags, saved], () => done()));
+    }
+    // Test runs must not open apps (see files:download).
+    if (!process.env.STEM_BACKGROUND) openFilesItem(shell, saved);
+  }
 
   /** Save a chat image (the data URL the renderer is already showing) straight into Downloads. */
   handleLocal('image:saveToDownloads', (_e, dataUrl: string, name: string) => saveImageToDownloads(dataUrl, name));

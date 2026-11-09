@@ -149,6 +149,8 @@ const api: StemApi = {
   removeFilesSubdir: (name: string) => ipcRenderer.invoke('files:rmdir', name),
   revealFiles: (rel?: string) => ipcRenderer.invoke('files:reveal', rel),
   downloadFile: (rel: string) => ipcRenderer.invoke('files:download', rel),
+  openFilesItem: (rel: string) => ipcRenderer.invoke('files:open', rel),
+  openScratchItem: (threadId: string, rel: string) => ipcRenderer.invoke('scratch:open', threadId, rel),
   previewImage: (path: string) => ipcRenderer.invoke('files:preview', path),
   previewImageData: (dataBase64: string, mime?: string, name?: string) =>
     ipcRenderer.invoke('files:previewData', dataBase64, mime, name),

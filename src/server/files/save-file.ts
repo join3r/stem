@@ -187,7 +187,18 @@ async function writeHere(snapshot: string, root: string, path: string): Promise<
   return null;
 }
 
-async function saveOne(threadId: string, item: SaveItem, folders: ConnectedFolder[], deps: SaveDeps): Promise<string> {
+/** One item's result line, and the path it wrote when it did. */
+interface SaveOutcome {
+  line: string;
+  written?: string;
+}
+
+async function saveOne(threadId: string, item: SaveItem, folders: ConnectedFolder[], deps: SaveDeps): Promise<SaveOutcome> {
+  const outcome = await saveOneLine(threadId, item, folders, deps);
+  return typeof outcome === 'string' ? { line: outcome } : outcome;
+}
+
+async function saveOneLine(threadId: string, item: SaveItem, folders: ConnectedFolder[], deps: SaveDeps): Promise<string | SaveOutcome> {
   const from = typeof item.from === 'string' ? item.from.trim() : '';
   const to = typeof item.to === 'string' ? item.to : '';
   const src = await resolveUploadSources(threadId, [from], deps);
@@ -203,7 +214,9 @@ async function saveOne(threadId: string, item: SaveItem, folders: ConnectedFolde
     if (hidden) return `Not saved “${from}”: “${hidden}” is hidden — save_file does not write into hidden files or folders.`;
     if (t.kind === 'server') {
       const problem = await writeHere(file.path, t.root, t.path);
-      return problem ? `Not saved “${from}” to ${t.shown}: ${problem}.` : `Saved “${from}” to ${t.shown} (${file.size} bytes).`;
+      return problem
+        ? `Not saved “${from}” to ${t.shown}: ${problem}.`
+        : { line: `Saved “${from}” to ${t.shown} (${file.size} bytes).`, written: t.path };
     }
     const devices = deps.devices;
     const label = devices ? `“${await devices.label(t.deviceId)}”` : 'its computer';
@@ -223,7 +236,10 @@ async function saveOne(threadId: string, item: SaveItem, folders: ConnectedFolde
     handedOff = true;
     const res = await devices.save(t.deviceId, { threadId, outboxId: entry.id, path: t.path });
     if (!res.ok) return `Not saved “${from}” to ${t.path} on ${label}: ${res.error}`;
-    return `Saved “${from}” to ${t.path} on ${label} (${file.size} bytes). The mirror at ${t.mirror} catches up within seconds.`;
+    return {
+      line: `Saved “${from}” to ${t.path} on ${label} (${file.size} bytes). The mirror at ${t.mirror} catches up within seconds.`,
+      written: t.path
+    };
   } finally {
     // quiet: a copy that will not delete is swept with the outbox folder on the next start.
     if (!handedOff) await rm(file.path, { force: true }).catch(() => undefined);
@@ -235,12 +251,20 @@ export async function saveFiles(
   threadId: string,
   items: SaveItem[],
   deps: SaveDeps
-): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; text: string; written: string[] } | { ok: false; error: string }> {
   if (!Array.isArray(items) || !items.length) return { ok: false, error: `Name at least one file to save. ${WHERE}` };
   if (items.length > MAX_SAVE_ITEMS) return { ok: false, error: `At most ${MAX_SAVE_ITEMS} files per call.` };
   const folders = (await deps.folders()).filter((f) => !f.missing || f.origin);
   const lines: string[] = [];
-  for (const item of items) lines.push(await saveOne(threadId, item ?? { from: '', to: '' }, folders, deps));
+  // The paths written, kept apart from the text: the text quotes the model's
+  // own `from` and `to`, so it is no record of what Stem wrote (the judge reads
+  // this list, exec/judge-context.ts savedFilesAction).
+  const written: string[] = [];
+  for (const item of items) {
+    const outcome = await saveOne(threadId, item ?? { from: '', to: '' }, folders, deps);
+    lines.push(outcome.line);
+    if (outcome.written) written.push(outcome.written);
+  }
   const text = lines.join('\n');
-  return lines.some((l) => l.startsWith('Saved')) ? { ok: true, text } : { ok: false, error: text };
+  return written.length ? { ok: true, text, written } : { ok: false, error: text };
 }

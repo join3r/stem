@@ -35,6 +35,8 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   'files:preview': [a.string],
   'files:previewData': [a.string, a.optional(a.nullish(a.string)), a.optional(a.nullish(a.string))],
   'files:download': [a.string],
+  'files:open': [a.string],
+  'scratch:open': [a.string, a.string],
   'link:open': [a.string],
   'image:saveToDownloads': [a.string, a.string],
   'audio:saveToDownloads': [a.string, a.string],

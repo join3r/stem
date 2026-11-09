@@ -3255,10 +3255,10 @@ function registerExecTool(pi) {
       '(use the dedicated read/grep/find/ls tools; a shell read aimed outside the folders those tools may ' +
       'reach is screened like any other command). By default the command runs in a scratch folder ' +
       'belonging to THIS conversation: other chats cannot see it, and it is deleted when the user ' +
-      'deletes this chat or once it has sat untouched for the period set in Settings. Treat it as ' +
-      'working space, not storage — anything the user asked you to keep goes in the Files place, ' +
-      'reachable from the shell as `files/` (e.g. `cp report.pdf files/`), which is the same folder ' +
-      'your file tools read and write. Say so plainly if you leave something only in scratch. ' +
+      'deletes this chat or once it has sat untouched for the period set in Settings. Keep your work ' +
+      'there and link a result in your reply as `[name](scratch/name)`, which the user can open. ' +
+      'The user\'s Files place, reachable from the shell as `files/` (e.g. `cp report.pdf files/`), is ' +
+      'theirs: write there only when they ask to save something there. ' +
       'Pass `cwd` only when the command must run in a specific existing directory; a relative `cwd` ' +
       'resolves inside this chat\'s scratch folder. Folders ' +
       'connected read-only are blocked entirely. Safe commands run immediately; others are screened by ' +
@@ -3365,7 +3365,11 @@ function registerSaveTool(pi) {
       } catch {
         res = { ok: false, error: 'Malformed response from Stem.' };
       }
-      return res.ok ? taskOk(res.text || 'Saved.') : taskErr(res.error || 'Nothing was saved.');
+      if (!res.ok) return taskErr(res.error || 'Nothing was saved.');
+      // Stem's own list of the paths written, stored with the result: the safety
+      // judge reads it in later turns (exec/judge-context.ts), never the text.
+      const written = Array.isArray(res.written) ? res.written.filter((w) => typeof w === 'string') : [];
+      return { content: [{ type: 'text', text: res.text || 'Saved.' }], details: { written } };
     }
   });
 }

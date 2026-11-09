@@ -43,6 +43,11 @@ describe('tools in the skill contract and store', () => {
     expect(validateSkill(draft({ tools: Array.from({ length: 7 }, (_, i) => `s.t${i}`) }))).toMatchObject([{ field: 'tools' }]);
   });
 
+  it('refuses a general tool that almost every turn calls', () => {
+    expect(validateSkill(draft({ tools: ['run_command'] }))).toMatchObject([{ field: 'tools', message: expect.stringContaining('"run_command" is a general tool') }]);
+    expect(validateSkill(draft({ tools: ['fastmail.draft_email', 'web_search'] }))).toMatchObject([{ field: 'tools' }]);
+  });
+
   it('writes them, reads them back, and keeps them through a patch that does not mention them', () => {
     expect(saveSkill(draft({ tools: ['fastmail.draft_email'] }), { origin: 'turn' }).ok).toBe(true);
     expect(readSkillRecord('draft-email-on-behalf')?.tools).toEqual(['fastmail.draft_email']);
@@ -78,6 +83,11 @@ describe('which skills a turn hands over at a tool call', () => {
     expect(got.map((s) => s.slug)).toEqual(['mail', 'calendar']);
     expect(got[0].text.startsWith(`${TOOL_SKILL_MARKER}mail">`)).toBe(true);
     expect(got[0].text).toContain('Sign it as Stem');
+  });
+
+  it('never holds a general tool, even for a skill saved with one', () => {
+    const got = toolSkillsForTurn([record('docker', ['run_command']), record('mixed', ['run_command', 'fastmail.draft_email'])], [], new Set());
+    expect(got.map((s) => [s.slug, s.tools])).toEqual([['mixed', ['fastmail.draft_email']]]);
   });
 
   it('settle reads every handed-over skill back off the trace', () => {

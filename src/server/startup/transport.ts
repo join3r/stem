@@ -3,6 +3,8 @@ import { MAIL_FILE_PREFIX, mailFileDownload } from '../interstem/mail-files';
 import { basename, dirname } from 'node:path';
 import { readableFilePath } from '../files/store';
 import { OUTBOX_PREFIX, outboxTake } from '../files/outbox';
+import { scratchDownload } from '../exec/scratch';
+import { SCRATCH_PREFIX } from '../../shared/files-links';
 import { liveTurnSnapshot } from '../live-turns';
 import { stageUpload, startStagingSweeper, stopStagingSweeper } from '../files/staging';
 import { dispatchLocal, serverChannels } from '../ipc/guard';
@@ -137,6 +139,8 @@ export async function resolveDownload(rel: string, deviceId?: string): Promise<D
   if (rel.startsWith(OUTBOX_PREFIX)) return deviceId ? outboxTake(deviceId, rel.slice(OUTBOX_PREFIX.length)) : null;
   // A file in mail with another person (interstem/mail-files.ts).
   if (rel.startsWith(MAIL_FILE_PREFIX)) return mailFileDownload(rel.slice(MAIL_FILE_PREFIX.length));
+  // A file in a chat's scratch folder, for a `scratch/…` link in a reply.
+  if (rel.startsWith(SCRATCH_PREFIX)) return scratchDownload(rel.slice(SCRATCH_PREFIX.length));
   const path = await readableFilePath(rel);
   if (!path) return null;
   return { path, name: basename(path), size: (await stat(path)).size };

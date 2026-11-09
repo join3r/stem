@@ -1,4 +1,4 @@
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 import type { Shell } from 'electron';
@@ -66,13 +66,68 @@ export function classifyLink(url: string, home: () => string = homedir): LinkAct
  * links — Chromium refuses a file: navigation from a page not itself served
  * from file: (the dev server) before Electron is ever asked.
  */
-export function openLink(shell: Pick<Shell, 'openExternal' | 'openPath' | 'showItemInFolder'>, url: string): void {
+type LinkShell = Pick<Shell, 'openExternal' | 'openPath' | 'showItemInFolder'>;
+
+/**
+ * Stem's own viewer (desktop/viewer.ts), set once at startup. Answers false for
+ * a type it does not show. Kept as a hook so this file stays free of Electron
+ * windows and its tests run without one.
+ */
+type FileViewer = (path: string) => Promise<boolean>;
+let fileViewer: FileViewer | null = null;
+
+export function setFileViewer(viewer: FileViewer | null): void {
+  fileViewer = viewer;
+}
+
+/** Try the viewer first; when it does not show the file (or fails), do `otherwise`. */
+function viewOr(path: string, otherwise: () => void): void {
+  if (!fileViewer) return otherwise();
+  fileViewer(path).then(
+    (shown) => {
+      if (!shown) otherwise();
+    },
+    // quiet: a viewer that fails falls back to the way this link opened before.
+    () => otherwise()
+  );
+}
+
+export function openLink(shell: LinkShell, url: string): void {
   const action = classifyLink(url);
+  if (action.kind === 'open' || action.kind === 'reveal') {
+    // A folder (trailing slash) is never a file to view.
+    if (/[/\\]$/.test(action.path)) return actOn(shell, action);
+    return viewOr(action.path, () => actOn(shell, action));
+  }
+  actOn(shell, action);
+}
+
+function actOn(shell: LinkShell, action: LinkAction): void {
   if (action.kind === 'external') void shell.openExternal(action.url).catch(() => undefined);
   // openPath resolves with an error string (never rejects) when the file is
   // missing, e.g. a link to another device's Downloads; nothing to open then.
   else if (action.kind === 'open') void shell.openPath(action.path);
   else if (action.kind === 'reveal') shell.showItemInFolder(action.path);
+}
+
+/**
+ * Types a `files/…` link (desktop files:open) only shows, never opens: the file
+ * comes from the server's Files folder, where the agent itself can write. Legacy
+ * Office files can carry macros, an SVG opens in a browser as a page with
+ * script, and a zip unpacks on open.
+ */
+const FILES_ITEM_REVEAL_ONLY = new Set(['.doc', '.xls', '.ppt', '.svg', '.zip']);
+
+/**
+ * Show a file fetched for a `files/…` link in Stem's viewer, which is closed
+ * off for any type it shows (an SVG there is safe, a .doc goes to Quick Look,
+ * which runs no macros). Otherwise the file: rules, minus the types above.
+ */
+export function openFilesItem(shell: LinkShell, path: string): void {
+  viewOr(path, () => {
+    if (FILES_ITEM_REVEAL_ONLY.has(extname(path).toLowerCase())) shell.showItemInFolder(path);
+    else actOn(shell, classifyLink(pathToFileURL(path).href));
+  });
 }
 
 /** The file a file:// link names, for "Show in Finder" and "Copy Path". */
