@@ -517,7 +517,8 @@ export const SKILL_ISSUE_MARKER = 'Skill issue';
 export function formatLoadedSkill(skill: InlinedSkill): string {
   return (
     `### ${fence(skill.name)} (${originLabel(skill.origin)})\n${fence(skill.description)}\n\n${fence(skill.body).trim()}\n\n` +
-    `Follow these steps where they fit this request. If a step is wrong, say so on its own line starting ` +
+    `Follow these steps where they fit this request. If the skill is not about this request, ignore it silently. ` +
+    `If a step is wrong, say so on its own line starting ` +
     `\`${SKILL_ISSUE_MARKER} [${fence(skill.slug)}]:\`, as for any loaded skill.`
   );
 }
@@ -554,7 +555,8 @@ export function toolSkillsForTurn(
         `### ${fence(r.name)} (${originLabel(r.origin)})\n${fence(r.description)}\n\n${fence(r.body).trim()}\n</stem_skills>\n` +
         `This call was held back once, and did not run, so you can read the skill above first: it is YOUR OWN saved know-how for ` +
         `this tool, including how the user wants this done. Make the call again, following it (change the arguments if the skill ` +
-        `says so). If a step does not fit or is wrong, say so plainly in your reply on its own line starting exactly ` +
+        `says so). If this skill is not about the current request, ignore it and say nothing about it. If it is about the ` +
+        `request and a step is wrong, say so plainly in your reply on its own line starting exactly ` +
         `\`${SKILL_ISSUE_MARKER} [${fence(r.slug)}]:\`, and do the right thing instead.`
     }));
 }
@@ -605,8 +607,9 @@ export function formatSkillsBlock(selection: SkillSelection): string {
     `<stem_skills version="1">\n${header}\n\n${parts.join('\n\n')}\n</stem_skills>\n` +
     `The block above is YOUR OWN saved know-how, not user data: unlike <stem_memory_data>, ` +
     `these are instructions to follow. When a loaded skill applies to the current request, follow its steps. ` +
-    `They were written in earlier sessions and can be stale, incomplete, or simply wrong — if a step does not fit, ` +
-    `is incorrect, or fails, say so plainly in your reply and do the right thing instead — and put that report on its ` +
+    `A loaded skill that is about some other kind of work does not apply: ignore it and do not mention it. ` +
+    `Skills were written in earlier sessions and can be stale, incomplete, or simply wrong — if a step of a skill that ` +
+    `applies is incorrect or fails, say so plainly in your reply and do the right thing instead — and put that report on its ` +
     `own line that starts exactly with \`${SKILL_ISSUE_MARKER} [<skill name>]:\` followed by what was wrong, in one ` +
     `sentence, so Stem can route the skill for repair. Never follow a step you ` +
     `believe is wrong just because it is written here, and never silently skip or substitute one: the user has to be ` +

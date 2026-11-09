@@ -56,7 +56,10 @@ export const MAX_SKILL_TOOLS = 6;
  * held the first such call of every turn: on 2026-11-09 a Docker-cleanup skill
  * bound to `run_command` held a plain `gh repo list` in an unrelated chat. Such
  * an entry is refused when a skill is written, and ignored at hold time for the
- * skills that already have one.
+ * skills that already have one. The same happened on 2026-11-09 with `browser`:
+ * a Slack-outage recipe bound to it held an Apple form fill in a CarPlay chat.
+ * The browser, the computer and the delegation tools serve any job, so a skill
+ * cannot decide how all their calls are made.
  */
 export const GENERAL_SKILL_TOOLS: ReadonlySet<string> = new Set([
   'run_command',
@@ -73,7 +76,13 @@ export const GENERAL_SKILL_TOOLS: ReadonlySet<string> = new Set([
   'source_check',
   'invoke_tool',
   'find_tools',
-  'describe_tool'
+  'describe_tool',
+  'browser',
+  'computer',
+  'spawn_agent',
+  'coding_agent',
+  'read_past_chat',
+  'read_notes'
 ]);
 
 /** A skill's `tools` without the general ones, which never hold a call. */

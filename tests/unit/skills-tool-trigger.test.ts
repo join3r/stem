@@ -3,7 +3,7 @@
 // these pin is the 2026-11-06 one: "every mail drafted for the user names Stem as
 // acting on their behalf" sat in memory as a fact recall had injected 0 times.
 import { afterAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -57,6 +57,20 @@ describe('tools in the skill contract and store', () => {
     expect(readSkillRecord('draft-email-on-behalf')?.tools).toEqual([]);
   });
 
+  it('drops a general tool that an older skill file kept, at the next write', () => {
+    // 2026-11-09: a Slack-outage recipe saved with tools ["browser"] held an Apple
+    // form fill in a CarPlay chat.
+    mkdirSync(join(skillsDir, 'slack-outage-rca'), { recursive: true });
+    writeFileSync(
+      join(skillsDir, 'slack-outage-rca', 'SKILL.md'),
+      `---\nname: "slack-outage-rca"\ndescription: "Use when reporting a Slack outage."\nmetadata:\n  stem:\n    source: agent\n    origin: "turn"\n    version: 1\n    tools: ["browser", "fastmail.draft_email"]\n---\n\n${BODY}\n`
+    );
+    expect(readSkillRecord('slack-outage-rca')?.tools).toEqual(['browser', 'fastmail.draft_email']);
+    const patch = draft({ name: 'slack-outage-rca', description: 'Use when reporting a Slack outage.' });
+    expect(saveSkill(patch, { origin: 'turn', expectExisting: true }).ok).toBe(true);
+    expect(readSkillRecord('slack-outage-rca')?.tools).toEqual(['fastmail.draft_email']);
+  });
+
   it('reads tools off the author reply only when it gives a list', () => {
     const reply = (tools: unknown) => JSON.stringify({ skill: { ...draft(), tools } });
     expect(parseAuthorReply(reply(['fastmail.draft_email']))).toMatchObject({ kind: 'skill', draft: { tools: ['fastmail.draft_email'] } });
@@ -88,6 +102,19 @@ describe('which skills a turn hands over at a tool call', () => {
   it('never holds a general tool, even for a skill saved with one', () => {
     const got = toolSkillsForTurn([record('docker', ['run_command']), record('mixed', ['run_command', 'fastmail.draft_email'])], [], new Set());
     expect(got.map((s) => [s.slug, s.tools])).toEqual([['mixed', ['fastmail.draft_email']]]);
+  });
+
+  it('never holds the browser, the computer or a delegation tool', () => {
+    for (const tool of ['browser', 'computer', 'spawn_agent', 'coding_agent']) {
+      expect(toolSkillsForTurn([record('recipe', [tool])], [], new Set())).toEqual([]);
+      expect(validateSkill(draft({ tools: [tool] }))).toMatchObject([{ field: 'tools' }]);
+    }
+  });
+
+  it('tells the model to ignore a held skill that is about other work, not to report it', () => {
+    const [held] = toolSkillsForTurn([record('mixed', ['fastmail.draft_email'])], [], new Set());
+    expect(held.text).toContain('If this skill is not about the current request, ignore it and say nothing about it.');
+    expect(held.text).not.toContain('does not fit');
   });
 
   it('settle reads every handed-over skill back off the trace', () => {

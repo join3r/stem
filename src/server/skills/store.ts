@@ -4,7 +4,7 @@ import { parse as parseYaml } from 'yaml';
 import { degrade } from '../degrade';
 import { SKILLS_REV_FILE } from '../pi/protocol';
 import { skillsRoot } from '../workspace/paths';
-import { SKILL_SLUG_RE, validateSkill, type SkillDraft, type SkillViolation } from './contract';
+import { GENERAL_SKILL_TOOLS, SKILL_SLUG_RE, validateSkill, type SkillDraft, type SkillViolation } from './contract';
 import { DISABLED_MARKER, syncSkillsIgnore } from './ignore';
 import { pruneUsage } from './usage';
 
@@ -274,8 +274,9 @@ export function saveSkill(draft: SkillDraft, opts: { origin: SkillOrigin; expect
     updated: now,
     enabled: existing?.enabled ?? true,
     // A patch that does not mention tools keeps the skill's; the author is shown
-    // them, so leaving them out is not a decision to drop them.
-    tools: draft.tools ? draft.tools.map((t) => t.trim()) : (existing?.tools ?? [])
+    // them, so leaving them out is not a decision to drop them. A kept general
+    // tool is dropped: it never holds a call, and the next write cleans the file.
+    tools: draft.tools ? draft.tools.map((t) => t.trim()) : (existing?.tools ?? []).filter((t) => !GENERAL_SKILL_TOOLS.has(t))
   };
 
   try {
