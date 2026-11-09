@@ -3,7 +3,7 @@ import { InfoTip } from '../../../ui/InfoTip';
 import { RowSelect, ValueRow } from './rows';
 import { AutonomySections } from './AutonomySettings';
 import { OtherStemsSection } from './OtherStemsSettings';
-import { SharedLinksSection } from './SharedLinksSettings';
+import { SharedLinksPage, SharedLinksSection } from './SharedLinksSettings';
 
 /**
  * Settings → Features: what Stem may DO beyond answering — personas mailing
@@ -11,11 +11,16 @@ import { SharedLinksSection } from './SharedLinksSettings';
  * governing every conversation at once; App keeps everything about talking.
  */
 export function FeaturesSettings() {
+  // The shared-links list replaces the tab while open, the way an opened
+  // provider replaces Models: one thing at a time, with a way back.
+  const [linksOpen, setLinksOpen] = useState(false);
+  if (linksOpen) return <SharedLinksPage onBack={() => setLinksOpen(false)} />;
+
   return (
     <div>
       <MailSection />
       <OtherStemsSection />
-      <SharedLinksSection />
+      <SharedLinksSection onOpen={() => setLinksOpen(true)} />
       <ImagesSection />
       <VoiceSection />
       <AutonomySections />

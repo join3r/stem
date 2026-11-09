@@ -14,7 +14,8 @@ import {
 } from '../../src/server/share/snapshot';
 import { keyFragment, openShare, sealShare } from '../../src/server/share/seal';
 import { openShare as browserOpenShare } from '../../src/share/decrypt';
-import { ShareService } from '../../src/server/share/service';
+import { cleanRecipients, ShareService } from '../../src/server/share/service';
+import { shareOpenedText } from '../../src/server/share/notice';
 import { ShareStore } from '../../src/server/share/store';
 import { RelayError } from '../../src/server/interstem/relay-client';
 import type { ChatBackend } from '../../src/server/backend';
@@ -331,5 +332,69 @@ describe('ShareService', () => {
       });
       await expect(svc.preview({ kind: 'mail', conversationId: 'c' })).rejects.toThrow(ShareInputError);
     }
+  });
+  it('locks a link to people: cleans the list and sends it to the relay', async () => {
+    let sent: string[] | undefined;
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: store(),
+      upload: async (_r, _i, _b, _t, _c, to) => {
+        sent = to;
+        return { id: 'CCCCCCCCCCCCCCCCCCCCCC', url: 'https://share.test/s/CCCCCCCCCCCCCCCCCCCCCC', expires: 0, recipients: to };
+      }
+    });
+    const link = await svc.create({ kind: 'chat', threadId: 'th' }, { recipients: [' Martin@Gmail.com ', 'martin@gmail.com', '', 'eva@x.sk'] });
+    expect(sent).toEqual(['martin@gmail.com', 'eva@x.sk']);
+    expect(link.recipients).toEqual(['martin@gmail.com', 'eva@x.sk']);
+    expect((await svc.list())[0]!.recipients).toEqual(['martin@gmail.com', 'eva@x.sk']);
+    expect(() => cleanRecipients(['not-an-address'])).toThrow(/not an email address/);
+    expect(() => cleanRecipients(Array.from({ length: 21 }, (_, i) => `p${i}@x.sk`))).toThrow(/at most 20/);
+  });
+
+  it('takes the link down when the relay did not lock it', async () => {
+    const removed: string[] = [];
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: store(),
+      // An old relay: ignores ?to= and answers without recipients.
+      upload: async () => ({ id: 'DDDDDDDDDDDDDDDDDDDDDD', url: 'https://share.test/s/DDDDDDDDDDDDDDDDDDDDDD', expires: 0 }),
+      remove: async (_r, _i, id) => {
+        removed.push(id);
+      }
+    });
+    await expect(svc.create({ kind: 'chat', threadId: 'th' }, { recipients: ['m@x.sk'] })).rejects.toThrow(/Nothing was shared/);
+    expect(removed).toEqual(['DDDDDDDDDDDDDDDDDDDDDD']);
+    expect(await svc.list()).toEqual([]);
+  });
+
+  it('stores who opened a locked link and announces each first opening once', async () => {
+    let opens: { address: string; first: number; last: number; count: number }[] = [];
+    const notices: string[][] = [];
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: store(),
+      upload: async (_r, _i, _b, _t, _c, to) => ({ id: 'EEEEEEEEEEEEEEEEEEEEEE', url: 'https://share.test/s/EEEEEEEEEEEEEEEEEEEEEE', expires: 0, recipients: to }),
+      relayList: async () => [{ id: 'EEEEEEEEEEEEEEEEEEEEEE', url: '', expires: 0, recipients: ['m@x.sk', 'e@x.sk'], opens }],
+      onOpened: async (_link, fresh) => {
+        notices.push(fresh.map((o) => o.address));
+      }
+    });
+    await svc.create({ kind: 'chat', threadId: 'th' }, { recipients: ['m@x.sk', 'e@x.sk'] });
+    await svc.syncOpens();
+    expect(notices).toEqual([]);
+    opens = [{ address: 'm@x.sk', first: 10, last: 10, count: 1 }];
+    await svc.syncOpens();
+    opens = [{ address: 'm@x.sk', first: 10, last: 20, count: 2 }];
+    await svc.syncOpens();
+    expect(notices).toEqual([['m@x.sk']]);
+    expect((await svc.list())[0]!.opens).toEqual([{ address: 'm@x.sk', firstAt: 10, lastAt: 20, count: 2 }]);
+    const text = shareOpenedText((await svc.list())[0]!, [
+      { address: 'm@x.sk', firstAt: 1, lastAt: 1, count: 1 },
+      { address: 'e@x.sk', firstAt: 1, lastAt: 1, count: 1 }
+    ]);
+    expect(text.body).toContain('m@x.sk and e@x.sk opened the link you shared');
   });
 });

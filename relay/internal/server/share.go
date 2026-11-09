@@ -76,6 +76,10 @@ func (s *Server) postShare(w http.ResponseWriter, r *http.Request, body []byte) 
 	if err != nil {
 		return err
 	}
+	recipients, err := parseRecipients(r.URL.Query().Get("to"), cfg.MaxRecipients)
+	if err != nil {
+		return err
+	}
 	live, used, err := s.st.OwnerShareUsage(addr)
 	if err != nil {
 		return err
@@ -92,11 +96,17 @@ func (s *Server) postShare(w http.ResponseWriter, r *http.Request, body []byte) 
 		return fail(429, "rate_limited")
 	}
 	sh := &store.Share{ID: newShareID(), Owner: addr, Fp: fp, Size: int64(len(body)), Blob: body,
-		Created: s.Now().UnixMilli(), Expires: expires, CardTitle: cardTitle, CardDesc: cardDesc}
+		Created: s.Now().UnixMilli(), Expires: expires, CardTitle: cardTitle, CardDesc: cardDesc, Recipients: recipients}
 	if err := s.st.PutShare(sh); err != nil {
 		return err
 	}
-	writeJSON(w, 200, map[string]any{"id": sh.ID, "url": s.shareURL(sh.ID), "expires": expires})
+	out := map[string]any{"id": sh.ID, "url": s.shareURL(sh.ID), "expires": expires}
+	if len(recipients) > 0 {
+		// The Stem checks this: a relay without locked links would have
+		// ignored ?to= and made the link public.
+		out["recipients"] = recipients
+	}
+	writeJSON(w, 200, out)
 	return nil
 }
 
@@ -127,8 +137,24 @@ func (s *Server) getShare(w http.ResponseWriter, r *http.Request, _ []byte) erro
 		writeJSON(w, 410, map[string]string{"error": "gone", "why": why})
 		return nil
 	}
-	// Short cache, so a revoke takes effect within a minute.
-	h.Set("Cache-Control", "private, max-age=60")
+	if len(sh.Recipients) > 0 {
+		// Locked: only a browser that entered a mailed code gets the blob.
+		h.Set("Cache-Control", "no-store")
+		who, err := s.viewer(r, sh)
+		if err != nil {
+			return err
+		}
+		if who == "" {
+			writeJSON(w, 401, map[string]any{"error": "locked", "recipients": masked(sh.Recipients)})
+			return nil
+		}
+		if err := s.st.RecordShareOpen(sh.ID, who, s.Now().UnixMilli()); err != nil {
+			return err
+		}
+	} else {
+		// Short cache, so a revoke takes effect within a minute.
+		h.Set("Cache-Control", "private, max-age=60")
+	}
 	h.Set("Content-Type", "application/octet-stream")
 	h.Set("Content-Length", strconv.Itoa(len(sh.Blob)))
 	_, _ = w.Write(sh.Blob)
@@ -175,9 +201,22 @@ func (s *Server) listShares(w http.ResponseWriter, r *http.Request, body []byte)
 	if err != nil {
 		return err
 	}
+	opens, err := s.st.OwnerShareOpens(addr)
+	if err != nil {
+		return err
+	}
 	out := make([]map[string]any, 0, len(rows))
 	for _, sh := range rows {
-		out = append(out, map[string]any{"id": sh.ID, "url": s.shareURL(sh.ID), "size": sh.Size, "created": sh.Created, "expires": sh.Expires})
+		row := map[string]any{"id": sh.ID, "url": s.shareURL(sh.ID), "size": sh.Size, "created": sh.Created, "expires": sh.Expires}
+		if len(sh.Recipients) > 0 {
+			row["recipients"] = sh.Recipients
+			o := opens[sh.ID]
+			if o == nil {
+				o = []store.ShareOpen{}
+			}
+			row["opens"] = o
+		}
+		out = append(out, row)
 	}
 	writeJSON(w, 200, map[string]any{"shares": out})
 	return nil

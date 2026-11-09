@@ -71,6 +71,14 @@ type Share struct {
 	MaxTTLDays int `toml:"max_ttl_days"`
 	// Abuse reports per client IP per hour.
 	ReportsPerIPHour int `toml:"reports_per_ip_hour"`
+	// Recipient-locked links: the most recipients per share, codes mailed to
+	// one address per share per day (five times that over all shares), code
+	// requests per client IP per day, and days a browser that entered a code
+	// keeps access.
+	MaxRecipients        int `toml:"max_recipients"`
+	CodesPerRecipientDay int `toml:"codes_per_recipient_day"`
+	CodesPerIPDay        int `toml:"codes_per_ip_day"`
+	ViewDays             int `toml:"view_days"`
 }
 
 // Push is the APNs gateway: Stems without the app's APNs key send wake-ups
@@ -165,7 +173,7 @@ func Defaults() Config {
 		},
 		Push: Push{PerIPHour: 600, PerKeyHour: 120, PerTokenHour: 60, GlobalHour: 20000, RebindDays: 7},
 		Share: Share{MaxBytes: 12 << 20, PerAddressDay: 30, MaxLive: 100, QuotaBytes: 500 << 20, MaxTTLDays: 30,
-			ReportsPerIPHour: 20},
+			ReportsPerIPHour: 20, MaxRecipients: 20, CodesPerRecipientDay: 10, CodesPerIPDay: 30, ViewDays: 7},
 	}
 }
 

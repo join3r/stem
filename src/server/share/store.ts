@@ -7,7 +7,7 @@ import { degrade } from '../degrade';
 import { decryptSecretValue, encryptSecretValue } from '../pi/secrets';
 import { replaceFile } from '../replace-file';
 import { sharesStorePath } from '../workspace/paths';
-import type { SharedLink } from '../../shared/share';
+import type { ShareOpen, SharedLink } from '../../shared/share';
 
 interface StoredShare extends Omit<SharedLink, 'url'> {
   /** Viewer URL without the fragment. */
@@ -69,7 +69,8 @@ export class ShareStore {
         title: s.title,
         createdAt: s.createdAt,
         expiresAt: s.expiresAt,
-        size: s.size
+        size: s.size,
+        ...(s.recipients?.length ? { recipients: s.recipients, opens: s.opens ?? [] } : {})
       });
     }
     return out.sort((a, b) => b.createdAt - a.createdAt);
@@ -81,6 +82,17 @@ export class ShareStore {
       const hash = link.url.indexOf('#');
       const { url, ...rest } = link;
       f.shares.push({ ...rest, base: url.slice(0, hash), key: encryptSecretValue(url.slice(hash + 1)) });
+      await this.writeFile(f);
+    });
+  }
+
+  /** Store the openings the relay reported for a locked link. */
+  setOpens(id: string, opens: ShareOpen[]): Promise<void> {
+    return this.serial(async () => {
+      const f = await this.readFile();
+      const s = f.shares.find((x) => x.id === id);
+      if (!s) return;
+      s.opens = opens;
       await this.writeFile(f);
     });
   }

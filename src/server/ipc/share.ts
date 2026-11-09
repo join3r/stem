@@ -2,7 +2,7 @@ import { registerServer } from './guard';
 import { ShareService } from '../share/service';
 import type { ChatBackend } from '../backend';
 import type { InterStemService } from '../interstem/service';
-import type { ShareCard, ShareOptions, ShareSource } from '../../shared/share';
+import type { ShareCard, ShareOpen, ShareOptions, SharedLink, ShareSource } from '../../shared/share';
 
 function source(raw: unknown): ShareSource {
   const o = (raw ?? {}) as Record<string, unknown>;
@@ -25,13 +25,19 @@ function options(raw: unknown): ShareOptions {
     ...(typeof o.ttlDays === 'number' && Number.isFinite(o.ttlDays) && o.ttlDays > 0 ? { ttlDays: o.ttlDays } : {}),
     ...(card && typeof card === 'object'
       ? { card: { title: String((card as ShareCard).title ?? ''), description: String((card as ShareCard).description ?? '') } }
-      : {})
+      : {}),
+    ...(Array.isArray(o.recipients) ? { recipients: o.recipients.filter((r): r is string => typeof r === 'string') } : {})
   };
 }
 
 /** Public share links (docs/public-share-design.md). */
-export function registerShareIpc(deps: { runtime(): ChatBackend; interStem(): InterStemService | null }): void {
+export function registerShareIpc(deps: {
+  runtime(): ChatBackend;
+  interStem(): InterStemService | null;
+  onOpened?: (link: SharedLink, opens: ShareOpen[]) => Promise<void>;
+}): void {
   const service = new ShareService(deps);
+  service.startPolling();
   registerServer('share:status', () => service.status());
   registerServer('share:preview', (_e, src: unknown, opts?: unknown) => service.preview(source(src), options(opts)));
   registerServer('share:create', (_e, src: unknown, opts?: unknown) => service.create(source(src), options(opts)));

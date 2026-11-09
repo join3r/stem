@@ -148,7 +148,38 @@ The browser decrypts with WebCrypto and `DecompressionStream('gzip')`.
   preview card (editable title and description, drawn like an unfurl, with a
   note that it is not encrypted), Create link. Then: the link with Copy, its end date, and Revoke. Without a verified address, the dialog explains and links to
   Settings → Your email address.
-- Settings → Your email address → "Shared links": list, copy, revoke.
+- Settings → Features → Shared links: one row with the count. It opens a
+  searchable list (newest first, a clock on links that stop within 3 days);
+  each link opens its own page with Copy and Revoke, and for a locked link
+  the recipients and who opened it.
+
+## Locked to chosen people (2026-11-09)
+
+A link can name the people who may open it ("Only people I choose" in the
+dialog). Decided with Vlado:
+
+- **The sharer sends the link.** The relay never mails the link itself, so it
+  cannot become a spam channel for arbitrary addresses.
+- **Link + inbox.** The key stays in the fragment. The relay hands out the
+  blob only to a browser that entered a code it mailed to one of the
+  recipients. A forwarded link shows nothing; the relay still cannot read
+  the page.
+- **A verified browser stays in for 7 days** (an HttpOnly cookie scoped to
+  that one share).
+- **Stem says when someone opens it.** The server asks the relay every 10
+  minutes (and when the Settings list opens) who opened its locked links,
+  stores it in shares.json, and posts a private mail ("martin@… opened the
+  link you shared") for each recipient's first opening.
+- The visitor picks a masked address (`m•••@gmail.com`) by index, so the page
+  never shows full addresses. The relay keeps the recipients in the clear
+  while the share lives; revoking deletes them with the blob.
+- The link-preview card starts off for a locked link (it is not encrypted).
+- An old relay ignores `to` and would make the link public. The upload answer
+  echoes the recipients; when it does not, Stem deletes the share and says
+  nothing was shared.
+- iOS still makes public links only.
+
+Protocol: relay/PROTOCOL.md, "Locked to recipients".
 
 ## Phase 2: iOS
 
@@ -158,6 +189,6 @@ phone at first, so the sheet shows what is included (counts, pictures off).
 
 ## Not doing
 
-- Live links, comments, view counts.
+- Live links, comments, view counts for public links.
 - Server-side moderation of content (we can't read it).
-- Per-recipient shares: that's inter-Stem mail.
+- Mailing the link from the relay (the sharer sends it; see above).

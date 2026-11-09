@@ -3,7 +3,9 @@ import { Check, Copy, ExternalLink, Link2, Link2Off, Share2 } from 'lucide-react
 import {
   SHARE_CARD_DESC_MAX,
   SHARE_CARD_TITLE_MAX,
+  SHARE_MAX_RECIPIENTS,
   SHARE_TTL_CHOICES,
+  normalizeRecipient,
   type SharedLink,
   type ShareOptions,
   type SharePreview,
@@ -22,6 +24,19 @@ const ttlLabel = (days: number) => (days === 1 ? 'Expires in 1 day' : `Expires i
 
 const cleanError = (e: unknown): string =>
   e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e);
+
+/** The addresses typed in the "Only these people" field: valid ones, and the rest. */
+export function parseRecipients(text: string): { ok: string[]; bad: string[] } {
+  const ok: string[] = [];
+  const bad: string[] = [];
+  for (const part of text.split(/[\s,;]+/)) {
+    if (!part) continue;
+    const a = normalizeRecipient(part);
+    if (!a) bad.push(part);
+    else if (!ok.includes(a)) ok.push(a);
+  }
+  return { ok, bad };
+}
 
 function sizeLabel(bytes: number): string {
   return bytes >= 1 << 20 ? `${(bytes / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -56,6 +71,12 @@ export function ShareDialog({
   const [cardOn, setCardOn] = useState(true);
   const [cardTitle, setCardTitle] = useState<string | null>(null);
   const [cardDesc, setCardDesc] = useState<string | null>(null);
+  // Who can open it: anyone with the link, or only the people named here.
+  const [locked, setLocked] = useState(false);
+  const [recipientText, setRecipientText] = useState('');
+  const recipients = parseRecipients(recipientText);
+  const recipientsReady =
+    !locked || (recipients.ok.length > 0 && recipients.bad.length === 0 && recipients.ok.length <= SHARE_MAX_RECIPIENTS);
   const title = cardTitle ?? preview?.card.title ?? '';
   const desc = cardDesc ?? preview?.card.description ?? '';
 
@@ -65,7 +86,8 @@ export function ShareDialog({
     includeAttachments,
     includeModel,
     ttlDays,
-    card: cardOn ? { title, description: desc } : null
+    card: cardOn ? { title, description: desc } : null,
+    ...(locked ? { recipients: recipients.ok } : {})
   };
 
   useEffect(() => {
@@ -155,7 +177,15 @@ export function ShareDialog({
           <span className="row-icon">
             <Share2 size={15} />
           </span>
-          <strong>{link ? (revoked ? 'Link revoked' : 'Anyone with this link can see it') : 'Share as a link'}</strong>
+          <strong>
+            {link
+              ? revoked
+                ? 'Link revoked'
+                : link.recipients?.length
+                  ? 'Only the people you chose can open it'
+                  : 'Anyone with this link can see it'
+              : 'Share as a link'}
+          </strong>
         </div>
 
         {link ? (
@@ -174,8 +204,10 @@ export function ShareDialog({
                   </a>
                 </div>
                 <p className="muted">
-                  Works until {new Date(link.expiresAt).toLocaleDateString(undefined, { dateStyle: 'long' })}. The content
-                  is encrypted; the key is the part after # in the link, so only people you give the link to can read it.
+                  Works until {new Date(link.expiresAt).toLocaleDateString(undefined, { dateStyle: 'long' })}.{' '}
+                  {link.recipients?.length
+                    ? `Send the link to ${link.recipients.join(', ')} yourself. To open it, they enter a code that Stem mails to their address, so a forwarded link shows nothing. Stem tells you when each of them opens it.`
+                    : 'The content is encrypted; the key is the part after # in the link, so only people you give the link to can read it.'}{' '}
                   Later messages are not added. Manage your links in Settings → Features.
                   {link.size >= 2 << 20 &&
                     ` At ${sizeLabel(link.size)}, the page takes a few seconds to open on a slow connection.`}
@@ -219,6 +251,55 @@ export function ShareDialog({
                   {o.label}
                 </button>
               ))}
+            </div>
+
+            <div className="share-who">
+              <div className="seg-ctl" role="radiogroup" aria-label="Who can open it">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!locked}
+                  className={!locked ? 'active' : ''}
+                  onClick={() => setLocked(false)}
+                >
+                  Anyone with the link
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={locked}
+                  className={locked ? 'active' : ''}
+                  onClick={() => {
+                    // The preview card is not encrypted; a private link starts without one.
+                    if (!locked) setCardOn(false);
+                    setLocked(true);
+                  }}
+                >
+                  Only people I choose
+                </button>
+              </div>
+              {locked && (
+                <>
+                  <input
+                    className="vfield"
+                    type="text"
+                    value={recipientText}
+                    placeholder="martin@gmail.com, eva@company.sk"
+                    aria-label="Email addresses"
+                    autoFocus
+                    onChange={(e) => setRecipientText(e.target.value)}
+                  />
+                  {recipients.bad.length > 0 ? (
+                    <p className="task-failed">Not an email address: {recipients.bad.join(', ')}</p>
+                  ) : recipients.ok.length > SHARE_MAX_RECIPIENTS ? (
+                    <p className="task-failed">A link can name at most {SHARE_MAX_RECIPIENTS} people.</p>
+                  ) : (
+                    <p className="muted share-note">
+                      To open the link, a person enters a code that Stem mails to their address. You send the link yourself.
+                    </p>
+                  )}
+                </>
+              )}
             </div>
 
             <div className="share-preview" aria-label="Preview">
@@ -290,7 +371,8 @@ export function ShareDialog({
             </div>
 
             <p className="muted share-note">
-              Tool steps, memory cards and in-app links are left out. Anyone with the link can read what you see above
+              Tool steps, memory cards and in-app links are left out.{' '}
+              {locked ? 'Only the people above can read what you see here' : 'Anyone with the link can read what you see above'}
               {status?.address ? `; it is published under ${status.address}` : ''}.
               {preview ? ` ${sizeLabel(preview.bytes)}.` : ''}
             </p>
@@ -302,7 +384,7 @@ export function ShareDialog({
               </button>
               <button
                 className="push default"
-                disabled={busy || !preview || !status?.available}
+                disabled={busy || !preview || !status?.available || !recipientsReady}
                 onClick={() => void publish()}
                 autoFocus
               >

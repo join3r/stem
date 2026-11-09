@@ -72,6 +72,7 @@ import { setActivityEmitter } from './activity';
 import { foldTurnEvent, liveTurnCount, noteTurnStart } from './live-turns';
 import { startTurnOnce } from './start-turn-once';
 import { pushApprovalRequest, pushMailReceived, pushPersonMail, pushTurnFinished, type ApprovalPushKind } from './push';
+import { mailShareOpened } from './share/notice';
 import { mailConversationFor, onMailChanged, onMailReceived, taskMailHistory, taskRunThreadIds } from './workspace/mail';
 import { closeApns } from './push/apns';
 import { closeDeviceMcpRouter } from './mcp-device/router';
@@ -432,7 +433,7 @@ function registerIpc(): void {
   setPeopleContactsSource(async () => (interStem ? (await interStem.status()).contacts : []));
   registerMailIpc({ router: () => mailRouter, runtime: () => runtime! });
   registerInterStemIpc({ service: () => interStem, router: () => mailRouter });
-  registerShareIpc({ runtime: () => runtime!, interStem: () => interStem });
+  registerShareIpc({ runtime: () => runtime!, interStem: () => interStem, onOpened: mailShareOpened });
   registerMemoryCheckIpc({ router: () => mailRouter, runtime: () => runtime!, emit });
   onMailChanged(() => emit('mail:changed', undefined));
   // What is learned from mail with other people, tagged with their address

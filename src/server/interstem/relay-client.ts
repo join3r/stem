@@ -306,6 +306,10 @@ export interface RelayShare {
   size?: number;
   created?: number;
   expires: number;
+  /** A locked share: who may open it. On upload, the relay's proof that it locked it. */
+  recipients?: string[];
+  /** A locked share, in the list: who opened it. */
+  opens?: { address: string; first: number; last: number; count: number }[];
 }
 
 /**
@@ -317,10 +321,12 @@ export async function postShare(
   id: Identity,
   blob: Uint8Array,
   ttlDays?: number,
-  card?: { title: string; description: string } | null
+  card?: { title: string; description: string } | null,
+  recipients?: string[]
 ): Promise<RelayShare> {
   const q = new URLSearchParams();
   if (ttlDays) q.set('ttl', String(ttlDays));
+  if (recipients?.length) q.set('to', Buffer.from(JSON.stringify(recipients)).toString('base64url'));
   if (card && (card.title || card.description)) {
     q.set('card', Buffer.from(JSON.stringify({ t: card.title, d: card.description })).toString('base64url'));
   }

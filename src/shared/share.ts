@@ -49,6 +49,14 @@ export const SHARE_MAX_TTL_DAYS = 30;
 export const SHARE_TTL_CHOICES = [30, 7, 1] as const;
 /** Live links per address, enforced by the relay. */
 export const SHARE_MAX_LINKS = 100;
+/** Most people one locked link names, enforced by the relay. */
+export const SHARE_MAX_RECIPIENTS = 20;
+
+/** A plausible email address, lowercased and trimmed; null when it is not one. */
+export function normalizeRecipient(raw: string): string | null {
+  const a = raw.trim().toLowerCase();
+  return /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/.test(a) && a.length <= 254 ? a : null;
+}
 
 /**
  * The link preview chat apps show when the link is pasted (og: tags). Unlike
@@ -104,6 +112,21 @@ export interface ShareOptions {
   ttlDays?: number;
   /** The link preview to publish; absent or null = none (a generic card). */
   card?: ShareCard | null;
+  /**
+   * Only these addresses may open the link: a visitor must enter a code the
+   * relay mails to one of them. Absent or empty = anyone with the link.
+   */
+  recipients?: string[];
+}
+
+/** One recipient's openings of a locked link. */
+export interface ShareOpen {
+  address: string;
+  /** Unix ms. */
+  firstAt: number;
+  /** Unix ms. */
+  lastAt: number;
+  count: number;
 }
 
 /** A link this Stem published, as listed in Settings. */
@@ -120,6 +143,10 @@ export interface SharedLink {
   /** Unix ms. */
   expiresAt: number;
   size: number;
+  /** A locked link: the only addresses that may open it. */
+  recipients?: string[];
+  /** A locked link: who opened it, as the relay last reported. */
+  opens?: ShareOpen[];
 }
 
 /** What the preview shows next to the rendered snapshot. */
