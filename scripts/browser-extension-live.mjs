@@ -55,7 +55,8 @@ async function main() {
   const recordFixture = process.argv.includes('--record-fixture');
   const keep = process.argv.includes('--keep');
   const { chromium } = await import('playwright');
-  const executable = chromium.executablePath();
+  // STEM_CHROME points at another Chrome for Testing when Playwright's own build is not installed.
+  const executable = process.env.STEM_CHROME || chromium.executablePath();
   const manifest = JSON.parse(await readFile(join(extensionDir, 'manifest.json'), 'utf8'));
   const extensionId = extensionIdFromKey(manifest.key);
 

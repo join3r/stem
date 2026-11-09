@@ -224,6 +224,20 @@ async function doAttach(tabId) {
     await chrome.debugger.attach({ tabId }, '1.3');
   } catch (err) {
     const message = cdpMessage(err);
+    // The debugger that holds the tab can be Stem's own, from before its
+    // service worker stopped: the attachment belongs to the extension and
+    // stays, but the new worker has no session for it (jbrow, 2026-11-09:
+    // after each worker crash every action in the tab was refused). The
+    // browser lets an extension detach only its own attachment, so a detach
+    // that works proves the tab was Stem's.
+    if (/another debugger/i.test(message) && (await releaseOwnStale(tabId))) {
+      try {
+        await chrome.debugger.attach({ tabId }, '1.3');
+      } catch (again) {
+        throw attachError(tabId, cdpMessage(again));
+      }
+      return startSession(tabId);
+    }
     // Another extension's frame (a password manager's fill menu) blocks the
     // debugger for the whole tab. It is that extension's overlay, not the
     // page: remove it and try once more.
@@ -234,6 +248,22 @@ async function doAttach(tabId) {
       throw attachError(tabId, cdpMessage(again));
     }
   }
+  return startSession(tabId);
+}
+
+/** Detach a debugger this worker has no session for; true when it was Stem's own. */
+async function releaseOwnStale(tabId) {
+  if (sessions.has(tabId)) return false;
+  try {
+    await chrome.debugger.detach({ tabId });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Set up the session for a tab the debugger was just attached to. */
+async function startSession(tabId) {
   // The attach may have woken the tab under a new ID.
   const now = currentTab(tabId);
   const s = new Session(now);
