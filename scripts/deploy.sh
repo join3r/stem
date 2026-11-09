@@ -92,7 +92,7 @@ g() { git -C "$D" "$@"; }
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
 die() { printf '\n\033[31mSTOP: %s\033[0m\n' "$*" >&2; exit 1; }
-SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o VisualHostKey=no -o LogLevel=ERROR)
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o VisualHostKey=no -o LogLevel=ERROR)
 vps() { ssh "${SSH_OPTS[@]}" "$VPS_HOST" "$@"; }
 relay() { ssh "${SSH_OPTS[@]}" "$RELAY_HOST" "$@"; }
 state_get() { [[ -f "$STATE_DIR/$1" ]] && cat "$STATE_DIR/$1" || true; }
@@ -124,12 +124,13 @@ done
 
 # Each target ships the diff since its own last deploy. The VPS knows its
 # commit; for the others the script keeps a state file. With no state file,
-# the deploy worktree's HEAD counts as deployed, because the last deploy
-# started from there.
+# the VPS commit counts as deployed. The script writes that base to the state
+# file before it ships, so a target that fails stays in the plan of the next
+# run (a fallback to the worktree HEAD moved with each run and lost failures).
 base_set vps "$V"
 for t in relay viewer mac ios; do
   b=$(state_get "$t")
-  if [[ -n "$b" ]] && g cat-file -e "$b^{commit}" 2>/dev/null; then base_set "$t" "$b"; else base_set "$t" "$PREV"; fi
+  if [[ -n "$b" ]] && g cat-file -e "$b^{commit}" 2>/dev/null; then base_set "$t" "$b"; else base_set "$t" "$V"; fi
 done
 
 # ---------------------------------------------------------------- 2. MERGE
@@ -201,6 +202,9 @@ PLAN=("${PLAN[@]:1}")
 has() { [[ ${#PLAN[@]} -gt 0 && " ${PLAN[*]} " == *" $1 "* ]]; }
 
 if [[ $DRY -eq 1 ]]; then echo; echo "Dry run: nothing changed."; exit 0; fi
+for t in relay viewer mac ios; do
+  [[ -n "$(state_get "$t")" ]] || state_set "$t" "$(base_get "$t")"
+done
 if [[ ${#PLAN[@]} -eq 0 ]]; then
   echo; echo "Nothing to ship. Deploy commit $(short "$HEAD_SHA") stays in $D."; exit 0
 fi
@@ -243,10 +247,14 @@ fi
 deploy_vps() {
   say "VPS stem-server"
   local bundle="$LOG_DIR/deploy.bundle"
-  g bundle create "$bundle" "$V..$HEAD_SHA" >/dev/null 2>&1 || { res vps "FAILED: git bundle"; return 1; }
+  # A bundle needs a ref: "V..<sha>" gives "Refusing to create empty bundle".
+  # HEAD of the deploy worktree is the deploy commit.
+  [[ "$(g rev-parse HEAD)" == "$HEAD_SHA" ]] || { res vps "FAILED: deploy worktree HEAD is not $(short "$HEAD_SHA")"; return 1; }
+  g bundle create "$bundle" "$V..HEAD" >"$LOG_DIR/vps-bundle.log" 2>&1 ||
+    { res vps "FAILED: git bundle, see $LOG_DIR/vps-bundle.log"; return 1; }
   scp -q "${SSH_OPTS[@]}" "$bundle" "$VPS_HOST:/tmp/stem-deploy.bundle" || { res vps "FAILED: scp of the bundle"; return 1; }
   local got
-  got=$(vps "cd $VPS_DIR && git fetch -q /tmp/stem-deploy.bundle $HEAD_SHA && git merge --ff-only -q $HEAD_SHA && rm -f /tmp/stem-deploy.bundle && git rev-parse HEAD") || got=""
+  got=$(vps "cd $VPS_DIR && git fetch -q /tmp/stem-deploy.bundle HEAD && git merge --ff-only -q FETCH_HEAD && rm -f /tmp/stem-deploy.bundle && git rev-parse HEAD") || got=""
   [[ "$got" == "$HEAD_SHA" ]] || { res vps "FAILED: VPS HEAD is $(short "$got")"; return 1; }
   note "checkout fast-forwarded to $(short "$got")"
   local sha12=${HEAD_SHA:0:12}
@@ -275,7 +283,8 @@ deploy_vps() {
 # ---------------------------------------------------------------- 7. RELAY + VIEWER
 deploy_relay() {
   say "Global relay"
-  relay "grep -Eq 'context: *(\./)?src/?\$' $RELAY_DIR/docker-compose.yml" ||
+  # The compose file has "build: ./src" (short form) or "context: ./src".
+  relay "grep -Eq '(build|context): *(\./)?src/?\$' $RELAY_DIR/docker-compose.yml" ||
     { res relay "FAILED: relay compose build context is not ./src; update this script"; return 1; }
   g archive "$HEAD_SHA" relay | relay "cd $RELAY_DIR && rm -rf src.old && mv src src.old && mkdir src && tar -x --strip-components=1 -C src" ||
     { res relay "FAILED: copy of relay/ (old code is in $RELAY_DIR/src.old)"; return 1; }
@@ -333,7 +342,7 @@ install_mac() {
     res mac "FAILED: copy to $MAC_APP"; return 1
   fi
   hdiutil detach -quiet "$mnt" || true
-  open -a "$MAC_APP"
+  open -a "$MAC_APP" </dev/null >/dev/null 2>&1
   sleep 5
   local ver
   ver=$(defaults read "$MAC_APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo '?')
