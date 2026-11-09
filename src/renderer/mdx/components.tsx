@@ -11,6 +11,7 @@ import { Compare } from './Compare';
 import { Diagram } from './Diagram';
 import { Replies, Reply } from './Replies';
 import { highlightCode } from './highlight';
+import { DiffBlock } from './DiffBlock';
 export { Chart };
 
 // The fixed, vetted component library. The MDX renderer will ONLY instantiate
@@ -72,7 +73,17 @@ export function Collapsible({ title, children }: { title?: string; children?: Re
   );
 }
 
+const DIFF_LANGS = new Set(['diff', 'patch', 'udiff']);
+/** Past this size a diff renders as a plain code block: one table row per line gets slow. */
+const MAX_DIFF_CHARS = 60_000;
+
 export function CodeBlock({ lang, value }: { lang?: string; value: string }) {
+  const name = lang?.trim().toLowerCase();
+  if (name && DIFF_LANGS.has(name) && value.length <= MAX_DIFF_CHARS) return <DiffBlock value={value} />;
+  return <PlainCodeBlock lang={lang} value={value} />;
+}
+
+function PlainCodeBlock({ lang, value }: { lang?: string; value: string }) {
   const [copied, setCopied] = useState(false);
   const colored = useMemo(() => highlightCode(lang, value), [lang, value]);
 

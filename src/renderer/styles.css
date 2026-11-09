@@ -1494,6 +1494,120 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   background: color-mix(in srgb, var(--code-ink) 20%, transparent);
 }
 
+/* ```diff fences (mdx/DiffBlock.tsx): tinted rows, +/− gutter, word marks,
+   one-column or side-by-side view. Drawn on --code-bg like other code. */
+.diff-block {
+  --diff-add: color-mix(in srgb, var(--success) 20%, var(--code-bg));
+  --diff-add-mark: color-mix(in srgb, var(--success) 48%, var(--code-bg));
+  --diff-del: color-mix(in srgb, var(--danger) 20%, var(--code-bg));
+  --diff-del-mark: color-mix(in srgb, var(--danger) 48%, var(--code-bg));
+  --diff-rule: color-mix(in srgb, var(--code-ink) 14%, transparent);
+  --diff-dim: color-mix(in srgb, var(--code-ink) 55%, transparent);
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+}
+.diff-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2, 8px);
+  padding: 6px 7px 6px 13px;
+  border-bottom: 1px solid var(--diff-rule);
+  font-size: 0.92em;
+}
+.diff-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--diff-dim);
+}
+.diff-stats { display: flex; gap: 6px; font-variant-numeric: tabular-nums; }
+.diff-stat-add { color: color-mix(in srgb, var(--success) 70%, var(--code-ink)); }
+.diff-stat-del { color: color-mix(in srgb, var(--danger) 65%, var(--code-ink)); }
+.diff-views {
+  display: inline-flex;
+  border: 0.5px solid var(--diff-rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.diff-views button,
+.diff-copy {
+  display: grid;
+  place-items: center;
+  padding: 4px 6px;
+  color: var(--diff-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.diff-views button + button { border-left: 0.5px solid var(--diff-rule); }
+.diff-views button:hover,
+.diff-copy:hover { color: var(--code-ink); background: color-mix(in srgb, var(--code-ink) 10%, transparent); }
+.diff-views button.active { color: var(--code-ink); background: color-mix(in srgb, var(--code-ink) 16%, transparent); }
+.diff-copy { border-radius: var(--radius); }
+.diff-scroll { overflow-x: auto; padding: 4px 0; }
+.diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  line-height: 1.5;
+}
+.diff-split .diff-table { table-layout: fixed; }
+.diff-col-no { width: 3.6em; }
+.diff-col-mark { width: 1.6em; }
+.diff-table td { padding: 0; vertical-align: top; }
+.diff-text { padding-right: 13px !important; }
+.diff-text-row { display: flex; }
+.diff-indent { white-space: pre; flex: none; }
+.diff-body { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.diff-no {
+  min-width: 2.6em;
+  padding: 0 6px 0 10px !important;
+  text-align: right;
+  color: var(--diff-dim);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.diff-mark {
+  width: 1.6em;
+  padding-left: 8px !important;
+  text-align: center;
+  user-select: none;
+  color: var(--diff-dim);
+}
+.diff-add { background: var(--diff-add); }
+.diff-del { background: var(--diff-del); }
+.diff-add .diff-mark, .diff-mark.diff-add { color: var(--success); }
+.diff-del .diff-mark, .diff-mark.diff-del { color: var(--danger); }
+.diff-empty {
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in srgb, var(--code-ink) 5%, transparent) 5px 6px
+  );
+}
+.diff-split.diff-numbered td.diff-side-new.diff-no,
+.diff-split:not(.diff-numbered) td.diff-side-new.diff-mark { border-left: 1px solid var(--diff-rule); }
+.diff-text mark { color: inherit; border-radius: 2px; }
+.diff-add .diff-text mark, .diff-text.diff-add mark { background: var(--diff-add-mark); }
+.diff-del .diff-text mark, .diff-text.diff-del mark { background: var(--diff-del-mark); }
+.diff-hunk td,
+.diff-note td,
+.diff-file td {
+  padding: 3px 13px !important;
+  color: var(--diff-dim);
+  white-space: pre-wrap;
+}
+.diff-hunk td { background: color-mix(in srgb, var(--code-ink) 6%, transparent); }
+.diff-hunk:not(:first-child) td { border-top: 1px solid var(--diff-rule); }
+.diff-note td { font-style: italic; }
+.diff-file td { color: var(--code-ink); font-weight: 600; border-top: 1px solid var(--diff-rule); }
+.diff-file:first-child td { border-top: 0; }
+
 .callout {
   border-left: 3px solid var(--info);
   background: color-mix(in srgb, var(--info) 9%, var(--surface));
