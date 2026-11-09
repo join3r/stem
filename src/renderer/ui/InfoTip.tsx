@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Info } from 'lucide-react';
+import { useSearchHarvest } from './searchHarvest';
 
 // Fixed positioning (so the manage panel's scroll pane can't clip the popup),
 // centered under the anchor, edge-clamped, flipped above when the window runs
@@ -43,6 +44,7 @@ export function InfoTip({ label, children }: { label: string; children: ReactNod
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLSpanElement>(null);
   const pos = useClampedPop(open, btnRef, popRef);
+  const harvest = useSearchHarvest();
 
   useEffect(() => {
     if (!open) return;
@@ -79,6 +81,13 @@ export function InfoTip({ label, children }: { label: string; children: ReactNod
       >
         <Info size={13} />
       </button>
+      {/* The settings search matches this text too: its hidden copy of Settings
+          keeps the text in the DOM, where the popover is not. */}
+      {harvest && (
+        <span data-stip="" hidden>
+          {children}
+        </span>
+      )}
       {open && (
         <span
           ref={popRef}

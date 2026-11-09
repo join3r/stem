@@ -9,6 +9,7 @@ import { PeopleTab } from './tabs/PeopleTab';
 import { useRememberedTab } from '../hooks/useRememberedTab';
 import { TasksTab } from './tabs/TasksTab';
 import { SettingsTab } from './tabs/settings/SettingsTab';
+import { requestManageIntent } from './intents';
 import { useRetrievalHealth } from '../hooks/useRetrievalHealth';
 import type { ModelTabProps, ActiveFactsViewProps } from './tabs/shared';
 import type { ManageTabId, ModelSummary } from '../../shared/types';
@@ -103,7 +104,11 @@ function ManagePanelImpl({
                 key={id}
                 className={tab === id ? 'active' : ''}
                 aria-label={unread ? `${label}, ${unread} unread` : label}
-                onClick={() => setTab(id)}
+                onClick={() => {
+                  setTab(id);
+                  // Settings opened by hand: put the focus in its search field.
+                  if (id === 'settings') requestManageIntent({ kind: 'settings-search' });
+                }}
               >
                 <Icon size={16} />
                 {/* Styled hover/focus tooltip replaces the native title (which is

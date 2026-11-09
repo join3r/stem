@@ -1204,6 +1204,7 @@ export default function App() {
   useShortcut('open-settings', () => {
     setShowInspector(true);
     setManageTab('settings');
+    requestManageIntent({ kind: 'settings-search' });
   });
 
   const openChat = useCallback(

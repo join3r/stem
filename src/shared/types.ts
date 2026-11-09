@@ -4003,7 +4003,9 @@ export type ManageIntent =
   /** MCP: a new server filled in from the official-server catalog (mcp-app-catalog.ts). */
   | { kind: 'mcp-connect'; entryId: string }
   /** Settings → Features → Browser control. */
-  | { kind: 'browser-control' };
+  | { kind: 'browser-control' }
+  /** Settings, opened on purpose: put the focus in its search field. */
+  | { kind: 'settings-search' };
 
 export interface QuickChatShortcutStatus {
   accelerator: string | null;

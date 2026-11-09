@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useSearchHarvest } from '../ui/searchHarvest';
 import type { ManageIntent } from '../../shared/types';
 
 // Where a jump into the right-hand panel should land past its tab: the MCP
@@ -27,7 +28,11 @@ export function useManageIntent<K extends ManageIntent['kind']>(
 ): void {
   const handleRef = useRef(handle);
   handleRef.current = handle;
+  // The hidden copy of Settings that the search reads must not take an intent
+  // that is for the copy on the screen.
+  const harvest = useSearchHarvest();
   useEffect(() => {
+    if (harvest) return;
     const check = () => {
       if (pending?.kind !== kind) return;
       const intent = pending as Extract<ManageIntent, { kind: K }>;
@@ -39,5 +44,5 @@ export function useManageIntent<K extends ManageIntent['kind']>(
     return () => {
       listeners.delete(check);
     };
-  }, [kind, take]);
+  }, [kind, take, harvest]);
 }

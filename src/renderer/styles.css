@@ -5480,3 +5480,48 @@ a.file-link .inline-code { color: var(--accent); text-decoration: underline; tex
 
 .preview-parents { padding-left: var(--sp-12); }
 .preview-parents li + li { margin-top: var(--sp-2); }
+
+/* Settings search: the field above the sub-tabs, the results in place of the
+   sub-tab, and the flash on the row a result opens. */
+.set-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--field);
+}
+.set-search:focus-within { border-color: var(--accent); }
+.set-search-icon { color: var(--muted); flex: none; }
+.set-search-input { flex: 1; min-width: 0; font: inherit; font-size: var(--fs-13); border: 0; background: none; color: var(--ink); outline: none; }
+.set-search-clear { flex: none; border: none; background: none; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; padding: 0; }
+.set-search-clear:hover { color: var(--ink); }
+.set-search-results { margin-top: var(--sp-4); }
+.set-search-results > .grp-head { margin-top: var(--sp-9); }
+.set-search-empty { margin: var(--sp-6) var(--sp-2); font-size: var(--fs-12); }
+.set-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: var(--sp-4) var(--sp-6);
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.set-search-hit + .set-search-hit { border-top: 0.5px solid var(--hair); }
+.set-search-hit.active { background: var(--sel); }
+.set-search-hit .hit-label { font-size: var(--fs-13); }
+.set-search-hit .hit-place { font-size: var(--fs-10); color: var(--muted); letter-spacing: 0.02em; }
+.set-search-hit .hit-second { font-size: var(--fs-11); color: var(--muted); overflow-wrap: anywhere; }
+.set-search-hit mark { background: none; color: var(--accent); font-weight: 600; }
+@keyframes set-search-flash {
+  0%, 30% { background: var(--sel); }
+  100% { background: transparent; }
+}
+.set-search-flash { animation: set-search-flash 1.6s ease-out; }
