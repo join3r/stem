@@ -2372,7 +2372,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Only lines naming the URL are worth parsing — the others can be megabytes.
     const entries: unknown[] = [];
     for (const line of text.split('\n')) {
-      if (!line.includes(needle) && !line.includes(url)) continue;
+      if (!line.includes(needle)) continue;
       try {
         entries.push(JSON.parse(line));
       } catch {

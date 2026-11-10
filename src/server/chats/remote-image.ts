@@ -10,8 +10,12 @@
 // Tools that compute (a shell, a file write, an echo-like MCP) are not trusted:
 // a model can have one assemble a URL that never appears in its own words.
 // URLs are compared whole, never by substring, so the model can't encode data
-// in which prefix of a long URL it repeats. The choice among URLs a page
-// offers still says something, so each chat fetches a bounded number of them.
+// in which prefix of a long URL it repeats. Two forms of a URL a page offered
+// also count: a scheme-relative `//host/…` read as https (Wikipedia writes its
+// pictures so), and the URL with its whole query removed (models drop tracker
+// tails like `?utm_source=…`). Each of these is one more URL to choose, not a
+// way to spell new text. The choice among URLs a page offers still says
+// something, so each chat fetches a bounded number of them.
 // Everything else renders as a link the user can open.
 //
 // Not covered: a model with web tools can have a reflecting site (one that
@@ -69,15 +73,39 @@ function names(text: string, url: string): boolean {
   return text.includes(url) && urlsIn(text).has(url);
 }
 
+/** `url` without its scheme: the part every form of it a page offers contains. */
+function schemeless(url: string): string {
+  return url.replace(/^https?:/i, '');
+}
+
+/**
+ * Whether a page's text offers `url`: whole, scheme-relative (`//host/…` read
+ * as https), or with the whole query (and fragment) removed.
+ */
+function offers(text: string, url: string): boolean {
+  if (!text.includes(schemeless(url))) return false;
+  for (const m of text.matchAll(/(?:https?:)?\/\/[^\s"'<>()[\]{}\\`]+/gi)) {
+    let found = m[0].replace(/[.,;:!?]+$/, '');
+    if (found.startsWith('//')) found = `https:${found}`;
+    if (found === url) return true;
+    const tail = found.search(/[?#]/);
+    if (tail > 0 && found.slice(0, tail) === url) return true;
+  }
+  return false;
+}
+
 function mentionIn(entry: unknown, url: string): Mention {
   if (!entry || typeof entry !== 'object') return null;
+  // A model mention counts in every form a page could offer it back in, so
+  // a web tool that echoes a model-written `//host/…` can't launder it.
+  const seen = jsonNeedle(url);
   const e = entry as { type?: unknown; customType?: unknown; message?: unknown; role?: unknown };
   const message = (e.type === 'message' ? e.message : e.role ? e : null) as { role?: unknown; content?: unknown; toolName?: unknown } | null;
   if (!message) {
     // A web tool's stored results. The query in there is the model's, but its
     // tool call (which carries the same query) comes first.
-    if (e.type === 'custom' && e.customType === 'web-search-results') return names(JSON.stringify(entry), url) ? 'input' : null;
-    return JSON.stringify(entry).includes(url) ? 'model' : null;
+    if (e.type === 'custom' && e.customType === 'web-search-results') return offers(JSON.stringify(entry), url) ? 'input' : null;
+    return JSON.stringify(entry).includes(seen) ? 'model' : null;
   }
   switch (message.role) {
     case 'user':
@@ -86,12 +114,12 @@ function mentionIn(entry: unknown, url: string): Mention {
       // this is no evidence either way.
       return null;
     case 'toolResult':
-      if (WEB_TOOLS.has(String(message.toolName))) return names(textOf(message.content), url) ? 'input' : null;
-      return JSON.stringify(message.content ?? '').includes(url) ? 'model' : null;
+      if (WEB_TOOLS.has(String(message.toolName))) return offers(textOf(message.content), url) ? 'input' : null;
+      return JSON.stringify(message.content ?? '').includes(seen) ? 'model' : null;
     default:
       // The model's own words and anything else: a mention here, even inside
       // a longer URL, means a model had a hand in it.
-      return JSON.stringify(message).includes(url) ? 'model' : null;
+      return JSON.stringify(message).includes(seen) ? 'model' : null;
   }
 }
 
@@ -107,9 +135,12 @@ export function cameFromInput(entries: Iterable<unknown>, url: string): boolean 
   return false;
 }
 
-/** The form a URL takes inside a JSON string, for skipping lines cheaply before parsing. */
+/**
+ * Text every session line that names `url` in any accepted form contains, as
+ * written inside a JSON string: for skipping lines cheaply before parsing.
+ */
 export function jsonNeedle(url: string): string {
-  return JSON.stringify(url).slice(1, -1);
+  return JSON.stringify(schemeless(url)).slice(1, -1);
 }
 
 /** Whether a URL is worth asking about at all: https, a public name, a sane length. */
