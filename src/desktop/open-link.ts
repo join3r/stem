@@ -2,6 +2,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 import type { Shell } from 'electron';
+import { filesPlaceRel, scratchRel } from '../shared/files-links';
 
 // How a link clicked in the renderer leaves the app. Web, mail and phone links
 // go to the browser / mail client / FaceTime. file:// links (an agent pointing at a CSV it just
@@ -146,4 +147,32 @@ export function revealLabel(platform: NodeJS.Platform = process.platform): strin
   if (platform === 'darwin') return 'Show in Finder';
   if (platform === 'win32') return 'Show in Explorer';
   return 'Show in Folder';
+}
+
+/**
+ * A link the page wrote as a relative `files/…` or `scratch/…` path
+ * (shared/files-links.ts). Chromium resolves it against the page's own URL, so
+ * in the packaged app it arrives as file:///…/Stem.app/…/renderer/scratch/…, a
+ * path that is not on the disk. The file is on the server: answer which one.
+ * `inApp` is true for any link inside the app's own folder, which is never a
+ * file of the user's to show or open.
+ */
+export type AppRelativeLink =
+  | { inApp: true; files?: string; scratch?: string }
+  | { inApp: false };
+
+export function appRelativeLink(linkURL: string, pageURL: string): AppRelativeLink {
+  let base: string;
+  try {
+    base = new URL('.', pageURL).href;
+  } catch {
+    return { inApp: false };
+  }
+  if (!linkURL.startsWith(base)) return { inApp: false };
+  const rest = linkURL.slice(base.length);
+  const files = filesPlaceRel(rest);
+  if (files) return { inApp: true, files };
+  const scratch = scratchRel(rest);
+  if (scratch) return { inApp: true, scratch };
+  return { inApp: true };
 }

@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setServerFileActions } from '../context-menu';
 import { handleLocal } from '../ipc-bridge';
 import { openFilesItem, openLink } from '../open-link';
 import { filesPlaceRel, isSafeRel, SCRATCH_PREFIX } from '../../shared/files-links';
@@ -394,7 +395,8 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
    * go, then show it there — the two halves of what "Download" means on a desktop.
    * Answers with the path it landed at, so the renderer can name it if it wants.
    */
-  handleLocal('files:download', async (_e, rel: string): Promise<string> => {
+  handleLocal('files:download', (_e, rel: string): Promise<string> => downloadAndReveal(rel));
+  async function downloadAndReveal(rel: string): Promise<string> {
     const saved = await downloadFile(deps.credentials(), rel, downloadsDir());
     // Opening a Finder window is the one part of this a test run must not do:
     // STEM_BACKGROUND is set for exactly the runs that are forbidden to take
@@ -402,7 +404,7 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     // skipped under the same kind of flag for the same kind of reason).
     if (!process.env.STEM_BACKGROUND) shell.showItemInFolder(saved);
     return saved;
-  });
+  }
 
   /**
    * A `files/…` link in a reply (shared/files-links.ts): fetch the file from the
@@ -434,6 +436,12 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     // Test runs must not open apps (see files:download).
     if (!process.env.STEM_BACKGROUND) openFilesItem(shell, saved);
   }
+
+  // The right-click menu on a `files/…` or `scratch/…` link (desktop/context-menu.ts).
+  setServerFileActions({
+    open: fetchAndOpen,
+    reveal: async (rel) => void (await downloadAndReveal(rel))
+  });
 
   /** Save a chat image (the data URL the renderer is already showing) straight into Downloads. */
   handleLocal('image:saveToDownloads', (_e, dataUrl: string, name: string) => saveImageToDownloads(dataUrl, name));

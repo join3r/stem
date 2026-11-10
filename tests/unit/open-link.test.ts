@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { classifyLink, linkFilePath } from '../../src/desktop/open-link';
+import { appRelativeLink, classifyLink, linkFilePath } from '../../src/desktop/open-link';
 
 // The paths below are POSIX; on Windows the same ones live on C:.
 const native = (p: string) => (process.platform === 'win32' ? `C:${p.replaceAll('/', '\\')}` : p);
@@ -51,5 +51,31 @@ describe('linkFilePath', () => {
     expect(linkFilePath(fileUrl('/tmp/x.command'))).toBe(native('/tmp/x.command'));
     expect(linkFilePath(fileUrl('/Users/me/Downloads/'))).toBe(native('/Users/me/Downloads'));
     expect(linkFilePath('https://example.com/')).toBeUndefined();
+  });
+});
+
+describe('appRelativeLink', () => {
+  const page = 'file:///Applications/Stem.app/Contents/Resources/app/dist/renderer/index.html#/chat/abc';
+
+  it('names the server file behind a relative scratch/ or files/ link in the packaged app', () => {
+    const scratch = 'file:///Applications/Stem.app/Contents/Resources/app/dist/renderer/scratch/Tla%C4%8D%20potvrdenia.pdf';
+    expect(appRelativeLink(scratch, page)).toEqual({ inApp: true, scratch: 'Tlač potvrdenia.pdf' });
+    const files = 'file:///Applications/Stem.app/Contents/Resources/app/dist/renderer/files/cfk/a.csv';
+    expect(appRelativeLink(files, page)).toEqual({ inApp: true, files: 'cfk/a.csv' });
+  });
+
+  it('works against the dev server too', () => {
+    expect(appRelativeLink('http://localhost:5173/scratch/a.txt', 'http://localhost:5173/#/x')).toEqual({
+      inApp: true,
+      scratch: 'a.txt'
+    });
+  });
+
+  it('marks any other link into the app folder, and leaves real links alone', () => {
+    expect(appRelativeLink('file:///Applications/Stem.app/Contents/Resources/app/dist/renderer/x.html', page)).toEqual({
+      inApp: true
+    });
+    expect(appRelativeLink('file:///Users/me/Downloads/a.csv', page)).toEqual({ inApp: false });
+    expect(appRelativeLink('https://example.com/scratch/a.txt', page)).toEqual({ inApp: false });
   });
 });

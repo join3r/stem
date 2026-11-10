@@ -124,7 +124,12 @@ function ScratchLink({ rel, children }: { rel: string; children: ReactNode }) {
     // quiet: a file swept with old scratch, or one that will not fetch, leaves the click without effect.
     void window.stem.openScratchItem!(threadId, rel).catch(() => undefined);
   };
-  return <a href={`scratch/${rel}`} title={`This chat's scratch › ${rel}`} className="file-link" onClick={open}>{children}</a>;
+  // data-thread: the right-click menu (desktop/context-menu.ts) reads the chat from it.
+  return (
+    <a href={`scratch/${rel}`} data-thread={threadId} title={`This chat's scratch › ${rel}`} className="file-link" onClick={open}>
+      {children}
+    </a>
+  );
 }
 
 function decodeFileHref(href: string): string {
