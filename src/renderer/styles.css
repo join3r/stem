@@ -1182,6 +1182,9 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   border: 1px solid var(--line); border-radius: var(--radius-md);
   object-fit: contain; display: block;
 }
+.zoomable-image { padding: 0; border: none; background: none; cursor: zoom-in; border-radius: var(--radius-md); }
+.zoomable-image:hover .message-image { border-color: var(--accent, var(--line)); }
+.zoomable-image:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .composer-field textarea {
   flex: 1;
   resize: none;

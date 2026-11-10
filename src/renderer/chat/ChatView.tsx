@@ -38,7 +38,7 @@ import type {
 } from '../../shared/types';
 import { formatSystemVersion } from '../../shared/sys-version';
 import { ActivityRows, SourcesList } from './ActivityRows';
-import { GeneratedImages } from './GeneratedImage';
+import { GeneratedImages, ZoomableImage } from './GeneratedImage';
 import { ChatAudioList } from './ChatAudio';
 import type { VoiceCall } from './voice';
 import { Composer, type ComposerHandle } from './Composer';
@@ -753,7 +753,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             <div className="message-attachments">
               {m.attachments.map((att, i) =>
                 att.kind === 'image' && att.dataUrl ? (
-                  <img
+                  <ZoomableImage
                     key={i}
                     className="message-image"
                     src={att.dataUrl}

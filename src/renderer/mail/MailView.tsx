@@ -71,7 +71,7 @@ import {
 } from './mail-drafts';
 import { useMailWork } from './useMailWork';
 import { MailWork } from './MailWork';
-import { GeneratedImages } from '../chat/GeneratedImage';
+import { GeneratedImages, ZoomableImage } from '../chat/GeneratedImage';
 import { DictateButton, useDictation } from '../chat/dictation';
 import { plainLine } from '../../shared/plain-text';
 import { useInterStem } from './useInterStem';
@@ -727,7 +727,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
             <div className="message-attachments">
               {m.attachments.map((att, i) => (
                 <Fragment key={i}>
-                  {att.kind === 'image' && att.dataUrl && <img className="message-image" src={att.dataUrl} alt={att.name ?? 'attachment'} />}
+                  {att.kind === 'image' && att.dataUrl && <ZoomableImage className="message-image" src={att.dataUrl} alt={att.name ?? 'attachment'} />}
                   {att.fileId ? (
                     // A file in mail with another person: kept on the server, saved to Downloads on click.
                     <button

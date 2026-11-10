@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, Copy, Download, ImageIcon, TriangleAlert, X } from 'lucide-react';
 import type { ActivityItem, GeneratedImageRef } from '../../shared/types';
 
@@ -99,12 +100,13 @@ export function PendingImageCard({ item, live }: { item: ActivityItem; live: boo
   );
 }
 
-function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+/** A full-window view of one picture. It renders into document.body, so no ancestor transform or overflow clips it. */
+export function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     closeRef.current?.focus();
   }, []);
-  return (
+  return createPortal(
     <div
       className="gen-image-lightbox"
       role="dialog"
@@ -124,7 +126,30 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
       <button ref={closeRef} type="button" className="gen-image-close" aria-label="Close" onClick={onClose}>
         <X size={18} />
       </button>
-    </div>
+    </div>,
+    document.body
+  );
+}
+
+/** A picture thumbnail that opens the full-window view on click (for example, an image the user attached). */
+export function ZoomableImage({ src, alt, className }: { src: string; alt: string; className?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        className="zoomable-image"
+        title="Show larger"
+        aria-label={`Show ${alt} larger`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
+      >
+        <img className={className} src={src} alt={alt} />
+      </button>
+      {open && <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 
