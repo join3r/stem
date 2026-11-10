@@ -1,48 +1,30 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Sparkles, User } from 'lucide-react';
 import { MdxView } from '../chat/MdxView';
-import type { ShareMessage, ShareSnapshot } from '../../shared/share';
+import { SourcesList } from '../chat/ActivityRows';
+import { SharedImageCard, ZoomableImage } from '../chat/GeneratedImage';
+import { ChatAudioCard } from '../chat/ChatAudio';
+import { MdxStaticContext, type MdxStatic } from '../mdx/ActionContext';
+import type { ShareImage, ShareMessage, ShareSnapshot } from '../../shared/share';
 
-// A share snapshot drawn with the chat's own markup and classes, so a shared
-// answer looks like it does in Stem. Used by the share dialog's preview and by
-// the share.heystem.app viewer (src/share), so it must stay web-safe: no
-// window.stem, no app stores. Interactive MDX renders inert here because no
-// action context is provided (forms read-only, Replies hidden).
+// A share snapshot drawn with the chat's own markup, classes and parts
+// (renderer/chat/ChatView.tsx renderMessage), so a shared answer looks like it
+// does in Stem. Used by the share dialog's preview and by the
+// share.heystem.app viewer (src/share), so it must stay web-safe: no
+// window.stem, no app stores. Whatever the app fetches from Stem as it draws a
+// reply (pictures, sounds, site icons) comes from the snapshot instead
+// (MdxStaticContext). Interactive MDX renders inert here because no action
+// context is provided (forms read-only, Replies hidden).
 
 const AVATAR: Record<ShareMessage['role'], { cls: string; icon: ReactNode; label: string }> = {
-  user: { cls: 'you', icon: <User size={15} />, label: 'Question' },
-  assistant: { cls: 'stem', icon: <Sparkles size={15} />, label: 'Stem' }
+  user: { cls: 'you', icon: <User size={12} />, label: 'Question' },
+  assistant: { cls: 'stem', icon: <Sparkles size={12} />, label: 'Stem' }
 };
 
+const IMAGE_DATA_RE = /^data:image\/(png|jpeg|gif|webp|avif);base64,/i;
+const AUDIO_DATA_RE = /^data:audio\/[a-z0-9.+-]+;base64,/i;
+const ICON_DATA_RE = /^data:image\/(x-icon|vnd\.microsoft\.icon|png|gif|jpeg|webp);base64,/i;
 const httpUrl = (u: string): boolean => /^https?:\/\//i.test(u);
-
-function siteName(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
-}
-
-function ShareSources({ sources }: { sources: NonNullable<ShareMessage['sources']> }) {
-  const safe = sources.filter((s) => httpUrl(s.url));
-  if (!safe.length) return null;
-  return (
-    <details className="share-sources">
-      <summary>Sources ({safe.length})</summary>
-      <ul>
-        {safe.map((s) => (
-          <li key={s.url}>
-            <a href={s.url} target="_blank" rel="noopener noreferrer nofollow" title={s.url}>
-              <span className="share-source-site">{siteName(s.url)}</span>
-              <span className="share-source-title">{s.title?.trim() || s.url}</span>
-            </a>
-          </li>
-        ))}
-      </ul>
-    </details>
-  );
-}
 
 function stampOf(iso?: string): string | undefined {
   if (!iso) return undefined;
@@ -50,31 +32,63 @@ function stampOf(iso?: string): string | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+/** A picture a model made. Snapshots from before the flag only had those on answers. */
+function isGenerated(img: ShareImage, role: ShareMessage['role']): boolean {
+  return img.generated ?? role === 'assistant';
+}
+
 export function ShareMessageView({ m }: { m: ShareMessage }) {
   const a = AVATAR[m.role];
-  const images = (m.images ?? []).filter((i) => /^data:image\/(png|jpeg|gif|webp);base64,/i.test(i.dataUrl));
+  const stamp = stampOf(m.createdAt);
+  const images = (m.images ?? []).filter((i) => IMAGE_DATA_RE.test(i.dataUrl));
+  const generated = images.filter((i) => isGenerated(i, m.role));
+  const attached = images.filter((i) => !isGenerated(i, m.role));
+  const audio = (m.audio ?? []).filter((s) => AUDIO_DATA_RE.test(s.dataUrl));
+  const sources = (m.sources ?? [])
+    .filter((s) => httpUrl(s.url))
+    .map((s) => ({ url: s.url, title: s.title, icon: s.icon && ICON_DATA_RE.test(s.icon) ? s.icon : undefined }));
+  const statik = useMemo<MdxStatic>(() => {
+    const pictures = new Map((m.webImages ?? []).filter((w) => IMAGE_DATA_RE.test(w.dataUrl)).map((w) => [w.url, w.dataUrl]));
+    return { webImage: (url) => pictures.get(url) };
+  }, [m.webImages]);
   return (
     <div className={`message message-${m.role}`}>
-      <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
       <div className="message-body">
         <div className="message-who">
+          <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
           <span className="message-who-name">{m.author ?? a.label}</span>
           {m.model && <span className="message-meta">{m.model}</span>}
-          {stampOf(m.createdAt) && <span className="message-timing">{stampOf(m.createdAt)}</span>}
+          {stamp && <span className="message-timing">{stamp}</span>}
         </div>
-        {m.role === 'assistant' ? (
-          m.text && <MdxView text={m.text} />
-        ) : (
-          m.text && <div className="message-plain">{m.text}</div>
-        )}
-        {images.length > 0 && (
-          <div className="message-attachments">
-            {images.map((img, i) => (
-              <img key={i} className="message-image" src={img.dataUrl} alt={img.alt ?? 'picture'} />
+        {m.role === 'assistant'
+          ? m.text && (
+              <MdxStaticContext.Provider value={statik}>
+                <MdxView text={m.text} />
+              </MdxStaticContext.Provider>
+            )
+          : m.text && <div className="message-plain">{m.text}</div>}
+        {generated.length > 0 && (
+          <div className="gen-images">
+            {generated.map((img, i) => (
+              <SharedImageCard key={i} src={img.dataUrl} alt={img.alt} mime={img.mime} width={img.width} height={img.height} />
             ))}
           </div>
         )}
-        {m.sources && m.sources.length > 0 && <ShareSources sources={m.sources} />}
+        {audio.length > 0 && (
+          <div className="chat-audio-list">
+            {audio.map((s, i) => (
+              <ChatAudioCard key={i} audio={{ id: `shared-${i}`, threadId: '', mime: s.mime, title: s.title }} src={s.dataUrl} />
+            ))}
+          </div>
+        )}
+        {sources.length > 0 && <SourcesList sources={sources} />}
+        {attached.length > 0 && (
+          <div className="message-attachments">
+            {attached.map((img, i) => (
+              <ZoomableImage key={i} className="message-image" src={img.dataUrl} alt={img.alt ?? 'picture'} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

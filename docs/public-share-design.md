@@ -48,7 +48,9 @@ cleaned:
 | --- | --- |
 | User text, assistant MDX (charts, diagrams, tables, callouts) | System notices (failed/interrupted turns), failed sends |
 | Generated images (embedded as data URLs) | Tool rows / activity (queries, paths, commands) |
-| Web sources (public URLs) | Recall, file, mail and schedule context (already stripped from history) |
+| Web pictures the chat shows (`![…](https://…)`, embedded) | Recall, file, mail and schedule context (already stripped from history) |
+| Sounds from `share_audio` (embedded) | |
+| Web sources (public URLs, with the site icon embedded) | |
 | The model's name (optional) | `<FactChange>` (personal memory), `<Replies>` (dead in a static page) |
 | User attachments: only when the user ticks "Include my pictures" | `stem://` and `file:` links (become plain text) |
 
@@ -64,11 +66,25 @@ is an explicit act.
 { "v": 1, "kind": "answer" | "thread", "title": "…", "sharedAt": 1760000000000,
   "messages": [
     { "role": "user" | "assistant", "text": "…", "createdAt": 1760000000000,
-      "model": "GPT-6.1", "images": [{ "mime": "image/png", "dataUrl": "data:…", "alt": "…" }],
-      "sources": [{ "url": "https://…", "title": "…" }] } ] }
+      "model": "GPT-6.1 Sol · ChatGPT",
+      "images": [{ "mime": "image/png", "dataUrl": "data:…", "alt": "…", "generated": true, "width": 1024, "height": 1024 }],
+      "webImages": [{ "url": "https://…", "dataUrl": "data:…" }],
+      "audio": [{ "mime": "audio/mpeg", "dataUrl": "data:…", "title": "…" }],
+      "sources": [{ "url": "https://…", "title": "…", "icon": "data:…" }] } ] }
 ```
 
 Viewers ignore unknown fields and show "made by a newer Stem" for `v > 1`.
+
+The page has no Stem to ask, so everything the app fetches from the server as
+it draws a reply rides in the snapshot. `webImages` holds exactly the pictures
+the chat shows: the server runs the same provenance check as
+`chats:remoteImage` (src/server/chats/remote-image.ts) when the link is made,
+and a refused picture stays a link, as in the app. Mail shows web pictures as
+links, so a mail share carries none. The page draws a reply with the app's own
+parts (src/renderer/share/ShareView.tsx); `MdxStaticContext` hands them the
+snapshot's bytes and makes file and Files links plain text.
+tests/e2e/share-view.spec.ts renders one reply in the app and on the built page
+under the CSP of relay/deploy/global/Caddyfile.snippet, and compares the markup.
 
 ### Encryption
 
@@ -117,7 +133,8 @@ The browser decrypts with WebCrypto and `DecompressionStream('gzip')`.
 - stem-relay serves the whole viewer origin from `[share] viewer_dir`
   (only on the viewer host): `/s/*`, `/assets/*`, icons, `/v1/shares/*`.
   Caddy proxies just those paths and 404s the rest of the relay API there. Strict CSP (`script-src 'self'`,
-  `connect-src 'self'`, `frame-ancestors 'none'`), `Referrer-Policy:
+  `connect-src 'self'`, `img-src 'self' data: blob:`, `media-src blob:` for
+  shared sounds, `frame-ancestors 'none'`), `Referrer-Policy:
   no-referrer`, `X-Robots-Tag: noindex`.
 - Footer: "Made with Stem · heystem.app" and "Report".
 - `/s/<id>` is the built `index.html` with its `<!--stem-card-->` block

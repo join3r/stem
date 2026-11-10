@@ -7,7 +7,7 @@ import remarkMdx from 'remark-mdx';
 import { stripCiteMarkers } from '../../shared/citations';
 import { filePathHref, findFilePaths } from '../../shared/file-paths';
 import { filesPlaceRel, scratchRel } from '../../shared/files-links';
-import { useMdxThread } from './ActionContext';
+import { useMdxStatic, useMdxThread } from './ActionContext';
 import { findPhoneNumbers } from '../../shared/phone-links';
 import { openStemLink, parseStemLink } from '../stemLinks';
 import { CodeBlock, TaskItem, componentMap } from './components';
@@ -89,8 +89,9 @@ function linkChildren(node: MdNode, key: string): ReactNode[] {
   }
 }
 
-/** A file:// link: the main process opens or reveals it on this computer. */
+/** A file:// link: the main process opens or reveals it on this computer. On a share page, its text. */
 function FileLink({ href, children }: { href: string; children: ReactNode }) {
+  if (useMdxStatic()) return <>{children}</>;
   const open = (e: { preventDefault(): void }) => {
     e.preventDefault();
     void window.stem.openLink(href);
@@ -98,8 +99,9 @@ function FileLink({ href, children }: { href: string; children: ReactNode }) {
   return <a href={href} title={decodeFileHref(href)} className="file-link" onClick={open}>{children}</a>;
 }
 
-/** A file in the user's Files place (shared/files-links.ts): fetched to this computer and opened. */
+/** A file in the user's Files place (shared/files-links.ts): fetched to this computer and opened. On a share page, its text. */
 function FilesPlaceLink({ rel, children }: { rel: string; children: ReactNode }) {
+  if (useMdxStatic()) return <>{children}</>;
   const open = (e: { preventDefault(): void }) => {
     e.preventDefault();
     // quiet: a file that is gone or will not fetch leaves the click without effect, like a dead file: link.
@@ -115,7 +117,8 @@ function FilesPlaceLink({ rel, children }: { rel: string; children: ReactNode })
  */
 function ScratchLink({ rel, children }: { rel: string; children: ReactNode }) {
   const threadId = useMdxThread();
-  if (!threadId || !window.stem?.openScratchItem) return <>{children}</>;
+  const shared = useMdxStatic();
+  if (shared || !threadId || !window.stem?.openScratchItem) return <>{children}</>;
   const open = (e: { preventDefault(): void }) => {
     e.preventDefault();
     // quiet: a file swept with old scratch, or one that will not fetch, leaves the click without effect.

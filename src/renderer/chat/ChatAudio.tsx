@@ -96,6 +96,37 @@ function load(ref: ChatAudioRef): Promise<Loaded | null> {
   return pending;
 }
 
+/**
+ * A sound whose bytes are already here (a share page's snapshot): decoded on
+ * every mount, with no cache, because the card owns and frees its blob: URL.
+ */
+async function loadData(dataUrl: string): Promise<Loaded | null> {
+  const raw = bytesOf(dataUrl);
+  if (!raw) return null;
+  const url = URL.createObjectURL(new Blob([raw.bytes], { type: raw.mime }));
+  const wave = await peaksOf(raw.bytes);
+  return { dataUrl, url, peaks: wave?.peaks ?? null, duration: wave?.duration ?? null };
+}
+
+const AUDIO_EXT: Record<string, string> = {
+  'audio/mpeg': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/aac': 'aac',
+  'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
+  'audio/ogg': 'ogg',
+  'audio/webm': 'webm',
+  'audio/flac': 'flac'
+};
+
+/** Save through the browser, where there is no Stem to save to Downloads (a share page). */
+function browserDownload(url: string, title: string, mime: string): void {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${title.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'Audio'}.${AUDIO_EXT[mime] ?? 'audio'}`;
+  a.click();
+}
+
 function clock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   const h = Math.floor(s / 3600);
@@ -107,9 +138,10 @@ function clock(seconds: number): string {
 /** Only one card plays at a time: starting one pauses the one before. */
 let playing: HTMLAudioElement | null = null;
 
-export function ChatAudioCard({ audio }: { audio: ChatAudioRef }) {
-  const key = `${audio.threadId}/${audio.id}`;
-  const [loaded, setLoaded] = useState<Loaded | null | undefined>(() => cache.get(key));
+/** One sound. `src` (a data URL) is a share page's copy; without it the card fetches the bytes from Stem. */
+export function ChatAudioCard({ audio, src }: { audio: ChatAudioRef; src?: string }) {
+  const key = src ? '' : `${audio.threadId}/${audio.id}`;
+  const [loaded, setLoaded] = useState<Loaded | null | undefined>(() => (src ? undefined : cache.get(key)));
   const [isPlaying, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState<number | null>(null);
@@ -119,6 +151,26 @@ export function ChatAudioCard({ audio }: { audio: ChatAudioRef }) {
   const title = audio.title || 'Audio';
 
   useEffect(() => {
+    if (!src) return;
+    let live = true;
+    let made: Loaded | null = null;
+    setLoaded(undefined);
+    loadData(src).then(
+      (l) => {
+        made = l;
+        if (live) setLoaded(l);
+        else if (l) URL.revokeObjectURL(l.url);
+      },
+      () => live && setLoaded(null)
+    );
+    return () => {
+      live = false;
+      if (made) URL.revokeObjectURL(made.url);
+    };
+  }, [src]);
+
+  useEffect(() => {
+    if (src) return;
     let live = true;
     const hit = cache.get(key);
     if (hit) {
@@ -134,7 +186,7 @@ export function ChatAudioCard({ audio }: { audio: ChatAudioRef }) {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the ref's identity
-  }, [key]);
+  }, [key, src]);
 
   // Leaving the chat stops the sound; the element is gone with the card.
   useEffect(
@@ -193,6 +245,10 @@ export function ChatAudioCard({ audio }: { audio: ChatAudioRef }) {
 
   const save = () => {
     if (!loaded) return;
+    if (src || !window.stem?.saveAudioToDownloads) {
+      browserDownload(loaded.url, title, audio.mime);
+      return;
+    }
     window.stem.saveAudioToDownloads(loaded.dataUrl, title).then(
       () => setFlash('Saved to Downloads'),
       (e: unknown) => setFlash(String((e as Error)?.message ?? e))

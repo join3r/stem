@@ -7,8 +7,11 @@ import { CLOSED_DOMAIN_SHARE, ShareUnavailableError, type InterStemService } fro
 import { deleteShare, listShares, postShare, RelayError, type Identity } from '../interstem/relay-client';
 import { degrade } from '../degrade';
 import { readMailConversation } from '../workspace/mail';
+import { remoteImageFor } from '../chats/remote-image';
+import { faviconFor } from '../chats/favicon';
+import { readChatAudio } from '../files/chat-audio';
 import { listPersonas } from '../workspace/personas';
-import type { Persona } from '../../shared/types';
+import type { ModelSummary, Persona } from '../../shared/types';
 import {
   SHARE_CARD_DESC_MAX,
   SHARE_CARD_TITLE_MAX,
@@ -47,7 +50,19 @@ export interface ShareDeps {
   /** Tests swap the mail store and the persona list. */
   readMail?: typeof readMailConversation;
   personas?: () => Promise<Persona[]>;
+  /** Tests swap what the app fetches as it draws a reply. */
+  webImage?: (threadId: string, url: string) => Promise<string | null>;
+  readAudio?: typeof readChatAudio;
+  favicon?: typeof faviconFor;
   now?: () => number;
+}
+
+/** A model id as the chat header names it (renderer/chat/ChatView.tsx metaTooltip, without the effort). */
+function modelLabels(models: ModelSummary[]): (id: string) => string | undefined {
+  return (id) => {
+    const m = models.find((x) => x.id === id);
+    return m ? `${m.displayName} · ${m.providerName}` : undefined;
+  };
 }
 
 /** One line each, within the relay's limits; nothing left = no card. */
@@ -164,14 +179,53 @@ export class ShareService {
     }
   }
 
+  private modelList: { at: number; list: Promise<ModelSummary[]> } | null = null;
+
+  /**
+   * The model catalog, for the names in the header. Kept a few minutes (the
+   * preview rebuilds on every option change) and never waited on for long:
+   * without it the header shows the model id.
+   */
+  private models(rt: ChatBackend): Promise<ModelSummary[]> {
+    if (!this.modelList || this.now() - this.modelList.at > 5 * 60_000) {
+      const list = Promise.resolve()
+        .then(() => rt.listModels())
+        .catch((e) => {
+          degrade('share', 'could not list the models for the share header', e);
+          this.modelList = null;
+          return [] as ModelSummary[];
+        });
+      this.modelList = { at: this.now(), list };
+    }
+    return Promise.race([this.modelList.list, new Promise<ModelSummary[]>((r) => setTimeout(() => r([]), 3000).unref?.())]);
+  }
+
   private async source(source: ShareSource): Promise<SnapshotSource> {
     const rt = this.deps.runtime();
+    const models = await this.models(rt);
+    const shared = {
+      // What the app fetches from the server as it draws a reply. The page
+      // has no server to ask, so the snapshot carries the bytes.
+      audio: async (id: string, threadId: string) => {
+        const hit = await (this.deps.readAudio ?? readChatAudio)(threadId, id);
+        return hit ? { mime: hit.mime, data: hit.data.toString('base64') } : null;
+      },
+      favicon: this.deps.favicon ?? faviconFor,
+      modelLabel: modelLabels(models)
+    };
     if (source.kind === 'chat') {
       const h = await rt.readThread(source.threadId);
+      const threadId = source.threadId;
       return {
         title: h.title,
         messages: chatMessages(h.messages),
-        image: (id, threadId) => rt.findThreadImage(threadId ?? source.threadId, id)
+        image: (id, imageThread) => rt.findThreadImage(imageThread ?? threadId, id),
+        // The same check the chat's own pictures pass (chats:remoteImage).
+        webImage: (url) =>
+          this.deps.webImage
+            ? this.deps.webImage(threadId, url)
+            : remoteImageFor(threadId, url, (t, u) => rt.urlCameFromInput(t, u)),
+        ...shared
       };
     }
     const { conversation, items } = await this.readMail(source.conversationId);
@@ -180,10 +234,12 @@ export class ShareService {
     if (conversation.external || conversation.outside) throw new ShareInputError('Mail with another person can’t be shared publicly.');
     if (conversation.owner) throw new ShareInputError('This conversation can’t be shared.');
     const personas = await this.personas();
+    // No webImage: the mail view shows web pictures as links, so the share does too.
     return {
       title: conversation.subject,
       messages: mailMessages(items, (id) => personaName(personas, id)),
-      image: (id, threadId) => (threadId ? rt.findThreadImage(threadId, id) : Promise.resolve(null))
+      image: (id, threadId) => (threadId ? rt.findThreadImage(threadId, id) : Promise.resolve(null)),
+      ...shared
     };
   }
 

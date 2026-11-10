@@ -9,6 +9,35 @@ export interface ShareImage {
   mime: string;
   dataUrl: string;
   alt?: string;
+  /** A picture a model made: the viewer draws it as the app's image card, else as an attachment thumbnail. */
+  generated?: boolean;
+  width?: number;
+  height?: number;
+}
+
+/**
+ * A picture an answer shows from the web (`![…](https://…)`). The app fetches
+ * it through the server; a share page has no server, so the bytes are taken
+ * when the link is made, and only for pictures the app itself would show.
+ */
+export interface ShareWebImage {
+  url: string;
+  dataUrl: string;
+}
+
+/** A sound the answer shared (share_audio), with its bytes. */
+export interface ShareAudio {
+  title?: string;
+  mime: string;
+  dataUrl: string;
+}
+
+/** A web source the answer cites, with the site's icon when the server could get one. */
+export interface ShareSourceLink {
+  url: string;
+  title?: string;
+  /** The site's icon as a data URL. */
+  icon?: string;
 }
 
 export interface ShareMessage {
@@ -19,11 +48,15 @@ export interface ShareMessage {
   text: string;
   /** ISO timestamp. */
   createdAt?: string;
-  /** Assistant only, when the sharer kept it: the model id. */
+  /** Assistant only, when the sharer kept it: the model's name as the app shows it. */
   model?: string;
   /** Generated pictures (assistant) or attached ones (user, opt-in). */
   images?: ShareImage[];
-  sources?: { url: string; title?: string }[];
+  /** Assistant only: the web pictures its text shows (see ShareWebImage). */
+  webImages?: ShareWebImage[];
+  /** Assistant only: sounds it shared. */
+  audio?: ShareAudio[];
+  sources?: ShareSourceLink[];
 }
 
 export interface ShareSnapshot {

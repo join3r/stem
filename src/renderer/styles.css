@@ -5376,45 +5376,11 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .share-view .share-head p {
   margin: 0;
 }
+/* No gap of its own: each .message keeps the chat's margin below it. */
 .share-messages {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-8);
 }
-.share-sources {
-  margin-top: var(--sp-4);
-  font-size: var(--fs-12, 12px);
-}
-.share-sources summary {
-  cursor: pointer;
-  color: var(--muted);
-}
-.share-sources ul {
-  list-style: none;
-  padding: 0;
-  margin: var(--sp-3) 0 0;
-  display: grid;
-  gap: var(--sp-2);
-}
-.share-sources a {
-  display: flex;
-  gap: var(--sp-4);
-  color: inherit;
-  text-decoration: none;
-}
-.share-sources a:hover .share-source-title {
-  text-decoration: underline;
-}
-.share-source-site {
-  color: var(--muted);
-  flex: 0 0 auto;
-}
-.share-source-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .share-card-edit {
   margin-bottom: var(--sp-4);
 }

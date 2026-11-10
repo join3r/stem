@@ -23,6 +23,7 @@ import type {
   McpLoginResult,
   ModelSummary,
   RuntimeStatus,
+  SourceRef,
   StartTurnInput,
   ChatFormat,
   StartTurnResult
@@ -132,6 +133,7 @@ function cannedSubject(prompt: string): string {
 //                 tool and snapshot its controls, through the real router,
 //                 desktop host and helper, on the first device that lets Stem
 //                 control it (needs a real desktop session)
+//   [e2e:sources] — the reply cites two web sources (the Sources list)
 //   [e2e:tools] — two tool rows (a command, then a file read) around an empty
 //                 text block, the shape a model gives when it calls a tool first
 //   [e2e:burst] — stream BURST_DELTAS deltas back to back, with no pacing
@@ -199,6 +201,8 @@ interface ActiveTurn {
   images?: GeneratedImageRef[];
   /** Sounds an `[e2e:audio]` turn shared, recorded with its reply. */
   audio?: ChatAudioRef[];
+  /** Web sources an `[e2e:sources]` turn cites, recorded with its reply. */
+  sources?: SourceRef[];
   /** Settled tool rows of an `[e2e:tools]` turn, recorded with its reply. */
   activity?: ActivityItem[];
 }
@@ -581,6 +585,16 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
         });
       });
     }
+    // [e2e:sources]: web sources, sent at turn end like the runtime's tee.
+    if (!fail && !turn.hang && text.includes('[e2e:sources]')) {
+      steps.push(() => {
+        turn.sources = [
+          { url: 'https://en.wikipedia.org/wiki/James_Bond', title: 'James Bond - Wikipedia' },
+          { url: 'https://www.example.com/casting', title: 'Who will be the next Bond?' }
+        ];
+        this.emitEvent('turn/sources', { threadId, turnId, sources: turn.sources });
+      });
+    }
     // [e2e:tools]: a command row, an empty text block settling while it runs
     // (which creates the turn's bubble before any words), then a file read.
     if (!fail && !turn.hang && text.includes('[e2e:tools]')) {
@@ -773,6 +787,7 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
       createdAt: new Date().toISOString(),
       ...(turn.images?.length ? { images: turn.images } : {}),
       ...(turn.audio?.length ? { audio: turn.audio } : {}),
+      ...(turn.sources?.length ? { sources: turn.sources } : {}),
       ...(turn.activity?.length ? { activity: turn.activity } : {})
     });
   }

@@ -45,7 +45,7 @@ relay.heystem.app {
 share.heystem.app {
 	import cloudflare_dns_heystem
 	header {
-		Content-Security-Policy "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		Content-Security-Policy "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src blob:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 		Referrer-Policy "no-referrer"
 		X-Content-Type-Options "nosniff"
 		X-Robots-Tag "noindex, nofollow, noarchive"

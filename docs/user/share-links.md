@@ -48,8 +48,12 @@ Tool steps, memory cards and in-app links are left out. Links to places inside
 Stem keep their words as plain text. Suggested replies, notices about failed
 turns and messages that failed to send stay out too. In mail, only the mails
 between you and your personas are shared: the personas' mail to each other and
-approval cards stay out. Pictures Stem made are included, and so are web
-sources.
+approval cards stay out.
+
+The page shows an answer as the chat shows it. Pictures Stem made, web pictures
+the answer shows, sounds it shared and its web sources are all included. The
+page has no Stem behind it, so Stem copies them into the link when you make it.
+A link to a file on your computer shows as its text.
 
 A private chat can be shared. Private only means Stem doesn't learn from it.
 

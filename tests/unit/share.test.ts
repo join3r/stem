@@ -13,6 +13,7 @@ import {
   ShareInputError
 } from '../../src/server/share/snapshot';
 import { keyFragment, openShare, sealShare } from '../../src/server/share/seal';
+import { webImageUrls } from '../../src/server/share/web-images';
 import { openShare as browserOpenShare } from '../../src/share/decrypt';
 import { cleanRecipients, ShareService } from '../../src/server/share/service';
 import { shareOpenedText } from '../../src/server/share/notice';
@@ -150,6 +151,110 @@ describe('share snapshot', () => {
   });
 });
 
+describe('what the app fetches as it draws a reply', () => {
+  const pic = (url: string) => `https://upload.example.org/${url}`;
+  const answer = [
+    'Two actors.',
+    '',
+    `![Callum Turner](${pic('callum.jpg')})`,
+    '',
+    `<Callout>![Jack Lowden](${pic('jack.jpg')})</Callout>`,
+    '',
+    `Again: ![Callum Turner](${pic('callum.jpg')}) and one the app refuses: ![x](${pic('model-made.png')})`,
+    '',
+    '```md',
+    `![in code](${pic('code.png')})`,
+    '```'
+  ].join('\n');
+  const messages: ChatMessage[] = [
+    { id: 'u', role: 'user', content: `Show ![me](${pic('user.png')})`, turnId: 't' },
+    {
+      id: 'a',
+      role: 'assistant',
+      content: answer,
+      turnId: 't',
+      meta: { model: 'openai-codex/gpt-6.1-sol' },
+      images: [{ id: 'img_0123456789', threadId: 'th', mime: 'image/png', prompt: 'a cat', revisedPrompt: 'a grey cat', width: 300, height: 200 }],
+      audio: [{ id: 'aud_0123456789', threadId: 'th', mime: 'audio/mpeg', title: 'Theme · 0:00–0:30' }],
+      sources: [{ url: 'https://variety.com/bond', title: 'Bond casting' }, { url: 'https://example.net/x' }]
+    }
+  ];
+  const asked: string[] = [];
+  const full = () => ({
+    title: 'Bond',
+    messages: chatMessages(messages),
+    image: async () => ({ mimeType: 'image/png', data: PNG }),
+    webImage: async (url: string) => {
+      asked.push(url);
+      return url.endsWith('model-made.png') ? null : `data:image/jpeg;base64,${PNG}`;
+    },
+    audio: async (id: string, threadId: string) => (id === 'aud_0123456789' && threadId === 'th' ? { mime: 'audio/mpeg', data: 'SUQz' } : null),
+    favicon: async (host: string) =>
+      host === 'variety.com' ? `data:image/vnd.microsoft.icon;base64,${PNG}` : 'data:image/svg+xml;base64,PHN2Zy8+',
+    modelLabel: (id: string) => (id === 'openai-codex/gpt-6.1-sol' ? 'GPT-6.1 Sol · ChatGPT' : undefined)
+  });
+
+  it('carries the web pictures the app shows, and only those (the James Bond chat)', async () => {
+    asked.length = 0;
+    const { snapshot } = await buildSnapshot(full(), { includeAttachments: true });
+    const [q, a] = snapshot.messages;
+    expect(a!.webImages?.map((w) => w.url)).toEqual([pic('callum.jpg'), pic('jack.jpg')]);
+    expect(a!.webImages?.[0]?.dataUrl).toMatch(/^data:image\/jpeg;base64,/);
+    // Each picture asked once; a URL inside code is text, not a picture.
+    expect(asked).toEqual([pic('callum.jpg'), pic('jack.jpg'), pic('model-made.png')]);
+    // The user's message renders as plain text in the app: no pictures there.
+    expect(q!.webImages).toBeUndefined();
+  });
+
+  it('carries the generated picture as a card, the sounds, the site icons and the model’s name', async () => {
+    const { snapshot } = await buildSnapshot(full(), {});
+    const a = snapshot.messages[1]!;
+    expect(a.images).toEqual([
+      { mime: 'image/png', dataUrl: `data:image/png;base64,${PNG}`, alt: 'a grey cat', generated: true, width: 300, height: 200 }
+    ]);
+    expect(a.audio).toEqual([{ mime: 'audio/mpeg', dataUrl: 'data:audio/mpeg;base64,SUQz', title: 'Theme · 0:00–0:30' }]);
+    expect(a.sources).toEqual([
+      { url: 'https://variety.com/bond', title: 'Bond casting', icon: `data:image/vnd.microsoft.icon;base64,${PNG}` },
+      { url: 'https://example.net/x' }
+    ]);
+    expect(a.model).toBe('GPT-6.1 Sol · ChatGPT');
+  });
+
+  it('marks the user’s own pictures as attached', async () => {
+    const { snapshot } = await buildSnapshot(source(), { includeAttachments: true });
+    expect(snapshot.messages[2]!.images?.[0]?.generated).toBe(false);
+  });
+
+  it('leaves web pictures as links where the app does (mail)', async () => {
+    const items: MailItem[] = [
+      { id: 'm1', conversationId: 'c', from: 'user', to: ['p1'], body: 'Who?', at: 1 },
+      { id: 'm2', conversationId: 'c', from: 'p1', to: ['user'], body: `![Callum](${pic('callum.jpg')})`, at: 2 }
+    ];
+    const { snapshot } = await buildSnapshot(
+      { title: 'Mail', messages: mailMessages(items, () => 'Secretary'), image: async () => null },
+      {}
+    );
+    expect(snapshot.messages[1]!.webImages).toBeUndefined();
+    expect(snapshot.messages[1]!.text).toContain(pic('callum.jpg'));
+  });
+});
+
+describe('webImageUrls', () => {
+  it('reads pictures the way the app’s renderer does', () => {
+    expect(webImageUrls('![a](https://a.test/1.png) ![b](http://a.test/2.png) ![c](data:image/png;base64,xx) ![d](/rel.png)')).toEqual([
+      'https://a.test/1.png',
+      'http://a.test/2.png'
+    ]);
+    // Inside a link, a list, a table and a component.
+    const nested = '[![a](https://a.test/1.png)](https://wiki.test)\n\n- ![b](https://a.test/2.png)\n\n| x |\n| - |\n| ![c](https://a.test/3.png) |\n\n<Tabs>\n<Tab label="A">\n![d](https://a.test/4.png)\n</Tab>\n</Tabs>';
+    expect(webImageUrls(nested)).toEqual(['https://a.test/1.png', 'https://a.test/2.png', 'https://a.test/3.png', 'https://a.test/4.png']);
+  });
+
+  it('falls back to plain Markdown when the MDX does not parse, as the renderer does', () => {
+    expect(webImageUrls('a < b and {broken\n\n![a](https://a.test/1.png)')).toEqual(['https://a.test/1.png']);
+  });
+});
+
 describe('link preview card', () => {
   it('suggests the title and a plain start of the first answer', () => {
     const snap: ShareSnapshot = {
@@ -237,6 +342,34 @@ describe('ShareService', () => {
     expect(snap.kind).toBe('answer');
     expect(snap.messages[0]!.text).toBe('First question');
     expect(await svc.list()).toEqual([link]);
+  });
+
+  it('takes a chat’s web pictures through the app’s own check, with the chat’s id', async () => {
+    const asked: [string, string][] = [];
+    const rt = {
+      readThread: async () => ({
+        title: 'Bond',
+        messages: [
+          { id: 'u', role: 'user', content: 'Who?', turnId: 't' },
+          { id: 'a', role: 'assistant', content: '![Callum](https://upload.example.org/c.jpg)', turnId: 't', meta: { model: 'm/x' } }
+        ]
+      }),
+      findThreadImage: async () => null,
+      listModels: async () => [{ id: 'm/x', displayName: 'Model X', providerName: 'Prov' }]
+    } as unknown as ChatBackend;
+    const svc = new ShareService({
+      runtime: () => rt,
+      interStem: () => interStem('a@b.test'),
+      store: store(),
+      webImage: async (threadId, url) => {
+        asked.push([threadId, url]);
+        return `data:image/jpeg;base64,${PNG}`;
+      }
+    });
+    const { snapshot } = await svc.preview({ kind: 'chat', threadId: 'th-bond' }, {});
+    expect(asked).toEqual([['th-bond', 'https://upload.example.org/c.jpg']]);
+    expect(snapshot.messages[1]!.webImages?.[0]?.url).toBe('https://upload.example.org/c.jpg');
+    expect(snapshot.messages[1]!.model).toBe('Model X · Prov');
   });
 
   it('revokes on the relay, then forgets the link (an already-gone link too)', async () => {
