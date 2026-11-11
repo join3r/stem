@@ -57,6 +57,7 @@ import type {
   QuickChatSessionStarted,
   QuickChatStatus,
   QuickChatTabs,
+  QuickChatMini,
   MailComposeInput,
   Persona,
   Person,
@@ -757,6 +758,13 @@ const api: StemApi = {
     const handler = (_e: unknown, tabs: QuickChatTabs) => listener(tabs);
     ipcRenderer.on('quickchat:tabs', handler);
     return () => ipcRenderer.removeListener('quickchat:tabs', handler);
+  },
+  minimizeQuickChat: () => ipcRenderer.invoke('quickchat:minimize'),
+  expandQuickChat: () => ipcRenderer.invoke('quickchat:expand'),
+  onQuickChatMini: (listener: (mini: QuickChatMini | null) => void) => {
+    const handler = (_e: unknown, mini: QuickChatMini | null) => listener(mini);
+    ipcRenderer.on('quickchat:mini', handler);
+    return () => ipcRenderer.removeListener('quickchat:mini', handler);
   },
   onQuickChatCloseTab: (listener: (request: { id: string }) => void) => {
     const handler = (_e: unknown, request: { id: string }) => listener(request);

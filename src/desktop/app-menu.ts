@@ -56,6 +56,8 @@ export interface AppMenuActions {
   /** Deliver a command to the main window. */
   command(command: MenuCommand): void;
   toggleQuickChat(): void;
+  /** Window › Minimize: a Quick Chat window panel shrinks to its pill, other windows minimise. */
+  minimize(): void;
   checkForUpdates(): void;
   /** Step the main window's page zoom (see zoom.ts, which also owns the keys). */
   zoom(action: 'in' | 'out' | 'reset'): void;
@@ -233,14 +235,17 @@ export function appMenuTemplate(
   };
 
   const chatsSection = chatItems.length ? [sep, ...chatItems] : [];
+  // Not the `minimize` role: ⌘M reaches the menu before any window, and in a
+  // Quick Chat window panel it shrinks the panel to its pill instead.
+  const minimize: MenuItemConstructorOptions = { label: 'Minimize', accelerator: 'CmdOrCtrl+M', click: () => actions.minimize() };
   // Built by hand rather than with the `windowMenu` role: the role is not
   // extensible, and off macOS it is the one that carries Close.
   const window: MenuItemConstructorOptions = mac
     ? {
         role: 'window',
-        submenu: [{ role: 'minimize' }, { role: 'zoom' }, ...chatsSection, sep, { role: 'front' }]
+        submenu: [minimize, { role: 'zoom' }, ...chatsSection, sep, { role: 'front' }]
       }
-    : { label: 'Window', submenu: [{ role: 'minimize' }, ...chatsSection] };
+    : { label: 'Window', submenu: [minimize, ...chatsSection] };
 
   if (!mac) return [file, edit, view, chat, window];
 

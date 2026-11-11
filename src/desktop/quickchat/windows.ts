@@ -113,18 +113,41 @@ export const overlayStacksWithWindow = process.platform === 'darwin';
  */
 export function stackOverlayWithWindows(win: BrowserWindow, stacked: boolean): void {
   if (!overlayStacksWithWindow) return;
+  sunk.delete(win);
   if (stacked) win.setAlwaysOnTop(false);
   else win.setAlwaysOnTop(true, 'screen-saver');
 }
 
+/** A panel whose window closed: back to the ordinary level, where it can be seen. */
+export function surfaceOverlay(win: BrowserWindow): void {
+  if (sunk.delete(win)) win.setAlwaysOnTop(false);
+}
+
+/** Panels put one level below ordinary windows while another app is in front. */
+const sunk = new WeakSet<BrowserWindow>();
+
 /**
- * Put the panel directly above `windowId` — not above everything: when another
- * window covers the asked-about one, it covers the panel too, and when the
- * asked-about window comes forward the panel comes with it. Never makes the
- * panel key or activates Stem.
+ * Keep the panel in the stacking order of the window `windowId`. While that
+ * window's app is in front, the panel goes directly above the window. While
+ * another app is in front (`frontmost` false), the panel goes one level below
+ * ordinary windows, so that app's windows cover it, as they cover the window.
+ *
+ * Why a level and not an order: macOS keeps a window that joins all Spaces in
+ * front of the other windows of its level when a different app comes forward,
+ * and it does not accept an order relative to another app's window for it.
+ * Electron's panel type always joins all Spaces. A panel the user types in
+ * stays where it is. Never makes the panel key or activates Stem.
  */
-export function orderOverlayAbove(win: BrowserWindow, windowId: number): void {
+export function orderOverlayWithWindow(win: BrowserWindow, windowId: number, frontmost: boolean | null): void {
   if (!overlayStacksWithWindow) return;
+  if (frontmost === false && !win.isFocused()) {
+    if (!sunk.has(win)) {
+      sunk.add(win);
+      win.setAlwaysOnTop(true, 'normal', -1);
+    }
+    return;
+  }
+  if (sunk.delete(win)) win.setAlwaysOnTop(false);
   try {
     win.moveAbove(`window:${windowId}:0`);
   } catch {
@@ -232,6 +255,9 @@ const TAB_STRIP_HEIGHT = 37;
 function compactHeight(chip: boolean, tabs: boolean): number {
   return QUICK_CHAT_HEIGHT + (chip ? WINDOW_CHIP_HEIGHT : 0) + (tabs ? TAB_STRIP_HEIGHT : 0);
 }
+/** The pill a window panel shrinks to (⌘M, or a click back into its window while it works). */
+const MINI_WIDTH = 248;
+const MINI_HEIGHT = 40;
 /** Space between the panel and the window it docks against. */
 const DOCK_GAP = 12;
 
@@ -272,7 +298,7 @@ export function dockBeside(target: DockRect, panel: { width: number; height: num
  * on that window's display. `chip`: the compact bar carries the window chip;
  * `tabs`: it carries the tab strip.
  */
-export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expanded: boolean, chip: boolean, tabs = false): void {
+export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expanded: boolean, chip: boolean, tabs = false, mini = false): void {
   const { workArea } = screen.getDisplayMatching({
     x: Math.round(target.x),
     y: Math.round(target.y),
@@ -281,8 +307,18 @@ export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expande
   });
   const w = QUICK_CHAT_WIDTH;
   const h = expanded ? QUICK_CHAT_PANEL_HEIGHT : compactHeight(chip, tabs);
-  const { x, y } = dockBeside(target, { width: w, height: h }, workArea);
-  win.setBounds(overlayOuterBounds({ x, y, width: w, height: h }));
+  const spot = dockBeside(target, { width: w, height: h }, workArea);
+  win.setBounds(overlayOuterBounds(mini ? miniSpot(target, spot, w) : { ...spot, width: w, height: h }));
+}
+
+/**
+ * The pill sits at the top of the spot the full panel takes, on the side next
+ * to the window: the panel's left edge when it docks right of the window,
+ * its right edge when it docks left. Pure, for the tests.
+ */
+export function miniSpot(target: DockRect, panel: { x: number; y: number }, panelWidth: number): DockRect {
+  const leftOfWindow = panel.x + panelWidth <= target.x;
+  return { x: leftOfWindow ? panel.x + panelWidth - MINI_WIDTH : panel.x, y: panel.y, width: MINI_WIDTH, height: MINI_HEIGHT };
 }
 
 /**

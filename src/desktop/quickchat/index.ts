@@ -22,7 +22,8 @@ import {
   compactOverlay,
   placeOverlay,
   placeOverlayBeside,
-  orderOverlayAbove,
+  orderOverlayWithWindow,
+  surfaceOverlay,
   overlayStacksWithWindow,
   parkOverlay,
   restoreOverlayOpacity,
@@ -31,7 +32,7 @@ import {
   stackOverlayWithWindows,
   type DockRect
 } from './windows';
-import { peekFrontWindow, readWindowText, stopWindowPeek, warmWindowPeek, windowPeekSupported, windowState } from './window-peek';
+import { focusWindowApp, peekFrontWindow, readWindowText, stopWindowPeek, warmWindowPeek, windowPeekSupported, windowState } from './window-peek';
 import { eventTurnId } from '../../shared/settledTurns';
 import { isBrowserApp } from '../../shared/browser-apps';
 import { PillTurns, type PillEventParams } from './pill-turns';
@@ -49,6 +50,7 @@ import type {
   QuickChatShortcutStatus,
   QuickChatStatus,
   QuickChatTabs,
+  QuickChatMini,
   QuickChatWindow,
   StartTurnInput,
   StartTurnResult,
@@ -112,6 +114,11 @@ export interface QuickChatSurface {
   registerIpc(): void;
   /** Summon or dismiss the overlay — the shortcut, the tray, the CLI, the HUD. */
   toggle(): void;
+  /**
+   * Window › Minimize (⌘M) while a Quick Chat panel has the keyboard: a window
+   * panel shrinks to its pill. True when a panel had it (a panel never minimises).
+   */
+  minimizeFocused(): boolean;
   /** "Ask about this window" — its shortcut, or `stem --ask-window` (the Wayland path). */
   askAboutWindow(): void;
   /** Is any Quick Chat panel on screen? (app.on('activate') asks before reopening the app.) */
@@ -164,6 +171,13 @@ interface Panel {
   unread: boolean;
   /** Showing a conversation (tall panel) rather than the compact bar. */
   expanded: boolean;
+  /**
+   * Shrunk to a small pill beside its window (window panels only): ⌘M, the
+   * header button, or a click back into the window while an answer runs.
+   */
+  mini: boolean;
+  /** What the pill shows while `mini`: the answer's last progress. */
+  miniStatus: QuickChatStatus | null;
   /** The compact bar carries the window chip. */
   chip: boolean;
   /**
@@ -216,6 +230,8 @@ function newPanel(win: BrowserWindow | null): Panel {
     label: null,
     unread: false,
     expanded: false,
+    mini: false,
+    miniStatus: null,
     chip: false,
     peek: null,
     overlay: new OverlaySession(),
@@ -354,7 +370,9 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     }
     const panel = ownerOf(threadId);
     if (panel) {
-      if (hudShows(panel) && !onScreen(panel) && hud.lastPhase !== 'finished')
+      if (miniShown(panel.group) && panel.group!.active === panel && panel.overlay.turnRunning)
+        showPanelHud(panel, { phase: 'working', label: 'Working…' });
+      else if (hudShows(panel) && !onScreen(panel) && hud.lastPhase !== 'finished')
         showPanelHud(panel, { phase: 'working', label: 'Working…' });
     } else syncMainHud();
   }
@@ -435,6 +453,14 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       windowPanels.set(windowId, group);
     }
     panel.group = group;
+    // A click back into the window (or anywhere else) while an answer runs
+    // shrinks the panel to its pill, so it stops covering the user's work.
+    // Deferred: a tab switch or a dismiss hides the panel in the same tick.
+    win.on('blur', () => {
+      setTimeout(() => {
+        if (panel.group?.active === panel && panel.overlay.turnRunning && !win.isFocused()) minimize(panel, false);
+      }, 0);
+    });
     win.on('closed', () => {
       stopFollowing(panel);
       panel.win = null;
@@ -475,12 +501,61 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     const canAdd = group.tabs.length < MAX_TABS_PER_WINDOW;
     for (const p of group.tabs) sendTo(p, 'quickchat:tabs', { tabs, canAdd, self: p.id } satisfies QuickChatTabs);
     if (onScreen(group.active) && !group.active.expanded) place(group.active);
+    pushMini(group.active);
   }
 
   /** Size and dock a window panel beside its window for what it shows now. */
   function place(panel: Panel): void {
     if (!live(panel.win) || !panel.peek) return;
-    placeOverlayBeside(panel.win, panel.peek.bounds, panel.expanded, panel.chip, showsTabs(panel));
+    placeOverlayBeside(panel.win, panel.peek.bounds, panel.expanded, panel.chip, showsTabs(panel), panel.mini);
+  }
+
+  /** The pill of `group` is on screen: its front tab is shrunk and shown. */
+  function miniShown(group: WindowGroup | null): boolean {
+    return !!group && group.active.mini && onScreen(group.active);
+  }
+
+  /** Tell a shrunk panel what its pill shows. */
+  function pushMini(panel: Panel): void {
+    if (!panel.mini || !panel.peek) return;
+    sendTo(panel, 'quickchat:mini', {
+      status: panel.miniStatus,
+      app: panel.peek.window.app,
+      tabs: panel.group?.tabs.length ?? 1
+    } satisfies QuickChatMini);
+  }
+
+  /**
+   * Shrink a window panel with a conversation to a pill beside its window.
+   * `giveBackKeys`: the user asked for it from inside the panel, so the
+   * keyboard goes back to the window (a click into the window already did that).
+   */
+  function minimize(panel: Panel, giveBackKeys: boolean): void {
+    if (panel.mini || !panel.group || !panel.peek || !panel.expanded || !onScreen(panel)) return;
+    panel.mini = true;
+    panel.miniStatus = panel.overlay.turnRunning
+      ? awaitingApproval(panel.overlay.threadId)
+        ? WAITING
+        : { phase: 'working', label: 'Working…' }
+      : null;
+    pushMini(panel);
+    place(panel);
+    if (giveBackKeys && panel.win!.isFocused()) {
+      // Hidden and shown again without focus: the panel stops being the key
+      // window. macOS then gives the keyboard to no app, so the helper makes
+      // the window's app the active one again.
+      panel.win!.hide();
+      panel.win!.showInactive();
+      void focusWindowApp(panel.peek.window.windowId);
+    }
+  }
+
+  /** Grow a pill back to the full panel; present() then puts it in front. */
+  function unminimize(panel: Panel): void {
+    if (!panel.mini) return;
+    panel.mini = false;
+    panel.miniStatus = null;
+    sendTo(panel, 'quickchat:mini', null);
   }
 
   function ensureHudWindow(): BrowserWindow {
@@ -509,6 +584,16 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
    * pill is visible.
    */
   function showHud(status: QuickChatStatus, owner: 'quickchat' | 'main', panel: Panel | null = null): void {
+    // A window shrunk to its pill: the pill beside it shows the front tab's
+    // progress, and no tab of that window uses the shared pill.
+    if (owner === 'quickchat' && panel?.group && miniShown(panel.group)) {
+      if (panel !== panel.group.active) return;
+      const finished = status.phase === 'finished' && panel.miniStatus?.phase !== 'finished';
+      panel.miniStatus = status;
+      pushMini(panel);
+      if (finished && finishSound) platformFinishChime(ensureHudWindow());
+      return;
+    }
     if (!pillTurns.connected) return;
     const win = ensureHudWindow();
     if (!win.isVisible()) {
@@ -549,8 +634,9 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     const p = (event.params ?? {}) as PillEventParams;
     if (eventTurnId(p) !== panel.turnId || !pillTurns.event(event.method, p)) return;
     const { overlay } = panel;
-    // A tab behind the one in front shows its progress in the strip, not the pill.
-    const visible = inSight(panel);
+    // A tab behind the one in front shows its progress in the strip, not the
+    // pill. A window shrunk to its pill shows the progress there (see showHud).
+    const visible = inSight(panel) && !miniShown(panel.group);
     switch (event.method) {
       case 'item/started': {
         if (visible) break;
@@ -670,6 +756,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     deps.beginSummon();
     panel.lastShown = Date.now();
     panel.parked = false;
+    unminimize(panel);
     const group = panel.group;
     if (group) {
       const before = group.active;
@@ -686,6 +773,8 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     // previous app stays active underneath and the main window is never pulled
     // forward. The macOS ordering is subtle; see presentOverlayWindow.
     restoreOverlayOpacity(win);
+    // A panel sunk behind another app's windows comes back to its own level.
+    if (group) stackOverlayWithWindows(win, stayWithWindow);
     presentOverlayWindow(win);
     if (group) {
       for (const tab of group.tabs) if (tab !== panel) dismissQuickChat(tab);
@@ -719,6 +808,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
           if (!state) {
             // Closed (or, off macOS, minimised): the panel stays where it is,
             // and one parked with it is let go.
+            surfaceOverlay(win);
             if (panel.parked) {
               panel.parked = false;
               stopFollowing(panel);
@@ -748,7 +838,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
             anchored.bounds = b;
             place(panel);
           }
-          if (stacking()) orderOverlayAbove(win, anchored.window.windowId);
+          if (stacking()) orderOverlayWithWindow(win, anchored.window.windowId, state.frontmost);
         })
         .catch(() => undefined);
     }, stacking() ? 250 : 400);
@@ -786,6 +876,12 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       await addBrowserState(w);
       // A window with several tabs comes back on the one last in front.
       const known = windowPanels.get(w.windowId)?.active;
+      if (known && onScreen(known) && known.mini) {
+        // Shrunk to its pill: the full panel comes back, keyboard and all.
+        present(known);
+        known.win!.webContents.send('quickchat:focus', { reset: false });
+        return;
+      }
       if (known && onScreen(known)) {
         // Already open beside it: just put the keyboard back in it.
         known.lastShown = Date.now();
@@ -1056,7 +1152,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
       }
       sendTo(owner, 'backend:event', event);
       driveHud(owner, event);
-      if (event.method === 'turn/completed' && onScreen(owner)) markOverlayThreadRead(owner);
+      if (event.method === 'turn/completed' && onScreen(owner) && !owner.mini) markOverlayThreadRead(owner);
       return true;
     }
     if (!threadId) {
@@ -1376,7 +1472,7 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
         const panel = panelFor(sender);
         panel.expanded = false;
         panel.chip = chip === true;
-        if (onScreen(panel)) compactOverlay(panel.win!, panel.chip, showsTabs(panel));
+        if (onScreen(panel) && !panel.mini) compactOverlay(panel.win!, panel.chip, showsTabs(panel));
       });
 
       // A window panel's tabs: another conversation about the same window,
@@ -1395,6 +1491,17 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
         // Where the panel stands now, not where the window was when it was first asked about.
         tab.peek = { window: w, bounds: from.peek?.bounds ?? peeked.bounds, text };
         showQuickChat(tab, true, w);
+      });
+
+      // ⌘M / the header button: shrink to the pill. A click on the pill grows it back.
+      handleLocalFrom('quickchat:minimize', (sender) => {
+        minimize(panelFor(sender), true);
+      });
+      handleLocalFrom('quickchat:expand', (sender) => {
+        const panel = panelFor(sender);
+        if (!panel.mini) return;
+        present(panel);
+        sendTo(panel, 'quickchat:focus', { reset: false });
       });
 
       handleLocalFrom('quickchat:switchTab', (sender, id: string) => {
@@ -1416,6 +1523,12 @@ export function createQuickChat(deps: QuickChatDeps): QuickChatSurface {
     },
 
     toggle: toggleQuickChat,
+    minimizeFocused: () => {
+      const panel = panels().find((p) => onScreen(p) && p.win!.isFocused());
+      if (!panel) return false;
+      minimize(panel, true);
+      return true;
+    },
 
     askAboutWindow: () => void askAboutWindow(),
 

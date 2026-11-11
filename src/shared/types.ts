@@ -5050,6 +5050,19 @@ export interface QuickChatTabs {
   canAdd: boolean;
 }
 
+/**
+ * Main → overlay: a window panel shrunk to a small pill beside its window
+ * (null: back to the full panel). The pill shows the answer's progress.
+ */
+export interface QuickChatMini {
+  /** The answer's progress; null when no answer runs or waits to be read. */
+  status: QuickChatStatus | null;
+  /** The app the window belongs to, shown when there is no status. */
+  app: string;
+  /** How many conversations its window has open. */
+  tabs: number;
+}
+
 /** The window "Ask about this window" captured, as the overlay shows it. */
 export interface QuickChatWindow {
   /** The window server's id, which main keys the window's text by. */
@@ -6141,6 +6154,12 @@ export interface StemApi {
   closeQuickChatTab(id: string): Promise<void>;
   /** Window panel: the tab list changed. */
   onQuickChatTabs(listener: (tabs: QuickChatTabs) => void): () => void;
+  /** Window panel: shrink to a small pill beside its window (⌘M). */
+  minimizeQuickChat(): Promise<void>;
+  /** Window panel: grow the pill back to the full panel. */
+  expandQuickChat(): Promise<void>;
+  /** Window panel: it became a pill (with what the pill shows), or the full panel again (null). */
+  onQuickChatMini(listener: (mini: QuickChatMini | null) => void): () => void;
   /** Window panel: this tab is being closed; stop its answer, then call closeQuickChatTab(own id). */
   onQuickChatCloseTab(listener: (request: { id: string }) => void): () => void;
   /** Overlay: fired each time the overlay is summoned; `reset` => fresh session. */

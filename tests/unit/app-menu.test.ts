@@ -27,6 +27,7 @@ function noopActions(): AppMenuActions & { commands: MenuCommand[] } {
     commands,
     command: (c) => commands.push(c),
     toggleQuickChat: vi.fn(),
+    minimize: vi.fn(),
     checkForUpdates: vi.fn(),
     zoom: vi.fn()
   };

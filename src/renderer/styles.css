@@ -3514,6 +3514,38 @@ body.platform-win32 .qc-card {
 /* ChatView fills the panel below the header. */
 .qc-panel .chat { flex: 1; min-height: 0; }
 
+/* A window panel shrunk to a pill beside its window. The window itself is
+   pill-sized (main sets it); the panel stays mounted under it, hidden. */
+.qc-mini-on > :not(.qc-mini) { display: none !important; }
+.qc-mini { height: 100%; }
+.qc-mini-pill {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  height: 100%;
+  padding: 0 var(--sp-6);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 42%, transparent);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-13);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.qc-mini-pill:hover { background: color-mix(in srgb, var(--surface) 60%, transparent); }
+body.platform-linux .qc-mini-pill,
+body.platform-win32 .qc-mini-pill {
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, calc(0.35 * var(--shadow-scale)));
+}
+.qc-mini-pill .activity-dots { flex: none; }
+.qc-mini-pill .qc-mark { flex: none; color: var(--accent); }
+.qc-mini-pill .hud-label { flex: 1; min-width: 0; text-align: left; }
+.qc-mini-pill.finished { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.qc-mini-pill.waiting { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+
 /* ---- status HUD (bottom-left pill, own frameless window) ---- */
 body.hud-body { background: transparent; }
 .hud-root {

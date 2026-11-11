@@ -361,7 +361,18 @@ while let line = readLine(strippingNewline: true) {
       let windowId = CGWindowID(Int(number(obj["windowId"]) ?? 0))
       // onScreen is false while the window is minimised, its app hidden, or it
       // sits on another Space: the docked panel steps aside with it.
-      emit(["id": id, "ok": true, "bounds": WindowPeek.bounds(windowId: windowId) ?? NSNull(), "onScreen": Windows.isOnScreen(windowId)])
+      // frontmost: the window's app is the one in front. A docked panel sinks
+      // behind other apps' windows while it is not (see orderOverlayWithWindow).
+      let owner = (Windows.record(of: windowId)?[kCGWindowOwnerPID as String] as? Int).map { pid_t($0) }
+      let front = owner == nil ? nil : Windows.frontmostPid()
+      emit([
+        "id": id, "ok": true, "bounds": WindowPeek.bounds(windowId: windowId) ?? NSNull(),
+        "onScreen": Windows.isOnScreen(windowId),
+        "frontmost": front.map { $0 == owner! } ?? NSNull()
+      ])
+    case "focus-app":
+      let windowId = CGWindowID(Int(number(obj["windowId"]) ?? 0))
+      emit(["id": id, "ok": true, "focused": Windows.focusApp(of: windowId)])
     case "watch":
       let on = obj["on"] as? Bool ?? true
       if on {

@@ -60,8 +60,25 @@ enum Windows {
         return pid
       }
     }
-    if Thread.isMainThread { RunLoop.current.run(until: Date()) }
+    // A short spin, not run(until: now): that can return before the pending
+    // activation notifications are handled, and then the answer is stale.
+    if Thread.isMainThread { RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01)) }
     return NSWorkspace.shared.frontmostApplication?.processIdentifier
+  }
+
+  /// Make the app that owns `id` the active one, so that it gets the keyboard
+  /// back (a window panel that shrinks to its pill leaves no key window).
+  /// Accessibility first: it works from a background process. False when the
+  /// window is gone.
+  static func focusApp(of id: CGWindowID) -> Bool {
+    guard let pidNum = record(of: id)?[kCGWindowOwnerPID as String] as? Int else { return false }
+    let pid = pid_t(pidNum)
+    if AXIsProcessTrusted() {
+      let app = AXUIElementCreateApplication(pid)
+      AXUIElementSetMessagingTimeout(app, 0.3)
+      if AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue) == .success { return true }
+    }
+    return NSRunningApplication(processIdentifier: pid)?.activate() ?? false
   }
 
   static func list(minimized wantMinimized: Bool = true) -> [WindowInfo] {

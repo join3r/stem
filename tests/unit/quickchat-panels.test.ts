@@ -10,6 +10,7 @@ const mock = vi.hoisted(() => {
       focused: false,
       destroyed: false,
       closed: [] as (() => void)[],
+      blurs: [] as (() => void)[],
       isDestroyed() { return this.destroyed; },
       isVisible() { return this.visible; },
       isFocused() { return this.focused; },
@@ -17,8 +18,11 @@ const mock = vi.hoisted(() => {
       hide() { this.visible = false; this.focused = false; },
       destroy() { this.destroyed = true; this.visible = false; for (const fn of this.closed) fn(); },
       getBounds: () => ({ x: 0, y: 0, width: 596, height: 108 }),
-      on(event: string, fn: () => void) { if (event === 'closed') this.closed.push(fn); },
-      webContents: { send: vi.fn() }
+      on(event: string, fn: () => void) {
+        if (event === 'closed') this.closed.push(fn);
+        if (event === 'blur') this.blurs.push(fn);
+      },
+      webContents: { send: vi.fn(), on: vi.fn() }
     };
     return win;
   };
@@ -26,7 +30,7 @@ const mock = vi.hoisted(() => {
     window,
     overlays: [] as ReturnType<typeof window>[],
     front: { windowId: 1, app: 'Slack' },
-    state: null as { bounds: { x: number; y: number; width: number; height: number }; onScreen: boolean } | null,
+    state: null as { bounds: { x: number; y: number; width: number; height: number }; onScreen: boolean; frontmost?: boolean | null } | null,
     handlers: new Map<string, (...args: unknown[]) => unknown>()
   };
 });
@@ -39,15 +43,15 @@ vi.mock('../../src/desktop/quickchat/windows', () => ({
   },
   placeHud: vi.fn(), placeOverlay: vi.fn(), placeOverlayBeside: vi.fn(), compactOverlay: vi.fn(),
   setOverlayWorkspaceVisibility: vi.fn(),
-  overlayStacksWithWindow: true, stackOverlayWithWindows: vi.fn(), orderOverlayAbove: vi.fn(),
+  overlayStacksWithWindow: true, stackOverlayWithWindows: vi.fn(), orderOverlayWithWindow: vi.fn(), surfaceOverlay: vi.fn(),
   parkOverlay: vi.fn((win: { hide(): void }) => win.hide()),
   unparkOverlay: vi.fn((win: { showInactive(): void }) => win.showInactive()),
   restoreOverlayOpacity: vi.fn()
 }));
 vi.mock('../../src/desktop/quickchat/window-peek', () => ({
   windowPeekSupported: true,
-  warmWindowPeek: vi.fn(), stopWindowPeek: vi.fn(),
-  windowState: async () => mock.state,
+  warmWindowPeek: vi.fn(), stopWindowPeek: vi.fn(), focusWindowApp: vi.fn(async () => undefined),
+  windowState: async () => mock.state && { frontmost: null, ...mock.state },
   readWindowText: async () => 'text',
   peekFrontWindow: async () => ({
     bounds: { x: 0, y: 0, width: 800, height: 600 },
@@ -113,7 +117,7 @@ describe('Ask about this window panels', () => {
     const bounds = { x: 0, y: 0, width: 800, height: 600 };
     mock.state = { bounds, onScreen: true };
     const panel = await ask(1);
-    await vi.waitFor(() => expect(windows.orderOverlayAbove).toHaveBeenCalledWith(panel, 1));
+    await vi.waitFor(() => expect(windows.orderOverlayWithWindow).toHaveBeenCalledWith(panel, 1, null));
     mock.state = { bounds, onScreen: false }; // minimised
     await vi.waitFor(() => expect(panel.visible).toBe(false));
     expect(windows.parkOverlay).toHaveBeenCalledWith(panel); // hidden at once, no fade-out
@@ -124,9 +128,21 @@ describe('Ask about this window panels', () => {
     surface.stop();
   });
 
+  it('passes on whether its window\'s app is in front, so another app can cover it', async () => {
+    const windows = await import('../../src/desktop/quickchat/windows');
+    const { ask, surface } = fixture();
+    const bounds = { x: 0, y: 0, width: 800, height: 600 };
+    mock.state = { bounds, onScreen: true, frontmost: true };
+    const panel = await ask(1);
+    await vi.waitFor(() => expect(windows.orderOverlayWithWindow).toHaveBeenCalledWith(panel, 1, true));
+    mock.state = { bounds, onScreen: true, frontmost: false }; // the user picked another app
+    await vi.waitFor(() => expect(windows.orderOverlayWithWindow).toHaveBeenLastCalledWith(panel, 1, false));
+    surface.stop();
+  });
+
   it('floats on top and ignores its window going away when "Keep with its window" is off', async () => {
     const windows = await import('../../src/desktop/quickchat/windows');
-    vi.mocked(windows.orderOverlayAbove).mockClear();
+    vi.mocked(windows.orderOverlayWithWindow).mockClear();
     const { ask, surface } = fixture({ stayWithWindow: false });
     const bounds = { x: 0, y: 0, width: 800, height: 600 };
     mock.state = { bounds, onScreen: false };
@@ -134,7 +150,7 @@ describe('Ask about this window panels', () => {
     expect(windows.stackOverlayWithWindows).toHaveBeenLastCalledWith(panel, false);
     await new Promise((r) => setTimeout(r, 600));
     expect(panel.visible).toBe(true);
-    expect(windows.orderOverlayAbove).not.toHaveBeenCalled();
+    expect(windows.orderOverlayWithWindow).not.toHaveBeenCalled();
     surface.stop();
   });
 
@@ -155,6 +171,64 @@ describe('Ask about this window panels', () => {
     await new Promise((r) => setTimeout(r, 600));
     expect(panel.visible).toBe(true);
     surface.stop();
+  });
+
+  describe('pill', () => {
+    const minis = (panel: (typeof mock.overlays)[number]) =>
+      panel.webContents.send.mock.calls.filter(([channel]) => channel === 'quickchat:mini').map(([, mini]) => mini);
+
+    async function working() {
+      const f = fixture();
+      mock.state = { bounds: { x: 0, y: 0, width: 800, height: 600 }, onScreen: true };
+      f.surface.reconcileHud('mac', []);
+      const panel = await f.ask(1);
+      f.surface.submitHudTurn({ turnId: 'a' } as StartTurnInput);
+      await f.run(panel, 'a');
+      const threadId = (f.startTurn.mock.calls[0][0] as StartTurnInput).threadId;
+      return { ...f, panel, threadId };
+    }
+
+    it('shrinks on ⌘M, shows the answer\'s progress, and grows back on a click', async () => {
+      const { panel, threadId, surface } = await working();
+      mock.handlers.get('quickchat:minimize')!(panel.webContents);
+      expect(minis(panel).at(-1)).toEqual({ status: { phase: 'working', label: 'Working…' }, app: 'App 1', tabs: 1 });
+      expect(panel.visible).toBe(true);
+      expect(panel.focused).toBe(false); // the keyboard goes back to the window
+      surface.routeBackendEvent({ method: 'turn/completed', receivedAt: '', params: { threadId, turnId: 'a' } });
+      expect(minis(panel).at(-1)).toMatchObject({ status: { phase: 'finished', label: 'Answer ready' } });
+      mock.handlers.get('quickchat:expand')!(panel.webContents);
+      expect(minis(panel).at(-1)).toBeNull();
+      expect(panel.focused).toBe(true);
+      surface.stop();
+    });
+
+    it('shrinks when the user clicks back into the window while it works', async () => {
+      const { panel, surface } = await working();
+      panel.focused = false;
+      for (const fn of panel.blurs) fn();
+      await vi.waitFor(() => expect(minis(panel).at(-1)).toMatchObject({ status: { phase: 'working' } }));
+      surface.stop();
+    });
+
+    it('stays full size when the user clicks away with no answer running', async () => {
+      const { ask, surface } = fixture();
+      mock.state = { bounds: { x: 0, y: 0, width: 800, height: 600 }, onScreen: true };
+      const panel = await ask(1);
+      panel.focused = false;
+      for (const fn of panel.blurs) fn();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(minis(panel)).toEqual([]);
+      surface.stop();
+    });
+
+    it('grows back when the window shortcut is pressed over its window', async () => {
+      const { panel, surface } = await working();
+      mock.handlers.get('quickchat:minimize')!(panel.webContents);
+      surface.askAboutWindow();
+      await vi.waitFor(() => expect(minis(panel).at(-1)).toBeNull());
+      expect(panel.focused).toBe(true);
+      surface.stop();
+    });
   });
 
   it('opens a separate panel per window and keeps the first one on screen', async () => {

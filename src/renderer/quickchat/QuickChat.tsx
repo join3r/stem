@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Sparkles, SquarePen, PanelRight, Globe, NotebookPen, Check, Zap, X, Plug, PlugZap, AppWindow, Plus } from 'lucide-react';
-import type { ModelSummary, QuickChatSettings, QuickChatTabs, QuickChatWindow, TurnAttachment, WindowMcpSuggestion } from '../../shared/types';
+import { Sparkles, SquarePen, PanelRight, Globe, NotebookPen, Check, Zap, X, Plug, PlugZap, AppWindow, Plus, Minus, ShieldAlert } from 'lucide-react';
+import type { ModelSummary, QuickChatMini, QuickChatSettings, QuickChatTabs, QuickChatWindow, TurnAttachment, WindowMcpSuggestion } from '../../shared/types';
 import { ChatView } from '../chat/ChatView';
 import { EffortModelControl } from '../ui/EffortModelControl';
 import { McpApprovalCard } from '../manage/McpApprovalCard';
@@ -58,6 +58,10 @@ export function QuickChat() {
   // window as tabs; this overlay is one of them. Null for the plain panel.
   const [tabs, setTabs] = useState<QuickChatTabs | null>(null);
   useEffect(() => window.stem.onQuickChatTabs(setTabs), []);
+  // A window panel shrunk to a pill beside its window. The panel stays mounted
+  // under the pill, so the draft, the scroll position and the stream survive.
+  const [mini, setMini] = useState<QuickChatMini | null>(null);
+  useEffect(() => window.stem.onQuickChatMini(setMini), []);
 
   // Permission asks. This thread's own ride inside the expanded ChatView like in
   // the main window; an ask from any other thread has no chat here to sit in and
@@ -628,11 +632,17 @@ export function QuickChat() {
   // Expanded conversation panel once the session has any messages.
   if (messages.length > 0) {
     return (
-      <div className="qc-root">
+      <div className={`qc-root${mini ? ' qc-mini-on' : ''}`}>
+        {mini && <MiniPill mini={mini} />}
         <div className="qc-card qc-panel">
           <div className="qc-head">
             <Sparkles className="qc-mark" size={18} />
             {tabs ? <TabStrip tabs={tabs} onClose={closeTab} /> : <span className="qc-spacer" />}
+            {tabs && (
+              <button className="qc-act" title="Shrink to a pill beside the window (⌘M)" aria-label="Shrink" onClick={() => void window.stem.minimizeQuickChat()}>
+                <Minus size={15} />
+              </button>
+            )}
             <button className="qc-act" title="New thread (⌘N)" onClick={() => void newThread()} disabled={resetting}>
               <SquarePen size={15} />
             </button>
@@ -825,6 +835,43 @@ export function QuickChat() {
  * The conversations open about one window, and a + that opens another with a
  * fresh picture of it. A single conversation shows only the +.
  */
+/** The window panel shrunk beside its window: the answer's progress; a click opens the panel again. */
+function MiniPill({ mini }: { mini: QuickChatMini }) {
+  const { status } = mini;
+  const finished = status?.phase === 'finished';
+  const waiting = status?.phase === 'waiting';
+  return (
+    <div className="qc-mini">
+      <button
+        type="button"
+        className={`qc-mini-pill${finished ? ' finished' : ''}${waiting ? ' waiting' : ''}`}
+        title="Open the panel"
+        onClick={() => void window.stem.expandQuickChat()}
+      >
+        {finished ? (
+          <span className="hud-check" aria-hidden="true">
+            <Check size={13} />
+          </span>
+        ) : waiting ? (
+          <span className="hud-wait" aria-hidden="true">
+            <ShieldAlert size={13} />
+          </span>
+        ) : status ? (
+          <span className="activity-dots" aria-hidden="true">
+            <span className="activity-dot" />
+            <span className="activity-dot" />
+            <span className="activity-dot" />
+          </span>
+        ) : (
+          <Sparkles className="qc-mark" size={14} aria-hidden="true" />
+        )}
+        <span className="hud-label">{status?.label ?? mini.app}</span>
+        {mini.tabs > 1 && <span className="hud-hint">{mini.tabs} tabs</span>}
+      </button>
+    </div>
+  );
+}
+
 function TabStrip({ tabs, onClose }: { tabs: QuickChatTabs; onClose(id: string): void }) {
   const several = tabs.tabs.length > 1;
   return (

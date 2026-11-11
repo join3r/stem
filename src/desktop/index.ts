@@ -507,6 +507,9 @@ app.whenReady().then(async () => {
     {
       command: runMenuCommand,
       toggleQuickChat: () => quickChat.toggle(),
+      minimize: () => {
+        if (!quickChat.minimizeFocused()) BrowserWindow.getFocusedWindow()?.minimize();
+      },
       checkForUpdates: () => void checkForUpdatesFromMenu(),
       zoom: applyZoom
     },
