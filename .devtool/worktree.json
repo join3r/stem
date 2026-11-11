@@ -1,4 +1,4 @@
 {
   "symlink": ["node_modules"],
-  "setup": ["[ -e node_modules ] || npm ci"]
+  "setup": ["[ -e node_modules ] || npm ci --prefer-offline"]
 }
