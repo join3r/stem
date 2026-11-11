@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Trash2, Wand2 } from 'lucide-react';
+import { History, RotateCcw, Trash2, Wand2 } from 'lucide-react';
 import type {
   DefaultsSettings,
   ModelSummary,
   SkillsMode,
-  SkillSummary
+  SkillSummary,
+  SkillVersionSummary
 } from '../../../shared/types';
 import { useOffline } from '../../hooks/useServerReachable';
 import { InfoTip } from '../../ui/InfoTip';
@@ -36,6 +37,11 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
   // serve an action taken once in a skill's life.
   const [selected, setSelected] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // Earlier versions of the selected skill (server/skills/store.ts keeps the
+  // text each change replaced). Loaded only when the history is opened.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [versions, setVersions] = useState<SkillVersionSummary[]>([]);
+  const [picked, setPicked] = useState<number | null>(null);
   // What "Same as main" resolves to — the model you chat with.
   const [defaults, setDefaults] = useState<DefaultsSettings>({
     model: null,
@@ -60,6 +66,40 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
   useEffect(() => {
     window.stem.listSkills().then(setSkills);
   }, [tidying]);
+
+  const selectedSkill = skills.find((s) => s.slug === selected) ?? null;
+  // Reload when the selection changes, or when the skill itself changed (a new
+  // version means one more earlier version to show).
+  useEffect(() => {
+    if (!historyOpen || !selected) {
+      setVersions([]);
+      setPicked(null);
+      return;
+    }
+    let live = true;
+    window.stem.listSkillVersions(selected).then((list) => {
+      if (!live) return;
+      setVersions(list);
+      setPicked(list[0]?.version ?? null);
+    }).catch(() => {
+      // quiet: an empty list reads as "no earlier versions", and Restore stays off.
+      if (live) setVersions([]);
+    });
+    return () => {
+      live = false;
+    };
+  }, [historyOpen, selected, selectedSkill?.version]);
+
+  async function restore(slug: string, version: number) {
+    const name = skills.find((s) => s.slug === slug)?.name ?? slug;
+    if (!window.confirm(`Put version ${version} of “${name}” back?\n\nThe current text is kept as an earlier version, so you can undo this.`)) return;
+    setRemoveError(null);
+    try {
+      setSkills(await window.stem.restoreSkillVersion(slug, version));
+    } catch (error) {
+      setRemoveError(error instanceof Error ? error.message : 'Could not restore that version.');
+    }
+  }
 
   function selectSkillsModel(id: string | null) {
     setSkillsModel(id);
@@ -146,8 +186,10 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
     const used = s.useCount
       ? `used ${s.useCount}×${s.lastUsedAt ? ` · last ${formatDay(s.lastUsedAt)}` : ''}`
       : 'never used';
-    // The assistant said a step was wrong: the one line here that is a verdict
-    // on the skill rather than a count of it being around.
+    // How the uses ended, read off the next message (server/skills/cases.ts):
+    // the verdict on the skill rather than a count of it being around. Before
+    // any use has an outcome, the model's own reports are all there is.
+    if (s.outcomes) return `${used} · ${s.outcomes.accepted} accepted · ${s.outcomes.failed} needed a fix`;
     return s.failCount ? `${used} · reported wrong ${s.failCount}×` : used;
   }
 
@@ -189,7 +231,11 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
                 <strong>
                   {s.name}
                   {s.source === 'agent' && (
-                    <span className="muted" style={{ marginLeft: 6, fontWeight: 400, fontSize: '0.8em' }}>
+                    <span
+                      className="muted"
+                      style={{ marginLeft: 6, fontWeight: 400, fontSize: '0.8em' }}
+                      title={s.change ? plainLine(s.change) : undefined}
+                    >
                       auto{s.version && s.version > 1 ? ` · v${s.version}` : ''}
                     </span>
                   )}
@@ -230,6 +276,56 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
           >
             <Trash2 size={15} />
           </button>
+          <button
+            title={
+              !selectedSkill
+                ? 'Select a skill to see its earlier versions'
+                : selectedSkill.versions
+                  ? 'Earlier versions of the selected skill'
+                  : 'This skill has no earlier versions'
+            }
+            aria-label="Earlier versions of the selected skill"
+            aria-pressed={historyOpen}
+            onClick={() => setHistoryOpen(!historyOpen)}
+            disabled={!selectedSkill?.versions}
+          >
+            <History size={15} />
+          </button>
+        </div>
+      )}
+      {historyOpen && selectedSkill && versions.length > 0 && (
+        <div className="formgroup">
+          <p className="muted">
+            Now v{selectedSkill.version ?? 1}
+            {selectedSkill.change ? ` — ${plainLine(selectedSkill.change)}` : ''}
+          </p>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <select
+              className="vfield"
+              aria-label="Earlier version"
+              value={picked ?? ''}
+              onChange={(e) => setPicked(Number(e.target.value))}
+              style={{ flex: 1, minWidth: 0 }}
+            >
+              {versions.map((v) => (
+                <option key={v.version} value={v.version}>
+                  v{v.version}
+                  {v.updated ? ` · ${formatDay(v.updated)}` : ''}
+                  {v.change ? ` · ${plainLine(v.change)}` : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              className="link-btn icon-only"
+              data-label="Restore"
+              aria-label="Restore this version"
+              title="Restore this version"
+              disabled={picked === null}
+              onClick={() => picked !== null && restore(selectedSkill.slug, picked)}
+            >
+              <RotateCcw size={15} />
+            </button>
+          </div>
         </div>
       )}
       {removeError && <p className="error">{removeError}</p>}

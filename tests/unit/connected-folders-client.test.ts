@@ -20,11 +20,12 @@ import {
   addConnectedFolders,
   listConnectedFolders,
   readStore,
+  recordFolderSynced,
   removeConnectedFolder,
   updateConnectedFolder
 } from '../../src/server/workspace/connected-folders';
 import { enrichConnectedFolders } from '../../src/server/connected-folders/enrich';
-import { buildConnectedFoldersContext } from '../../src/server/connected-folders/inject';
+import { buildConnectedFoldersContext, RECENT_SYNC_MS } from '../../src/server/connected-folders/inject';
 import { forgetCachedDevices, mintDevice, revokeDevice } from '../../src/server/transport/auth';
 import { mirrorRoot, mirrorsDir } from '../../src/server/workspace/paths';
 
@@ -164,6 +165,31 @@ describe('enrichment and injection', () => {
     expect(ctx).toContain('first sync not finished');
     expect(ctx).toContain('one-way mirrors');
     expect(ctx).toContain('`node_modules`'); // the ignore disclosure
+  });
+
+  // The block goes out again whenever its text changes. A connected computer
+  // syncs again and again, and the exact time of each round made the text new
+  // on nearly every turn.
+  it('keeps the same text across sync rounds while the mirror is fresh', async () => {
+    const [f] = await addClientFolder({ deviceId: macId, clientPath: '/Users/v/notes' });
+    const t0 = Date.parse('2026-11-11T10:00:00.000Z');
+    await recordFolderSynced(f!.id, new Date(t0).toISOString());
+    const first = await buildConnectedFoldersContext(t0 + 5_000);
+    await recordFolderSynced(f!.id, new Date(t0 + 60_000).toISOString());
+    const second = await buildConnectedFoldersContext(t0 + 65_000);
+    expect(first).toContain('synced within the last hour');
+    expect(first).not.toContain('2026-11-11T10:00');
+    expect(second).toBe(first);
+  });
+
+  it('gives the exact time once the last sync is old enough to matter', async () => {
+    const [f] = await addClientFolder({ deviceId: macId, clientPath: '/Users/v/notes' });
+    const at = '2026-11-11T10:00:00.000Z';
+    await recordFolderSynced(f!.id, at);
+    const stale = await buildConnectedFoldersContext(Date.parse(at) + RECENT_SYNC_MS);
+    expect(stale).toContain(`last synced ${at}`);
+    // And that text holds still for as long as no new round lands.
+    expect(await buildConnectedFoldersContext(Date.parse(at) + 3 * RECENT_SYNC_MS)).toBe(stale);
   });
 
   it('marks a folder orphaned when its device is unpaired', async () => {

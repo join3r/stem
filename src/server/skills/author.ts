@@ -1,6 +1,8 @@
 import type { LlmClient } from '../recall/llm';
 import type { TraceEntry } from '../pi/normalize';
 import { SKILL_CONTRACT_TEXT, formatViolations, validateSkill, type SkillDraft, type SkillViolation } from './contract';
+import type { SkillCase } from './cases';
+import { renderCase } from './review';
 
 // One-shot skill authoring: given what the assistant actually did in a turn, decide
 // whether any of it is worth keeping and, if so, write the SKILL.md.
@@ -87,6 +89,26 @@ export interface AuthorInput {
    * model has already named it.
    */
   issue?: string;
+  /**
+   * Patch path only: what the user said was wrong with the result of a turn
+   * that followed `existing`, as the distill pass read it off their next
+   * message (skills/cases.ts). The strongest evidence a skill gets: the person
+   * the work was for said how it should have been done.
+   */
+  correction?: string;
+  /**
+   * Patch and rewrite paths: the recorded uses of `existing`, oldest first, with
+   * how each one ended. Shown so a fix for today's case keeps what the earlier
+   * accepted uses relied on.
+   */
+  cases?: readonly SkillCase[];
+  /**
+   * The rewrite path (skills/rewrite.ts): no single turn is the evidence. The
+   * skill went wrong several times, `diagnosis` says why, and the author
+   * rewrites it from all of its `cases` at once.
+   */
+  rewrite?: boolean;
+  diagnosis?: string;
   /**
    * Which machine this turn ran on, in a sentence (`whereSkillsRun()` in
    * workspace/bootstrap.ts). Passed in rather than read here so this module stays
@@ -234,6 +256,38 @@ It does not belong in a skill when it is a taste or a fact rather than a way of 
 
 If a skill for that kind of work is already in the library, name it so the convention is folded in rather than written beside it. When the convention governs one particular action (creating the draft, the calendar event, the invoice file), list that tool in "tools", so the skill is in front of the assistant at the moment of the action even when the request is worded nothing like it. Write a new skill only when the conversation also shows how that work is done; a skill with a preference and no procedure is not followable. The evidence is the whole conversation, oldest turn first.`;
 
+/**
+ * Extra framing on the patch path when the user corrected the result of a turn
+ * that followed the skill (skills/cases.ts). The evidence is the whole
+ * conversation: the turn that used the skill, the correction, and what the
+ * assistant did after it.
+ */
+export const SKILL_CORRECTION_INSTRUCTIONS = `The user corrected the result of a turn that followed the skill shown below. Their correction is under "What the user said was wrong with the result", and the conversation shows the turn, the correction, and what the assistant did after it.
+
+Decide whether the correction is about how this kind of work is done. If it is, return the FULL skill under the same name with the correction folded in as a step, quoted exactly where wording matters, and keep every other step as it is. When the assistant's work after the correction succeeded, write the steps the way that work went.
+
+Return null when the correction is about this one case only (this recipient, this date, this file), about the taste of one reply, or about something the skill does not cover. A skill that collects one-off fixes stops being followable.`;
+
+/**
+ * The rewrite path (skills/rewrite.ts): the skill went wrong several times, and
+ * a separate diagnosis call has said why. Diagnosis apart from the rewrite, and
+ * from all cases at once rather than one turn, is what the published methods
+ * that improve skills reliably have in common (arXiv 2606.11435).
+ */
+export const SKILL_REWRITE_INSTRUCTIONS = `You rewrite a saved skill that went wrong several times. A skill is a procedure an assistant follows for one kind of work. Below are the skill, its recorded uses with how each one ended, and a diagnosis of the uses that went wrong.
+
+Rewrite the skill so that it avoids every problem in the diagnosis, and keep every step that the accepted uses relied on. Keep its job and its name: do not widen it to other work, and do not narrow it to one case with names, dates or numbers that will be different next time. Write instructions, not a history of what happened.
+
+Return null when the diagnosis shows that the skill did not cause the failures.
+
+Reply with ONLY a JSON object, no prose and no markdown fences:
+{"skill": {"name": "...", "description": "...", "body": "...", "tools": ["..."]}}
+or, to leave the skill as it is:
+{"skill": null, "reason": "<one short clause>"}`;
+
+/** Recorded uses shown to the author, newest kept. */
+const AUTHOR_CASES = 8;
+
 const MAX_ATTEMPTS = 2;
 
 /** One turn of the conversation: what the user said, what was run, what came back. */
@@ -271,14 +325,21 @@ export function renderEvidence(input: AuthorInput): string {
     input.earlier.forEach((turn, i) => parts.push(`--- Turn ${i + 1} ---`, renderTurn(turn)));
     parts.push('--- Latest turn ---');
   }
-  parts.push(renderTurn(input));
+  // A rewrite has no single turn behind it: its evidence is the cases below.
+  if (!input.rewrite) parts.push(renderTurn(input));
   if (input.existing) {
-    const heading = input.chosenTarget ? 'The skill you named' : 'The skill this turn used';
+    const heading = input.rewrite ? 'The skill' : input.chosenTarget ? 'The skill you named' : 'The skill this turn used';
     parts.push(
       `${heading}:\nname: ${input.existing.name}\ndescription: ${input.existing.description}\n\n${input.existing.body}`
     );
     if (input.issue?.trim()) parts.push(`What the assistant reported as wrong with it this turn:\n${input.issue.trim()}`);
+    if (input.correction?.trim()) parts.push(`What the user said was wrong with the result:\n${input.correction.trim()}`);
   }
+  const cases = (input.cases ?? []).filter((c) => c.outcome !== 'pending' && c.outcome !== 'expired').slice(-AUTHOR_CASES);
+  if (input.existing && cases.length > 0) {
+    parts.push(`Recorded uses of this skill, oldest first:\n${cases.map((c, i) => renderCase(c, i + 1)).join('\n\n')}`);
+  }
+  if (input.diagnosis?.trim()) parts.push(`Diagnosis of the uses that went wrong:\n${input.diagnosis.trim()}`);
   // The library, when the author is being asked to choose. Bodies first: those
   // are the ones it can judge properly, and a name-and-description line is a
   // weaker claim to be weighed against a body it can read.
@@ -300,11 +361,17 @@ export function renderEvidence(input: AuthorInput): string {
 }
 
 export function buildAuthorPrompt(input: AuthorInput): string {
+  // A rewrite is its own question: not "is there a skill in this turn" but "fix
+  // this skill from everything it did".
+  if (input.rewrite && input.existing) return [SKILL_REWRITE_INSTRUCTIONS, SKILL_CONTRACT_TEXT, '---', renderEvidence(input)].join('\n\n');
   const parts = [SKILL_AUTHORING_INSTRUCTIONS];
   if (input.requested) parts.push(SKILL_LEARN_INSTRUCTIONS);
   if (input.writing) parts.push(SKILL_WRITING_INSTRUCTIONS);
   if (input.conventions?.length) parts.push(SKILL_CONVENTION_INSTRUCTIONS);
-  if (input.existing) parts.push(input.chosenTarget ? SKILL_TARGET_PATCH_INSTRUCTIONS : SKILL_PATCH_INSTRUCTIONS);
+  if (input.existing) {
+    parts.push(input.chosenTarget ? SKILL_TARGET_PATCH_INSTRUCTIONS : SKILL_PATCH_INSTRUCTIONS);
+    if (input.correction?.trim()) parts.push(SKILL_CORRECTION_INSTRUCTIONS);
+  }
   // Only when there is actually a library to read: an empty list under "read what
   // is already there" invites a target the author cannot have seen.
   else if (input.candidates?.length || input.libraryIndex?.length) parts.push(SKILL_LIBRARY_INSTRUCTIONS);

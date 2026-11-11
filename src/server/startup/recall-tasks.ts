@@ -23,7 +23,7 @@ import { migrateSkillProvenance } from '../skills/provenance';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import { applyAutomaticTransitions } from '../skills/lifecycle';
-import { isSettlePassRunning, learnConventions } from './skills';
+import { isSettlePassRunning, learnConventions, queueSkillRevisions } from './skills';
 import { getEmbeddingsClient } from '../recall/retrieval';
 import type { LlmClient } from '../recall/llm';
 import type { ChatBackend } from '../backend';
@@ -144,6 +144,10 @@ export function initRecallTasks(deps: {
         // learnConventions). Grouped by the conversation they were learned in,
         // since that conversation is the evidence the author reads.
         queueConventions(distillFrom);
+        // The same pass read how the user took each skill use (skills/cases.ts):
+        // a correction patches its skill, and a skill that keeps going wrong is
+        // rewritten from all of its uses. Not awaited: it waits for quiet itself.
+        void queueSkillRevisions();
         // And, one batch per pass, the preferences learned before that pass
         // existed (backfillConventions).
         void backfillConventions();

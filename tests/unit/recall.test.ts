@@ -71,7 +71,8 @@ describe('Stem Recall', () => {
     const ctx = (await inject.buildRecallContext('what is my UZ Gent cardiology appointment', { currentThreadId: 'B' })) ?? '';
     expect(ctx).toMatch(/stem_memory_data/i);
     expect(ctx).toMatch(/UZ Gent/i);
-    expect(ctx).toMatch(/search_past_chats/);
+    // The pointer to the search tools is in the rules, which go out once per chat.
+    expect(inject.RECALL_RULES).toMatch(/search_past_chats/);
   });
 
   it('parseFacts reads JSON arrays and bullets, dropping secrets', () => {
@@ -468,13 +469,13 @@ describe('Stem Recall — fact relevance ranking', () => {
 
     const all = (await inject.buildRecallContext('where do I live', {})) ?? '';
     expect(all).toMatch(/stem_memory_data/);
-    expect(all).toMatch(/search_facts/);
+    expect(inject.RECALL_RULES).toMatch(/search_facts/);
 
     // Above it the injected set is partial: say so and point at the facts tool,
     // so off-topic-but-relevant context (family, vehicle) can still be found.
     for (let i = 0; i < 45; i++) store.upsertFact(`The user has misc preference ${i}`, 'distilled');
     const subset = (await inject.buildRecallContext('tell me about Bratislava', {})) ?? '';
-    expect(subset).toMatch(/search_facts/);
+    expect(subset).toMatch(/stem_memory_data/);
   });
 
   it('recencyWeight decays monotonically from 1 to ~0', () => {

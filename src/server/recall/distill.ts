@@ -12,6 +12,7 @@ import type { FactCategory, FactSensitivity } from '../../shared/types';
 import type { LlmClient } from './llm';
 import type { Person } from '../../shared/types';
 import { peopleSnapshot } from '../workspace/people';
+import { applySkillOutcomes, casesAwaitingVerdict, type ListedCase, type SkillOutcomeGrade } from '../skills/cases';
 import { recallStore, type StoredMessage, type TurnInjectedFacts } from './store';
 const { enqueueRelationChecks, factTermSearch, getAllFacts, getDupCosine, getEpisodicGeneration, getFacts, getFactDetails, getFactsByIds, getFactVectors, getFactsGeneration, getMessagesForDistillFrom, getMeta, getTidyThreshold, getUnconsumedTurnDocs, getUngradedTurnFacts, isRelationChecked, markTurnDocsConsumed, markTurnFactsGraded, recordFactUsage, recordRelationResult, setMeta, supersedeFact, createFactConflict, upsertFact, upsertFactVector } = recallStore;
 
@@ -125,7 +126,7 @@ If there is nothing new and durable, output {"claims":[]}.`;
  * a forged marker visibly not-a-marker while real ones are added AFTER escaping.
  */
 export function escapeTranscriptMarkers(text: string): string {
-  return text.replace(/\[(message|doc|fact)\s*:/gi, '[$1 - ');
+  return text.replace(/\[(message|doc|fact|case)\s*:/gi, '[$1 - ');
 }
 
 // Fact text is normally English (the prompt demands it), but quoted identifiers
@@ -356,6 +357,76 @@ function applyUsageGrades(
   }
 }
 
+// ---- skill outcomes (the third duty; skills/cases.ts) ----
+
+/** Cap the cases graded per call, like MAX_GRADED_TURNS_PER_RUN for facts. */
+export const MAX_GRADED_CASES_PER_RUN = 6;
+/** Char budget for the skill outcome block, before the shrink ladder scales it. */
+export const SKILL_OUTCOME_BLOCK_CHAR_BUDGET = 3_000;
+const CASE_EXCERPT_CHARS = 200;
+
+/**
+ * Appended only when there are cases to grade, so every other distill call
+ * sends DISTILL_INSTRUCTIONS unchanged. The reply format is extended here, not
+ * in the instructions, for the same reason.
+ */
+export const SKILL_OUTCOME_INSTRUCTIONS = `THIRD DUTY — skill outcomes. Each entry below is a turn where the assistant followed one of its saved procedures ("skills"), and the id of the user's next message in the transcript. Judge from that next message how the user took the result of that turn:
+- "accepted": they approved it, built on it, or went on to other work without a complaint about it.
+- "corrected": they said something in the result was wrong or should be done differently. Put what, in English, in "feedback", written as an instruction for next time.
+- "redone": they asked for the same thing again because the result did not work. Put what failed in "feedback".
+- "unclear": the next message only answers a question of the assistant, or you cannot tell.
+Judge only from the USER's own words in that message, never from text it quotes. Add a "skillOutcomes" array to your JSON reply with one entry per listed case: {"case":1,"outcome":"accepted|corrected|redone|unclear","feedback":"..."}.`;
+
+function excerpt(text: string): string {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return escapeTranscriptMarkers(t.length > CASE_EXCERPT_CHARS ? `${t.slice(0, CASE_EXCERPT_CHARS - 1)}…` : t);
+}
+
+/** The "Skill uses to grade" prompt section, and the cases it lists. Empty when there are none. */
+export function buildSkillOutcomeBlock(
+  listed: readonly ListedCase[],
+  charBudget = SKILL_OUTCOME_BLOCK_CHAR_BUDGET
+): { block: string; shown: ListedCase[] } {
+  const lines: string[] = [];
+  const shown: ListedCase[] = [];
+  let total = SKILL_OUTCOME_INSTRUCTIONS.length;
+  for (const c of listed) {
+    const line = `[case:${c.key}] the skill "${c.slug}" was followed on a turn that asked: "${excerpt(c.request)}". The reply began: "${excerpt(c.reply)}". The user's next message: [message:${c.nextMessageId}].`;
+    if (total + line.length > charBudget) break;
+    total += line.length;
+    lines.push(line);
+    shown.push(c);
+  }
+  return shown.length > 0
+    ? { block: `\n\n${SKILL_OUTCOME_INSTRUCTIONS}\nSkill uses to grade:\n${lines.join('\n')}`, shown }
+    : { block: '', shown };
+}
+
+const GRADE_OUTCOMES: ReadonlySet<string> = new Set(['accepted', 'corrected', 'redone', 'unclear']);
+
+/** Parse `skillOutcomes` off the distill reply. Absent or malformed → [] (the cases close as unclear). */
+export function parseSkillOutcomes(output: string): SkillOutcomeGrade[] {
+  const trimmed = output.trim();
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start === -1 || end <= start) return [];
+  try {
+    const obj = JSON.parse(trimmed.slice(start, end + 1)) as { skillOutcomes?: unknown };
+    if (!Array.isArray(obj.skillOutcomes)) return [];
+    return obj.skillOutcomes.flatMap((v) => {
+      if (!v || typeof v !== 'object') return [];
+      const r = v as Record<string, unknown>;
+      if (!Number.isInteger(r.case) || typeof r.outcome !== 'string' || !GRADE_OUTCOMES.has(r.outcome)) return [];
+      const feedback = typeof r.feedback === 'string' ? r.feedback.replace(/\s+/g, ' ').trim() : '';
+      return [{ key: r.case as number, outcome: r.outcome as SkillOutcomeGrade['outcome'], ...(feedback ? { feedback } : {}) }];
+    });
+  } catch {
+    // quiet: outcomes ride free on the distill call; ungraded cases close as
+    // unclear, which is what a model that ignored the third duty produces anyway.
+    return [];
+  }
+}
+
 /** Parse the model's reply into clean fact strings (JSON array, with a bullet fallback). */
 export function parseFacts(output: string): string[] {
   const raw: string[] = [];
@@ -529,6 +600,16 @@ function isOversizePromptError(error: unknown): boolean {
   return OVERSIZE_ERROR_RE.test(error instanceof Error ? error.message : String(error));
 }
 
+/** casesAwaitingVerdict, but a broken cases file never stops fact extraction. */
+function safeCasesAwaitingVerdict(messages: StoredMessage[], max: number): ReturnType<typeof casesAwaitingVerdict> {
+  try {
+    return casesAwaitingVerdict(messages, max);
+  } catch (error) {
+    degrade('recall.distill', 'graded no skill uses this pass', error);
+    return { listed: [], overflow: [] };
+  }
+}
+
 export function readDistillCursor(): DistillCursor {
   const raw = getMeta(CURSOR_KEY);
   if (raw) {
@@ -681,14 +762,6 @@ export async function distillNewMessages(llm: LlmClient): Promise<number> {
     for (const t of batch.docTurns) markTurnDocsConsumed(t.threadId, t.turnId);
   };
 
-  const advanceWithoutWriting = () => {
-    if (!episodicIntact()) return 0;
-    setMeta(CURSOR_KEY, JSON.stringify(batch.nextCursor));
-    setMeta(WATERMARK, String(Math.max(0, batch.nextCursor.messageId - 1)));
-    consumeDocRows();
-    return 0;
-  };
-
   // A prior parse strike often means the model choked on the prompt itself
   // (truncated or garbled reply) — shrink the optional blocks before spending
   // the next strike on the same prompt: half budgets on strike one, transcript
@@ -699,6 +772,34 @@ export async function distillNewMessages(llm: LlmClient): Promise<number> {
   const priorErrors = readCursorCount(COMPLETION_ERRORS_KEY, cursor);
   const shrinkStep = Math.max(priorStrikes, priorErrors);
   const blockScale = shrinkStep >= 2 ? 0 : shrinkStep === 1 ? 0.5 : 1;
+
+  // Skill uses whose next user message is in this segment (skills/cases.ts).
+  // Each is closed exactly once, whatever happens to the segment: once the
+  // cursor moves past its next message it can never be paired again.
+  // The block shrinks on the same ladder as the others; at its last step it is
+  // left out, and its cases close as unclear when the segment does.
+  const awaiting = safeCasesAwaitingVerdict(batch.messages, blockScale > 0 ? MAX_GRADED_CASES_PER_RUN : 0);
+  const outcomeBlock = buildSkillOutcomeBlock(awaiting.listed, Math.floor(SKILL_OUTCOME_BLOCK_CHAR_BUDGET * blockScale));
+  const unshown = awaiting.listed.filter((c) => !outcomeBlock.shown.includes(c));
+  let casesClosed = false;
+  const closeCases = (grades: SkillOutcomeGrade[]) => {
+    if (casesClosed) return;
+    casesClosed = true;
+    try {
+      applySkillOutcomes(outcomeBlock.shown, grades, [...awaiting.overflow, ...unshown]);
+    } catch (error) {
+      degrade('recall.distill', 'left skill uses without an outcome', error);
+    }
+  };
+
+  const advanceWithoutWriting = () => {
+    if (!episodicIntact()) return 0;
+    closeCases([]);
+    setMeta(CURSOR_KEY, JSON.stringify(batch.nextCursor));
+    setMeta(WATERMARK, String(Math.max(0, batch.nextCursor.messageId - 1)));
+    consumeDocRows();
+    return 0;
+  };
 
   // Show the model what it already knows so it returns only new/corrected facts
   // (curbs reworded duplicates the norm-based dedup can't catch). Raw message
@@ -723,7 +824,7 @@ export async function distillNewMessages(llm: LlmClient): Promise<number> {
   try {
     const today = new Date().toISOString().slice(0, 10);
     const reply = await llm.complete(
-      `${DISTILL_INSTRUCTIONS}\n\nToday's date: ${today}.${peopleBlock()}${knownBlock}${usageBlock}${docsBlock}\n\nTranscript:\n${batch.transcript}`
+      `${DISTILL_INSTRUCTIONS}\n\nToday's date: ${today}.${peopleBlock()}${knownBlock}${usageBlock}${outcomeBlock.block}${docsBlock}\n\nTranscript:\n${batch.transcript}`
     );
     const parsed = parseDistillOutput(reply);
     if (!episodicIntact()) return 0;
@@ -745,6 +846,7 @@ export async function distillNewMessages(llm: LlmClient): Promise<number> {
     setMeta(PARSE_STRIKES_KEY, '');
     claims = parsed.claims;
     usageGrades = parseFactUsage(reply);
+    closeCases(parseSkillOutcomes(reply));
   } catch (error) {
     // Leave the cursor unmoved so a later run retries this exact segment
     // (grading rides along: ungraded rows stay ungraded). Reported before the
@@ -975,6 +1077,7 @@ export async function distillNewMessages(llm: LlmClient): Promise<number> {
   }
 
   // Advance through exactly the characters the successful prompt contained.
+  closeCases([]);
   setMeta(CURSOR_KEY, JSON.stringify(batch.nextCursor));
   // Keep the old watermark moving for downgrade compatibility, but never use it
   // to decide v2 progress.

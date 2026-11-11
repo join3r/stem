@@ -3,7 +3,7 @@
 // deleted members, and injection through the GTE fact path. Stateful (shared
 // per-process DB) like the sibling recall suites.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildRecallContext, previewFacts } from '../../src/server/recall/inject';
+import { buildRecallContext, previewFacts, RECALL_RULES } from '../../src/server/recall/inject';
 import { formatFactQuery } from '../../src/server/recall/fact-query';
 import { recallStore as store, type Fact, type FactTier } from '../../src/server/recall/store';
 import { setRetrievalClients, type FactRerankClient } from '../../src/server/recall/retrieval';
@@ -244,7 +244,9 @@ describe('injection', () => {
     const block = await buildRecallContext('How are my tomatoes?', { factReranker: gte(() => 1), chosen });
     expect(chosen.parents).toHaveLength(1);
     expect(block).toContain('"broaderMemories":[{"text":"The user has a garden: memory covering 2 facts."');
-    expect(block).toContain('Each broaderMemories entry sums up several related facts');
+    // What a broader memory is, is said in the rules, which go out once per chat.
+    expect(block).not.toContain('Each broaderMemories entry');
+    expect(RECALL_RULES).toContain('Each broaderMemories entry sums up several related facts');
   });
 
   it('holds a parent with a sensitive member to the sensitive margin', async () => {

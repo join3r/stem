@@ -888,6 +888,25 @@ export interface SkillSummary {
   lastFailure?: { at: string; reason: string };
   /** Tools whose first call in a turn hands this skill over (`server.tool`, `server.*`, or a tool name). */
   tools?: string[];
+  /**
+   * How the recorded uses ended (server/skills/cases.ts): accepted, and went
+   * wrong (corrected, asked again, or reported). Absent with no graded use.
+   */
+  outcomes?: { accepted: number; failed: number };
+  /** Earlier versions kept, which Manage can restore. */
+  versions?: number;
+  /** Why the current version was written, when the writer said. */
+  change?: string;
+}
+
+/** One kept earlier version of a skill (server/skills/store.ts). */
+export interface SkillVersionSummary {
+  version: number;
+  /** ISO timestamp when that version was written. */
+  updated: string;
+  description: string;
+  /** Why that version was written, when the writer said. */
+  change?: string;
 }
 
 // ---- Files (the persistent drop-place the assistant can read) ----
@@ -5356,6 +5375,10 @@ export interface StemApi {
    * file manager.
    */
   removeSkill(slug: string): Promise<SkillSummary[]>;
+  /** The earlier versions of one skill that are kept, newest first. */
+  listSkillVersions(slug: string): Promise<SkillVersionSummary[]>;
+  /** Put an earlier version back, as a new version. Rejects with the reason when it cannot. */
+  restoreSkillVersion(slug: string, version: number): Promise<SkillSummary[]>;
   /**
    * `/learn [focus]` — save a skill from the turn that just finished on this
    * thread. Bypasses the automatic gate (the user asked), but still respects the

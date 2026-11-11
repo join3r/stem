@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { degrade } from '../degrade';
@@ -7,6 +7,7 @@ import { skillsRoot } from '../workspace/paths';
 import { GENERAL_SKILL_TOOLS, SKILL_SLUG_RE, validateSkill, type SkillDraft, type SkillViolation } from './contract';
 import { DISABLED_MARKER, syncSkillsIgnore } from './ignore';
 import { pruneUsage } from './usage';
+import { pruneCases } from './cases';
 
 // The one place a SKILL.md is written.
 //
@@ -57,6 +58,8 @@ export interface SkillRecord {
   enabled: boolean;
   /** Tools whose calls hand this skill over (contract.ts SkillDraft.tools); [] = none. */
   tools: string[];
+  /** Why this version was written, in one line, when the writer said (see SaveOptions.change). */
+  change?: string;
 }
 
 export type WriteResult =
@@ -73,7 +76,11 @@ export interface SkillFront {
   created?: string;
   updated?: string;
   tools?: string[];
+  change?: string;
 }
+
+/** Longest change note kept in the front-matter. */
+export const SKILL_CHANGE_MAX = 200;
 
 /**
  * Compose a SKILL.md. Scalars are JSON-stringified, which is valid YAML for
@@ -92,6 +99,7 @@ export function composeSkillMd(input: {
   /** Defaults to now; passed explicitly so a caller can report what it wrote. */
   updated?: string;
   tools?: readonly string[];
+  change?: string;
 }): string {
   const fm = [
     '---',
@@ -105,6 +113,7 @@ export function composeSkillMd(input: {
     `    created: ${JSON.stringify(input.created)}`,
     `    updated: ${JSON.stringify(input.updated ?? new Date().toISOString())}`,
     ...(input.tools?.length ? [`    tools: ${JSON.stringify(input.tools)}`] : []),
+    ...(input.change?.trim() ? [`    change: ${JSON.stringify(oneLine(input.change, SKILL_CHANGE_MAX))}`] : []),
     '---'
   ].join('\n');
   return `${fm}\n\n${input.body.trim()}\n`;
@@ -134,7 +143,8 @@ export function parseSkillMd(text: string): SkillFront {
     version: typeof stem.version === 'number' ? stem.version : undefined,
     created: str(stem.created),
     updated: str(stem.updated),
-    tools: Array.isArray(stem.tools) ? stem.tools.filter((t): t is string => typeof t === 'string') : undefined
+    tools: Array.isArray(stem.tools) ? stem.tools.filter((t): t is string => typeof t === 'string') : undefined,
+    change: str(stem.change)
   };
 }
 
@@ -182,7 +192,8 @@ function readRecordIn(root: string, slug: string): SkillRecord | null {
     created: fm.created ?? '',
     updated: fm.updated ?? fm.created ?? '',
     enabled: !existsSync(join(root, slug, DISABLED_MARKER)),
-    tools: fm.tools ?? []
+    tools: fm.tools ?? [],
+    ...(fm.change ? { change: fm.change } : {})
   };
 }
 
@@ -243,7 +254,18 @@ function bumpSkillsRev(root: string): void {
  * `source` and the ORIGINAL `origin`: a later automatic touch of a skill the user
  * asked for must not relabel it as something Stem thought of on its own.
  */
-export function saveSkill(draft: SkillDraft, opts: { origin: SkillOrigin; expectExisting?: boolean }): WriteResult {
+export interface SaveOptions {
+  origin: SkillOrigin;
+  expectExisting?: boolean;
+  /**
+   * Why this version exists, in one line ("Changed after your correction: …").
+   * Kept in the front-matter, so every kept version carries its own reason and
+   * Manage can say what each one was for. Omitted: the version has no note.
+   */
+  change?: string;
+}
+
+export function saveSkill(draft: SkillDraft, opts: SaveOptions): WriteResult {
   const violations = validateSkill(draft);
   if (violations.length > 0) {
     return { ok: false, error: violations.map((v) => v.message).join(' '), violations };
@@ -276,12 +298,16 @@ export function saveSkill(draft: SkillDraft, opts: { origin: SkillOrigin; expect
     // A patch that does not mention tools keeps the skill's; the author is shown
     // them, so leaving them out is not a decision to drop them. A kept general
     // tool is dropped: it never holds a call, and the next write cleans the file.
-    tools: draft.tools ? draft.tools.map((t) => t.trim()) : (existing?.tools ?? []).filter((t) => !GENERAL_SKILL_TOOLS.has(t))
+    tools: draft.tools ? draft.tools.map((t) => t.trim()) : (existing?.tools ?? []).filter((t) => !GENERAL_SKILL_TOOLS.has(t)),
+    ...(opts.change?.trim() ? { change: oneLine(opts.change, SKILL_CHANGE_MAX) } : {})
   };
 
+  // The text this write replaces is kept first. An automatic change that turns
+  // out worse than what it replaced is only a mistake if it can be undone.
+  if (existing) keepVersion(root, slug, existing.version);
   try {
     mkdirSync(join(root, slug), { recursive: true });
-    writeFileSync(join(root, slug, SKILL_FILE), composeSkillMd(record), 'utf8');
+    writeAtomic(join(root, slug, SKILL_FILE), composeSkillMd(record));
   } catch (error) {
     // quiet: the message goes back to whoever asked for the write and is shown —
     // a save that vanished would be a skill the user believes exists.
@@ -302,7 +328,7 @@ export function relabelSkill(slug: string, origin: SkillOrigin): WriteResult {
   if (!existing) return { ok: false, error: `No skill "${slug}".` };
   const record = { ...existing, origin };
   try {
-    writeFileSync(join(root, slug, SKILL_FILE), composeSkillMd(record), 'utf8');
+    writeAtomic(join(root, slug, SKILL_FILE), composeSkillMd(record));
   } catch (error) {
     // quiet: the caller gets the reason; the old label stays and the pass runs again.
     return { ok: false, error: `Could not relabel skill "${slug}": ${message(error)}` };
@@ -335,15 +361,145 @@ export function removeSkill(slug: string, opts: { requireAgentAuthored?: boolean
     // quiet: same as saveSkill — the caller gets the reason and shows it.
     return { ok: false, error: `Could not remove skill "${clean}": ${message(error)}` };
   }
+  // The kept versions go with the skill: there is no way to restore a skill that
+  // is gone, and old text of a deleted skill is text the user asked to be rid of.
+  try {
+    rmSync(join(root, SKILL_VERSIONS_DIR, clean), { recursive: true, force: true });
+  } catch (error) {
+    degrade('skills.store', 'kept the old versions of a deleted skill', error);
+  }
   bumpSkillsRev(root);
   // The usage sidecar and the ignore file both key off directories that no longer
   // exist; leaving either stale would resurrect the slug in the curator prompt or
   // keep hiding a name that is now free to reuse.
   pruneUsage();
+  pruneCases();
   syncSkillsIgnore(root);
   return { ok: true, slug: clean, record, created: false };
 }
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function oneLine(text: string, max: number): string {
+  const line = text.replace(/\s+/g, ' ').trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/**
+ * Write through a temporary file and a rename, so a crash or a full disk never
+ * leaves a half-written SKILL.md. The temporary name does not end in `.md`, so
+ * the backend's scanner never reads it as a skill.
+ */
+function writeAtomic(path: string, text: string): void {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, text, 'utf8');
+  try {
+    renameSync(tmp, path);
+  } catch (error) {
+    rmSync(tmp, { force: true });
+    throw error;
+  }
+}
+
+// ---- kept versions ----
+//
+// Every update keeps the text it replaces under `.skill-versions/<slug>/v<N>.md`.
+// A dot folder, so the backend's scanner skips it, and no file in it is named
+// SKILL.md, so `listSkillRecords` never reads one as a skill. The curator keeps
+// its own run backups in `.curator-history`; this is per skill and per write,
+// whoever the writer was, so Manage can roll any one skill back.
+
+export const SKILL_VERSIONS_DIR = '.skill-versions';
+/** Earlier versions kept per skill. Older ones are dropped on the next write. */
+export const SKILL_VERSIONS_KEPT = 10;
+
+export interface SkillVersion {
+  version: number;
+  /** When that version was written (its own `updated`). */
+  updated: string;
+  description: string;
+  change?: string;
+}
+
+function versionsDir(root: string, slug: string): string {
+  return join(root, SKILL_VERSIONS_DIR, slug);
+}
+
+/** Copy the current SKILL.md aside as `v<version>.md`. Best-effort: a failed copy never blocks the write. */
+function keepVersion(root: string, slug: string, version: number): void {
+  try {
+    const raw = readFileSync(join(root, slug, SKILL_FILE), 'utf8');
+    const dir = versionsDir(root, slug);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `v${version}.md`), raw, 'utf8');
+    const kept = versionNumbers(dir);
+    for (const old of kept.slice(SKILL_VERSIONS_KEPT)) rmSync(join(dir, `v${old}.md`), { force: true });
+  } catch (error) {
+    degrade('skills.store', 'changed a skill without keeping its previous text', error);
+  }
+}
+
+/** The version numbers kept in `dir`, newest first. */
+function versionNumbers(dir: string): number[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') degrade('skills.store', 'listed no earlier versions of a skill', error);
+    return [];
+  }
+  return names
+    .map((n) => /^v(\d+)\.md$/.exec(n)?.[1])
+    .filter((v): v is string => !!v)
+    .map(Number)
+    .sort((a, b) => b - a);
+}
+
+/** The earlier versions of a skill that can be restored, newest first. */
+export function listSkillVersions(slug: string): SkillVersion[] {
+  const clean = String(slug ?? '').trim();
+  if (!SKILL_SLUG_RE.test(clean)) return [];
+  const dir = versionsDir(skillsRoot(), clean);
+  const out: SkillVersion[] = [];
+  for (const version of versionNumbers(dir)) {
+    try {
+      const fm = parseSkillMd(readFileSync(join(dir, `v${version}.md`), 'utf8'));
+      out.push({ version, updated: fm.updated ?? fm.created ?? '', description: fm.description ?? '', ...(fm.change ? { change: fm.change } : {}) });
+    } catch (error) {
+      degrade('skills.store', 'skipped one earlier version of a skill', error);
+    }
+  }
+  return out;
+}
+
+/** How many earlier versions of `slug` are kept. */
+export function countSkillVersions(slug: string): number {
+  return versionNumbers(versionsDir(skillsRoot(), slug)).length;
+}
+
+/**
+ * Put an earlier version back. It is written as a new version, so the text it
+ * replaces is kept in turn and a restore can itself be undone. The restored text
+ * must still meet the contract; an old version that no longer does is refused
+ * with the reason, rather than written around the validator.
+ */
+export function restoreSkillVersion(slug: string, version: number): WriteResult {
+  const clean = String(slug ?? '').trim();
+  const root = skillsRoot();
+  const current = readRecordIn(root, clean);
+  if (!current) return { ok: false, error: `No skill "${clean}".` };
+  let raw: string;
+  try {
+    raw = readFileSync(join(versionsDir(root, clean), `v${Math.trunc(version)}.md`), 'utf8');
+  } catch (error) {
+    // quiet: the caller shows the reason; nothing was changed.
+    return { ok: false, error: `Version ${version} of "${clean}" is not kept: ${message(error)}` };
+  }
+  const fm = parseSkillMd(raw);
+  return saveSkill(
+    { name: clean, description: fm.description ?? current.description, body: stripFront(raw), tools: fm.tools ?? [] },
+    { origin: current.origin, expectExisting: true, change: `Restored version ${version}` }
+  );
 }

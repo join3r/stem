@@ -93,3 +93,32 @@ export function loadedSkillNames(snapshot: unknown): Set<string> {
   }
   return names;
 }
+
+/**
+ * The name-only index lines the chat already holds, exactly as formatSkillsBlock
+ * wrote them ("- name — description"). `liveUserTexts` is the chat's live user
+ * messages (pi/context-dedupe.ts follows the same projection as above), so a
+ * line that a compaction summarised away is not in the set and may be listed
+ * again.
+ *
+ * Every "- " line of a skills block is taken, a bullet in a loaded skill's steps
+ * included: the caller asks only whether one exact line is there, and a step
+ * that is letter for letter another skill's name and description does not exist.
+ * An empty set is the safe answer to any doubt. It lists the index in full, which
+ * is what every turn did before this existed.
+ */
+export function listedSkillLines(liveUserTexts: readonly string[]): Set<string> {
+  const lines = new Set<string>();
+  for (const text of liveUserTexts) {
+    let from = 0;
+    for (;;) {
+      const open = text.indexOf(SKILLS_OPEN, from);
+      if (open < 0) break;
+      const close = text.indexOf(SKILLS_CLOSE, open);
+      if (close < 0) break;
+      for (const line of text.slice(open, close).split('\n')) if (line.startsWith('- ')) lines.add(line);
+      from = close + SKILLS_CLOSE.length;
+    }
+  }
+  return lines;
+}

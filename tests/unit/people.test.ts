@@ -12,7 +12,7 @@ import { peopleForTurn, personFacts } from '../../src/server/recall/people-conte
 import { setPeopleContactsSource, suggestPeople } from '../../src/server/recall/people-suggest';
 import { peopleBlock } from '../../src/server/recall/distill';
 import { contactSource, recallStore as store } from '../../src/server/recall/store';
-import { buildRecallContext } from '../../src/server/recall/inject';
+import { buildRecallContext, RECALL_RULES } from '../../src/server/recall/inject';
 import * as search from '../../src/server/recall/search';
 import * as searchCore from '../../src/server/recall/search-core';
 import * as folders from '../../src/server/folder-index';
@@ -184,6 +184,7 @@ describe('recall context', () => {
     });
     expect(block).toContain('"people":[{"name":"Peter Novák","relation":"colleague","facts":[{"id":');
     expect(block).toContain('uses Linux');
-    expect(block).toContain('"people" are the people this conversation names');
+    // What "people" means is said in the rules, which go out once per chat.
+    expect(RECALL_RULES).toContain('"people" are the people the conversation names');
   });
 });

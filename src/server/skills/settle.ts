@@ -3,6 +3,7 @@ import type { LlmClient } from '../recall/llm';
 import type { SkillsMode } from '../../shared/types';
 import { authorSkill, type AuthorCandidate, type AuthorOutcome, type AuthorTurn } from './author';
 import { listSkillRecords, readSkillRecord } from './store';
+import { casesFor } from './cases';
 import { whereSkillsRun } from '../workspace/bootstrap';
 
 // The end-of-turn pass: after a turn that did real work, decide whether it left
@@ -223,6 +224,8 @@ export async function authorForTurn(
     writing?: boolean;
     /** Preferences memory just learned from this conversation (the convention pass). */
     conventions?: string[];
+    /** What the user said was wrong with a result of `existing` (skills/cases.ts). */
+    correction?: string;
   } = {}
 ): Promise<AuthorOutcome> {
   const evidence = {
@@ -235,9 +238,12 @@ export async function authorForTurn(
     issue: opts.issue,
     writing: opts.writing,
     conventions: opts.conventions,
+    correction: opts.correction,
     machine: whereSkillsRun()
   };
-  if (opts.existing) return authorSkill(llm, { ...evidence, existing: opts.existing });
+  // A patch is shown the skill's recorded uses, so a fix for this turn keeps
+  // what the earlier accepted uses relied on (skills/cases.ts).
+  if (opts.existing) return authorSkill(llm, { ...evidence, existing: opts.existing, cases: casesFor(opts.existing.name) });
 
   const { candidates, libraryIndex } = libraryForAuthor(turn.skillsInjected);
   const first = await authorSkill(llm, { ...evidence, candidates, libraryIndex });
@@ -260,7 +266,8 @@ export async function authorForTurn(
   const second = await authorSkill(llm, {
     ...evidence,
     existing: { name: record.slug, description: record.description, body: record.body },
-    chosenTarget: true
+    chosenTarget: true,
+    cases: casesFor(record.slug)
   });
   // Both shots' attempts, so a log line reads as the whole cost of the turn.
   const attempts = first.attempts + second.attempts;

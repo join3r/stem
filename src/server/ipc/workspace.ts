@@ -30,7 +30,7 @@ import { log } from '../log';
 import { pushToDevice } from '../startup/transport';
 import { memoryRunOf, skillsRunOf, updateSkillsSettings } from '../workspace/settings';
 import { resetSkills, skillsResetStatus } from '../skills/reset';
-import { removeSkill } from '../skills/store';
+import { listSkillVersions, removeSkill, restoreSkillVersion } from '../skills/store';
 import { learnFromChat } from '../startup/skills';
 import {
   answerRecordingDraft,
@@ -92,6 +92,15 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   // way they have to remove anything at all.
   registerServer('skills:remove', async (_e, slug: string) => {
     const res = removeSkill(slug);
+    if (!res.ok) throw new Error(res.error);
+    await deps.runtime().requestSkillReload();
+    return listSkills();
+  });
+  // Kept versions (skills/store.ts): every change keeps the text it replaced,
+  // so an automatic change that made a skill worse can be undone from Manage.
+  registerServer('skills:versions', (_e, slug: string) => listSkillVersions(slug));
+  registerServer('skills:restore', async (_e, slug: string, version: number) => {
+    const res = restoreSkillVersion(slug, version);
     if (!res.ok) throw new Error(res.error);
     await deps.runtime().requestSkillReload();
     return listSkills();

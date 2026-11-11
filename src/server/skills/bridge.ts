@@ -1,8 +1,10 @@
 import type { SkillsMode } from '../../shared/types';
 import { formatViolations, validateSkill, type SkillDraft } from './contract';
 import { findDuplicateSkill } from './dedup';
-import { listSkillRecords, readSkillRecord, removeSkill, saveSkill, type SkillOrigin } from './store';
+import { listSkillRecords, readSkillRecord, removeSkill, saveSkill, type SkillOrigin, type SkillRecord } from './store';
 import { formatLoadedSkill, type InlinedSkill } from './inject';
+import type { ReviewVerdict } from './review';
+import { log } from '../log';
 
 // The policy layer for every skill write the assistant asks for.
 //
@@ -41,6 +43,12 @@ export interface SkillSaveRequest {
    * tool itself, where initiatedBy is the whole story.
    */
   origin?: SkillOrigin;
+  /**
+   * Why the skill is changed, in one line: kept with the new version (Manage
+   * shows it beside the version) and shown to the check (review.ts) as the
+   * reason to weigh. Set by the background passes; the live tool leaves it out.
+   */
+  change?: string;
 }
 
 export interface SkillRemoveRequest {
@@ -62,6 +70,8 @@ export interface SkillBridgeResult {
   text: string;
   /** `view` only: the skill loaded, so the turn can grade and route it like an inlined one. */
   loaded?: InlinedSkill;
+  /** Save only: the check (review.ts) turned the change down, or could not judge it. */
+  rejected?: true;
 }
 
 export interface SkillApprovalOutcome {
@@ -87,6 +97,11 @@ export interface SkillBridgeDeps {
    * a curator pass — see the curate-on-create trigger in startup/recall-tasks.ts.
    */
   onCreated?(): void;
+  /**
+   * Check a change Stem made on its own before it is written (review.ts). Null
+   * means the check could not answer. Absent: no check (tests, the E2E fake).
+   */
+  reviewChange?(input: { before: SkillRecord; after: SkillDraft; why?: string }): Promise<ReviewVerdict | null>;
 }
 
 /**
@@ -204,6 +219,31 @@ export class SkillBridge {
     const mode = assistantIdea ? await this.deps.mode() : null;
     if (mode === 'off') return { ok: false, text: OFF_REFUSAL };
 
+    // Stem's own change to a skill that exists is checked against the skill's
+    // recorded uses before anyone sees it: a change the check rejects is not
+    // written in Auto mode and not put on a card in Ask mode. A change the check
+    // could not judge is not written silently; in Ask mode the user still sees
+    // it, because then the user is the check.
+    if (assistantIdea && target && this.deps.reviewChange) {
+      const verdict = await this.deps.reviewChange({ before: target, after: draft, why: req.change });
+      if (verdict && !verdict.keep) {
+        log('skills', 'change rejected by review', { skill: target.slug, reason: verdict.reason });
+        return {
+          ok: false,
+          rejected: true,
+          text: `The change to "${target.slug}" was not saved: a check against its earlier uses found that ${verdict.reason}. Keep following the skill as it is, and do not retry this change.`
+        };
+      }
+      if (!verdict && (mode === 'auto' && target.origin !== 'imported')) {
+        log('skills', 'change not checked', { skill: target.slug });
+        return {
+          ok: false,
+          rejected: true,
+          text: `The change to "${target.slug}" was not saved, because it could not be checked against the skill's earlier uses. Do not retry it now.`
+        };
+      }
+    }
+
     // Only a genuine create is checked for duplicates — an update names its
     // target, and resembling the skill you are updating is not a defect.
     if (!target) {
@@ -220,10 +260,10 @@ export class SkillBridge {
     }
 
     // The user asked for this one: write it, whatever the mode says.
-    if (mode === null) return this.write(draft, req.origin ?? 'user-requested', req.expectExisting);
+    if (mode === null) return this.write(draft, req.origin ?? 'user-requested', req.expectExisting, req.change);
     // Auto mode never edits an import silently: the user installed it as it is,
     // so Stem's idea of a fix goes to a card like any other ask-mode proposal.
-    if (mode === 'auto' && target?.origin !== 'imported') return this.write(draft, req.origin ?? 'assistant', req.expectExisting);
+    if (mode === 'auto' && target?.origin !== 'imported') return this.write(draft, req.origin ?? 'assistant', req.expectExisting, req.change);
 
     const outcome = await this.deps.requestApproval(
       { ...draft, isPatch: !!req.expectExisting },
@@ -244,11 +284,11 @@ export class SkillBridge {
     // it, which the injected label reflects (inject.ts), but the idea was Stem's.
     // The curator may reshape what Stem thought of; it never touches what the user
     // asked for (skills/curate.ts).
-    return this.write(edited, 'approved', req.expectExisting);
+    return this.write(edited, 'approved', req.expectExisting, req.change);
   }
 
-  private write(draft: SkillDraft, origin: SkillOrigin, expectExisting?: boolean): SkillBridgeResult {
-    const res = saveSkill(draft, { origin, expectExisting });
+  private write(draft: SkillDraft, origin: SkillOrigin, expectExisting?: boolean, change?: string): SkillBridgeResult {
+    const res = saveSkill(draft, { origin, expectExisting, ...(change ? { change } : {}) });
     if (!res.ok) return { ok: false, text: res.error };
     this.deps.onChanged();
     if (res.created) this.deps.onCreated?.();

@@ -32,6 +32,10 @@ Open **Tools → Skills**.
 - Click a skill to select it, then the trash button under the list deletes it for
   good — it asks first. This works on skills you wrote yourself too: on a server
   install the skills folder is on the server, so this is the only way to reach it.
+- The history button under the list shows the earlier versions of the selected
+  skill, each with the reason it changed. Pick one and press **Restore** to put it
+  back. The current text is kept as an earlier version, so a restore can be undone.
+  Stem keeps the last ten versions of each skill.
 - **Tidy up** keeps one skill per job: it splits a skill that grew to cover several
   unrelated jobs, merges two write-ups of the same job, and archives ones untouched
   for 90 days. Archiving is the same reversible switch as above, so an archived
@@ -45,12 +49,36 @@ An **auto** label marks a skill Stem created. Usage details show whether it is s
 useful. Stem reshapes only skills that were its own idea, including ones you accepted
 from a proposal card; it may change or split those without asking. Skills you asked it
 to save, skills you imported or added yourself, `/learn` skills and recorded skills are
-never rewritten by tidy-up, and Stem changes them only when you ask.
+never rewritten by tidy-up or by the rewrite below. Stem changes them only when you ask,
+or when you correct a result that followed one. Imported skills never change that way.
 
 A cloud curator receives relevant chat excerpts during collection and auto-skill text
 during upkeep. It may use provider quota.
 
 Keep skills narrow and verifiable. Disable an auto skill to stop Stem using it.
+
+## How skills improve
+
+Each time a skill is used, Stem keeps a short record of that use: your request, what
+Stem did, and how you took the result in your next message. It reads that from your
+next message in the background, with the memory pass that already reads it, so this
+costs no extra model call per message.
+
+- When you correct a result ("no, sign it as Stem"), Stem changes the skill that
+  produced it, with your correction as a step.
+- When three uses of a skill went wrong, Stem looks at all of its records at once,
+  works out which steps caused the trouble, and rewrites the skill. This applies only
+  to skills that were Stem's own idea.
+- Before Stem saves any change it made on its own, a separate check compares the new
+  text with the old one and with the records. A change that would break what worked
+  before, or that only fits one case, is not saved.
+
+The Skills list shows the result as "5 accepted · 1 needed a fix". The **Saving
+skills** setting applies to all of this: **Only when I ask** stops it, and **Ask
+first** shows each change as a card.
+
+The records need Memory on. Private chats, scheduled runs and personas without memory
+leave no record, and deleting a chat deletes its records.
 
 ## Recording a skill
 

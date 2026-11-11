@@ -305,6 +305,8 @@ export interface SettledTurnTrace {
   /** The turn read inside a memorize:false folder: never author from it. */
   memoryTainted: boolean;
   isScheduled: boolean;
+  /** A persona without memory (or a private chat) ran this turn: nothing from it is kept. */
+  noRecall?: boolean;
 }
 
 export function snapshotTurnTrace(turn: TurnContext, endedAt: number): SettledTurnTrace {
@@ -319,7 +321,8 @@ export function snapshotTurnTrace(turn: TurnContext, endedAt: number): SettledTu
     skillsGradedUsed: [...(turn.skillsGradedUsed ?? [])],
     skillsReported: (turn.skillsReported ?? []).map((i) => ({ ...i })),
     memoryTainted: turn.memoryTainted === true,
-    isScheduled: turn.isScheduled === true
+    isScheduled: turn.isScheduled === true,
+    ...(turn.noRecall ? { noRecall: true } : {})
   };
 }
 

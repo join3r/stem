@@ -74,7 +74,7 @@ import { autoTitle, nameThread, nameThreadIfDue as nameIfDue, type SubjectDeps }
 import { noteRename } from '../workspace/inbox';
 import { getChatFormat, isChatPrivate, markTurnTainted, setChatFormat, setChatPrivate, setNaming, taintedTurns } from '../workspace/chats';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
-import { buildRecallContext, type RecallTimings } from '../recall/inject';
+import { buildRecallContext, RECALL_RULES, type RecallTimings } from '../recall/inject';
 import { userProfileContext } from '../recall/profile';
 import { buildPinsContext } from '../pins/context';
 import { getFactRerankClient } from '../recall/retrieval';
@@ -133,8 +133,8 @@ import {
 } from './web-search';
 import { piMcpConfigPath, skillsRoot, workspaceRoot as stemWorkspaceRoot } from '../workspace/paths';
 import { readUsage, recordGrades, recordInjections, recordUses } from '../skills/usage';
-import { formatSkillsBlock, selectSkills, toolSkillsForTurn, toolSkillsHandedOver, type SkillUsageStat } from '../skills/inject';
-import { loadedSkillNames } from '../skills/thread-history';
+import { formatSkillsBlock, selectSkills, SKILL_RULES, toolSkillsForTurn, toolSkillsHandedOver, type SkillUsageStat } from '../skills/inject';
+import { listedSkillLines, loadedSkillNames } from '../skills/thread-history';
 import { AmbientBlocks, liveUserTexts } from './context-dedupe';
 import { formatPracticeBlock } from '../skills/record';
 import { formatWindowBlock, isBrowserWindow } from './window-context';
@@ -5118,6 +5118,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
     const previousUserMessages =
       historySnapshot !== undefined && !input.scheduled && !input.mail ? previousFactUserMessages(historySnapshot) : [];
+    // What the model already has in front of it. Text that is there verbatim is
+    // not sent a second time (context-dedupe.ts): a long thread, and above all a
+    // mail thread where every delivery is a turn, used to carry one full copy
+    // per message. That holds for the ambient blocks at the end of this
+    // function, and for the rules of the memory and skills blocks, which are
+    // constant text and used to follow their block on every turn.
+    const liveTexts = historySnapshot === undefined ? [] : liveUserTexts(historySnapshot);
+    const ambient = new AmbientBlocks(liveTexts);
     // A persona with recall off sees none of the user's memory: no facts, no
     // episodic history, no indexed folder excerpts. The block is skipped
     // outright rather than emptied, so nothing about the user rides along
@@ -5145,7 +5153,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         previousUserMessages: factReranker?.factQuery ? previousUserMessages : [],
         earlierUserMessages: previousUserMessages
       });
-      if (recall) blocks.push(recall);
+      if (recall) {
+        blocks.push(recall);
+        ambient.add(RECALL_RULES, 'the rules for the memory block');
+      }
       // Documents from a memorize:false folder were injected: taint the turn the
       // same way reading such a folder does, so the reply stays out of Recall.
       if (flags.privateDocsInjected && turn?.threadId === threadId) {
@@ -5188,7 +5199,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const selection = await selectSkills(input.input, records, {
         usage: skillUsageLookup(),
         previousUserMessages,
-        alreadyLoaded
+        alreadyLoaded,
+        // A skill the chat lists already is not listed again.
+        alreadyListed: listedSkillLines(liveTexts)
       });
       toolSkills = toolSkillsForTurn(records, selection.inlined.map((s) => s.slug), alreadyLoaded);
       if (turn?.threadId === threadId) turn.toolSkillsOffered = toolSkills.map((s) => s.slug);
@@ -5207,6 +5220,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const skillsBlock = formatSkillsBlock(selection);
       if (skillsBlock) {
         blocks.push(skillsBlock);
+        ambient.add(SKILL_RULES, 'the rules for saved skills');
         // The denominator of the usage loop. Only inlined skills count: a skill
         // listed by name was never given its steps, so it had no chance to be
         // followed and grading it either way would be noise.
@@ -5276,11 +5290,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       blocks.push(formatWindowBlock(w, servers, computer, browser, { browserOff, offer }));
     }
 
-    // The ambient blocks below go out only when the live context does not
-    // already hold them verbatim (context-dedupe.ts): a long thread, and above
-    // all a mail thread where every delivery is a turn, used to carry one full
-    // copy per message.
-    const ambient = new AmbientBlocks(historySnapshot === undefined ? [] : liveUserTexts(historySnapshot));
+    // The ambient blocks: each goes out only when the live context does not
+    // already hold it verbatim (`ambient` is made above, next to the snapshot).
     // The user summary: the whole picture once per chat context, where recall
     // above carries only the facts this message calls for.
     if (userSummary) ambient.add(userSummary, 'the summary of what you know about the user');

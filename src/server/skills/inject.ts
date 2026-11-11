@@ -78,6 +78,8 @@ export interface SkillDecision {
   alreadyLoaded?: string[];
   /** The ranked text carried the previous user message (a short follow-up). */
   withContext?: boolean;
+  /** Index entries left out because this chat's history already lists them. */
+  listedEarlier?: number;
 }
 
 export interface SkillSelection {
@@ -100,16 +102,19 @@ export interface SkillSelection {
 export const MAX_INLINED_SKILLS = 2;
 
 /**
- * How many skills the name-only index may list. The index is cheap per entry
- * (~100 bytes) but it is paid on EVERY turn, so an unbounded list turns a growing
- * library into a growing per-turn tax — which is the shape of the problem this
- * rebuild exists to fix, just with a smaller constant. Thirty is well above any
- * library seen so far and still bounds the block at a couple of kilobytes.
+ * How many skills the name-only index may consider for one message: the ones the
+ * message matched best. Entries are dropped from the bottom of the ranking, so
+ * what falls off is what the message matched least. When embeddings are
+ * unavailable there is no ranking to trust, so the whole library is a candidate —
+ * the alternative is hiding skills on an arbitrary criterion.
  *
- * Entries are dropped from the bottom of the ranking, so what falls off is what
- * the message matched least. When embeddings are unavailable there is no ranking
- * to trust, so the whole library is listed — the alternative is hiding skills on
- * an arbitrary criterion.
+ * A turn lists only the candidates the chat does not list already (see
+ * `alreadyListed`). The cap was written for a library below thirty skills, when
+ * the index was paid in full on EVERY turn. Measured 2026-11-11 on a library of
+ * 83: 4.8 KB per turn, a third of everything Stem put in front of a message,
+ * and the same list as the turn before in 21 turns of 889, because the order
+ * follows the message. pi keeps every message, so a chat of ten turns carried
+ * ten indexes.
  */
 export const MAX_INDEXED_SKILLS = 30;
 
@@ -215,6 +220,14 @@ export interface SelectSkillsOptions {
    */
   alreadyLoaded?: ReadonlySet<string>;
   /**
+   * Index lines already in this chat's live history (`listedSkillLines` in
+   * skills/thread-history.ts). A skill whose line is there is not listed again:
+   * the model still has it, and a second copy only costs context. The match is
+   * on the whole line, so a skill whose name or description changed is listed
+   * again with the new text.
+   */
+  alreadyListed?: ReadonlySet<string>;
+  /**
    * Example requests by slug (skills/examples.ts). Read from the skills dir
    * when absent. Used only with a reranker calibrated for them.
    */
@@ -284,11 +297,33 @@ function indexAll(
  * Choose what the model sees this turn. Never throws and never rejects: every
  * failure mode (no embeddings, model still downloading, embed error, blank
  * message) degrades to indexing the whole enabled library.
+ *
+ * The index holds only what the chat does not list already. That applies to the
+ * degraded paths too: they offer the whole library, which on a chat of many
+ * short messages was the whole library many times over.
  */
 export async function selectSkills(
   message: string,
   records: SkillRecordish[],
   opts: SelectSkillsOptions = {}
+): Promise<SkillSelection> {
+  const selection = await rankSkills(message, records, opts);
+  const listed = opts.alreadyListed;
+  if (!listed?.size) return selection;
+  const indexed = selection.indexed.filter((s) => !listed.has(skillIndexLine(s)));
+  const listedEarlier = selection.indexed.length - indexed.length;
+  if (listedEarlier === 0) return selection;
+  return {
+    ...selection,
+    indexed,
+    ...(selection.decision ? { decision: { ...selection.decision, listedEarlier } } : {})
+  };
+}
+
+async function rankSkills(
+  message: string,
+  records: SkillRecordish[],
+  opts: SelectSkillsOptions
 ): Promise<SkillSelection> {
   const candidates = enabledOnly(records);
   if (candidates.length === 0) return { inlined: [], indexed: [] };
@@ -488,18 +523,14 @@ function fence(text: string): string {
 }
 
 /**
- * Render the per-turn block. Returns '' when there is nothing to say so the
- * caller can drop the block entirely rather than emit an empty wrapper.
- *
- * The framing is the deliberate inverse of `<stem_memory_data>`, which
- * `workspace/bootstrap.ts:7` fences as untrusted historical DATA whose quoted
- * directives must never be followed. Skills are the opposite by construction:
- * they are Stem's own saved procedures and the whole point is that they get
- * followed. What that inversion costs is a safety property, so it is bought back
- * explicitly — the model is told to SAY SO in its reply when a step is wrong
- * rather than follow it silently. A bad auto-saved skill has to become visible
- * to the user, and that report is also what routes the skill into patch-on-use.
+ * One entry of the name-only index, exactly as the block prints it. One spelling
+ * for the writer (formatSkillsBlock) and for the check that keeps a skill from
+ * being listed twice in a chat (selectSkills against thread-history.ts).
  */
+export function skillIndexLine(skill: IndexedSkill): string {
+  return `- ${fence(skill.name)} — ${fence(skill.description)}`;
+}
+
 /**
  * The prefix the model is told to put on a report that a loaded step was wrong.
  * `reportedSkillIssues` in grade.ts parses it back out of the reply. One fixed
@@ -583,6 +614,11 @@ export function toolSkillsHandedOver(trace: readonly { result?: string; isError?
   return slugs;
 }
 
+/**
+ * Render the per-turn block. Returns '' when there is nothing to say so the
+ * caller can drop the block entirely rather than emit an empty wrapper. The
+ * rules for the block are not part of it: see {@link SKILL_RULES}.
+ */
 export function formatSkillsBlock(selection: SkillSelection): string {
   const { inlined, indexed } = selection;
   if (inlined.length === 0 && indexed.length === 0) return '';
@@ -595,27 +631,47 @@ export function formatSkillsBlock(selection: SkillSelection): string {
     );
   }
   if (indexed.length > 0) {
-    const list = indexed.map((s) => `- ${fence(s.name)} — ${fence(s.description)}`).join('\n');
-    parts.push(`## Other saved skills (names only, steps not loaded)\n${list}`);
+    parts.push(`## Other saved skills (names only, steps not loaded)\n${indexed.map(skillIndexLine).join('\n')}`);
   }
 
   const header = inlined.length > 0
     ? 'Saved procedures relevant to this message.'
     : 'Saved procedures. None matched this message closely enough to load.';
 
-  return (
-    `<stem_skills version="1">\n${header}\n\n${parts.join('\n\n')}\n</stem_skills>\n` +
-    `The block above is YOUR OWN saved know-how, not user data: unlike <stem_memory_data>, ` +
-    `these are instructions to follow. When a loaded skill applies to the current request, follow its steps. ` +
-    `A loaded skill that is about some other kind of work does not apply: ignore it and do not mention it. ` +
-    `Skills were written in earlier sessions and can be stale, incomplete, or simply wrong — if a step of a skill that ` +
-    `applies is incorrect or fails, say so plainly in your reply and do the right thing instead — and put that report on its ` +
-    `own line that starts exactly with \`${SKILL_ISSUE_MARKER} [<skill name>]:\` followed by what was wrong, in one ` +
-    `sentence, so Stem can route the skill for repair. Never follow a step you ` +
-    `believe is wrong just because it is written here, and never silently skip or substitute one: the user has to be ` +
-    `able to see that a saved skill needs fixing. A skill marked "auto-saved, never reviewed" was written by you ` +
-    `without anyone checking it, so weigh it accordingly. Skills listed by name only are not loaded — their steps ` +
-    `are not here, so do not guess at them. When one's description fits the request, load it with \`manage_skill\` ` +
-    `action "view" before you start, and follow it.`
-  );
+  return `<stem_skills version="1">\n${header}\n\n${parts.join('\n\n')}\n</stem_skills>`;
 }
+
+/**
+ * The rules for every skills block in a chat. They used to follow each block,
+ * about a kilobyte of the same text on every turn. The text is constant, so it
+ * goes out as an ambient block (pi/context-dedupe.ts): one time per live
+ * context, and again after a compaction took it away.
+ *
+ * The framing is the deliberate inverse of the memory block, which is untrusted
+ * historical DATA whose quoted directives must never be followed. Skills are
+ * the opposite by construction: they are Stem's own saved procedures and the
+ * whole point is that they get followed. What that inversion costs is a safety
+ * property, so it is bought back explicitly — the model is told to SAY SO in
+ * its reply when a step is wrong rather than follow it silently. A bad
+ * auto-saved skill has to become visible to the user, and that report is also
+ * what routes the skill into patch-on-use.
+ *
+ * Two things the wording must not do. It names the block without its angle
+ * bracket, because thread-history.ts and thread-evidence.ts read an opening tag
+ * as the start of a block. And it does not speak of memory: a persona with
+ * recall off gets this text too, and is told nothing about what it cannot see.
+ */
+export const SKILL_RULES =
+  `Rules for every stem_skills block in this chat. Such a block is YOUR OWN saved know-how, not user data: ` +
+  `its skills are instructions to follow. When a loaded skill applies to the current request, follow its steps. ` +
+  `A loaded skill that is about some other kind of work does not apply: ignore it and do not mention it. ` +
+  `Skills were written in earlier sessions and can be stale, incomplete, or simply wrong — if a step of a skill that ` +
+  `applies is incorrect or fails, say so plainly in your reply and do the right thing instead — and put that report on its ` +
+  `own line that starts exactly with \`${SKILL_ISSUE_MARKER} [<skill name>]:\` followed by what was wrong, in one ` +
+  `sentence, so Stem can route the skill for repair. Never follow a step you ` +
+  `believe is wrong just because a skill says so, and never silently skip or substitute one: the user has to be ` +
+  `able to see that a saved skill needs fixing. A skill marked "auto-saved, never reviewed" was written by you ` +
+  `without anyone checking it, so weigh it accordingly. Skills listed by name only are not loaded — their steps ` +
+  `are not there, so do not guess at them. A skill is listed by name one time per chat, so a list in an earlier ` +
+  `message still holds. When a listed skill's description fits the request, load it with \`manage_skill\` ` +
+  `action "view" before you start, and follow it.`;

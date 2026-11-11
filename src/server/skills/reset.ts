@@ -3,11 +3,12 @@ import { join } from 'node:path';
 import { degrade } from '../degrade';
 import { filesRoot, skillsRoot } from '../workspace/paths';
 import { SKILLS_REV_FILE } from '../pi/protocol';
-import { listSkillRecords } from './store';
+import { listSkillRecords, SKILL_VERSIONS_DIR } from './store';
 import { SKILLS_USAGE_FILE } from './usage';
 import { SKILLS_VECTORS_FILE } from './vectors';
 import { SKILLS_IGNORE_FILE } from './ignore';
 import { SKILLS_CURATED_FILE } from './curate';
+import { SKILLS_CASES_FILE } from './cases';
 
 // The one-time migration off the old library.
 //
@@ -33,7 +34,7 @@ export const SKILLS_SCHEMA_VERSION = 2;
 export const SKILLS_SCHEMA_FILE = '.skills-schema';
 
 /** Sidecars that are meaningless once the library they describe is gone. */
-const SIDECARS = [SKILLS_USAGE_FILE, SKILLS_VECTORS_FILE, SKILLS_IGNORE_FILE, SKILLS_REV_FILE, SKILLS_CURATED_FILE];
+const SIDECARS = [SKILLS_USAGE_FILE, SKILLS_VECTORS_FILE, SKILLS_IGNORE_FILE, SKILLS_REV_FILE, SKILLS_CURATED_FILE, SKILLS_CASES_FILE];
 
 export interface SkillsResetStatus {
   /** The user has not yet answered for this schema version. */
@@ -139,6 +140,12 @@ export function resetSkills(opts: { export: boolean } = { export: true }): Skill
       // quiet: a leftover directory is visible in the Manage panel, where the
       // user can remove it by hand.
     }
+  }
+  // The kept versions describe skills that are gone now.
+  try {
+    rmSync(join(root, SKILL_VERSIONS_DIR), { recursive: true, force: true });
+  } catch {
+    // quiet: old versions of removed skills are never read again.
   }
   for (const sidecar of SIDECARS) {
     try {
