@@ -81,7 +81,12 @@ enum Windows {
     return NSRunningApplication(processIdentifier: pid)?.activate() ?? false
   }
 
-  static func list(minimized wantMinimized: Bool = true) -> [WindowInfo] {
+  /// `floating: true` also keeps the windows that float above ordinary ones
+  /// (up to the status bar level) and the windows of apps without a Dock icon:
+  /// a hotkey browser or a launcher shows such a panel, and it can be the
+  /// window the person is in. Only "ask about this window" wants them.
+  static func list(minimized wantMinimized: Bool = true, floating: Bool = false) -> [WindowInfo] {
+    let topLayer = floating ? Int(CGWindowLevelForKey(.statusWindow)) : 1
     guard let raw = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return [] }
     trace("window list: \(raw.count) entries")
     let front = frontmostPid()
@@ -93,7 +98,7 @@ enum Windows {
     let axTrusted = AXIsProcessTrusted()
     var out: [WindowInfo] = []
     for w in raw {
-      guard let layer = w[kCGWindowLayer as String] as? Int, layer == 0,
+      guard let layer = w[kCGWindowLayer as String] as? Int, layer >= 0, layer < topLayer,
             let idNum = w[kCGWindowNumber as String] as? Int,
             let pidNum = w[kCGWindowOwnerPID as String] as? Int,
             let boundsDict = w[kCGWindowBounds as String] as? NSDictionary,
@@ -111,7 +116,7 @@ enum Windows {
         app = NSRunningApplication(processIdentifier: pid)
         apps[pid] = app
       }
-      guard let app, app.activationPolicy == .regular else { continue }
+      guard let app, app.activationPolicy == .regular || (floating && app.activationPolicy == .accessory) else { continue }
       let name = app.localizedName ?? (w[kCGWindowOwnerName as String] as? String) ?? "pid \(pid)"
       let onScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
       let title = (w[kCGWindowName as String] as? String) ?? ""
