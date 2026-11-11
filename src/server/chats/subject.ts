@@ -202,6 +202,57 @@ export function sanitizeSubject(raw: string): string {
   return text;
 }
 
+/**
+ * Writing systems a stray-script check knows. A letter outside all of these
+ * (a rare script) is not judged at all.
+ */
+const SCRIPTS = [
+  'Latin', 'Cyrillic', 'Greek', 'Armenian', 'Georgian', 'Hebrew', 'Arabic', 'Syriac', 'Thaana',
+  'Devanagari', 'Bengali', 'Gurmukhi', 'Gujarati', 'Oriya', 'Tamil', 'Telugu', 'Kannada', 'Malayalam',
+  'Sinhala', 'Thai', 'Lao', 'Tibetan', 'Myanmar', 'Khmer', 'Ethiopic', 'Hangul', 'Hiragana', 'Katakana',
+  'Han', 'Mongolian'
+].map((name) => ({ name, letter: new RegExp(`\\p{Script=${name}}`, 'u') }));
+
+function scriptsOf(text: string): Set<string> {
+  const found = new Set<string>();
+  for (const ch of text.match(/\p{L}/gu) ?? []) {
+    const script = SCRIPTS.find((s) => s.letter.test(ch));
+    if (script) found.add(script.name);
+  }
+  return found;
+}
+
+/**
+ * True when the subject has letters of a writing system that the source text
+ * has none of. Small models sometimes glue a word from a random script onto a
+ * good subject ("Zdroj grafu o sandbagginguтипақ", "Ružinovская"); such a
+ * subject is a glitch, not a name.
+ */
+export function hasStrayScript(subject: string, source: string): boolean {
+  const known = scriptsOf(source);
+  for (const script of scriptsOf(subject)) if (!known.has(script)) return true;
+  return false;
+}
+
+/**
+ * Ask for a subject and sanitize it. A reply with a stray script gets one more
+ * try, because the glitch is random and a second call is usually clean. If the
+ * second reply is bad too, the result is '' and the standing name stays.
+ */
+export async function writeSubject(
+  complete: SubjectDeps['complete'],
+  prompt: string,
+  opts: Parameters<SubjectDeps['complete']>[1],
+  source: string
+): Promise<string> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const subject = sanitizeSubject(await complete(prompt, opts));
+    if (!hasStrayScript(subject, source)) return subject;
+    log('chats', 'subject had a stray script', { subject, attempt });
+  }
+  return '';
+}
+
 /** What the naming pass needs from the backend, injected so it stays testable. */
 export interface SubjectDeps {
   complete(
@@ -338,11 +389,16 @@ export async function nameThread(
     // advanced, or a thread would try again on every turn. A forced run counts
     // too, so an explicit rename gets a full gap of quiet before a re-check.
     await advance();
-    const reply = await deps.complete(recheck ? resubjectPrompt(currentName, excerpt) : subjectPrompt(excerpt), {
-      ...(await backgroundRunOf('subject', () => ({ model: chats.subjectModel, effort: chats.subjectEffort }))),
-      timeoutMs: SUBJECT_TIMEOUT_MS
-    });
-    const subject = sanitizeSubject(reply);
+    const subject = await writeSubject(
+      deps.complete,
+      recheck ? resubjectPrompt(currentName, excerpt) : subjectPrompt(excerpt),
+      {
+        ...(await backgroundRunOf('subject', () => ({ model: chats.subjectModel, effort: chats.subjectEffort }))),
+        timeoutMs: SUBJECT_TIMEOUT_MS
+      },
+      // The model saw the excerpt and, on a re-check, the standing name.
+      recheck ? `${currentName}\n${excerpt}` : excerpt
+    );
     if (!subject) return null;
     if (recheck && saysKeep(subject, currentName)) return null;
 

@@ -15,6 +15,7 @@ import {
   nameThreadIfDue,
   resubjectPrompt,
   sanitizeSubject,
+  hasStrayScript,
   subjectPrompt
 } from '../../src/server/chats/subject';
 import { getNaming, getSubjects, removeChat, setNaming, setSubject } from '../../src/server/workspace/chats';
@@ -155,6 +156,23 @@ describe('the prompts', () => {
   });
 });
 
+describe('hasStrayScript', () => {
+  it('flags letters of a script the conversation has none of', () => {
+    const slovak = 'Nájdi mi zdroj tohoto grafu o sandbaggingu';
+    expect(hasStrayScript('Zdroj grafu o sandbagginguтипақ', slovak)).toBe(true);
+    expect(hasStrayScript('Telefóny na ambulancie Ružinovская', slovak)).toBe(true);
+    expect(hasStrayScript('OpenJDK Image Replacement തീരുമാനം', 'replace the OpenJDK image')).toBe(true);
+    expect(hasStrayScript('Discord #test message_久久爱', 'send a Discord test message')).toBe(true);
+  });
+
+  it('accepts a subject in the scripts of the conversation', () => {
+    expect(hasStrayScript('Zdroj grafu o sandbaggingu', 'Nájdi mi zdroj')).toBe(false);
+    expect(hasStrayScript('Перевод письма', 'Переведи это письмо')).toBe(false);
+    expect(hasStrayScript('東京 trip プラン', 'Plan my 東京 trip, ホテル included')).toBe(false);
+    expect(hasStrayScript('Q3 2026 — 12%', 'numbers')).toBe(false);
+  });
+});
+
 describe('naming a new thread', () => {
   it('writes the subject and renames the thread at the everywhere default', async () => {
     const s = stub({ title: 'pull the Q3 numbers' });
@@ -163,6 +181,20 @@ describe('naming a new thread', () => {
     expect(subject).toBe('Quarterly revenue breakdown');
     expect(s.rename).toHaveBeenCalledWith('a', 'Quarterly revenue breakdown');
     expect((await getSubjects()).a).toBe('Quarterly revenue breakdown');
+  });
+
+  it('asks again when the subject has a stray script, and keeps the name if it stays bad', async () => {
+    const s = stub({ title: 'pull the Q3 numbers' });
+    s.complete.mockResolvedValueOnce('Quarterly revenueтипақ');
+    await setNaming('a', { step: 0, since: 0 });
+    expect(await nameThreadIfDue(s.deps, 'a')).toBe('Quarterly revenue breakdown');
+    expect(s.complete).toHaveBeenCalledTimes(2);
+
+    const bad = stub({ title: 'pull the Q3 numbers', reply: 'Quarterly revenueтипақ' });
+    await setNaming('b', { step: 0, since: 0 });
+    expect(await nameThreadIfDue(bad.deps, 'b')).toBeNull();
+    expect(bad.complete).toHaveBeenCalledTimes(2);
+    expect(bad.state.title).toBe('pull the Q3 numbers');
   });
 
   it('shows the model the reply, not just the message that opened the thread', async () => {
