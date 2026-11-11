@@ -18,6 +18,7 @@ build/native/
 
 # Skill retrieval eval build output (embed-catalog, compiled to CJS)
 .skills-build/
+.gate-canary-build/
 
 # Playwright E2E artifacts
 test-results/

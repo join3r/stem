@@ -1,0 +1,280 @@
+{
+  "about": "Synthetic (query, document) pairs and the gate model's scores for them. See gate-canary.ts. No real user data.",
+  "model": "gte-memory-20261021",
+  "pairs": [
+    {
+      "query": "Kedy mám ísť k zubárovi?",
+      "doc": "The user has a dentist appointment with Dr. Kováč on 14 March at 9:30."
+    },
+    {
+      "query": "Kedy mám ísť k zubárovi?",
+      "doc": "The user prefers oat milk in coffee."
+    },
+    {
+      "query": "What's my wifi password at the cottage?",
+      "doc": "The user's cottage in Donovaly has a router whose network is named Chata-5G."
+    },
+    {
+      "query": "Book me a table for Friday",
+      "doc": "The user is vegetarian and avoids restaurants without vegetarian mains."
+    },
+    {
+      "query": "Book me a table for Friday",
+      "doc": "The user's car is a 2019 Škoda Octavia with winter tyres stored in the garage."
+    },
+    {
+      "query": "Napíš mail Petrovi, že faktúra príde zajtra",
+      "doc": "The user's accountant is Peter Horváth, reachable at peter@example.com."
+    },
+    {
+      "query": "Napíš mail Petrovi, že faktúra príde zajtra",
+      "doc": "The user's brother Peter lives in Brno and works shifts."
+    },
+    {
+      "query": "Jak dlouho ještě platí moje pojištění auta?",
+      "doc": "The user's car insurance with Kooperativa is valid until 30 June 2027."
+    },
+    {
+      "query": "Jak dlouho ještě platí moje pojištění auta?",
+      "doc": "The user's travel insurance covers skiing in Austria."
+    },
+    {
+      "query": "ok thanks",
+      "doc": "The user has a dentist appointment with Dr. Kováč on 14 March at 9:30."
+    },
+    {
+      "query": "Was soll ich meiner Mutter zum Geburtstag schenken?",
+      "doc": "The user's mother Anna likes gardening and has her birthday on 2 May."
+    },
+    {
+      "query": "Was soll ich meiner Mutter zum Geburtstag schenken?",
+      "doc": "The user pays 12.99 euro a month for a streaming subscription."
+    },
+    {
+      "query": "Earlier messages from the user in this conversation:\n- I'm planning the trip to Lisbon in May\n\nCurrent message: which airport should I fly from?",
+      "doc": "The user lives in Bratislava and usually flies from Vienna airport."
+    },
+    {
+      "query": "Earlier messages from the user in this conversation:\n- I'm planning the trip to Lisbon in May\n\nCurrent message: which airport should I fly from?",
+      "doc": "The user is allergic to penicillin."
+    },
+    {
+      "query": "How much did I pay for the new laptop?",
+      "doc": "The user bought a MacBook Pro in October 2026 for 2,499 euro."
+    },
+    {
+      "query": "How much did I pay for the new laptop?",
+      "doc": "The user's work laptop is managed by the company's IT department."
+    },
+    {
+      "query": "Pripomeň mi, čo mám kúpiť do bytu",
+      "doc": "The user plans to buy a standing desk and a bookshelf for the new flat."
+    },
+    {
+      "query": "Write a Python function that parses ISO dates",
+      "doc": "The user prefers TypeScript over Python for new projects."
+    },
+    {
+      "query": "Write a Python function that parses ISO dates",
+      "doc": "The user's daughter Ema starts school in September."
+    },
+    {
+      "query": "Aký liek beriem na tlak?",
+      "doc": "The user takes 5 mg of amlodipine every morning for blood pressure."
+    },
+    {
+      "query": "Aký liek beriem na tlak?",
+      "doc": "The user measures blood pressure with an Omron device bought in 2025."
+    },
+    {
+      "query": "What's the weather like in Bratislava today?",
+      "doc": "The user lives in Bratislava."
+    },
+    {
+      "query": "Summarize this article for me",
+      "doc": "The user wants summaries as five short bullet points."
+    },
+    {
+      "query": "Summarize this article for me",
+      "doc": "The user's favourite football club is Slovan Bratislava."
+    },
+    {
+      "query": "Earlier messages from the user in this conversation:\n- Potrebujem vybaviť nový pas\n- Starý mi platí do konca roka\n\nCurrent message: kde to mám najbližšie?",
+      "doc": "The user lives in Bratislava, in the Petržalka district."
+    },
+    {
+      "query": "I spent the whole weekend going through the boxes from the move and I still cannot find the folder with the warranty papers. The washing machine started leaking yesterday evening, the floor in the bathroom was wet when I came home, and I would like to know whether it is still covered before I call anybody. Do you remember when I bought it and for how long the warranty runs?",
+      "doc": "The user bought a Bosch washing machine in February 2025 with a three-year warranty."
+    },
+    {
+      "query": "I spent the whole weekend going through the boxes from the move and I still cannot find the folder with the warranty papers. The washing machine started leaking yesterday evening, the floor in the bathroom was wet when I came home, and I would like to know whether it is still covered before I call anybody. Do you remember when I bought it and for how long the warranty runs?",
+      "doc": "The user rents a storage unit on the outskirts of the city for 60 euro a month and keeps seasonal sports equipment, old furniture and several boxes of books there since the move in 2024."
+    },
+    {
+      "query": "Vytvor mi faktúru pre Acme za október",
+      "doc": "create-monthly-invoice\nUse when the user asks for the monthly invoice for a client: fills the template, numbers it and exports a PDF."
+    },
+    {
+      "query": "Vytvor mi faktúru pre Acme za október",
+      "doc": "create-monthly-invoice\nSprav faktúru za tento mesiac pre klienta"
+    },
+    {
+      "query": "Vytvor mi faktúru pre Acme za október",
+      "doc": "renew-domain-name\nUse when a domain is about to expire: checks the registrar, renews it and confirms the new expiry date."
+    },
+    {
+      "query": "explain what a CNAME record does",
+      "doc": "renew-domain-name\nUse when a domain is about to expire: checks the registrar, renews it and confirms the new expiry date."
+    },
+    {
+      "query": "renew my domain example.sk before it expires",
+      "doc": "renew-domain-name\nUse when a domain is about to expire: checks the registrar, renews it and confirms the new expiry date."
+    },
+    {
+      "query": "Zisti, čo majú dnes na obed v Kolibe",
+      "doc": "scrape-daily-lunch-menu\nUse when the user asks what a restaurant serves for lunch today: opens the menu page and lists today's dishes with prices."
+    },
+    {
+      "query": "Zisti, čo majú dnes na obed v Kolibe",
+      "doc": "book-restaurant-table\nUse when the user wants a table reserved: finds a free slot and books it under the user's name."
+    },
+    {
+      "query": "Try now",
+      "doc": "file-insurance-claim\nUse when the user wants to report damage to the insurer: collects photos, fills the claim form and submits it."
+    },
+    {
+      "query": "My flight was cancelled, can you get my money back?",
+      "doc": "request-flight-refund\nUse when an airline cancelled or delayed a flight: checks the fare rules and files the refund or compensation request."
+    },
+    {
+      "query": "My flight was cancelled, can you get my money back?",
+      "doc": "request-flight-refund\nLet mi zrušili, vybav mi vrátenie peňazí"
+    },
+    {
+      "query": "Deploy the latest build to the server",
+      "doc": "deploy-app-to-server\nUse when the user asks to ship the current build: builds the image, uploads it and restarts the service."
+    },
+    {
+      "query": "Deploy the latest build to the server",
+      "doc": "write-release-notes\nUse when a release is cut: reads the commits since the last tag and writes user-facing notes."
+    },
+    {
+      "query": "Kannst du mir die Steuererklärung vorbereiten?",
+      "doc": "prepare-tax-return\nUse when the user asks for the yearly tax return: gathers income documents and fills the form."
+    },
+    {
+      "query": "what time is it in Tokyo",
+      "doc": "prepare-tax-return\nUse when the user asks for the yearly tax return: gathers income documents and fills the form."
+    },
+    {
+      "query": "Pošli týždenný report tímu",
+      "doc": "send-weekly-team-report\nUse when the user asks for the weekly status report: collects the week's closed tasks and mails the summary to the team."
+    },
+    {
+      "query": "Pošli týždenný report tímu",
+      "doc": "send-weekly-team-report\nSend the weekly status update to my team"
+    },
+    {
+      "query": "Auto mi včera niekto oškrabal na parkovisku, čo teraz?",
+      "doc": "file-insurance-claim\nUse when the user wants to report damage to the insurer: collects photos, fills the claim form and submits it."
+    }
+  ],
+  "reference": {
+    "darwin-arm64": [
+      -4.9411,
+      -6.161,
+      5.0486,
+      -6.1408,
+      -6.1626,
+      -4.4091,
+      -6.1287,
+      5.8558,
+      -6.1565,
+      -6.1641,
+      5.7626,
+      -6.1675,
+      5.838,
+      -6.1664,
+      4.6113,
+      -6.11,
+      4.8239,
+      -6.1129,
+      -6.1691,
+      5.7642,
+      -6.1417,
+      0.0015,
+      4.3408,
+      -6.159,
+      -3.6347,
+      5.8781,
+      -5.9914,
+      -2.2924,
+      2.4119,
+      -6.1206,
+      -4.9643,
+      5.0739,
+      1.6162,
+      -5.9404,
+      -5.522,
+      4.0506,
+      5.8811,
+      4.7579,
+      -5.0043,
+      -1.8068,
+      -6.1432,
+      4.8278,
+      5.5115,
+      -4.8746
+    ],
+    "linux-x64": [
+      0.3991,
+      -6.1516,
+      3.8131,
+      -6.1358,
+      -6.1653,
+      -5.902,
+      -6.1519,
+      5.4163,
+      -6.1557,
+      -6.1645,
+      5.68,
+      -6.1649,
+      5.8502,
+      -6.144,
+      1.0079,
+      -6.0883,
+      4.8795,
+      -6.0353,
+      -6.1672,
+      4.5605,
+      -6.1423,
+      0.3758,
+      5.1926,
+      -6.1571,
+      -3.3315,
+      5.8573,
+      -5.9408,
+      -4.2455,
+      0.1538,
+      -6.0931,
+      -4.6761,
+      3.9064,
+      1.264,
+      -5.7437,
+      -5.3579,
+      3.3913,
+      5.8867,
+      2.7402,
+      -4.9702,
+      -4.5209,
+      -6.107,
+      4.0048,
+      5.3717,
+      -5.7116
+    ]
+  },
+  "measured": {
+    "darwin-arm64": "transformers.js 4.3.1, 2026-11-11, Apple silicon",
+    "linux-x64": "transformers.js 4.3.1, 2026-11-11, server image on AMD EPYC-Rome (AVX2, no VNNI)"
+  }
+}

@@ -37,7 +37,7 @@ function seedFact(
   vec: number[],
   over: {
     source?: string; confidence?: number; pinned?: boolean; excerpt?: string;
-    sensitive?: boolean; origin?: 'folder_doc' | 'assistant_claim' | 'assistant_claim_web';
+    sensitive?: boolean; origin?: 'folder_doc' | 'assistant_claim' | 'assistant_claim_web'; relPath?: string;
   } = {}
 ): number {
   const id = store.upsertFact(text, {
@@ -47,7 +47,7 @@ function seedFact(
     evidence: [{
       messageId: null, threadId: null, role: null,
       timestamp: Math.floor(Date.now() / 1000) - 86_400,
-      excerpt: over.excerpt ?? `evidence: ${text}`, origin: over.origin ?? 'folder_doc', folderId: 'f', relPath: 'x.pdf'
+      excerpt: over.excerpt ?? `evidence: ${text}`, origin: over.origin ?? 'folder_doc', folderId: 'f', relPath: over.relPath ?? 'x.pdf'
     }]
   })!;
   if (over.pinned) store.setFactPinned(id, true);
@@ -235,5 +235,31 @@ describe('repair of facts learned from documents alone', () => {
     const later = seedFact('The user plays VR games.', [0.5, 0.5, 0]);
     expect(store.retireDocOnlyChatFacts()).toEqual([]);
     expect(store.getFactDetails(later)?.status).toBe('active');
+  });
+});
+
+describe('repair of facts learned from Claude Code session transcripts', () => {
+  it('retires them once, keeping memory-note facts, confirmed and pinned ones, and other folders', () => {
+    store.setMeta('claude_session_facts_retired', '');
+    const cc = { source: 'folder:cc', confidence: 0.55 };
+    const session = seedFact('The billing service has a failing migration test.', [1, 0, 0], { ...cc, relPath: 'sessions/billing/2026-10-01-fix-a1.md' });
+    const cowork = seedFact('The user asked for a slide deck about Q3.', [0, 1, 0], { ...cc, relPath: 'cowork/2026-10-02-deck-b2.md' });
+    const note = seedFact('The user wants commits on the task branch.', [0, 0, 1], { ...cc, relPath: 'memory/feedback/stem/commit.md' });
+    const confirmed = seedFact('The user runs the server on a VPS.', [1, 1, 0], { source: 'folder:cc', confidence: 0.9, relPath: 'sessions/stem/2026-10-03-vps-c3.md' });
+    const pinned = seedFact('The user deploys with docker compose.', [1, 0, 1], { ...cc, relPath: 'sessions/stem/2026-10-04-deploy-d4.md', pinned: true });
+    const vault = seedFact('The user issued invoice 20260005.', [0, 1, 1], { source: 'folder:notes', confidence: 0.55, relPath: 'sessions/old.md' });
+    expect(store.retireClaudeSessionFacts(['folder:cc']).sort()).toEqual([session, cowork].sort());
+    for (const id of [session, cowork]) expect(store.getFactDetails(id)?.status).toBe('superseded');
+    for (const id of [note, confirmed, pinned, vault]) expect(store.getFactDetails(id)?.status).toBe('active');
+    // Restorable, and the repair does not come back for it.
+    expect(store.restoreSupersededFact(session)).toBe(true);
+    expect(store.retireClaudeSessionFacts(['folder:cc'])).toEqual([]);
+    expect(store.getFactDetails(session)?.status).toBe('active');
+  });
+
+  it('settles on an install with no Claude Code folder', () => {
+    store.setMeta('claude_session_facts_retired', '');
+    expect(store.retireClaudeSessionFacts([])).toEqual([]);
+    expect(store.getMeta('claude_session_facts_retired')).toBe('1');
   });
 });

@@ -6,6 +6,7 @@ import type { RerankResult } from './rerank';
 import type { WorkerOutMessage } from './embed-worker';
 import type { WorkerTransport } from './embed-worker-host';
 import { log } from '../log';
+import { currentWorkerTimings, noteWorkerRequest, type WorkerTimings } from './worker-timings';
 import type { LocalEmbedStatus, LocalRerankStatus } from '../../shared/types';
 
 // Main-process side of the local retrieval worker: owns the utility-process
@@ -62,6 +63,9 @@ interface PendingEmbed {
   resolve: (vectors: Float32Array[]) => void;
   reject: (err: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
+  /** When the caller asked, and the turn (if any) that is charged for the answer. */
+  requestedAt: number;
+  sink?: WorkerTimings;
 }
 
 interface PendingRerank {
@@ -71,6 +75,8 @@ interface PendingRerank {
   resolve: (results: RerankResult[]) => void;
   reject: (err: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
+  requestedAt: number;
+  sink?: WorkerTimings;
 }
 
 const EMBED_TIMEOUT_MS = 60_000;
@@ -270,6 +276,7 @@ export function createEmbedWorkerManager(deps: {
       if (!p) return; // timed out already
       inflight.delete(msg.id);
       if (p.timer) clearTimeout(p.timer);
+      noteWorkerRequest(p.sink, Date.now() - p.requestedAt, msg.stats);
       p.resolve(msg.vectors);
       settled(p);
       return;
@@ -279,6 +286,7 @@ export function createEmbedWorkerManager(deps: {
       if (!p) return; // timed out already
       rerankInflight.delete(msg.id);
       if (p.timer) clearTimeout(p.timer);
+      noteWorkerRequest(p.sink, Date.now() - p.requestedAt, msg.stats);
       p.resolve(msg.results);
       return;
     }
@@ -416,7 +424,10 @@ export function createEmbedWorkerManager(deps: {
     },
     embed(texts, kind, opts = {}) {
       return new Promise<Float32Array[]>((resolve, reject) => {
-        const p: PendingEmbed = { texts, kind, timeoutMs: opts.timeoutMs ?? embedTimeoutMs, resolve, reject };
+        const p: PendingEmbed = {
+          texts, kind, timeoutMs: opts.timeoutMs ?? embedTimeoutMs, resolve, reject,
+          requestedAt: Date.now(), sink: currentWorkerTimings()
+        };
         if (status.state === 'ready' && transport) dispatch(p);
         else if (transport && (status.state === 'loading' || status.state === 'downloading')) queued.push(p);
         else reject(new Error('local embeddings: worker not running'));
@@ -462,7 +473,7 @@ export function createEmbedWorkerManager(deps: {
     },
     rerank(query, docs, topN) {
       return new Promise<RerankResult[]>((resolve, reject) => {
-        const p: PendingRerank = { query, docs, topN, resolve, reject };
+        const p: PendingRerank = { query, docs, topN, resolve, reject, requestedAt: Date.now(), sink: currentWorkerTimings() };
         if (rrStatus.state === 'ready' && transport) sendRerank(p);
         else if (transport && (rrStatus.state === 'loading' || rrStatus.state === 'downloading'))
           rerankQueued.push(p);

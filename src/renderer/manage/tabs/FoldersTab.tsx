@@ -107,6 +107,16 @@ const LEARN_HINTS: Record<LearnMode, string> = {
   all: 'Reads every file already in the folder once (Save shows the cost first), then keeps up with new and edited files.'
 };
 
+/**
+ * The "Claude Code" folder learns in one way or not at all: its memory notes
+ * as they change, its sessions when they come up in a chat. Reading every
+ * session through the learning model is not on offer (it filled memory with
+ * undated notes about project states).
+ */
+const CLAUDE_LEARN_MODES: LearnMode[] = ['off', 'use'];
+const CLAUDE_USE_HINT =
+  'Reads Claude Code’s memory notes as they are added or changed, about one model call per 20 notes. Sessions teach Stem only when they come up in your chats.';
+
 /** Average prompt chars one learning call consumes (MAX_TRANSCRIPT_CHARS-ish). */
 const LEARN_CHARS_PER_CALL = 14_000;
 
@@ -680,7 +690,7 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
                   }
                 >
                   <div className="ld-radio" role="radiogroup" aria-label="Learn facts mode">
-                    {(['off', 'use', 'new', 'all'] as LearnMode[]).map((m) => (
+                    {(d.kind === 'claude' ? CLAUDE_LEARN_MODES : (['off', 'use', 'new', 'all'] as LearnMode[])).map((m) => (
                       <label key={m} className={d.learnMode === m ? 'on' : ''}>
                         <input
                           type="radio"
@@ -690,7 +700,7 @@ function ConnectedFoldersTab({ models }: { models: ModelSummary[] }) {
                         />
                         <span>
                           <strong>{LEARN_LABELS[m]}</strong>
-                          <em>{LEARN_HINTS[m]}</em>
+                          <em>{d.kind === 'claude' && m === 'use' ? CLAUDE_USE_HINT : LEARN_HINTS[m]}</em>
                         </span>
                       </label>
                     ))}

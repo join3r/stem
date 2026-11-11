@@ -15,7 +15,8 @@ import { buildUserProfile, userProfileDue, userWritingStyle } from '../recall/pr
 import { peopleSuggestDue, suggestPeople } from '../recall/people-suggest';
 import { getMemoryRebuildStatus, runMemoryRebuildStep } from '../recall/rebuild';
 import { summarizeFactTexts } from '../recall/audit';
-import { recallStore } from '../recall/store';
+import { CLAUDE_SESSION_RETIRED_KEY, recallStore } from '../recall/store';
+import { readStore as readFolderStore } from '../workspace/connected-folders';
 import { curateSkills } from '../skills/curate';
 import { refreshSkillExamples } from '../skills/examples';
 import { listSkillRecords } from '../skills/store';
@@ -132,6 +133,14 @@ export function initRecallTasks(deps: {
         // retireDocOnlyChatFacts); a no-op once it has run.
         const repaired = recallStore.retireDocOnlyChatFacts();
         if (repaired.length > 0) log('recall', 'retired facts learned from documents alone', { ids: repaired });
+        // One-shot likewise: what a "Claude Code" folder's session transcripts
+        // taught before that folder was held to its memory notes.
+        if (recallStore.getMeta(CLAUDE_SESSION_RETIRED_KEY) !== '1') {
+          const { folders } = await readFolderStore();
+          const sources = folders.filter((f) => f.kind === 'claude').map((f) => `folder:${f.id}`);
+          const retired = recallStore.retireClaudeSessionFacts(sources);
+          if (retired.length > 0) log('recall', 'retired facts learned from Claude Code session transcripts', { count: retired.length });
+        }
         const distillFrom = Math.floor(Date.now() / 1000);
         await activity.track('memory.distill', 'Distilling facts', () => distillNewMessages(recallLlm), (n) => ({
           worked: n > 0,

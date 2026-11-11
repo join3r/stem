@@ -6,6 +6,7 @@ import type { LocalRerankModelSpec } from './rerank-catalog';
 import { readGteScalarScore, validateGtePairTokens } from './rerank-score';
 import { modelPresent, pathAppearsInMessage } from './embed-files';
 import { createEmbedQueue } from './embed-queue';
+import { createRunClock, finishRunStats, newRunStats, type RunStats, type WorkerRequestStats } from './run-clock';
 import type { EmbedKind } from './embeddings';
 import type { RerankResult } from './rerank';
 import type { LocalEmbedStatus, LocalRerankStatus } from '../../shared/types';
@@ -27,9 +28,9 @@ export type WorkerInMessage =
 
 export type WorkerOutMessage =
   | { type: 'status'; status: LocalEmbedStatus }
-  | { type: 'result'; id: number; dim: number; vectors: Float32Array[] }
+  | { type: 'result'; id: number; dim: number; vectors: Float32Array[]; stats?: WorkerRequestStats }
   | { type: 'rerank-status'; status: LocalRerankStatus }
-  | { type: 'rerank-result'; id: number; results: RerankResult[] }
+  | { type: 'rerank-result'; id: number; results: RerankResult[]; stats?: WorkerRequestStats }
   | { type: 'error'; id?: number; message: string }
   | { type: 'disposed' };
 
@@ -173,13 +174,21 @@ function formatCausalRerankPair(instruct: string, query: string, doc: string): s
 // as well as across the documents within a single request.
 let gteInferenceChain: Promise<void> = Promise.resolve();
 
-function scoreGtePair(reranker: Reranker, query: string, doc: string): Promise<number> {
-  const run = gteInferenceChain.then(async () => {
-    const inputs = reranker.tokenizer([query], { text_pair: [doc], padding: true, truncation: false });
-    validateGtePairTokens(inputs.input_ids);
-    const { logits } = await reranker.model(inputs);
-    return readGteScalarScore(logits);
-  });
+// One clock for every model run in this process, so a request can be told how
+// much of its time was its own runs and how much of that was shared (run-clock.ts).
+const runClock = createRunClock();
+
+function scoreGtePair(reranker: Reranker, query: string, doc: string, stats: RunStats): Promise<number> {
+  const run = gteInferenceChain.then(() =>
+    // Timed from its place in the chain, not from the call: the pairs ahead of
+    // it are this request's wait, not its run.
+    runClock.run(async () => {
+      const inputs = reranker.tokenizer([query], { text_pair: [doc], padding: true, truncation: false });
+      validateGtePairTokens(inputs.input_ids);
+      const { logits } = await reranker.model(inputs);
+      return readGteScalarScore(logits);
+    }, stats)
+  );
   gteInferenceChain = run.then(() => undefined, () => undefined);
   return run;
 }
@@ -379,7 +388,7 @@ async function loadRerank(nextSpec: LocalRerankModelSpec, cacheDir: string): Pro
     if (isGte) gteModel = model;
     const next: Reranker = { tokenizer, model, scoring: nextSpec.scoring };
     if (isGte) {
-      await scoreGtePair(next, 'ping', 'pong');
+      await scoreGtePair(next, 'ping', 'pong', newRunStats());
     } else if (nextSpec.scoring === 'causal-yes-no') {
       const enc = tokenizer as unknown as { encode?: (t: string) => number[] };
       next.yesId = enc.encode?.('yes')[0];
@@ -466,13 +475,13 @@ async function runEmbedStep(texts: string[]): Promise<Float32Array[]> {
 // Requests run through one queue (see embed-queue.ts): one ONNX run at a time,
 // queries ahead of passage work, cancelled requests dropped between steps.
 const embedQueue = createEmbedQueue({
-  run: runEmbedStep,
+  run: (texts, stats) => runClock.run(() => runEmbedStep(texts), stats),
   // Batch size 1 for models flagged `unbatched`: their export mis-attends
   // across padding (see the spec field), so every text rides alone. Same
   // per-item throughput as RUN_BATCH on the models measured, just no
   // amortization of the graph launch.
   stepSize: () => (spec?.unbatched ? 1 : RUN_BATCH),
-  done: (id, vectors) => post({ type: 'result', id, dim, vectors }),
+  done: (id, vectors, stats) => post({ type: 'result', id, dim, vectors, stats }),
   fail: (id, err) => post({ type: 'error', id, message: err instanceof Error ? err.message : String(err) })
 });
 
@@ -489,6 +498,8 @@ async function rerank(id: number, query: string, docs: string[], topN: number): 
     post({ type: 'error', id, message: 'reranker not loaded' });
     return;
   }
+  const arrivedAt = performance.now();
+  const stats = newRunStats();
   try {
     // Cross-encode (query, doc) pairs in small batches for the same memory
     // reason as embed(): attention allocation scales with batch · maxSeqLen².
@@ -496,7 +507,7 @@ async function rerank(id: number, query: string, docs: string[], topN: number): 
     for (let i = 0; i < docs.length; i += RUN_BATCH) {
       const batch = docs.slice(i, i + RUN_BATCH);
       if (reranker.scoring === 'gte-scalar') {
-        for (const doc of batch) scores.push(await scoreGtePair(reranker, query, doc));
+        for (const doc of batch) scores.push(await scoreGtePair(reranker, query, doc, stats));
       } else if (reranker.scoring === 'causal-yes-no') {
         // ONE PAIR PER FORWARD PASS, not an oversight: this ONNX export (GQA
         // fused) mis-attended across padding on transformers.js 3.8.1 — a
@@ -508,23 +519,25 @@ async function rerank(id: number, query: string, docs: string[], topN: number): 
         // numbers at all; the bge notes document the same padding-drift class.
         const instruct = rerankSpec?.instruct ?? '';
         for (const doc of batch) {
+          const model = reranker.model;
           const inputs = reranker.tokenizer([formatCausalRerankPair(instruct, query, doc)], {
             padding: true,
             truncation: true
           });
-          const { logits } = await reranker.model(inputs);
+          const { logits } = await runClock.run(() => model(inputs), stats);
           const [, seq, vocab] = logits.dims;
           const base = (seq - 1) * vocab;
           // log-odds of "yes" — the raw-logit scale the catalog floors use.
           scores.push(logits.data[base + reranker.yesId!] - logits.data[base + reranker.noId!]);
         }
       } else {
+        const model = reranker.model;
         const inputs = reranker.tokenizer(new Array<string>(batch.length).fill(query), {
           text_pair: batch,
           padding: true,
           truncation: true
         });
-        const { logits } = await reranker.model(inputs);
+        const { logits } = await runClock.run(() => model(inputs), stats);
         for (let row = 0; row < batch.length; row++) scores.push(logits.data[row]);
       }
     }
@@ -532,7 +545,7 @@ async function rerank(id: number, query: string, docs: string[], topN: number): 
       .map((score, index) => ({ index, score }))
       .sort((a, b) => b.score - a.score)
       .slice(0, topN);
-    post({ type: 'rerank-result', id, results });
+    post({ type: 'rerank-result', id, results, stats: finishRunStats(stats, arrivedAt, performance.now()) });
   } catch (err) {
     post({ type: 'error', id, message: err instanceof Error ? err.message : String(err) });
   }

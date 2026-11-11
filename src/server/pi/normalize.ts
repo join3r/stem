@@ -15,6 +15,7 @@ import { stripCiteMarkers } from '../../shared/citations';
 import { WEB_ACCESS_TOOL_NAMES } from '../../shared/activity';
 import { SECRET_ENVELOPE_KEY, TOOL_SKILL_MARKER, toolArgsOf } from './protocol';
 import type { InlinedSkill } from '../skills/inject';
+import type { WorkerTimings } from '../recall/worker-timings';
 import type { BrowserGrant, CodingGrant, ComputerGrant } from '../harness/chat-grants';
 import type { SkillIssue } from '../skills/grade';
 import type { JudgeContext } from '../exec/judge-context';
@@ -74,6 +75,9 @@ export interface TurnContext {
   ensureMs?: number; // ensureStarted cost (process spawn on a cold turn)
   buildMs?: number; // buildMessage total (recall + files + attachments)
   recall?: { facts?: number; embed?: number; rerank?: number; search?: number; total?: number };
+  skillsMs?: number; // skill selection inside buildMessage
+  /** What this turn's requests to the local retrieval worker cost (recall/worker-timings.ts). */
+  workerTimings?: WorkerTimings;
   /**
    * Approximate wall-time split, accumulated by PiRuntime: each inter-event
    * interval is attributed to the phase that was active. These do NOT sum to the
@@ -386,6 +390,9 @@ export interface TurnTimingBreakdown {
   ensureMs: number;
   buildMs: number | null;
   recall: { total: number | null; facts: number | null; embed: number | null; rerank: number | null; search: number | null };
+  skillsMs: number | null;
+  /** Null when the turn asked the local worker for nothing (remote endpoints, recall off). */
+  worker: { waitMs: number; runMs: number; sharedMs: number } | null;
   thinkingMs: number;
   toolMs: number;
   answerMs: number;

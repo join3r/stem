@@ -232,7 +232,37 @@ export interface TurnTimingRecord {
   /** Output tokens + stream time of the turn's timed model calls (pi/generation-speed.ts). */
   outputTokens?: number | null;
   generationMs?: number | null;
+  /** Where the time before the request went. Absent on a turn that measured none of it. */
+  stages?: TurnStageTimings;
 }
+
+/**
+ * The parts of a turn's preparation, in milliseconds; null = not measured.
+ * `recallMs` alone could not tell a slow embed from a slow rerank, nor either
+ * from a request that waited behind other work in the local worker — and a
+ * slow turn is one of those three (recall/run-clock.ts). Never shown; these are
+ * for reading back out of the table when turns are slow.
+ */
+export interface TurnStageTimings {
+  /** Fact selection in all: embed, cosine, rerank. */
+  recallFactsMs: number | null;
+  recallEmbedMs: number | null;
+  recallRerankMs: number | null;
+  /** Episodic search: summaries, past messages, folder documents. */
+  recallSearchMs: number | null;
+  /** Skill selection: its own embed and rerank. */
+  skillsMs: number | null;
+  /** The turn's requests to the local worker: not being computed / computed / computed beside another run. */
+  workerWaitMs: number | null;
+  workerRunMs: number | null;
+  workerSharedMs: number | null;
+}
+
+/** turn_timings columns behind TurnStageTimings, in its field order. */
+const TURN_STAGE_COLUMNS = [
+  'recall_facts_ms', 'recall_embed_ms', 'recall_rerank_ms', 'recall_search_ms',
+  'skills_ms', 'worker_wait_ms', 'worker_run_ms', 'worker_shared_ms'
+] as const;
 
 
 /** A turn's persisted tool activity + web sources (see turn_activities). */
@@ -441,6 +471,8 @@ export const V1_FACTS_MIGRATED_KEY = 'recall_v1_facts_migrated';
 
 /** Set once retireDocOnlyChatFacts() has run (see there). */
 const DOC_ONLY_RETIRED_KEY = 'doc_only_chat_facts_retired';
+/** Set once retireClaudeSessionFacts() has run (see there). */
+export const CLAUDE_SESSION_RETIRED_KEY = 'claude_session_facts_retired';
 
 
 // ---- fact-ranking tunables (inject-time relevance selection) ----
@@ -731,7 +763,16 @@ export class RecallStore {
         recall_ms     INTEGER,
         created_at    INTEGER NOT NULL,
         output_tokens INTEGER,
-        generation_ms INTEGER
+        generation_ms INTEGER,
+        -- Where the time before the request went (TurnTimingRecord.stages).
+        recall_facts_ms  INTEGER,
+        recall_embed_ms  INTEGER,
+        recall_rerank_ms INTEGER,
+        recall_search_ms INTEGER,
+        skills_ms        INTEGER,
+        worker_wait_ms   INTEGER,
+        worker_run_ms    INTEGER,
+        worker_shared_ms INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_turn_timings_thread ON turn_timings(thread_id);
 
@@ -1012,7 +1053,7 @@ export class RecallStore {
     const timingColumns = new Set(
       (handle.prepare(`PRAGMA table_info(turn_timings)`).all() as Array<{ name: string }>).map((r) => r.name)
     );
-    for (const name of ['output_tokens', 'generation_ms']) {
+    for (const name of ['output_tokens', 'generation_ms', ...TURN_STAGE_COLUMNS]) {
       if (!timingColumns.has(name)) handle.exec(`ALTER TABLE turn_timings ADD COLUMN ${name} INTEGER`);
     }
     // Existing v1 rows predate the external-content FTS table. Populate it before
@@ -1222,9 +1263,10 @@ export class RecallStore {
       .prepare(
         `INSERT INTO turn_timings
            (turn_entry_id, thread_id, total_ms, thinking_ms, tool_ms, answer_ms, ttft_ms, build_ms, recall_ms,
-            output_tokens, generation_ms, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            output_tokens, generation_ms, created_at, ${TURN_STAGE_COLUMNS.join(', ')})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${TURN_STAGE_COLUMNS.map(() => '?').join(', ')})
          ON CONFLICT(turn_entry_id) DO UPDATE SET
+           ${TURN_STAGE_COLUMNS.map((c) => `${c} = excluded.${c}`).join(', ')},
            thread_id = excluded.thread_id,
            total_ms = excluded.total_ms,
            thinking_ms = excluded.thinking_ms,
@@ -1248,7 +1290,15 @@ export class RecallStore {
         rec.recallMs,
         rec.outputTokens ?? null,
         rec.generationMs ?? null,
-        this.nowSeconds()
+        this.nowSeconds(),
+        rec.stages?.recallFactsMs ?? null,
+        rec.stages?.recallEmbedMs ?? null,
+        rec.stages?.recallRerankMs ?? null,
+        rec.stages?.recallSearchMs ?? null,
+        rec.stages?.skillsMs ?? null,
+        rec.stages?.workerWaitMs ?? null,
+        rec.stages?.workerRunMs ?? null,
+        rec.stages?.workerSharedMs ?? null
       );
   };
 
@@ -2239,6 +2289,46 @@ export class RecallStore {
     try {
       for (const id of ids) this.supersedeFact(id);
       this.setMeta(DOC_ONLY_RETIRED_KEY, '1');
+      handle.exec('COMMIT');
+    } catch (err) {
+      handle.exec('ROLLBACK');
+      throw err;
+    }
+    return ids;
+  };
+
+
+  /**
+   * One-shot repair: retire the facts a "Claude Code" folder's session
+   * transcripts produced while "Full history" still read them. The folder now
+   * learns its memory notes alone (folder-index/learn.ts learnScope); what the
+   * transcripts left behind is a log of project states with no date to expire
+   * on. Kept: a fact that rests on a memory note, and one the user confirmed
+   * or pinned (confidence at the injection floor). Retired rows are
+   * superseded, so they remain restorable.
+   *
+   * `sources` are the `folder:<id>` sources of the Claude Code folders
+   * connected now. A folder connected later cannot make such facts, so one run
+   * settles it. Returns the ids retired (empty after the first run).
+   */
+  retireClaudeSessionFacts = (sources: readonly string[]): number[] => {
+    if (this.getMeta(CLAUDE_SESSION_RETIRED_KEY) === '1') return [];
+    const handle = this.open();
+    const ids = sources.length === 0
+      ? []
+      : (handle.prepare(
+          `SELECT f.id FROM facts f
+           WHERE f.status = 'active' AND f.pinned = 0 AND f.confidence < 0.7
+             AND f.source IN (${sources.map(() => '?').join(', ')})
+             AND NOT EXISTS (
+               SELECT 1 FROM fact_evidence e
+               WHERE e.fact_id = f.id AND e.origin = 'folder_doc' AND substr(e.rel_path, 1, 7) = 'memory/'
+             )`
+        ).all(...sources) as Array<{ id: number }>).map((r) => r.id);
+    handle.exec('BEGIN');
+    try {
+      for (const id of ids) this.supersedeFact(id);
+      this.setMeta(CLAUDE_SESSION_RETIRED_KEY, '1');
       handle.exec('COMMIT');
     } catch (err) {
       handle.exec('ROLLBACK');

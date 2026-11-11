@@ -36,6 +36,7 @@
     "eval:memory": "node scripts/memory-eval.mjs",
     "eval:skills": "node scripts/skill-author-eval.mjs",
     "eval:skill-retrieval": "node scripts/skill-retrieval-eval.mjs",
+    "eval:gate-canary": "node scripts/gate-canary.mjs",
     "fixtures:skills": "node scripts/skill-fixtures.mjs",
     "probe:quiet": "node scripts/quiet-mutants.mjs",
     "gen:shortcuts-doc": "node scripts/gen-shortcuts-doc.mjs",

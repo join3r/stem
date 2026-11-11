@@ -75,6 +75,7 @@ import { noteRename } from '../workspace/inbox';
 import { getChatFormat, isChatPrivate, markTurnTainted, setChatFormat, setChatPrivate, setNaming, taintedTurns } from '../workspace/chats';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
 import { buildRecallContext, RECALL_RULES, type RecallTimings } from '../recall/inject';
+import { newWorkerTimings, withWorkerTimings } from '../recall/worker-timings';
 import { userProfileContext } from '../recall/profile';
 import { buildPinsContext } from '../pins/context';
 import { getFactRerankClient } from '../recall/retrieval';
@@ -1344,6 +1345,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       turn.startedAt = startedAt;
       turn.ensureMs = ensureMs;
       turn.recall = {};
+      turn.workerTimings = newWorkerTimings();
       // Autonomous scheduled run: run_command's manual-approval tier is rejected
       // (nobody is present to answer the card) — see handleExecBridgeRequest.
       // Mail deliveries inherit the same nobody-is-watching semantics, with one
@@ -4668,6 +4670,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         rerank: r.rerank ?? null,
         search: r.search ?? null
       },
+      skillsMs: turn.skillsMs ?? null,
+      worker: turn.workerTimings?.requests
+        ? { waitMs: turn.workerTimings.waitMs, runMs: turn.workerTimings.runMs, sharedMs: turn.workerTimings.sharedMs }
+        : null,
       thinkingMs: turn.thinkingMs,
       toolMs: turn.toolMs,
       answerMs: turn.answerMs,
@@ -4684,8 +4690,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         ? ''
         : ` recall=${fmt(r.total ?? null)}[facts=${fmt(r.facts ?? null)} embed=${fmt(r.embed ?? null)}` +
           ` rerank=${fmt(r.rerank ?? null)} search=${fmt(r.search ?? null)}]`;
+    const w = breakdown.worker;
+    // The local worker's side of recall and skills: time its runs took, how much
+    // of that ran beside another run, and time the requests were not running.
+    const workerStr = w ? ` worker[run=${w.runMs}ms shared=${w.sharedMs}ms wait=${w.waitMs}ms]` : '';
     const line =
-      `build=${fmt(breakdown.buildMs)}${recallStr} ` +
+      `build=${fmt(breakdown.buildMs)}${recallStr} skills=${fmt(breakdown.skillsMs)}${workerStr} ` +
       `think=${fmt(breakdown.thinkingMs)} tools=${fmt(breakdown.toolMs)} answer=${fmt(breakdown.answerMs)} ` +
       `send→first=${fmt(breakdown.sendToFirstTokenMs)} ` +
       `first→end=${fmt(breakdown.firstTokenToEndMs)} total=${fmt(breakdown.totalMs)}` +
@@ -4731,7 +4741,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           buildMs: b.buildMs,
           recallMs: b.recall.total,
           outputTokens: b.outputTokens,
-          generationMs: b.generationMs
+          generationMs: b.generationMs,
+          stages: {
+            recallFactsMs: b.recall.facts,
+            recallEmbedMs: b.recall.embed,
+            recallRerankMs: b.recall.rerank,
+            recallSearchMs: b.recall.search,
+            skillsMs: b.skillsMs,
+            workerWaitMs: b.worker?.waitMs ?? null,
+            workerRunMs: b.worker?.runMs ?? null,
+            workerSharedMs: b.worker?.sharedMs ?? null
+          }
         });
       }
       // Persist the turn's tool activity + web sources next to the timing (same
@@ -5141,7 +5161,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const chosen: { facts: Fact[]; tier: FactTier } = { facts: [], tier: 'all' };
       const flags: { privateDocsInjected?: boolean } = {};
       const injectedDocs: InjectedDocRef[] = [];
-      const recall = await buildRecallContext(input.input, {
+      const recall = await withWorkerTimings(turn?.workerTimings, () => buildRecallContext(input.input, {
         currentThreadId: threadId,
         // Mail with another person: what Stem learned from them joins the user's memory here, and only here.
         contact: input.mail?.external?.address ?? null,
@@ -5152,7 +5172,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         factReranker,
         previousUserMessages: factReranker?.factQuery ? previousUserMessages : [],
         earlierUserMessages: previousUserMessages
-      });
+      }));
       if (recall) {
         blocks.push(recall);
         ambient.add(RECALL_RULES, 'the rules for the memory block');
@@ -5193,16 +5213,18 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Sits after recall and before files so the model reads "what I remember" and
     // "how I do this" together, ahead of the ambient context blocks.
     let toolSkills: ReturnType<typeof toolSkillsForTurn> = [];
+    const skillsStart = Date.now();
     try {
       const records = listSkillRecords();
       const alreadyLoaded = loadedSkillNames(historySnapshot);
-      const selection = await selectSkills(input.input, records, {
+      const selection = await withWorkerTimings(turn?.workerTimings, () => selectSkills(input.input, records, {
         usage: skillUsageLookup(),
         previousUserMessages,
         alreadyLoaded,
         // A skill the chat lists already is not listed again.
         alreadyListed: listedSkillLines(liveTexts)
-      });
+      }));
+      if (turn?.threadId === threadId) turn.skillsMs = Date.now() - skillsStart;
       toolSkills = toolSkillsForTurn(records, selection.inlined.map((s) => s.slug), alreadyLoaded);
       if (turn?.threadId === threadId) turn.toolSkillsOffered = toolSkills.map((s) => s.slug);
       // Log the cut on EVERY turn, including — especially — the turns that

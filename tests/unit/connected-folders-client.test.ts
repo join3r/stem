@@ -203,6 +203,19 @@ describe('enrichment and injection', () => {
   });
 });
 
+describe('the Claude Code folder learn mode', () => {
+  it('has no "new" or "all": a patch for either stores the default, and off stays off', async () => {
+    const dir = join(root, 'claude-code');
+    mkdirSync(dir, { recursive: true });
+    const id = (await addConnectedFolders([dir]))[0]!.id;
+    await updateConnectedFolder(id, { kind: 'claude' });
+    expect((await updateConnectedFolder(id, { learnMode: 'all' }))[0]!.learnMode).toBeUndefined();
+    expect((await updateConnectedFolder(id, { learnMode: 'new' }))[0]!.learnMode).toBeUndefined();
+    expect((await updateConnectedFolder(id, { learnMode: 'off' }))[0]!.learnMode).toBe('off');
+    expect((await readStore()).folders[0]!.learnMode).toBe('off');
+  });
+});
+
 describe('the folder kind', () => {
   it('stores a known kind, clears it on null, and ignores anything else', async () => {
     const folders = await addClientFolder({ deviceId: macId, clientPath: '/a/vault' });

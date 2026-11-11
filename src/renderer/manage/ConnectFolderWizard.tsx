@@ -507,7 +507,7 @@ export function ConnectFolderWizard({
                   value={learnMode}
                   onChange={(e) => setLearnMode(e.target.value as LearnMode)}
                 >
-                  {LEARN_CHOICES.map((c) => (
+                  {LEARN_CHOICES.filter((c) => !claude || c.value === 'use' || c.value === 'off').map((c) => (
                     <option key={c.value} value={c.value}>
                       {c.label}
                     </option>
@@ -515,7 +515,7 @@ export function ConnectFolderWizard({
                 </select>
                 <span className="muted">
                   {claude && learnMode === 'use'
-                    ? 'Sessions teach Stem only when they come up in your chats. Claude Code’s memory notes are read as they are added or changed, about one model call per 20 notes.'
+                    ? 'Reads Claude Code’s memory notes as they are added or changed, about one model call per 20 notes. Sessions teach Stem only when they come up in your chats.'
                     : LEARN_CHOICES.find((c) => c.value === learnMode)?.hint}
                 </span>
               </label>
