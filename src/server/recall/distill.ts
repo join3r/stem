@@ -5,6 +5,7 @@ import { cosineSim } from './vector';
 import { isRecallEnabled } from '../workspace/memory';
 import * as activity from '../activity';
 import { degrade } from '../degrade';
+import { log } from '../log';
 import {
   classifyRelation, evidenceDateOf, isDuplicateVerdict, mergeDuplicatePair, sweepFactAgainstNeighbours, type SweepBudget
 } from './reconcile';
@@ -14,7 +15,7 @@ import type { Person } from '../../shared/types';
 import { peopleSnapshot } from '../workspace/people';
 import { applySkillOutcomes, casesAwaitingVerdict, type ListedCase, type SkillOutcomeGrade } from '../skills/cases';
 import { recallStore, type StoredMessage, type TurnInjectedFacts } from './store';
-const { enqueueRelationChecks, factTermSearch, getAllFacts, getDupCosine, getEpisodicGeneration, getFacts, getFactDetails, getFactsByIds, getFactVectors, getFactsGeneration, getMessagesForDistillFrom, getMeta, getTidyThreshold, getUnconsumedTurnDocs, getUngradedTurnFacts, isRelationChecked, markTurnDocsConsumed, markTurnFactsGraded, recordFactUsage, recordRelationResult, setMeta, supersedeFact, createFactConflict, upsertFact, upsertFactVector } = recallStore;
+const { enqueueRelationChecks, factTermSearch, getAllFacts, getDupCosine, getEpisodicGeneration, getFacts, getFactDetails, getFactsByIds, getFactVectors, getFactsGeneration, getMessagesForDistillFrom, getMeta, getTidyThreshold, getUnconsumedTurnDocs, getUngradedTurnFacts, isRelationChecked, markTurnDocsConsumed, markTurnFactsGraded, recordFactUsage, recordFactUsageGrades, recordRelationResult, setMeta, supersedeFact, createFactConflict, upsertFact, upsertFactVector } = recallStore;
 
 // Level 1: the reflection pass. Periodically reads conversation that's new since
 // its last run and distills durable, stable facts about the user — and about
@@ -345,6 +346,7 @@ function applyUsageGrades(
   grades: FactUsageGrade[]
 ): void {
   const byMessageId = new Map(grades.map((g) => [g.messageId, g]));
+  const tally = { turns: 0, facts: 0, used: 0, lexical: 0 };
   for (const { row, reply } of turns) {
     const graded = byMessageId.get(reply.id);
     if (!graded && reply.text.length < MIN_LEXICAL_GRADE_REPLY_CHARS) continue;
@@ -353,8 +355,20 @@ function applyUsageGrades(
       ? graded.usedFactIds.filter((id) => injected.has(id))
       : getFactsByIds(row.factIds).filter((f) => lexicalUsage(f.text, reply.text)).map((f) => f.id);
     recordFactUsage(row.factIds, used, reply.ts);
+    try {
+      recordFactUsageGrades(row, used, graded ? 'model' : 'lexical');
+    } catch (error) {
+      // The counters above already landed; only the per-turn record is lost.
+      degrade('recall.distill', 'kept the usage counters without the per-turn grade record', error);
+    }
     markTurnFactsGraded(row.threadId, row.turnId);
+    tally.turns++;
+    tally.facts += row.factIds.length;
+    tally.used += used.length;
+    if (!graded) tally.lexical++;
   }
+  // Counts only. The rows are in fact_usage_grades (getFactUsageReport).
+  if (tally.turns > 0) log('recall', 'fact usage graded', tally);
 }
 
 // ---- skill outcomes (the third duty; skills/cases.ts) ----

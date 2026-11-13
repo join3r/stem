@@ -597,6 +597,71 @@ async function runRefresh(llm: LlmClient): Promise<FactGroupsResult> {
 
 // ---------------------------------------------------------------- injection
 
+// ---------------------------------------------------------------- topic list
+
+/** Above this the topic list is cut (bench #2 at production size: 3.0k chars on average, 4.4k at most). */
+export const MEMORY_TOPICS_MAX_CHARS = 5_000;
+
+/**
+ * What memory holds, one group label per line: sent once per chat context, so
+ * the model knows when a search_facts call would find something. Per-turn
+ * injection only reaches facts that read like the message; "plan my weekend"
+ * does not read like "knee surgery on the 20th". With this list, the chat
+ * model's searches on the production-sized bench found more relevant facts
+ * (recall +0.08, F1 +0.04 against searching without it) and it did not search
+ * more on turns that needed nothing (recall-bench/topic-list-20261113).
+ *
+ * Groups with at least two live members, as measured; a group with a sensitive
+ * member shows only its category (topicLine). Sorted by label rather
+ * than by size: the block is resent only when its text changes, and member
+ * counts change on most memory passes. Null when there is nothing to list.
+ */
+/**
+ * One line of the topic list. A group holding a sensitive fact goes out on
+ * every chat only as its category ("Private: health"), never its label: a
+ * sensitive fact itself needs the gate's extra margin to reach a turn, and a
+ * label like a diagnosis would skip that. The category still tells the model a
+ * search there can find something.
+ */
+function topicLine(label: string, members: readonly Fact[]): string {
+  const sensitive = members.filter((f) => f.sensitivity === 'sensitive');
+  if (sensitive.length > 0) {
+    const counts = new Map<string, number>();
+    for (const f of sensitive) counts.set(f.category, (counts.get(f.category) ?? 0) + 1);
+    const top = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+    return `Private: ${top === 'other' ? 'personal details' : top}`;
+  }
+  // Model-written: no line breaks, and no angle brackets to close a block.
+  return label.replace(/\s+/g, ' ').replace(/</g, '‹').replace(/>/g, '›').trim();
+}
+
+export function memoryTopicsContext(): string | null {
+  if (!isRecallEnabled()) return null;
+  const pool = groupableFacts();
+  if (pool.length < 2) return null;
+  const live = liveMembers(new Map(pool.map((f) => [f.id, f])));
+  const labels = [...new Set(
+    activeGroups()
+      .filter((g) => (live.get(g.id)?.length ?? 0) >= 2)
+      .map((g) => topicLine(g.label, live.get(g.id) ?? []))
+      .filter(Boolean)
+  )].sort((a, b) => a.localeCompare(b));
+  if (labels.length === 0) return null;
+  const lines: string[] = [];
+  let chars = 0;
+  for (const label of labels) {
+    if (chars + label.length + 3 > MEMORY_TOPICS_MAX_CHARS) break;
+    lines.push(`- ${label}`);
+    chars += label.length + 3;
+  }
+  return (
+    // The wording the eval measured (topic-list-20261113), word for word.
+    'What your memory holds about this user. Each line is one topic Stem has stored facts about; ' +
+    'the facts themselves are not shown here — search_facts retrieves them.\n' +
+    lines.join('\n')
+  );
+}
+
 /**
  * Parent memories for this turn: the PARENT_SHORTLIST injectable groups nearest
  * the query vector, gated by the same cross-encoder floor as facts (plus the

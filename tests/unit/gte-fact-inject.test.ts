@@ -170,6 +170,6 @@ describe('GTE fact injection isolation', () => {
     seed('Fresh replacement must not inherit erased selection');
     release([{ index: 0, score: 10 }]);
     expect(await pending).toBeNull();
-    expect(selected).toEqual({ facts: [], tier: 'none', parents: [] });
+    expect(selected).toMatchObject({ facts: [], tier: 'none', parents: [] });
   });
 });

@@ -152,6 +152,48 @@ function embedQueryViaSocket(query: string): Promise<QueryEmbedding | null> {
   });
 }
 
+/**
+ * The ids of `ids` that clear the per-turn fact gate for `query`, scored in
+ * main (embed-endpoint.ts op factGate), or null when main could not gate them:
+ * then the hits go back as they were.
+ */
+function gateFactsViaSocket(query: string, ids: number[]): Promise<number[] | null> {
+  if (!EMBED_SOCK || !EMBED_TOKEN || ids.length === 0) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v: number[] | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      socket.destroy();
+      resolve(v);
+    };
+    // Scoring waits behind a turn's own recall in the model worker.
+    const deadline = setTimeout(() => done(null), FACT_GATE_TIMEOUT_MS);
+    const socket = connect(EMBED_SOCK);
+    socket.on('error', () => done(null));
+    let buf = '';
+    socket.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      const nl = buf.indexOf('\n');
+      if (nl === -1) return;
+      try {
+        const res = JSON.parse(buf.slice(0, nl)) as { ok?: boolean; pass?: unknown };
+        done(res?.ok && Array.isArray(res.pass) ? res.pass.filter((v): v is number => Number.isInteger(v)) : null);
+      } catch {
+        // quiet: null keeps the ungated hits, the same answer as every other
+        // failure of this call; searchFacts reports that it went ungated.
+        done(null);
+      }
+    });
+    socket.on('connect', () => {
+      socket.write(`${JSON.stringify({ id: 1, op: 'factGate', query, ids, token: EMBED_TOKEN })}\n`);
+    });
+  });
+}
+
+const FACT_GATE_TIMEOUT_MS = 6_000;
+
 /** One-shot embed thunk for a single tool call (each call embeds at most once). */
 function embedOnce(query: string): () => Promise<QueryEmbedding | null> {
   let memo: Promise<QueryEmbedding | null> | null = null;
@@ -171,13 +213,36 @@ async function searchPastChats(query: string, limit: unknown): Promise<CoreSearc
   });
 }
 
-async function searchFacts(query: string, limit: unknown, contact: unknown): Promise<CoreFactHit[]> {
-  return hybridSearchFacts(open(), query, {
+/** What search_facts found, and how many loose matches the fact gate held back. */
+interface FactSearchResult {
+  hits: CoreFactHit[];
+  heldBack: number;
+}
+
+/**
+ * Hybrid search, then the per-turn fact gate against the search query. Keyword
+ * and cosine matching pass nearly every fact at the semantic floor, so a search
+ * used to return its full limit, about four in five of them unrelated and many
+ * of them sensitive. Gated, the relevant share rose from 0.19 to 0.58 on the
+ * production-sized bench and F1 over the turn rose by 0.09
+ * (recall-bench/topic-list-20261113). When main cannot gate (app down, no
+ * calibrated fact reranker), the hits go back ungated, as before.
+ */
+async function searchFacts(query: string, limit: unknown, contact: unknown): Promise<FactSearchResult> {
+  const hits = await hybridSearchFacts(open(), query, {
     limit: clampLimit(limit, 10, 30),
     embedQuery: embedOnce(query),
     // Stamped by the bridge from the turn's gate (recallToolParams), never the model.
     contact: typeof contact === 'string' && contact.includes('@') ? contact : null
   });
+  const pass = await gateFactsViaSocket(query, hits.map((h) => h.id));
+  if (pass === null) {
+    if (hits.length > 0 && EMBED_SOCK) report('recall.mcp', 'returned search_facts hits without the relevance gate', new Error('fact gate unavailable'));
+    return { hits, heldBack: 0 };
+  }
+  const keep = new Set(pass);
+  const kept = hits.filter((h) => keep.has(h.id));
+  return { hits: kept, heldBack: hits.length - kept.length };
 }
 
 async function searchSummaries(query: string, limit: unknown): Promise<CoreSummaryHit[]> {
@@ -314,9 +379,14 @@ function formatFolderDocs(rows: FolderDocHit[]): string {
     .join('\n\n');
 }
 
-function formatFacts(rows: CoreFactHit[]): string {
-  if (rows.length === 0) return 'No matching stored facts found.';
-  return rows.map((r) => `- ${r.text.replace(/\s+/g, ' ').trim()}`).join('\n');
+function formatFacts({ hits, heldBack }: FactSearchResult): string {
+  const held = heldBack > 0
+    ? `${heldBack} loosely matching fact${heldBack === 1 ? ' was' : 's were'} left out as not about this query; ` +
+      'try other or more specific terms if what you need is missing.'
+    : '';
+  if (hits.length === 0) return held ? `No stored facts matched closely. ${held}` : 'No matching stored facts found.';
+  const list = hits.map((r) => `- ${r.text.replace(/\s+/g, ' ').trim()}`).join('\n');
+  return held ? `${list}\n(${held})` : list;
 }
 
 function isoDate(ts: number): string {

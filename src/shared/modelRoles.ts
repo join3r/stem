@@ -75,13 +75,14 @@ export function resolveBackgroundModel(
 
 /**
  * The quick-tasks jobs — the ones that share the cheap model group and carry an
- * effort setting of their own. Just one now: chat subjects, extraction on a
- * latency budget. Skills used to be a member and is not: it is editorial
+ * effort setting of their own: chat subjects, extraction on a latency budget,
+ * and picking which saved skills a message needs (a classification in front of
+ * every turn, no setting of its own). Skills AUTHORING used to be a member and is not: it is editorial
  * judgment (see {@link resolveSkillsModel}). The safety check is half a member:
  * its quick check runs on Quick tasks, its review does not
  * (see {@link resolveJudgeQuickModel}).
  */
-export type BackgroundRole = 'subject';
+export type BackgroundRole = 'subject' | 'skillPick';
 
 /**
  * How hard each quick-tasks job thinks when nobody has said anything at all —
@@ -97,7 +98,12 @@ export type BackgroundRole = 'subject';
  * a model that has no `off` pi clamps up to its lowest instead of failing.
  */
 export const ROLE_EFFORT_FLOOR: Record<BackgroundRole, string | null> = {
-  subject: 'off'
+  subject: 'off',
+  // Picking which saved skills a message needs (skills/pick.ts): a short
+  // classification in front of every turn, so it must not stop to think.
+  // 'minimal', not 'off': gpt-6-luna still reasoned at 'off' (42–98 tokens in
+  // the 2026-11-13 eval) and does not at 'minimal'.
+  skillPick: 'minimal'
 };
 
 /**

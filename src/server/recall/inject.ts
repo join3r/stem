@@ -402,7 +402,7 @@ async function chooseFacts(
           // in the top part of this turn's own span. Unmeasured heuristic; a
           // per-backend floor via factGateScore is always preferable.
           : span > 0 && (topScore - r.score) / span <= (sensitive ? 0.2 : 0.4);
-        if (pass) admitted.push(fact);
+        if (pass) admitted.push(floor != null ? { ...fact, gateMargin: r.score - floor } : fact);
         if (admitted.length >= limit) break;
       }
       relevant = admitted;
@@ -491,8 +491,8 @@ export interface BuildContextOptions {
   earlierUserMessages?: readonly string[];
   /** Optional sink: filled with the per-stage latency breakdown of this call. */
   timings?: RecallTimings;
-  /** Optional sink: filled with the durable facts chosen this turn + their tier. */
-  chosen?: { facts: Fact[]; tier: FactTier; parents?: ParentMemory[] };
+  /** Optional sink: filled with the durable facts chosen this turn + their tier and the fact gate's model. */
+  chosen?: { facts: Fact[]; tier: FactTier; parents?: ParentMemory[]; gateModel?: string | null };
   /**
    * Optional sink: set true when the injected block carries documents from a
    * memorize:false folder — the caller must taint the turn so nothing derived
@@ -616,6 +616,7 @@ export async function buildRecallContext(
     options.chosen.facts = facts;
     options.chosen.tier = tier;
     options.chosen.parents = parents;
+    options.chosen.gateModel = factReranker?.modelId ?? null;
   }
 
   // The people this turn is about (named now or just before, or the mail's

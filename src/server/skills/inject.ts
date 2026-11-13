@@ -8,6 +8,7 @@ import { readSkillExamples } from './examples';
 import { DEFAULT_SHORTLIST_SIZE, countWords, queryHasSignal, selectCut, type CutReason, type CutResult } from './gate';
 import { TOOL_SKILL_MARKER } from '../pi/protocol';
 import { holdableSkillTools } from './contract';
+import { PICK_SHORTLIST_SIZE, type SkillPicker } from './pick';
 
 // Per-turn skill selection: which saved procedures the model gets, and in what
 // depth. This is the half of the skills rebuild that takes retrieval away from
@@ -80,6 +81,12 @@ export interface SkillDecision {
   withContext?: boolean;
   /** Index entries left out because this chat's history already lists them. */
   listedEarlier?: number;
+  /** The model picker ran: 'failed' means it gave no answer, so the cut stood alone. */
+  picker?: 'answered' | 'failed';
+  /** Slugs the picker added to the cut (skills/pick.ts). */
+  picked?: string[];
+  /** How long the picker took (ms). */
+  pickMs?: number;
 }
 
 export interface SkillSelection {
@@ -232,6 +239,12 @@ export interface SelectSkillsOptions {
    * when absent. Used only with a reranker calibrated for them.
    */
   examples?: ReadonlyMap<string, readonly string[]>;
+  /**
+   * The model picks from the embedder shortlist (skills/pick.ts), beside the
+   * cross-encoder; its picks are added to the cut. No answer leaves the cut
+   * as it is without one.
+   */
+  pick?: SkillPicker | null;
 }
 
 /**
@@ -351,7 +364,9 @@ async function rankSkills(
     // quiet: no example floor means descriptions alone, which is the shipped
     // behaviour and needs no saying.
   }
-  const examples = exampleFloor === null ? new Map<string, readonly string[]>() : (opts.examples ?? readSkillExamples(candidates));
+  // Example requests widen the shortlist for the cross-encoder calibrated on
+  // them, and for the picker, whose measured shortlist used them.
+  const examples = exampleFloor === null && !opts.pick ? new Map<string, readonly string[]>() : (opts.examples ?? readSkillExamples(candidates));
 
   let qVec: Float32Array;
   let vectors: Map<string, Float32Array>;
@@ -409,6 +424,25 @@ async function rankSkills(
   // gate had: usage reorders candidates, it never admits or ejects one.
   const shortlist = scored.slice(0, DEFAULT_SHORTLIST_SIZE);
   let cut: CutResult = { inlined: [], reason: 'no-rerank-score' };
+  // The model picker runs beside the cross-encoder (skills/pick.ts) and its
+  // picks are added to the cut, never replace it: on gold-v3 the quick-tasks
+  // model alone served 51/81 against the cut's 44 (not significant), the two
+  // together 57/81 for 8 more wrong-load turns of 815. A null answer (timeout,
+  // error, unreadable reply) leaves the cut as it is.
+  let pickList: SkillRecordish[] = [];
+  let pickMs: number | undefined;
+  const pickStarted = Date.now();
+  const picking: Promise<string[] | null> | null = opts.pick && scored.length > 0
+    ? (() => {
+        pickList = scored.slice(0, PICK_SHORTLIST_SIZE).map((s) => s.record);
+        return opts.pick(query, pickList.map((r) => ({ name: r.name, description: r.description })), maxInlined)
+          .catch((error: unknown) => {
+            degrade('skills.pick', 'kept the cut without the model picker', error);
+            return null;
+          })
+          .finally(() => { pickMs = Date.now() - pickStarted; });
+      })()
+    : null;
   if (rr && shortlist.length > 0) {
     try {
       // A floor of null means a backend whose score scale we cannot know yet
@@ -465,8 +499,20 @@ async function rankSkills(
     });
   }
 
+  let picker: SkillDecision['picker'];
+  let picked: string[] = [];
+  if (picking) {
+    const names = await picking;
+    picker = names ? 'answered' : 'failed';
+    const byName = new Map(pickList.map((r) => [r.name, r.slug]));
+    picked = (names ?? [])
+      .map((n) => byName.get(n))
+      .filter((slug): slug is string => !!slug && !cut.inlined.includes(slug))
+      .slice(0, maxInlined);
+  }
+
   const bySlug = new Map(candidates.map((r) => [r.slug, r]));
-  const cutRecords = cut.inlined.map((slug) => bySlug.get(slug)).filter((r): r is SkillRecordish => !!r);
+  const cutRecords = [...cut.inlined, ...picked].map((slug) => bySlug.get(slug)).filter((r): r is SkillRecordish => !!r);
   const loaded = opts.alreadyLoaded ?? new Set<string>();
   // Already in the chat's history: the model has the steps, and a second copy
   // only costs context. Nor does it go in the index — it is not "names only".
@@ -491,7 +537,8 @@ async function rankSkills(
       topCosine: scored[0]?.cosine,
       inlined: inlined.map((r) => r.slug),
       ...(alreadyLoaded.length ? { alreadyLoaded } : {}),
-      ...(withContext ? { withContext } : {})
+      ...(withContext ? { withContext } : {}),
+      ...(picker ? { picker, pickMs, ...(picked.length ? { picked } : {}) } : {})
     }
   };
 }

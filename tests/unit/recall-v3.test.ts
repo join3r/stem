@@ -582,7 +582,12 @@ describe('usage grading through the distill pass', () => {
     const otherId = store.upsertFact('The user supports Slovan Bratislava', 'distilled', { confidence: 0.9 })!;
     store.recordMessage({ threadId: 'g-1', turnId: 'g-turn-1', role: 'user', text: 'What antibiotic can I take for this infection, given my history?' });
     store.recordMessage({ threadId: 'g-1', turnId: 'g-turn-1', role: 'assistant', text: 'Given your penicillin allergy, a macrolide like azithromycin is the usual alternative — confirm with your doctor.' });
-    store.recordTurnInjectedFacts('g-1', 'g-turn-1', [factId, otherId]);
+    store.recordTurnInjectedFacts('g-1', 'g-turn-1', [factId, otherId], {
+      tier: 'reranked',
+      gateModel: 'gte-test',
+      facts: [{ id: factId, reason: 'semantic', margin: 2.5 }, { id: otherId, reason: 'lexical', margin: 0.25 }]
+    });
+    const since = Math.floor(Date.now() / 1000) - 60;
 
     let sawUsageBlock = false;
     const llm = {
@@ -607,6 +612,22 @@ describe('usage grading through the distill pass', () => {
     // and the row is graded — a rerun must not double-count.
     await distillNewMessages({ complete: async () => '{"claims":[]}' });
     expect(store.getFactDetails(factId)!.timesInjected).toBe(1);
+
+    // The per-turn record keeps how each fact got in, and the rerun added nothing.
+    const report = store.getFactUsageReport(since);
+    expect([report.turns, report.graded, report.used]).toEqual([1, 2, 1]);
+    expect(report.byGrader).toEqual([{ key: 'model', graded: 2, used: 1 }]);
+    expect(report.byReason).toEqual(expect.arrayContaining([
+      { key: 'semantic', graded: 1, used: 1 },
+      { key: 'lexical', graded: 1, used: 0 }
+    ]));
+    expect(report.byMargin).toEqual(expect.arrayContaining([
+      { key: '2-4', graded: 1, used: 1 },
+      { key: '0-1', graded: 1, used: 0 }
+    ]));
+    // Deleting a fact takes its grade rows with it.
+    store.deleteFact(otherId);
+    expect(store.getFactUsageReport(since).graded).toBe(1);
   });
 
   it('falls back to the lexical heuristic when the model skips the grading duty', async () => {
@@ -622,6 +643,14 @@ describe('usage grading through the distill pass', () => {
     expect(store.getFactDetails(usedId)!.timesUsed).toBe(1);
     expect(store.getFactDetails(unusedId)!.timesUsed).toBe(0);
     expect(store.getFactDetails(unusedId)!.timesInjected).toBe(1);
+    // A row from before the per-fact log: graded, marked lexical, no reason or margin.
+    const report = store.getFactUsageReport(0);
+    expect(report.byGrader).toEqual([{ key: 'lexical', graded: 2, used: 1 }]);
+    expect(report.byReason).toEqual([{ key: 'unknown', graded: 2, used: 1 }]);
+    expect(report.byMargin).toEqual([]);
+    // A facts reset drops the grade rows with the facts.
+    store.resetFacts();
+    expect(store.getFactUsageReport(0).graded).toBe(0);
   });
 
   it('abstains from lexical grading on a trivially short reply', async () => {

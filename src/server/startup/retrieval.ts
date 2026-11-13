@@ -6,7 +6,7 @@ import { embedModelsDir, embedSocketPath, recallDbPath } from '../workspace/path
 import { embedNewMessages } from '../recall/embed-episodic';
 import { embedMissingFactVectors } from '../recall/embed-facts';
 import { scanAllIndexedFolders } from '../folder-index';
-import { getEmbeddingsClient, setRetrievalClients } from '../recall/retrieval';
+import { getEmbeddingsClient, getFactRerankClient, setRetrievalClients } from '../recall/retrieval';
 import { startEmbedEndpoint } from '../recall/embed-endpoint';
 import type { EmbeddingsClient } from '../recall/embeddings';
 import { isCustomModelId, localModelCacheKey, resolveEmbedSpec } from '../recall/embed-catalog';
@@ -273,7 +273,9 @@ export function initRetrieval(deps: {
   // auto-inject. Listen failures are logged and non-fatal (tool stays FTS-only).
   const embedEndpoint = startEmbedEndpoint({
     socketPath: embedSocketPath(),
-    getClient: getEmbeddingsClient
+    getClient: getEmbeddingsClient,
+    // search_facts hits go through the per-turn fact gate (embed-endpoint.ts).
+    getFactGate: getFactRerankClient
   });
   host().onShutdown(() => {
     void embedEndpoint.close();

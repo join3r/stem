@@ -58,7 +58,7 @@ import {
   computerControlInstructions,
   stemAssistantInstructions
 } from '../workspace/bootstrap';
-import { memoryRunOf, readSettings } from '../workspace/settings';
+import { backgroundRunOf, memoryRunOf, readSettings } from '../workspace/settings';
 import { resolveBrowserGrant, resolveCodingGrant, resolveComputerGrant } from '../harness/chat-grants';
 import { browserChoicesText, codingChoicesText, computerChoicesText } from '../harness/chat-hosts';
 import { resolveLoginPath } from '../exec/executor';
@@ -75,6 +75,7 @@ import { noteRename } from '../workspace/inbox';
 import { getChatFormat, isChatPrivate, markTurnTainted, setChatFormat, setChatPrivate, setNaming, taintedTurns } from '../workspace/chats';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
 import { buildRecallContext, RECALL_RULES, type RecallTimings } from '../recall/inject';
+import { memoryTopicsContext } from '../recall/fact-groups';
 import { newWorkerTimings, withWorkerTimings } from '../recall/worker-timings';
 import { userProfileContext } from '../recall/profile';
 import { buildPinsContext } from '../pins/context';
@@ -134,6 +135,7 @@ import {
 } from './web-search';
 import { piMcpConfigPath, skillsRoot, workspaceRoot as stemWorkspaceRoot } from '../workspace/paths';
 import { readUsage, recordGrades, recordInjections, recordUses } from '../skills/usage';
+import { completionSkillPicker, SKILL_PICK_DEADLINE_MS, type SkillPicker } from '../skills/pick';
 import { formatSkillsBlock, selectSkills, SKILL_RULES, toolSkillsForTurn, toolSkillsHandedOver, type SkillUsageStat } from '../skills/inject';
 import { listedSkillLines, loadedSkillNames } from '../skills/thread-history';
 import { AmbientBlocks, liveUserTexts } from './context-dedupe';
@@ -2082,6 +2084,33 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       privateFolderLabels: labels,
       taintedTurnIds: tainted
     });
+  }
+
+  /**
+   * The skill picker for a turn (skills/pick.ts): one short call on the
+   * quick-tasks model, ahead of the memory passes in the complete queue. The
+   * deadline counts the wait for a slot too; past it the cross-encoder cut
+   * stands alone.
+   */
+  private skillPicker(): SkillPicker {
+    return completionSkillPicker(
+      async (prompt) => {
+        let timer: NodeJS.Timeout | undefined;
+        const deadline = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`no answer within ${SKILL_PICK_DEADLINE_MS} ms`)), SKILL_PICK_DEADLINE_MS);
+        });
+        try {
+          const run = await backgroundRunOf('skillPick', () => ({ model: null, effort: null }));
+          return await Promise.race([
+            this.complete(prompt, { ...run, timeoutMs: SKILL_PICK_DEADLINE_MS, priority: true }),
+            deadline
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+      (error) => degrade('skills.pick', 'chose skills with the cross-encoder alone', error)
+    );
   }
 
   /**
@@ -5146,19 +5175,45 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // constant text and used to follow their block on every turn.
     const liveTexts = historySnapshot === undefined ? [] : liveUserTexts(historySnapshot);
     const ambient = new AmbientBlocks(liveTexts);
+    // Skill selection starts now and runs beside recall: the model picker
+    // (skills/pick.ts) is a model call (luna p50 2.2 s), and recall's own wait
+    // (p50 1.9 s) hides most of it.
+    // Awaited where the skills block goes, below.
+    const skillsStart = Date.now();
+    const skillRecords = listSkillRecords();
+    const skillsAlreadyLoaded = loadedSkillNames(historySnapshot);
+    const skillSelection = withWorkerTimings(turn?.workerTimings, () => selectSkills(input.input, skillRecords, {
+      usage: skillUsageLookup(),
+      previousUserMessages,
+      alreadyLoaded: skillsAlreadyLoaded,
+      // A skill the chat lists already is not listed again.
+      alreadyListed: listedSkillLines(liveTexts),
+      pick: this.skillPicker()
+    })).then(
+      (selection) => ({ selection, error: null as unknown }),
+      (error: unknown) => ({ selection: null, error })
+    );
     // A persona with recall off sees none of the user's memory: no facts, no
     // episodic history, no indexed folder excerpts. The block is skipped
     // outright rather than emptied, so nothing about the user rides along
     // with the material (Persona.recall explains why Critic needs this).
     let userSummary: string | null = null;
+    let memoryTopics: string | null = null;
     if (isRecallEnabled() && input.persona?.recall !== false && !turn?.isPrivate) {
       try {
         userSummary = userProfileContext();
       } catch (error) {
         degrade('pi.profile', "sent the turn without the user's summary", error);
       }
+      try {
+        // Not in mail with another person: what the user's memory covers is
+        // not that conversation's business, even as labels.
+        memoryTopics = input.mail?.external ? null : memoryTopicsContext();
+      } catch (error) {
+        degrade('pi.recall', 'sent the turn without the list of memory topics', error);
+      }
       const factReranker = await getFactRerankClient();
-      const chosen: { facts: Fact[]; tier: FactTier } = { facts: [], tier: 'all' };
+      const chosen: { facts: Fact[]; tier: FactTier; gateModel?: string | null } = { facts: [], tier: 'all' };
       const flags: { privateDocsInjected?: boolean } = {};
       const injectedDocs: InjectedDocRef[] = [];
       const recall = await withWorkerTimings(turn?.workerTimings, () => buildRecallContext(input.input, {
@@ -5194,7 +5249,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // signal behind usage-aware fact ranking. The captured user/assistant
         // messages carry the same turnId, which is the join key.
         if (turnId && chosen.facts.length > 0) {
-          recordTurnInjectedFacts(threadId, turnId, chosen.facts.map((f) => f.id));
+          recordTurnInjectedFacts(threadId, turnId, chosen.facts.map((f) => f.id), {
+            tier: chosen.tier,
+            gateModel: chosen.gateModel ?? null,
+            facts: chosen.facts.map((f) => ({ id: f.id, reason: f.selectionReason, margin: f.gateMargin }))
+          });
         }
         // Same log for learn-eligible folder-doc excerpts (learn-on-use): the
         // distill pass folds them into its transcript as citable evidence.
@@ -5213,19 +5272,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Sits after recall and before files so the model reads "what I remember" and
     // "how I do this" together, ahead of the ambient context blocks.
     let toolSkills: ReturnType<typeof toolSkillsForTurn> = [];
-    const skillsStart = Date.now();
     try {
-      const records = listSkillRecords();
-      const alreadyLoaded = loadedSkillNames(historySnapshot);
-      const selection = await withWorkerTimings(turn?.workerTimings, () => selectSkills(input.input, records, {
-        usage: skillUsageLookup(),
-        previousUserMessages,
-        alreadyLoaded,
-        // A skill the chat lists already is not listed again.
-        alreadyListed: listedSkillLines(liveTexts)
-      }));
+      const { selection, error } = await skillSelection;
+      if (!selection) throw error;
       if (turn?.threadId === threadId) turn.skillsMs = Date.now() - skillsStart;
-      toolSkills = toolSkillsForTurn(records, selection.inlined.map((s) => s.slug), alreadyLoaded);
+      toolSkills = toolSkillsForTurn(skillRecords, selection.inlined.map((s) => s.slug), skillsAlreadyLoaded);
       if (turn?.threadId === threadId) turn.toolSkillsOffered = toolSkills.map((s) => s.slug);
       // Log the cut on EVERY turn, including — especially — the turns that
       // inline nothing. The regression this replaced was invisible precisely
@@ -5317,6 +5368,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // The user summary: the whole picture once per chat context, where recall
     // above carries only the facts this message calls for.
     if (userSummary) ambient.add(userSummary, 'the summary of what you know about the user');
+    // What memory holds, so the model knows when search_facts would find something.
+    if (memoryTopics) ambient.add(memoryTopics, 'the topics in memory');
     const files = await buildFilesContext();
     if (files) ambient.add(files, 'the workspace files list');
     const connected = await buildConnectedFoldersContext();
