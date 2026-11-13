@@ -5201,7 +5201,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     let memoryTopics: string | null = null;
     if (isRecallEnabled() && input.persona?.recall !== false && !turn?.isPrivate) {
       try {
-        userSummary = userProfileContext();
+        // Its "Current situation" may hold health and whereabouts: not for mail with another person.
+        userSummary = userProfileContext({ situation: !input.mail?.external });
       } catch (error) {
         degrade('pi.profile', "sent the turn without the user's summary", error);
       }

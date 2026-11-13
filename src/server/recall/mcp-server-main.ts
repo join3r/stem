@@ -213,20 +213,34 @@ async function searchPastChats(query: string, limit: unknown): Promise<CoreSearc
   });
 }
 
-/** What search_facts found, and how many loose matches the fact gate held back. */
+/**
+ * What search_facts found: `hits` in search order, and of those the ones the
+ * fact gate called loose (`loose`, empty when the gate did not run).
+ */
 interface FactSearchResult {
   hits: CoreFactHit[];
-  heldBack: number;
+  loose: ReadonlySet<number>;
 }
 
 /**
- * Hybrid search, then the per-turn fact gate against the search query. Keyword
- * and cosine matching pass nearly every fact at the semantic floor, so a search
- * used to return its full limit, about four in five of them unrelated and many
- * of them sensitive. Gated, the relevant share rose from 0.19 to 0.58 on the
- * production-sized bench and F1 over the turn rose by 0.09
- * (recall-bench/topic-list-20261113). When main cannot gate (app down, no
- * calibrated fact reranker), the hits go back ungated, as before.
+ * Hybrid search, then the per-turn fact gate against the search query, used to
+ * ORDER the answer and never to shorten it: facts that clear the gate come
+ * first, the rest follow under a line that says they may be unrelated.
+ *
+ * Keyword and cosine matching pass nearly every fact at the semantic floor, so
+ * about four hits in five are unrelated (recall-bench/topic-list-20261113), and
+ * the gate tells the two apart well on that bench. It was first used to drop
+ * the loose ones, and that cost more than it saved: the bench itself lost a
+ * third to two thirds of the relevant facts search had found, and in the first
+ * real chat after the deploy (2026-11-13, the user in hospital after surgery)
+ * the model searched "operácia operacii surgery November …" and got one fact of
+ * six. The gate scored "The user plans knee surgery at Antolská …" at −5.6 for
+ * that query and +4.3 for the same question as an English phrase: it was
+ * trained on user messages, and a model's search query is a bag of keywords in
+ * two languages. A fact the model asked for and did not get reads to it as "the
+ * memory does not hold this"; an unrelated line in a tool result costs words.
+ * When main cannot gate (app down, no calibrated fact reranker), the hits go
+ * back in search order alone.
  */
 async function searchFacts(query: string, limit: unknown, contact: unknown): Promise<FactSearchResult> {
   const hits = await hybridSearchFacts(open(), query, {
@@ -237,12 +251,11 @@ async function searchFacts(query: string, limit: unknown, contact: unknown): Pro
   });
   const pass = await gateFactsViaSocket(query, hits.map((h) => h.id));
   if (pass === null) {
-    if (hits.length > 0 && EMBED_SOCK) report('recall.mcp', 'returned search_facts hits without the relevance gate', new Error('fact gate unavailable'));
-    return { hits, heldBack: 0 };
+    if (hits.length > 0 && EMBED_SOCK) report('recall.mcp', 'returned search_facts hits without the relevance order', new Error('fact gate unavailable'));
+    return { hits, loose: new Set() };
   }
-  const keep = new Set(pass);
-  const kept = hits.filter((h) => keep.has(h.id));
-  return { hits: kept, heldBack: hits.length - kept.length };
+  const close = new Set(pass);
+  return { hits, loose: new Set(hits.filter((h) => !close.has(h.id)).map((h) => h.id)) };
 }
 
 async function searchSummaries(query: string, limit: unknown): Promise<CoreSummaryHit[]> {
@@ -379,14 +392,17 @@ function formatFolderDocs(rows: FolderDocHit[]): string {
     .join('\n\n');
 }
 
-function formatFacts({ hits, heldBack }: FactSearchResult): string {
-  const held = heldBack > 0
-    ? `${heldBack} loosely matching fact${heldBack === 1 ? ' was' : 's were'} left out as not about this query; ` +
-      'try other or more specific terms if what you need is missing.'
-    : '';
-  if (hits.length === 0) return held ? `No stored facts matched closely. ${held}` : 'No matching stored facts found.';
-  const list = hits.map((r) => `- ${r.text.replace(/\s+/g, ' ').trim()}`).join('\n');
-  return held ? `${list}\n(${held})` : list;
+/** Shown above the hits the fact gate called loose; exported for the test. */
+export const LOOSE_FACTS_HEADING = 'Looser matches, which may not be about this query:';
+
+/** Every hit, the gate's close ones first; see searchFacts for why none is dropped. */
+export function formatFacts({ hits, loose }: FactSearchResult): string {
+  if (hits.length === 0) return 'No matching stored facts found.';
+  const line = (r: CoreFactHit): string => `- ${r.text.replace(/\s+/g, ' ').trim()}`;
+  const close = hits.filter((h) => !loose.has(h.id)).map(line);
+  const rest = hits.filter((h) => loose.has(h.id)).map(line);
+  if (rest.length === 0) return close.join('\n');
+  return [...close, LOOSE_FACTS_HEADING, ...rest].join('\n');
 }
 
 function isoDate(ts: number): string {

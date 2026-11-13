@@ -35,6 +35,12 @@ with every chat that can see your memory. It is at the top of **Memory → Facts
   after asking.
 - It leaves out sensitive details (health, money, addresses) and facts learned
   from connected folders.
+- The one exception is **Current situation**, the first section: where you are
+  and what you are in the middle of right now, such as a hospital stay, recovery
+  after an operation, or a trip, with its dates. It names the circumstance, not
+  your medical details, so that an answer never ignores it. It is rewritten as
+  soon as Stem learns that the situation changed, and it is left out of mail
+  with other people. Edit the summary to remove or correct it.
 - It describes you; it never overrides your custom instructions.
 - Private chats and personas without memory access never get it. The switch on
   the card turns it off everywhere.

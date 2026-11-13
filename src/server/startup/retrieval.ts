@@ -274,7 +274,7 @@ export function initRetrieval(deps: {
   const embedEndpoint = startEmbedEndpoint({
     socketPath: embedSocketPath(),
     getClient: getEmbeddingsClient,
-    // search_facts hits go through the per-turn fact gate (embed-endpoint.ts).
+    // search_facts orders its hits by the per-turn fact gate (embed-endpoint.ts).
     getFactGate: getFactRerankClient
   });
   host().onShutdown(() => {

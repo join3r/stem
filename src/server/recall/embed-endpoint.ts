@@ -26,6 +26,8 @@ import { recallStore } from './store';
 // Second op, the fact gate for search_facts: the hits are scored against the
 // search query by the same cross-encoder and floor as per-turn injection
 // (sensitive facts need the margin too), and only the ids that clear it return.
+// The caller lists those first and the rest after them; it drops none
+// (mcp-server-main.ts searchFacts has the reason).
 //   → {"id":1,"op":"factGate","query":"…","ids":[12,40],"token":"<hex>"}
 //   ← {"id":1,"ok":true,"pass":[40]}
 // Any failure means the caller keeps its hits as they were.

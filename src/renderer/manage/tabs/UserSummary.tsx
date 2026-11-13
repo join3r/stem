@@ -15,7 +15,7 @@ const rewriteJob = createJobStore();
 // list out of sight. Module-level so the choice survives a tab switch.
 let shownOnce = false;
 
-const HEADINGS = new Set(['Work context', 'Personal context', 'How they communicate', 'Top of mind', 'Brief history']);
+const HEADINGS = new Set(['Current situation', 'Work context', 'Personal context', 'How they communicate', 'Top of mind', 'Brief history']);
 
 function SummaryText({ text }: { text: string }) {
   return (
@@ -96,7 +96,7 @@ export function UserSummaryCard({ disabled }: { disabled: boolean }) {
   const status = !profile.enabled
     ? 'Off — chats get only the facts that match each message.'
     : profile.text
-      ? 'From your facts and how you write. Sent with every chat that can see your memory; rewritten as Stem learns more about you.'
+      ? 'From your facts and how you write. Sent with every chat that can see your memory; rewritten as Stem learns more about you. "Current situation" may name a hospital stay or a trip, and is left out of mail with other people.'
       : 'Not written yet — Stem writes it once it has learned a little about you from your chats.';
 
   return (

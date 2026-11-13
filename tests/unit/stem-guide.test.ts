@@ -95,3 +95,22 @@ describe('read_stem_guide descriptor', () => {
     expect(await guideEnum()).toEqual([...STEM_GUIDE_SLUGS]);
   });
 });
+
+describe('search_facts answer', () => {
+  const hit = (id: number, text: string) => ({ id, text, score: 1 });
+
+  it('keeps every hit and only orders them by the fact gate', async () => {
+    const { formatFacts, LOOSE_FACTS_HEADING } = await import('../../src/server/recall/mcp-server-main');
+    const hits = [hit(1, 'The user plans knee surgery.'), hit(2, 'The user has a surgery absence\n in the calendar.'), hit(3, 'The user booked a rehabilitation stay.')];
+    // The gate cleared only the second: it leads, the other two still arrive.
+    expect(formatFacts({ hits, loose: new Set([1, 3]) })).toBe([
+      '- The user has a surgery absence in the calendar.',
+      LOOSE_FACTS_HEADING,
+      '- The user plans knee surgery.',
+      '- The user booked a rehabilitation stay.'
+    ].join('\n'));
+    // No gate verdict (or all close): the plain list, in search order.
+    expect(formatFacts({ hits: hits.slice(0, 2), loose: new Set() }).split('\n')).toHaveLength(2);
+    expect(formatFacts({ hits: [], loose: new Set() })).toBe('No matching stored facts found.');
+  });
+});

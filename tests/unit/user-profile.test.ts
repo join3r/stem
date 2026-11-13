@@ -18,6 +18,7 @@ import {
   profileInputFacts,
   saveUserProfileText,
   setUserProfileEnabled,
+  situationFacts,
   userProfileContext,
   userProfileDue
 } from '../../src/server/recall/profile';
@@ -87,6 +88,53 @@ describe('user summary', () => {
     const texts = (await profileInputFacts()).map((f) => f.text);
     expect(texts).not.toContain('Has a heart condition');
     expect(texts).not.toContain('The handbook says leave is 25 days');
+  });
+
+  it('writes the current situation from recent sensitive health and schedule facts, and nothing else from them', async () => {
+    seedFacts(MIN_PROFILE_FACTS);
+    const day = 86_400;
+    const now = Math.floor(Date.now() / 1000);
+    store.upsertFact('The user is currently in hospital', { source: 'distilled', confidence: 0.9, sensitivity: 'sensitive', category: 'health' });
+    store.upsertFact('Rehabilitation stay until the end of the month', {
+      source: 'distilled', confidence: 0.9, sensitivity: 'sensitive', category: 'schedule', validUntil: now + 20 * day
+    });
+    // Not a circumstance: money, and a sensitive fact from a folder document.
+    store.upsertFact('The mortgage rate is fixed for three years', { source: 'distilled', confidence: 0.9, sensitivity: 'sensitive', category: 'finance' });
+    store.upsertFact('A scan documents an old fracture', { source: 'folder:abc', confidence: 0.9, sensitivity: 'sensitive', category: 'health' });
+    expect(situationFacts().map((f) => f.text)).toEqual(['The user is currently in hospital', 'Rehabilitation stay until the end of the month']);
+    // A health fact learned long ago with no end date is history, not the situation.
+    expect(situationFacts(now + 40 * day).map((f) => f.text)).toEqual([]);
+
+    const llm = fakeLlm(JSON.stringify({ ...JSON.parse(REPLY), now: 'As of today: in hospital after an operation.' }));
+    await buildUserProfile(llm);
+    const prompt = llm.prompts[0];
+    const [general, circumstance] = prompt.split('CIRCUMSTANCE FACTS, private, for "now" only (2):');
+    expect(circumstance).toContain('The user is currently in hospital');
+    expect(general).not.toContain('The user is currently in hospital');
+    expect(prompt).not.toContain('mortgage');
+    // The section leads the summary and stays out of mail with another person.
+    expect((await getUserProfile()).text.startsWith('Current situation\nAs of today: in hospital')).toBe(true);
+    expect(userProfileContext()).toContain('in hospital after an operation');
+    const forMail = userProfileContext({ situation: false })!;
+    expect(forMail).not.toContain('hospital');
+    expect(forMail).toContain('Work context');
+  });
+
+  it('is rewritten at once when the situation changes', async () => {
+    seedFacts(20);
+    await buildUserProfile(fakeLlm());
+    expect(await userProfileDue()).toBe(false);
+    const id = store.upsertFact('The user is currently in hospital', { source: 'distilled', confidence: 0.9, sensitivity: 'sensitive', category: 'health' })!;
+    expect(await userProfileDue()).toBe(true);
+    const llm = fakeLlm();
+    expect(await buildUserProfile(llm)).toMatchObject({ updated: true, mode: 'update' });
+    expect(llm.prompts[0]).toContain('Write "now" afresh');
+    // The sensitive fact is not listed among the general new facts.
+    expect(llm.prompts[0].split('CIRCUMSTANCE FACTS')[0]).not.toContain('currently in hospital');
+    expect(await userProfileDue()).toBe(false);
+    // Back home: the fact is retired, and that is news too.
+    store.supersedeFact(id, null);
+    expect(await userProfileDue()).toBe(true);
   });
 
   it('reads facts from the Claude Code folder: they come from the user\'s own sessions', async () => {
