@@ -948,56 +948,30 @@ struct MailComposeView: View {
     private var outLooksValid: Bool { outAddress.wholeMatch(of: /[^\s@]+@[^\s@]+\.[^\s@]+/) != nil }
     private var outSendable: Bool { outLooksValid && (reach == nil || reach?.state == "reachable" || reach?.state == "unreachable") }
 
+    private var leadName: String? {
+        draft.to.first.flatMap { id in session.mailPersonas.first { $0.id == id }?.name }
+    }
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Form {
-                    if session.interStem.canWriteOut {
-                        Section {
-                            Toggle(isOn: Binding(get: { writingOut }, set: { draft.outTo = $0 ? (draft.outTo ?? "") : nil })) {
-                                Label("To a person", systemImage: "at")
-                            }
-                        } footer: {
-                            if writingOut { Text("To someone on their own Stem, by email address. End-to-end encrypted; only you send.") }
-                        }
-                    }
-                    if writingOut {
-                        personSection
-                    } else {
-                    Section {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("To — the first one leads").font(.caption).foregroundStyle(.secondary)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 6) {
-                                    ForEach(session.mailPersonas) { p in
-                                        let idx = draft.to.firstIndex(of: p.id)
-                                        Button {
-                                            if let idx { draft.to.remove(at: idx) } else { draft.to.append(p.id) }
-                                        } label: {
-                                            HStack(spacing: 4) {
-                                                if let idx { Text("\(idx + 1)").font(.caption2.bold()) }
-                                                Text(p.name)
-                                            }
-                                        }
-                                        .chipStyle(on: idx != nil)
-                                    }
-                                }
-                                .font(.subheadline)
-                            }
-                        }
-                        TextField("Subject", text: $draft.subject)
-                        Toggle(isOn: $draft.isPrivate) { Label("Private", systemImage: "eye.slash") }
-                    }
-                    }
-                    if let error { Section { Text(error).foregroundStyle(.red).font(.footnote) } }
-                }
-                .scrollDismissesKeyboard(.interactively)
-                Composer(kind: .mail, draftKey: "mail:new", draft: $draft, busy: writingOut && !outSendable,
-                         placeholder: "Write your mail", onSend: send)
-            }
+            Composer(kind: .mail, draftKey: "mail:new", draft: $draft, busy: writingOut ? !outSendable : draft.to.isEmpty,
+                     placeholder: writingOut ? "Write your mail" : "Write the task — the reply lands in your Inbox",
+                     onSend: send, page: AnyView(header),
+                     sendTitle: writingOut ? "Send" : leadName.map { "Send to \($0)" })
             .navigationTitle("New mail")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                if !writingOut {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { draft.isPrivate.toggle() } label: {
+                            Image(systemName: draft.isPrivate ? "lock.fill" : "lock")
+                        }
+                        .tint(draft.isPrivate ? Color.accentColor : .secondary)
+                        .accessibilityLabel(draft.isPrivate ? "Private on" : "Private off")
+                    }
+                }
+            }
             .onChange(of: draft) { _, d in DraftStore.save("mail:new", d) }
             .onAppear { if draft.to.isEmpty, session.mailPersonas.contains(where: { $0.id == "normal" }) { draft.to = ["normal"] } }
             .task(id: outAddress) {
@@ -1011,33 +985,127 @@ struct MailComposeView: View {
         }
     }
 
-    @ViewBuilder private var personSection: some View {
-        Section {
-            if session.interStem.verifiedAddresses.count > 1 {
-                Picker("From", selection: Binding(get: { from ?? session.interStem.verifiedAddresses[0] }, set: { from = $0 })) {
-                    ForEach(session.interStem.verifiedAddresses, id: \.self) { Text($0).tag($0) }
+    /// To, Subject and the notes above the body, as lines on one page.
+    @ViewBuilder private var header: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if session.interStem.canWriteOut {
+                Picker("Write to", selection: Binding(get: { writingOut }, set: { draft.outTo = $0 ? (draft.outTo ?? "") : nil })) {
+                    Text("Personas").tag(false)
+                    Text("A person").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, writingOut ? 4 : 10)
+                if writingOut {
+                    Text("To someone on their own Stem, by email address. End-to-end encrypted; only you send.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 16).padding(.bottom, 10)
                 }
             }
-            TextField("their@email.com", text: Binding(get: { draft.outTo ?? "" }, set: { draft.outTo = $0 }))
-                .keyboardType(.emailAddress)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            let matches = (session.interStem.status?.contacts ?? []).filter {
-                $0.state != "blocked" && $0.address != outAddress && (outAddress.isEmpty || $0.address.contains(outAddress)
-                    || ($0.name ?? "").lowercased().contains(outAddress))
-            }.prefix(5)
-            if !matches.isEmpty {
+            if writingOut { personLines } else { personaLines }
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(.red)
+                    .padding(.horizontal, 16).padding(.top, 10)
+            }
+        }
+    }
+
+    /// One header line: a muted label, then its field. `labelTop` lines the
+    /// label up with a taller first row (the persona chips).
+    private func line<Content: View>(_ label: String, labelTop: CGFloat = 0, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 10) {
+                Text(label).foregroundStyle(.secondary).frame(width: 62, alignment: .leading).padding(.top, labelTop)
+                content().frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            Divider().padding(.leading, 16)
+        }
+    }
+
+    @ViewBuilder private var personaLines: some View {
+        line("To", labelTop: 5) {
+            VStack(alignment: .leading, spacing: 6) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(Array(matches)) { c in
-                            Button(c.name ?? c.address) { draft.outTo = c.address }.chipStyle(on: false)
+                        ForEach(session.mailPersonas) { p in
+                            let idx = draft.to.firstIndex(of: p.id)
+                            Button {
+                                if let idx { draft.to.remove(at: idx) } else { draft.to.append(p.id) }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    if let idx, draft.to.count > 1 { Text("\(idx + 1)").font(.caption2.bold()) }
+                                    Text(p.name)
+                                }
+                            }
+                            .chipStyle(on: idx != nil)
                         }
                     }
                     .font(.subheadline)
                 }
+                Text(toHint).font(.caption).foregroundStyle(.secondary)
             }
-            if let reach, outLooksValid { reachRow(reach) }
-            TextField("Subject (optional)", text: $draft.subject)
+        }
+        line("Subject") {
+            TextField("Optional", text: $draft.subject).fontWeight(.semibold)
+        }
+        if draft.isPrivate {
+            VStack(spacing: 0) {
+                Label("Private: nothing here is saved to memory or read from it. Fixed once sent.", systemImage: "lock.fill")
+                    .font(.footnote)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .background(Color.accentColor.opacity(0.12))
+                Divider()
+            }
+        }
+    }
+
+    private var toHint: String {
+        guard let lead = leadName else { return "Pick at least one persona — the first one leads." }
+        let others = draft.to.dropFirst().compactMap { id in session.mailPersonas.first { $0.id == id }?.name }
+        if others.isEmpty { return "\(lead) gets your mail and answers you." }
+        return "\(lead) gets your mail and answers you. \(others.joined(separator: ", ")) \(others.count == 1 ? "joins" : "join") when \(lead) asks."
+    }
+
+    @ViewBuilder private var personLines: some View {
+        if session.interStem.verifiedAddresses.count > 1 {
+            line("From") {
+                Picker("From", selection: Binding(get: { from ?? session.interStem.verifiedAddresses[0] }, set: { from = $0 })) {
+                    ForEach(session.interStem.verifiedAddresses, id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            }
+        }
+        line("To") {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("their@email.com", text: Binding(get: { draft.outTo ?? "" }, set: { draft.outTo = $0 }))
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                let matches = (session.interStem.status?.contacts ?? []).filter {
+                    $0.state != "blocked" && $0.address != outAddress && (outAddress.isEmpty || $0.address.contains(outAddress)
+                        || ($0.name ?? "").lowercased().contains(outAddress))
+                }.prefix(5)
+                if !matches.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(Array(matches)) { c in
+                                Button(c.name ?? c.address) { draft.outTo = c.address }.chipStyle(on: false)
+                            }
+                        }
+                        .font(.subheadline)
+                    }
+                }
+                if let reach, outLooksValid { reachRow(reach) }
+            }
+        }
+        line("Subject") {
+            TextField("Optional", text: $draft.subject).fontWeight(.semibold)
         }
     }
 

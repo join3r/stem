@@ -4190,8 +4190,6 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-earlier-work > summary { cursor: pointer; padding: var(--sp-2) 0; }
 .mail-earlier-work[open] { display: flex; flex-direction: column; gap: var(--sp-3); }
 /* New mail: the type-to-add To field and the Private switch. */
-.mail-field-to { align-items: flex-start; }
-.mail-field-to > span { padding-top: var(--sp-3); }
 .mail-to-field { flex: 1; min-width: 0; position: relative; }
 .mail-to-box { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); border: 0.5px solid var(--hair); border-radius: var(--radius-sm); padding: var(--sp-2) var(--sp-3); cursor: text; }
 .mail-to-box:focus-within { border-color: var(--accent); }
@@ -4210,17 +4208,53 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-private-switch { display: inline-flex; align-items: center; gap: var(--sp-3); border: 0.5px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: var(--radius-pill); padding: var(--sp-2) var(--sp-5); background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-12); cursor: pointer; }
 .mail-private-switch.on { border-color: var(--accent); color: var(--accent); background: var(--sel); }
 .mail-private-note { margin: 0; display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-10); border-bottom: 0.5px solid var(--hair); background: var(--sel); font-size: var(--fs-12); color: var(--ink); }
-.mail-send { display: inline-flex; align-items: center; gap: var(--sp-3); border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 7px var(--sp-7); background: var(--accent); color: var(--accent-ink); cursor: pointer; }
-.mail-send:disabled { opacity: 0.5; cursor: default; }
+.mail-send { display: inline-flex; align-items: center; gap: var(--sp-3); border: none; border-radius: var(--radius-md); padding: 7px var(--sp-7); background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 600; cursor: pointer; }
+.mail-send:hover:not(:disabled) { filter: brightness(1.06); }
+.mail-send:disabled { opacity: 0.45; cursor: default; }
 
-/* Compose form. */
-.mail-compose-form { flex: 1; overflow-y: auto; padding: var(--sp-7) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-5); max-width: 640px; }
-.mail-field { display: flex; align-items: center; gap: var(--sp-5); }
-.mail-field > span { width: 56px; color: var(--muted); font-size: var(--fs-12); }
-.mail-private { display: inline-flex; align-items: center; margin-right: 5px; vertical-align: -1px; color: var(--muted); }
-.mail-field input, .mail-field select { flex: 1; border: 0.5px solid var(--hair); border-radius: var(--radius-sm); padding: var(--sp-3) var(--sp-4); font: inherit; background: transparent; color: inherit; }
-.mail-compose-body { resize: vertical; border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: var(--sp-4) var(--sp-5); font: inherit; background: transparent; color: inherit; }
-.mail-compose-body:focus, .mail-field input:focus { outline: none; border-color: var(--accent); }
+/* Compose: one letter card on the reading column — To and Subject as
+   hairline-separated lines, a borderless body that grows, the actions in a
+   foot strip. Same card language as the chat composer. */
+.mail-compose-scroll { flex: 1; overflow-y: auto; padding: var(--sp-9) var(--sp-12) var(--sp-12); }
+.mail-letter {
+  max-width: var(--measure);
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, calc(0.04 * var(--shadow-scale))), 0 8px 24px rgba(0, 0, 0, calc(0.05 * var(--shadow-scale)));
+}
+.mail-letter:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.mail-line { display: flex; align-items: center; gap: var(--sp-5); min-height: 44px; padding: var(--sp-3) var(--sp-8); border-bottom: 0.5px solid var(--hair); }
+.mail-line-label { flex: none; width: 58px; color: var(--muted); font-size: var(--fs-12); }
+.mail-line-to { align-items: flex-start; }
+.mail-line-to > .mail-line-label { padding-top: 7px; }
+.mail-line input, .mail-line select { flex: 1; min-width: 0; border: none; padding: var(--sp-2) 0; font: inherit; background: transparent; color: inherit; outline: none; }
+.mail-line-subject input { font-size: var(--fs-14); font-weight: 600; }
+.mail-line-subject input::placeholder { font-weight: 400; font-size: var(--fs-13); }
+.mail-letter .mail-to-box, .mail-letter .mail-to-box:focus-within { border: none; padding: var(--sp-1) 0; }
+.mail-letter .mail-to-hint { margin: var(--sp-1) 0 var(--sp-1); font-size: var(--fs-11); }
+.mail-compose-body {
+  field-sizing: content;
+  min-height: 240px;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: var(--sp-7) var(--sp-8);
+  font: inherit;
+  font-size: var(--fs-14);
+  line-height: 1.55;
+  background: transparent;
+  color: inherit;
+}
+.mail-letter > .mail-forward-quote { margin: 0 var(--sp-8) var(--sp-5); }
+.mail-letter > .composer-attachments { padding: 0 var(--sp-8) var(--sp-4); }
+.mail-letter-error { margin: 0 var(--sp-8) var(--sp-4); }
+.mail-letter-foot { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4) var(--sp-3) var(--sp-5); border-top: 0.5px solid var(--hair); }
+.mail-letter-foot .mail-send { margin-left: var(--sp-3); }
+.mail-send-kbd { font: inherit; font-size: var(--fs-11); opacity: 0.7; margin-left: var(--sp-1); }
 .mail-forward-quote { margin: 0; max-height: 320px; overflow-y: auto; padding: var(--sp-4) var(--sp-5); border-left: 2px solid var(--hair); background: var(--inline-bg); border-radius: var(--radius-sm); font: inherit; font-size: var(--fs-12); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .mail-compose-actions { display: flex; align-items: center; gap: var(--sp-4); }
 .mail-to-chips { flex: 1; display: flex; flex-wrap: wrap; gap: var(--sp-3); }

@@ -1398,112 +1398,121 @@ export const MailComposeView = forwardRef<MailViewHandle, {
           <Lock size={12} /> Private: nothing here is saved to memory or read from it. Fixed once sent.
         </p>
       )}
-      <div className="mail-compose-form">
-        {writingOut ? (
-          <>
-            {ownAddresses.length > 1 && (
-              <label className="mail-field">
-                <span>From</span>
-                <select value={outFrom ?? ownAddresses[0]} onChange={(e) => setOutFrom(e.target.value)} aria-label="Send from">
-                  {ownAddresses.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <div className="mail-field mail-field-to">
-              <span>To</span>
-              <PersonToField value={outTo} onChange={setOutTo} contacts={interStem.status?.contacts ?? []} onReach={setReach} />
-            </div>
-          </>
-        ) : (
-          <div className="mail-field mail-field-to">
-            <span>To</span>
-            <MailToField personas={personas} to={to} onChange={setTo} />
-          </div>
-        )}
-        <label className="mail-field">
-          <span>Subject</span>
-          <input
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            placeholder={writingOut ? 'Optional' : 'Optional — Stem names it after the first reply'}
-          />
-        </label>
-        <textarea
-          className="mail-compose-body"
-          value={body}
-          onChange={(e) => {
-            dictation.freeze();
-            setBody(e.target.value);
-          }}
-          aria-label="Mail"
-          placeholder={
-            forward
-              ? 'Add a note for the personas (optional) — the forwarded mail follows below.'
-              : writingOut
-                ? 'Write your mail. Only you send it; it is end-to-end encrypted.'
-                : 'Write the task. The personas work it unattended and the reply lands in your Inbox.'
-          }
-          rows={forward ? 4 : 10}
-          autoFocus
-          onPaste={(e) => void files.onPaste(e)}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={files.onDrop}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        {forward && (
-          <pre className="mail-forward-quote" aria-label="The forwarded mail">
-            {forward.quote}
-          </pre>
-        )}
-        <AttachmentChips attachments={files.attachments} onRemove={files.remove} />
-        {error && <p className="task-failed">{error}</p>}
-        <div className="mail-compose-actions">
-          <button
-            type="button"
-            className="composer-attach"
-            title={writingOut ? 'Attach — sealed with the mail, 17 MB in all' : 'Attach'}
-            aria-label="Attach"
-            onClick={() => void files.pickFiles()}
-          >
-            <Paperclip size={15} />
-          </button>
-          <DictateButton dictation={dictation} size={15} />
-          {confirmDiscard ? (
-            <span className="mail-discard-confirm" role="group" aria-label="Discard this draft?">
-              Discard this draft?
-              <button type="button" className="push default danger" onClick={discard}>
-                Discard
-              </button>
-              <button type="button" className="push" onClick={() => setConfirmDiscard(false)}>
-                Keep
-              </button>
-            </span>
+      <div className="mail-compose-scroll">
+        <div className="mail-letter">
+          {writingOut ? (
+            <>
+              {ownAddresses.length > 1 && (
+                <label className="mail-line">
+                  <span className="mail-line-label">From</span>
+                  <select value={outFrom ?? ownAddresses[0]} onChange={(e) => setOutFrom(e.target.value)} aria-label="Send from">
+                    {ownAddresses.map((a) => (
+                      <option key={a} value={a}>
+                        {a}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <div className="mail-line mail-line-to">
+                <span className="mail-line-label">To</span>
+                <PersonToField value={outTo} onChange={setOutTo} contacts={interStem.status?.contacts ?? []} onReach={setReach} />
+              </div>
+            </>
           ) : (
-            !forward && (
-              <button type="button" className="mail-discard" onClick={() => setConfirmDiscard(true)} disabled={!hasDraft}>
-                Discard…
-              </button>
-            )
+            <div className="mail-line mail-line-to">
+              <span className="mail-line-label">To</span>
+              <MailToField personas={personas} to={to} onChange={setTo} />
+            </div>
           )}
-          <span className="mail-compose-spacer" />
-          <span className="mail-kbd">⌘↵</span>
-          <button
-            className="mail-send"
-            onClick={() => void send()}
-            disabled={sending || (writingOut ? !outReady : empty || to.length === 0)}
-          >
-            <Send size={14} />{' '}
-            {sending ? 'Sending…' : writingOut ? 'Send' : leadName ? `Send to ${leadName}` : 'Send'}
-          </button>
+          <label className="mail-line mail-line-subject">
+            <span className="mail-line-label">Subject</span>
+            <input
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              placeholder={writingOut ? 'Optional' : 'Optional — Stem names it after the first reply'}
+            />
+          </label>
+          <textarea
+            className="mail-compose-body"
+            value={body}
+            onChange={(e) => {
+              dictation.freeze();
+              setBody(e.target.value);
+            }}
+            aria-label="Mail"
+            placeholder={
+              forward
+                ? 'Add a note for the personas (optional) — the forwarded mail follows below.'
+                : writingOut
+                  ? 'Write your mail. Only you send it; it is end-to-end encrypted.'
+                  : 'Write the task. The personas work it unattended and the reply lands in your Inbox.'
+            }
+            autoFocus
+            onPaste={(e) => void files.onPaste(e)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={files.onDrop}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          {forward && (
+            <pre className="mail-forward-quote" aria-label="The forwarded mail">
+              {forward.quote}
+            </pre>
+          )}
+          <AttachmentChips attachments={files.attachments} onRemove={files.remove} />
+          {error && <p className="task-failed mail-letter-error">{error}</p>}
+          <div className="mail-letter-foot">
+            <button
+              type="button"
+              className="composer-attach"
+              title={writingOut ? 'Attach — sealed with the mail, 17 MB in all' : 'Attach'}
+              aria-label="Attach"
+              onClick={() => void files.pickFiles()}
+            >
+              <Paperclip size={15} />
+            </button>
+            <DictateButton dictation={dictation} size={15} />
+            <span className="mail-compose-spacer" />
+            {confirmDiscard ? (
+              <span className="mail-discard-confirm" role="group" aria-label="Discard this draft?">
+                Discard this draft?
+                <button type="button" className="push default danger" onClick={discard}>
+                  Discard
+                </button>
+                <button type="button" className="push" onClick={() => setConfirmDiscard(false)}>
+                  Keep
+                </button>
+              </span>
+            ) : (
+              !forward &&
+              hasDraft && (
+                <button
+                  type="button"
+                  className="composer-attach"
+                  onClick={() => setConfirmDiscard(true)}
+                  title="Discard this draft"
+                  aria-label="Discard this draft"
+                >
+                  <Trash2 size={15} />
+                </button>
+              )
+            )}
+            <button
+              className="mail-send"
+              onClick={() => void send()}
+              disabled={sending || (writingOut ? !outReady : empty || to.length === 0)}
+              title="Send (⌘↵)"
+            >
+              <Send size={14} />
+              {sending ? 'Sending…' : writingOut ? 'Send' : leadName ? `Send to ${leadName}` : 'Send'}
+              <kbd className="mail-send-kbd" aria-hidden="true">⌘↵</kbd>
+            </button>
+          </div>
         </div>
       </div>
     </div>
