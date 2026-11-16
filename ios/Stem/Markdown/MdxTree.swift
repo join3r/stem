@@ -100,6 +100,11 @@ enum MdxTreeParser {
         var fence: (char: Character, count: Int)?
         var dataLines: [String]?
         var dataLang = ""
+        // A data component whose fence just ended: its closing tag is due.
+        // Models sometimes skip it and carry on with prose (see desktop's
+        // closeDataComponents), so any other non-blank line closes it here. A
+        // later stray closer matches nothing on the stack and is skipped.
+        var closerDue = false
 
         func close(_ frame: Frame, closed: Bool) -> MdxBlock {
             frame.flush()
@@ -108,6 +113,18 @@ enum MdxTreeParser {
         }
 
         for line in text.components(separatedBy: "\n") {
+            if closerDue, fence == nil {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                let name = stack[stack.count - 1].name
+                if trimmed.isEmpty { continue }
+                closerDue = false
+                if !"</\(name)>".hasPrefix(trimmed), !trimmed.hasPrefix("</\(name)") {
+                    let frame = stack.removeLast()
+                    let parent = stack[stack.count - 1]
+                    parent.flush()
+                    parent.children.append(close(frame, closed: true))
+                }
+            }
             let top = stack[stack.count - 1]
             if let f = fence {
                 if isFenceClose(line, f) {
@@ -115,6 +132,7 @@ enum MdxTreeParser {
                     if let d = dataLines {
                         top.data = MdxData(lang: dataLang, value: d.joined(separator: "\n"))
                         dataLines = nil
+                        closerDue = true
                     } else {
                         top.md.append(line)
                     }

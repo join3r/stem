@@ -297,6 +297,81 @@ function renderNode(node: MdNode, key: string): ReactNode {
 /** Every tag the renderer instantiates; the stream splitter tracks only these. */
 export const COMPONENT_NAMES: ReadonlySet<string> = new Set(Object.keys(componentMap));
 
+const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})/;
+const FENCE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+
+// Data components: their content is one fenced block and nothing else (any
+// children are ignored). A streaming reply draws these while their data is
+// still arriving.
+const LIVE_DATA: ReadonlySet<string> = new Set(['Diagram', 'Chart', 'DataTable', 'Stats', 'Compare']);
+const DATA_OPEN = /^\s{0,3}<(Diagram|Chart|DataTable|Stats|Compare)\b(?:[^>"']|"[^"]*"|'[^']*')*>\s*$/;
+
+/**
+ * Close data components the model forgot to close. Models sometimes write
+ * `<DataTable>` + its fence and carry straight on with prose, never writing
+ * `</DataTable>`: the MDX parse of the whole reply then fails and every
+ * component in it falls back to plain text. A data component holds nothing
+ * after its fence, so a non-blank line other than its closing tag there means
+ * the closer is missing: it is inserted right after the fence, and a later
+ * orphaned closer of the same name is dropped. A line that may still grow into
+ * the closer (`</Data` mid-stream) is left alone.
+ */
+export function closeDataComponents(text: string): string {
+  if (!text.includes('<')) return text;
+  const out: string[] = [];
+  let fence: string | null = null;
+  let open: string | null = null; // data component whose fence hasn't started yet
+  let inData: string | null = null; // data component whose fence is being read
+  let awaiting: { name: string; at: number } | null = null; // fence done, closer due
+  const orphans = new Map<string, number>();
+  let changed = false;
+  for (const line of text.split('\n')) {
+    if (fence) {
+      out.push(line);
+      const close = FENCE_CLOSE.exec(line);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) {
+        fence = null;
+        if (inData) awaiting = { name: inData, at: out.length };
+        inData = null;
+      }
+      continue;
+    }
+    const trimmed = line.trim();
+    if (awaiting) {
+      const closer = `</${awaiting.name}>`;
+      if (!trimmed || closer.startsWith(trimmed.replace(/\s+(?=>)/, ''))) {
+        if (trimmed && new RegExp(`^</${awaiting.name}\\s*>$`).test(trimmed)) awaiting = null;
+        out.push(line);
+        continue;
+      }
+      out.splice(awaiting.at, 0, closer);
+      orphans.set(awaiting.name, (orphans.get(awaiting.name) ?? 0) + 1);
+      awaiting = null;
+      changed = true;
+    }
+    const orphan = /^<\/([A-Z][A-Za-z0-9]*)\s*>$/.exec(trimmed);
+    if (orphan && (orphans.get(orphan[1]) ?? 0) > 0) {
+      orphans.set(orphan[1], orphans.get(orphan[1])! - 1);
+      changed = true;
+      continue;
+    }
+    const fenceOpen = FENCE_OPEN.exec(line);
+    if (fenceOpen) {
+      fence = fenceOpen[1];
+      inData = open;
+      open = null;
+      out.push(line);
+      continue;
+    }
+    const dataOpen = DATA_OPEN.exec(line);
+    // A new component of the same name owns the next closer.
+    if (dataOpen) orphans.delete((open = dataOpen[1]));
+    else if (trimmed) open = null;
+    out.push(line);
+  }
+  return changed ? out.join('\n') : text;
+}
+
 /** One top-level block of a reply, and the component still being written in it, if any. */
 export interface StreamBlock {
   text: string;
@@ -310,8 +385,6 @@ export interface StreamBlock {
   stack: string[];
 }
 
-const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})/;
-const FENCE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
 // A complete opening, closing or self-closing tag. Attribute values are plain
 // strings, so a `>` inside quotes is the one case worth skipping over.
 const TAG = /<(\/?)([A-Z][A-Za-z0-9]*)\b(?:[^>"']|"[^"]*"|'[^']*')*?(\/?)>/g;
@@ -333,6 +406,7 @@ const PARTIAL_TAG = /<\/?([A-Z][A-Za-z0-9]*)?(?:\s(?:[^>"']|"[^"]*"|'[^']*')*(?:
  * re-renders via the exact full parse.
  */
 export function splitStreamBlocks(text: string): StreamBlock[] {
+  text = closeDataComponents(text);
   const blocks: StreamBlock[] = [];
   let current: string[] = [];
   let fence: string | null = null; // the opening fence marker (``` or ~~~, possibly longer)
@@ -434,8 +508,6 @@ export function provisionalTail(block: StreamBlock): { live: string; pending: st
   return { live, pending: null };
 }
 
-// Data components a streaming reply draws while their data is still arriving.
-const LIVE_DATA: ReadonlySet<string> = new Set(['Diagram', 'Chart', 'DataTable', 'Stats', 'Compare']);
 const ATTR = /\b([A-Za-z][A-Za-z0-9]*)=(?:"([^"]*)"|'([^']*)')/g;
 
 /**
@@ -491,23 +563,33 @@ export function splitMdBlocks(text: string): string[] {
  */
 export function tryRenderMdx(text: string): ReactNode | null {
   try {
-    return renderNode(mdxProcessor.parse(stripCiteMarkers(text)) as unknown as MdNode, 'mdx');
+    return renderNode(mdxProcessor.parse(closeDataComponents(stripCiteMarkers(text))) as unknown as MdNode, 'mdx');
   } catch {
     return null;
   }
 }
 
 export function renderMdx(text: string): ReactNode {
-  text = stripCiteMarkers(text);
-  let tree: MdNode;
+  text = closeDataComponents(stripCiteMarkers(text));
   try {
-    tree = mdxProcessor.parse(text) as unknown as MdNode;
+    return renderNode(mdxProcessor.parse(text) as unknown as MdNode, 'mdx');
   } catch {
-    try {
-      tree = plainProcessor.parse(text) as unknown as MdNode;
-    } catch {
-      return <p>{text}</p>;
+    // One malformed component shouldn't strip every other one: fall back block
+    // by block, so only the blocks that don't parse render as plain Markdown.
+    const blocks = splitMdBlocks(text);
+    if (blocks.length > 1) {
+      return blocks.map((block, i) => (
+        <Fragment key={`fb-${i}`}>{tryRenderMdx(block) ?? renderPlain(block, `fb-${i}`)}</Fragment>
+      ));
     }
+    return renderPlain(text, 'mdx');
   }
-  return renderNode(tree, 'mdx');
+}
+
+function renderPlain(text: string, key: string): ReactNode {
+  try {
+    return renderNode(plainProcessor.parse(text) as unknown as MdNode, key);
+  } catch {
+    return <p>{text}</p>;
+  }
 }
