@@ -115,7 +115,8 @@ import {
 // any other participant's to the driver — even when the turn was started by a
 // helper's mail. Sent back down (the old rule), a coordinator's
 // "Acknowledged." woke the helper, whose "Acknowledged." woke the coordinator.
-// A turn that ends with no text sends nothing at all (settleSilentTurn).
+// A turn that ends with no text sends nothing at all (settleSilentTurn) — except
+// one the user is still owed an answer from, which is asked once more first.
 //
 // After the answer: once a persona has answered upward and left nothing open
 // (no fan-out, no new work sent down), mail from its own helpers in that wave
@@ -152,6 +153,14 @@ import {
 const WAVE_CONCURRENCY = 3;
 
 /** One queued delivery: a mail waiting for its persona's turn. */
+/**
+ * Sent into the same thread when a turn that owed the user an answer ended
+ * with no text. Written as a Stem note, not as the user's words.
+ */
+export const EMPTY_TURN_NUDGE =
+  '[Stem] Your last turn ended without any text, so the user got no reply to their mail above. ' +
+  'Write your reply to them now. If there is nothing to add, a short acknowledgement is fine.';
+
 interface DeliveryTask {
   personaId: string;
   body: string;
@@ -183,6 +192,8 @@ interface DeliveryTask {
   itemId?: string;
   /** A join's assembly: one turn carrying every branch's reply, no item of its own. */
   assembly?: boolean;
+  /** The one re-ask after a turn owed the user an answer and ended with no text. */
+  retry?: boolean;
 }
 
 /**
@@ -1810,7 +1821,8 @@ export class MailRouter {
         task.epoch,
         task.sourceItemId,
         task.attachments,
-        task.assembly === true
+        task.assembly === true,
+        task.retry === true
       )
         // quiet: deliver() reports every failure as a mail the user sees; a
         // rejection reaching here has already been told.
@@ -1939,7 +1951,8 @@ export class MailRouter {
     epoch: number,
     sourceItemId: string,
     attachments?: TurnAttachment[],
-    assembly = false
+    assembly = false,
+    retried = false
   ): Promise<void> {
     // Minted out here so the finally below can clear the turn's bookkeeping on
     // every exit path.
@@ -2217,6 +2230,27 @@ export class MailRouter {
           if (reply) {
             await this.routeImplicitReply(conversationId, personaId, target, reply, epoch, sourceItemId);
             answeredUp = true;
+          } else if (
+            from === 'user' &&
+            !retried &&
+            !this.stopping.has(conversationId) &&
+            now.userUpdatedAt <= epoch
+          ) {
+            // The model sometimes closes a turn with no text at all (seen on
+            // 2026-11-16: an empty reasoning block and stop, 7 s in, after a
+            // short status update from the user). The user is still owed an
+            // answer, so the same thread is asked once more before the
+            // placeholder goes out. Queued before this delivery releases its
+            // pending count, so the conversation cannot settle in between.
+            this.enqueueTask(conversationId, {
+              personaId,
+              body: EMPTY_TURN_NUDGE,
+              from,
+              epoch,
+              sourceItemId,
+              retry: true,
+              ...(assembly ? { assembly: true } : {})
+            });
           } else {
             await this.settleSilentTurn(now, personaId, from, epoch, sourceItemId, assembly);
           }

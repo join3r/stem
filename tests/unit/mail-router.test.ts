@@ -9,7 +9,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetActivity, snapshot } from '../../src/server/activity';
-import { MailRouter } from '../../src/server/mail/router';
+import { EMPTY_TURN_NUDGE, MailRouter } from '../../src/server/mail/router';
 import {
   appendMailItem,
   createConversation,
@@ -3146,6 +3146,25 @@ describe('after the answer', () => {
     await router.compose({ to: ['orchestrator'], subject: 's', body: 'q' });
     const mail = await settledMail();
     expect(mail.items.at(-1)?.body).toBe('(The persona finished without writing a reply.)');
+    // Asked once more before giving up, and only once.
+    expect(fake.starts).toHaveLength(2);
+    expect(fake.starts[1].input).toContain(EMPTY_TURN_NUDGE);
+    expect(mail.items.filter((i) => i.from === 'orchestrator')).toHaveLength(1);
+  });
+
+  it('re-asks the same thread once when the driver ends empty, and mails the second answer', async () => {
+    const fake = fakeBackend();
+    const router = makeRouter(fake);
+    fake.scriptsByPersona.orchestrator = [
+      { mode: 'ok', reply: '' },
+      { mode: 'ok', reply: 'Dobre, drž sa toho.' }
+    ];
+    await router.compose({ to: ['orchestrator'], subject: 's', body: 'status update' });
+    const mail = await settledMail();
+    const replies = mail.items.filter((i) => i.from === 'orchestrator');
+    expect(replies.map((i) => i.body)).toEqual(['Dobre, drž sa toho.']);
+    expect(fake.starts[1].threadId).toBe(fake.starts[0].threadId ?? mail.conversations[0].sessions.orchestrator);
+    expect(mail.conversations[0].status).toBe('idle');
   });
 });
 
