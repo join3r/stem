@@ -119,6 +119,7 @@ struct Composer: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
+            .interactiveDismissDisabled(sending)
             VStack(alignment: .leading, spacing: 6) {
                 if let flash {
                     Text(flash).font(.footnote).foregroundStyle(.secondary).transition(.opacity)
@@ -464,23 +465,33 @@ struct Composer: View {
             return
         }
 
-        // The field empties at once; the message waits in the transcript while
-        // its attachments upload, and comes back here if the send fails.
+        // In a chat the field empties at once; the message waits in the transcript
+        // while its attachments upload, and comes back here if the send fails.
+        // A page (new mail) has no transcript: the text stays put — and saved —
+        // until the send lands, so closing the sheet or losing the app mid-upload
+        // never loses it.
         let sent = draft
-        draft.text = ""
-        draft.attachments = []
+        if page == nil {
+            draft.text = ""
+            draft.attachments = []
+        }
         if await onSend(text, files) {
             files.forEach { $0.delete() }
             var fresh = Draft()
             fresh.personaId = draft.personaId
             fresh.isPrivate = draft.isPrivate
             fresh.to = draft.to
-            fresh.text = draft.text
-            fresh.attachments = draft.attachments
+            if page == nil {
+                // Whatever was typed while it sent stays for the next message.
+                fresh.text = draft.text
+                fresh.attachments = draft.attachments
+            }
             draft = fresh
-        } else {
+        } else if page == nil {
             draft.text = draft.text.isEmpty ? sent.text : sent.text + "\n" + draft.text
             draft.attachments = sent.attachments + draft.attachments
+        } else {
+            show("Not sent — your mail is still here.", seconds: 6)
         }
     }
 

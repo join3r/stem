@@ -1131,6 +1131,10 @@ struct MailComposeView: View {
     }
 
     private func send(_ text: String, _ files: [DraftAttachment]) async -> Bool {
+        // Photo uploads take a while on mobile data; locking the phone or
+        // switching apps must not cut the upload off halfway.
+        let background = UIApplication.shared.beginBackgroundTask(withName: "mail:compose")
+        defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
         if writingOut { return await sendToPerson(text, files) }
         do {
             let uploads = try await Uploads.upload(files, client: session.client)
