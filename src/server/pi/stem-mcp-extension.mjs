@@ -35,6 +35,7 @@ import {
   stubOldImages
 } from './image-gen.mjs';
 import { searchMcpTools, summarizeToolCapabilities } from './mcp-discovery.mjs';
+import { shortLivedServerMessage, shortLivedServerPath } from './mcp-install-paths.mjs';
 
 // Stem's internal recall server stays EAGER (its one tool is used every turn);
 // every other server goes behind discovery + invocation routers so
@@ -2582,6 +2583,22 @@ function buildServerEntry(params) {
   return { name, entry, input };
 }
 
+/**
+ * Why a stdio server at `command`/`args` would not last, or null. Roots come
+ * from main (STEM_MCP_SHORT_LIVED_ROOTS); an older main sends none, and then
+ * main's apply step is the only check.
+ */
+function shortLivedServerReason(name, command, args) {
+  let roots = [];
+  try {
+    roots = JSON.parse(process.env.STEM_MCP_SHORT_LIVED_ROOTS || '[]');
+  } catch {
+    // quiet: a malformed list only skips the early check; main re-checks on apply.
+  }
+  const hit = shortLivedServerPath(command, args, Array.isArray(roots) ? roots : [], process.cwd());
+  return hit ? shortLivedServerMessage(hit, process.env.STEM_MCP_INSTALL_ROOT, name) : null;
+}
+
 function registerAdminTools(pi, cfgPath, turnContext) {
   pi.registerTool({
     name: 'list_mcp_servers',
@@ -2652,7 +2669,9 @@ function registerAdminTools(pi, cfgPath, turnContext) {
     name: 'add_mcp_server',
     label: 'Add MCP server',
     description:
-      'Add (or replace) an MCP server so its tools become available. The user must approve the change in the app before it is applied; after approval Stem reloads so the new tools are usable. Use transport "stdio" for a local command (uvx/npx) or "http" for a remote streamable-HTTP URL. For a remote server, authenticate it in one of two ways: a static auth header (`headers`), or OAuth — for OAuth providers that lack dynamic client registration (e.g. Slack) supply `oauthClientId`/`oauthClientSecret`/`oauthScope` from a pre-registered provider app; the user then signs in via the browser. Pass OAuth credentials the user gives you here rather than as headers.',
+      'Add (or replace) an MCP server so its tools become available. The user must approve the change in the app before it is applied; after approval Stem reloads so the new tools are usable. Use transport "stdio" for a local command (uvx/npx) or "http" for a remote streamable-HTTP URL. For a remote server, authenticate it in one of two ways: a static auth header (`headers`), or OAuth — for OAuth providers that lack dynamic client registration (e.g. Slack) supply `oauthClientId`/`oauthClientSecret`/`oauthScope` from a pre-registered provider app; the user then signs in via the browser. Pass OAuth credentials the user gives you here rather than as headers. A stdio server you build or download yourself goes in its own folder under ' +
+      (process.env.STEM_MCP_INSTALL_ROOT ? `${process.env.STEM_MCP_INSTALL_ROOT}/<name>` : 'the tools folder beside Stem\'s state') +
+      ', never in chat scratch or files/: those go away and take the server with them.',
     parameters: {
       type: 'object',
       properties: {
@@ -2676,6 +2695,17 @@ function registerAdminTools(pi, cfgPath, turnContext) {
       } catch (e) {
         return { content: [{ type: 'text', text: `Cannot add server: ${e.message}` }], details: {}, isError: true };
       }
+      // add_mcp_server always adds a server that runs here, unless an existing
+      // entry of that name is pinned (main keeps the pin) — its paths are then
+      // on that computer and nothing here can judge them.
+      let pinned = false;
+      try {
+        pinned = Boolean(((readMcpJson(cfgPath).servers || {})[built.name] || {}).location);
+      } catch {
+        // quiet: an unreadable config reads as unpinned; main re-checks on apply.
+      }
+      const shortLived = !pinned && built.input.transport === 'stdio' && shortLivedServerReason(built.name, built.input.command, built.input.args);
+      if (shortLived) return { content: [{ type: 'text', text: `Cannot add server: ${shortLived}` }], details: {}, isError: true };
       const approved = await requestAdminApproval(ctx, { action: 'add', name: built.name, input: built.input });
       if (!approved) return { content: [{ type: 'text', text: `The user declined adding "${built.name}".` }], details: {} };
       // The main process applies the accepted proposal through its serialized
@@ -2744,6 +2774,14 @@ function registerAdminTools(pi, cfgPath, turnContext) {
         return fail(
           `"${name}" is a ${remote ? 'remote (http)' : 'local (stdio)'} server, so ${wrongKind.join(', ')} ${wrongKind.length === 1 ? 'does' : 'do'} not apply. Changing the transport needs remove + add.`
         );
+      }
+      if (!remote && !current.location && ('command' in patch || 'args' in patch)) {
+        const shortLived = shortLivedServerReason(
+          name,
+          patch.command ?? current.command,
+          patch.args ?? (Array.isArray(current.args) ? current.args : [])
+        );
+        if (shortLived) return fail(shortLived);
       }
       // Names only (never values) of what the stored entry carries and the edit
       // keeps: when the command or URL changes, these go to the new destination,

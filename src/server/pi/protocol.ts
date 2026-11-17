@@ -192,6 +192,10 @@ export const SKILLS_REV_FILE = '.skills-rev';
 export const ENV_MCP_CONFIG = 'STEM_MCP_CONFIG';
 export const ENV_MCP_OAUTH = 'STEM_PI_MCP_OAUTH';
 export const ENV_SKILLS_DIR = 'STEM_SKILLS_DIR';
+/** Where add_mcp_server tells the model to install a server it built (workspace/paths.ts mcpInstallRoot). */
+export const ENV_MCP_INSTALL_ROOT = 'STEM_MCP_INSTALL_ROOT';
+/** JSON [{ root, kind }]: folders a server may not live in (pi/mcp-install-paths.mjs). */
+export const ENV_MCP_SHORT_LIVED_ROOTS = 'STEM_MCP_SHORT_LIVED_ROOTS';
 /**
  * Directory this process's PER-TURN gate files live in (native-search.json /
  * service-tier.json, plus the active-tools.json diagnostic). Each worker of the

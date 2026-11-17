@@ -25,6 +25,44 @@ import { deviceMcpRouter, deviceSpecFor } from '../mcp-device/router';
 import { mcpSpecFingerprint } from '../../shared/mcp-fingerprint';
 import { RECALL_MCP_NAME } from '../recall/register-mcp';
 import { ADMIN_MCP_NAME } from '../admin/register-mcp';
+import { execWorkspaceDir, filesRoot, mcpInstallRoot, workspaceRoot } from '../workspace/paths';
+import { shortLivedServerMessage, shortLivedServerPath, type ShortLivedRoot } from './mcp-install-paths.mjs';
+
+/** Folders an MCP server may not live in: chat scratch and the Files place (mcp-install-paths.mjs). */
+export function shortLivedRoots(): ShortLivedRoot[] {
+  return [
+    { root: execWorkspaceDir(), kind: 'scratch' },
+    { root: filesRoot(), kind: 'files' }
+  ];
+}
+
+/**
+ * Refuse an assistant-proposed stdio server whose command or args point into
+ * chat scratch or Files. The bridge checks this before the card; this is the
+ * same rule at apply time, for a bridge older than main. Servers pinned to a
+ * device are judged by nothing here: their paths are on that computer.
+ */
+export function assertDurableServerPaths(
+  name: string,
+  spec: { command?: string; args?: readonly string[]; url?: string },
+  pinned: boolean
+): void {
+  if (pinned || spec.url) return;
+  const hit = shortLivedServerPath(spec.command, spec.args, shortLivedRoots(), workspaceRoot());
+  if (hit) throw new Error(shortLivedServerMessage(hit, mcpInstallRoot(), name));
+}
+
+/** assertDurableServerPaths for an edit: judged only when it moves the command or args. */
+export async function assertDurableEdit(name: string, patch: McpServerPatch): Promise<void> {
+  if (patch.command === undefined && patch.args === undefined) return;
+  const current = (await readMcpConfig()).servers[name];
+  if (!current) return;
+  assertDurableServerPaths(
+    name,
+    { command: patch.command ?? current.command, args: patch.args ?? (Array.isArray(current.args) ? current.args : []), url: current.url },
+    Boolean(current.location)
+  );
+}
 
 // User-facing MCP add/remove/list for the pi backend, operating on mcp.json. The
 // bridge extension (stem-mcp-extension.mjs) reads this file on (re)start; the

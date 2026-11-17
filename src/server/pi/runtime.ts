@@ -133,7 +133,7 @@ import {
   webAccessVersion,
   writeWebSearchConfig
 } from './web-search';
-import { piMcpConfigPath, skillsRoot, workspaceRoot as stemWorkspaceRoot } from '../workspace/paths';
+import { mcpInstallRoot, piMcpConfigPath, skillsRoot, workspaceRoot as stemWorkspaceRoot } from '../workspace/paths';
 import { readUsage, recordGrades, recordInjections, recordUses } from '../skills/usage';
 import { completionSkillPicker, SKILL_PICK_DEADLINE_MS, type SkillPicker } from '../skills/pick';
 import { formatSkillsBlock, selectSkills, SKILL_RULES, toolSkillsForTurn, toolSkillsHandedOver, type SkillUsageStat } from '../skills/inject';
@@ -141,7 +141,7 @@ import { listedSkillLines, loadedSkillNames } from '../skills/thread-history';
 import { AmbientBlocks, liveUserTexts } from './context-dedupe';
 import { formatPracticeBlock } from '../skills/record';
 import { formatWindowBlock, isBrowserWindow } from './window-context';
-import { mcpServersForAppName, windowSuggestionFor } from './mcp';
+import { mcpServersForAppName, shortLivedRoots, windowSuggestionFor } from './mcp';
 import { readDevices } from '../transport/auth';
 import { listSkillRecords, readSkillRecord } from '../skills/store';
 import { gradeSkillUse, reportedSkillIssues } from '../skills/grade';
@@ -189,6 +189,8 @@ import {
   ENV_MCP_OAUTH,
   ENV_SECRET_KEY,
   ENV_SKILLS_DIR,
+  ENV_MCP_INSTALL_ROOT,
+  ENV_MCP_SHORT_LIVED_ROOTS,
   EXEC_BRIDGE_TITLE,
   FILE_BRIDGE_TITLE,
   SAVE_BRIDGE_TITLE,
@@ -6081,6 +6083,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (secretKey) env[ENV_SECRET_KEY] = secretKey;
     // Tell the bridge extension where the assistant's self-authored skills live.
     env[ENV_SKILLS_DIR] = skillsRoot();
+    // Where add_mcp_server sends a server the assistant built, and the folders it
+    // refuses (chat scratch, Files): both go away while a server must not.
+    env[ENV_MCP_INSTALL_ROOT] = mcpInstallRoot();
+    env[ENV_MCP_SHORT_LIVED_ROOTS] = JSON.stringify(shortLivedRoots());
     return env;
   }
 }
