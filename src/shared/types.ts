@@ -897,7 +897,21 @@ export interface SkillSummary {
   versions?: number;
   /** Why the current version was written, when the writer said. */
   change?: string;
+  /**
+   * How often the task is expected to come up again: the writer's estimate, or
+   * the user's own from Manage. Absent when nobody has said.
+   */
+  recurs?: SkillRecurrence;
+  /**
+   * Days without use after which Stem switches this skill off by itself, which
+   * follows from `recurs`. Absent for a skill Stem never switches off (the
+   * user's own file).
+   */
+  retiresAfterDays?: number;
 }
+
+/** How often a skill's task is expected to come up again (server/skills/contract.ts). */
+export type SkillRecurrence = 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'occasional';
 
 /** One kept earlier version of a skill (server/skills/store.ts). */
 export interface SkillVersionSummary {
@@ -5375,6 +5389,8 @@ export interface StemApi {
    * file manager.
    */
   removeSkill(slug: string): Promise<SkillSummary[]>;
+  /** Say how often a skill's task comes up, which sets how long it is kept unused. */
+  setSkillRecurrence(slug: string, recurs: SkillRecurrence): Promise<SkillSummary[]>;
   /** The earlier versions of one skill that are kept, newest first. */
   listSkillVersions(slug: string): Promise<SkillVersionSummary[]>;
   /** Put an earlier version back, as a new version. Rejects with the reason when it cannot. */

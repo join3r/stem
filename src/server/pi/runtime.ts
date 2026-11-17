@@ -3827,7 +3827,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                 description: String(req.description ?? ''),
                 body: String(req.content ?? req.body ?? ''),
                 expectExisting: req.expect_existing === true,
-                ...(Array.isArray(req.tools) ? { tools: req.tools.map((t) => String(t)) } : {})
+                ...(Array.isArray(req.tools) ? { tools: req.tools.map((t) => String(t)) } : {}),
+                ...(typeof req.recurs === 'string' ? { recurs: req.recurs } : {})
               },
           { isScheduled, isMail, threadId }
         );

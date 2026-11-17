@@ -4621,6 +4621,12 @@ function registerSkillTools(pi) {
           items: { type: 'string' },
           description:
             'save, optional: tools whose calls this skill decides how to make for the user (e.g. their conventions for drafting mail), as "server.tool" (what invoke_tool takes), "server.*", or a built-in tool name. Stem then shows the skill the first time a turn calls one. Omit to keep the current list.'
+        },
+        recurs: {
+          type: 'string',
+          enum: ['weekly', 'monthly', 'quarterly', 'yearly', 'occasional'],
+          description:
+            'save, optional: how often this task comes up again. Stem keeps an unused skill for several such periods before switching it off. "occasional" = no rhythm. Omit to keep the current estimate.'
         }
       },
       required: ['action', 'name']
@@ -4644,7 +4650,8 @@ function registerSkillTools(pi) {
           content: params && params.content,
           // "patch" carried the same intent the flag now carries explicitly.
           expect_existing: (params && params.expect_existing === true) || action === 'patch',
-          ...(params && Array.isArray(params.tools) ? { tools: params.tools } : {})
+          ...(params && Array.isArray(params.tools) ? { tools: params.tools } : {}),
+          ...(params && typeof params.recurs === 'string' ? { recurs: params.recurs } : {})
         });
         return res && res.ok ? skillOk(res.text || 'Done.') : skillErr((res && res.text) || 'The skill could not be saved.');
       } catch (e) {

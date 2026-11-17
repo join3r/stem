@@ -327,6 +327,7 @@ async function learnOutcome(threadId: string, focus?: string, conventions?: stri
       description: author.draft.description,
       body: author.draft.body,
       tools: author.draft.tools,
+      recurs: author.draft.recurs,
       // A patch — routed by grading or chosen by the author — writes with
       // `expect_existing`, so a skill that vanished between the model call and the
       // write refuses instead of quietly creating itself from a patch-shaped draft.
@@ -480,6 +481,7 @@ async function runEndOfTurnPass(turn: SettledTurnTrace, bridge: SkillBridge, run
         description: outcome.author.draft.description,
         body: outcome.author.draft.body,
         tools: outcome.author.draft.tools,
+        recurs: outcome.author.draft.recurs,
         // See `/learn` above: every patch write is guarded, so a skill deleted or
         // merged away while the author was thinking degrades to a refusal rather
         // than reappearing as a create. After this step patches are the primary
@@ -658,6 +660,7 @@ async function reviseFromCorrection(
       description: author.draft.description,
       body: author.draft.body,
       tools: author.draft.tools,
+      recurs: author.draft.recurs,
       expectExisting: true,
       origin: 'turn',
       change: `Changed after your correction: ${correction}`
@@ -688,6 +691,7 @@ async function rewriteFromCases(slug: string, bridge: SkillBridge, llm: LlmClien
       description: outcome.draft.description,
       body: outcome.draft.body,
       tools: outcome.draft.tools,
+      recurs: outcome.draft.recurs,
       expectExisting: true,
       origin: 'turn',
       change: `Rewritten from ${cases.length} recorded uses, ${failures} of which went wrong`

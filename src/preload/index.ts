@@ -133,6 +133,7 @@ const api: StemApi = {
   listSkills: () => ipcRenderer.invoke('skills:list'),
   setSkillEnabled: (slug: string, enabled: boolean) => ipcRenderer.invoke('skills:setEnabled', slug, enabled),
   removeSkill: (slug: string) => ipcRenderer.invoke('skills:remove', slug),
+  setSkillRecurrence: (slug: string, recurs: string) => ipcRenderer.invoke('skills:setRecurrence', slug, recurs),
   listSkillVersions: (slug: string) => ipcRenderer.invoke('skills:versions', slug),
   restoreSkillVersion: (slug: string, version: number) => ipcRenderer.invoke('skills:restore', slug, version),
   curateSkills: () => ipcRenderer.invoke('skills:curate'),

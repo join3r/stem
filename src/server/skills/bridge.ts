@@ -1,5 +1,5 @@
 import type { SkillsMode } from '../../shared/types';
-import { formatViolations, validateSkill, type SkillDraft } from './contract';
+import { formatViolations, parseRecurrence, validateSkill, type SkillDraft } from './contract';
 import { findDuplicateSkill } from './dedup';
 import { listSkillRecords, readSkillRecord, removeSkill, saveSkill, type SkillOrigin, type SkillRecord } from './store';
 import { formatLoadedSkill, type InlinedSkill } from './inject';
@@ -35,6 +35,8 @@ export interface SkillSaveRequest {
   expectExisting?: boolean;
   /** Tools whose calls hand this skill over (contract.ts SkillDraft.tools). Absent = keep. */
   tools?: string[];
+  /** How often the task is expected to come up again (contract.ts SkillRecurrence). Absent or unknown = keep. */
+  recurs?: string;
   /**
    * Provenance override for surfaces that know better than the initiatedBy flag
    * can say: `/learn` is user-initiated but not the same thing as the user
@@ -186,7 +188,8 @@ export class SkillBridge {
       name: String(req.name ?? '').trim(),
       description: String(req.description ?? '').trim(),
       body: String(req.body ?? '').trim(),
-      ...(Array.isArray(req.tools) ? { tools: req.tools.map((t) => String(t ?? '').trim()) } : {})
+      ...(Array.isArray(req.tools) ? { tools: req.tools.map((t) => String(t ?? '').trim()) } : {}),
+      ...(parseRecurrence(req.recurs) ? { recurs: parseRecurrence(req.recurs) } : {})
     };
 
     // Validate before policy, always. A rejected draft costs the model one retry
@@ -274,8 +277,10 @@ export class SkillBridge {
     }
     // The user may have edited the text in the card, so re-validate what they
     // actually accepted rather than what the model proposed.
-    // The card edits the text only; the tools ride along with the draft.
-    const edited: SkillDraft = outcome.skill ? { ...outcome.skill, ...(draft.tools ? { tools: draft.tools } : {}) } : draft;
+    // The card edits the text only; the tools and the estimate ride along with the draft.
+    const edited: SkillDraft = outcome.skill
+      ? { ...outcome.skill, ...(draft.tools ? { tools: draft.tools } : {}), ...(draft.recurs ? { recurs: draft.recurs } : {}) }
+      : draft;
     const editedViolations = validateSkill(edited);
     if (editedViolations.length > 0) {
       return { ok: false, text: `The edited skill no longer meets the contract, so nothing was saved:\n${formatViolations(editedViolations)}` };

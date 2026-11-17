@@ -36,10 +36,21 @@ Open **Tools → Skills**.
   skill, each with the reason it changed. Pick one and press **Restore** to put it
   back. The current text is kept as an earlier version, so a restore can be undone.
   Stem keeps the last ten versions of each skill.
+- **Needed** appears under the list for a selected skill that Stem wrote. It says
+  how often the task comes up: every week, every month, a few times a year, once
+  a year, or now and then. Stem estimates it when it writes the skill, and you can
+  change it. Stem switches a skill off by itself only after several of those
+  periods without use (60 days for a weekly task, 150 for a monthly one, 400 for
+  a few times a year, 800 for a yearly one, 90 for one with no rhythm), so a
+  yearly task is still there the next year. A skill switched off this way stays
+  on disk and can be switched back on.
 - **Tidy up** keeps one skill per job: it splits a skill that grew to cover several
-  unrelated jobs, merges two write-ups of the same job, and archives ones untouched
-  for 90 days. Archiving is the same reversible switch as above, so an archived
-  skill can be switched back on. Anything it rewrites is backed up first.
+  unrelated jobs, merges two write-ups of the same job, and merges skills that are
+  one procedure written once per app, server or account into a single skill that
+  lists what differs for each. It also switches off skills unused for longer than
+  their **Needed** answer allows. Archiving is the same reversible switch as
+  above, so an archived skill can be switched back on. Anything it rewrites is
+  backed up first. Stem runs the same pass by itself once a day.
 - **Saving skills** decides how much Stem may save on its own. Asking it to save
   one always works, whichever you pick.
 - **Skills model** does the model-driven skills work: writing, `/learn`, tidy-up.

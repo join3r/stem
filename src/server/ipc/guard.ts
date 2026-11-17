@@ -79,6 +79,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'backend:createThread': [a.optional(a.nullish(a.string)), a.optional(a.nullish(a.oneOf(['md', 'mdx'])))],
   'skills:setEnabled': [a.string, a.boolean],
   'skills:remove': [a.string],
+  'skills:setRecurrence': [a.string, a.oneOf(['weekly', 'monthly', 'quarterly', 'yearly', 'occasional'])],
   'skills:versions': [a.string],
   'skills:restore': [a.string, a.number],
   'files:add': [a.stringArray, a.optional(a.nullish(a.string))],

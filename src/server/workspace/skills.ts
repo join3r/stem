@@ -7,6 +7,8 @@ import { DISABLED_MARKER, syncSkillsIgnore } from '../skills/ignore';
 import { readUsage } from '../skills/usage';
 import { allCaseCounts, FAILED_OUTCOMES } from '../skills/cases';
 import { countSkillVersions } from '../skills/store';
+import { parseRecurrence, type SkillRecurrence } from '../skills/contract';
+import { archiveAfterDays } from '../skills/lifecycle';
 import { skillsRoot } from './paths';
 
 interface FrontMatter {
@@ -17,6 +19,7 @@ interface FrontMatter {
   updated?: string;
   tools?: string[];
   change?: string;
+  recurs?: SkillRecurrence;
 }
 
 /** Parse the leading `---` YAML front-matter block of a SKILL.md. */
@@ -34,7 +37,8 @@ function parseFrontMatter(text: string): FrontMatter {
       version: typeof stem.version === 'number' ? stem.version : undefined,
       updated: typeof stem.updated === 'string' ? stem.updated : undefined,
       tools: Array.isArray(stem.tools) ? stem.tools.filter((t): t is string => typeof t === 'string') : undefined,
-      change: typeof stem.change === 'string' ? stem.change : undefined
+      change: typeof stem.change === 'string' ? stem.change : undefined,
+      recurs: parseRecurrence(stem.recurs)
     };
   } catch (error) {
     // Front matter that will not parse leaves the skill in the panel under its
@@ -86,6 +90,9 @@ export async function listSkills(): Promise<SkillSummary[]> {
         ...(fm.tools?.length ? { tools: fm.tools } : {}),
         ...outcomeSummary(outcomes.get(slug)),
         ...(fm.change ? { change: fm.change } : {}),
+        ...(fm.recurs ? { recurs: fm.recurs } : {}),
+        // The lifecycle clock only ever switches off what Stem wrote (lifecycle.ts).
+        ...(fm.source === 'agent' ? { retiresAfterDays: archiveAfterDays(fm.recurs) } : {}),
         ...versionSummary(slug)
       });
     } catch (error) {

@@ -1,6 +1,6 @@
 import type { LlmClient } from '../recall/llm';
 import type { TraceEntry } from '../pi/normalize';
-import { SKILL_CONTRACT_TEXT, formatViolations, validateSkill, type SkillDraft, type SkillViolation } from './contract';
+import { SKILL_CONTRACT_TEXT, formatViolations, parseRecurrence, validateSkill, type SkillDraft, type SkillViolation } from './contract';
 import type { SkillCase } from './cases';
 import { renderCase } from './review';
 
@@ -169,12 +169,14 @@ One kind of preference IS a skill: how the user wants a recurring kind of work d
 
 "tools" is optional. Use it when the skill decides how a particular tool's action is done for the user, typically their conventions for it: list those tools as "server.tool" (the server and tool names invoke_tool takes), "server.*" for a whole server, or a built-in tool's own name. Stem then hands the skill over whenever a turn is about to call one of them, even when the request's wording would not have brought the skill up. Never list a general tool such as run_command, read, write, fetch_content, web_search, invoke_tool, browser, computer, spawn_agent or coding_agent: they serve any kind of work, so the skill would interrupt unrelated turns. Leave it out for a procedure that merely calls tools along the way; listing a tool the skill does not govern interrupts every unrelated call to it. On an update, leave it out to keep the skill's current tools.
 
+"recurs" is your estimate of how often this task will come up again. Stem keeps an unused skill for several of those periods before it switches the skill off, so the estimate decides whether a slow task survives until its next run. One of "weekly" (every week or more often), "monthly", "quarterly" (a few times a year), "yearly" (tied to the calendar: a tax return, an annual renewal, a yearly report) or "occasional" (no rhythm: it comes up when something breaks or the need arises). Go by what the evidence shows: the user saying how often, a period named in the work itself (an invoice for one month, a quarterly statement), a scheduled task. Answer "occasional" when nothing shows a rhythm; a longer period is not the safe guess. On an update, leave it out to keep the skill's current estimate, unless this turn showed the rhythm.
+
 Declining is the normal answer. Most turns contain nothing durable, and a library full of near-misses is worse than a small one: every skill costs context on every turn, and a bad skill will be followed. Decline freely and without justifying yourself at length.
 
 If you do save one, write it from the evidence — the actual arguments that worked, the actual error text that sent you down a different path — not from the assistant's summary of its own work. The summary is where the detail was already lost.
 
 Reply with ONLY a JSON object, no prose and no markdown fences:
-{"skill": {"name": "...", "description": "...", "body": "...", "tools": ["..."]}}
+{"skill": {"name": "...", "description": "...", "body": "...", "tools": ["..."], "recurs": "..."}}
 or, to decline:
 {"skill": null, "reason": "<one short clause>"}`;
 
@@ -202,12 +204,14 @@ If the procedure you would write belongs in one of them — the same job, or the
 
 You will then be shown that skill in full and asked to fold this turn into it, so you do not have to write the merged version now.
 
+The same procedure for a different target is the same job. If a skill already installs, connects, queries or diagnoses one app, server, account or site, and this turn did those steps for another one, name that skill: the steps are written once and what differs per target is listed in it. A second skill that repeats the steps under another product's name is the same failure as a duplicate.
+
 Two write-ups of one procedure is the failure this question exists to catch: nothing merges them afterwards, retrieval has to choose between them, and whichever loses takes its detail with it. But a procedure that merely happens nearby is not the same procedure — a skill that grows a subsection every time something adjacent happens stops being followable. Same job: name it. Neighbouring job: write the new one. Neither: decline.`;
 
 /** Framing for the second shot, once the author's own named target has been loaded. */
 export const SKILL_TARGET_PATCH_INSTRUCTIONS = `You named the skill below as where this turn's procedure belongs. Here it is in full.
 
-Return the FULL skill under the SAME name, with this turn folded in: the step that was missing, the argument that turned out to matter, the dead end worth a warning. Keep what is already there unless the evidence shows it wrong, and do not restructure it to make room. Return null if, now that you can read it, the skill already covers what happened — that is an honest answer and it costs nothing.`;
+Return the FULL skill under the SAME name, with this turn folded in: the step that was missing, the argument that turned out to matter, the dead end worth a warning. Keep what is already there unless the evidence shows it wrong, and do not restructure it to make room. The one exception: when this turn was the same procedure for a different target (another app, server, account or site), make the steps take the target as their input and list what differs per target (exact commands, package names, ids, paths, traps) under the steps, and widen the description to the general job if it names only the first target. Return null if, now that you can read it, the skill already covers what happened — that is an honest answer and it costs nothing.`;
 
 /**
  * Extra framing for `/learn`, which is the user asking rather than Stem guessing.
@@ -414,7 +418,7 @@ export function parseAuthorReply(output: string): ParsedReply {
     return { kind: 'declined', reason: typeof reason === 'string' && reason.trim() ? reason.trim() : 'nothing reusable in this turn' };
   }
   if (typeof skill !== 'object') return { kind: 'unparseable' };
-  const { name, description, content, body, tools } = skill as Record<string, unknown>;
+  const { name, description, content, body, tools, recurs } = skill as Record<string, unknown>;
   // `content` is what manage_skill has always called the body; accept either so a
   // model primed on that tool's schema isn't punished for consistency.
   const text = typeof body === 'string' ? body : typeof content === 'string' ? content : '';
@@ -423,6 +427,9 @@ export function parseAuthorReply(output: string): ParsedReply {
   // Only a list counts; anything else is read as "not said", which keeps a
   // patched skill's tools (store.ts saveSkill).
   if (Array.isArray(tools)) draft.tools = tools.filter((t): t is string => typeof t === 'string').map((t) => t.trim()).filter(Boolean);
+  // A value outside the list is "not said" too: an estimate is never worth a retry.
+  const estimate = parseRecurrence(recurs);
+  if (estimate) draft.recurs = estimate;
   return { kind: 'skill', draft };
 }
 

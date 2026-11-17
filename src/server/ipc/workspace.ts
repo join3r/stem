@@ -30,7 +30,8 @@ import { log } from '../log';
 import { pushToDevice } from '../startup/transport';
 import { memoryRunOf, skillsRunOf, updateSkillsSettings } from '../workspace/settings';
 import { resetSkills, skillsResetStatus } from '../skills/reset';
-import { listSkillVersions, removeSkill, restoreSkillVersion } from '../skills/store';
+import { listSkillVersions, removeSkill, restoreSkillVersion, setSkillRecurrence } from '../skills/store';
+import type { SkillRecurrence } from '../skills/contract';
 import { learnFromChat } from '../startup/skills';
 import {
   answerRecordingDraft,
@@ -94,6 +95,13 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     const res = removeSkill(slug);
     if (!res.ok) throw new Error(res.error);
     await deps.runtime().requestSkillReload();
+    return listSkills();
+  });
+  // The user's own answer to "how often is this needed", over the writer's
+  // estimate. Bookkeeping only: the backend does not read it, so no reload.
+  registerServer('skills:setRecurrence', async (_e, slug: string, recurs: SkillRecurrence) => {
+    const res = setSkillRecurrence(slug, recurs);
+    if (!res.ok) throw new Error(res.error);
     return listSkills();
   });
   // Kept versions (skills/store.ts): every change keeps the text it replaced,

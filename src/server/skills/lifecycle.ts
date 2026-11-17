@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { skillsRoot } from '../workspace/paths';
+import type { SkillRecurrence } from './contract';
 import { DISABLED_MARKER, syncSkillsIgnore } from './ignore';
 import { listSkillRecords } from './store';
 import { readUsage, type SkillsUsage } from './usage';
@@ -38,14 +39,55 @@ import { readUsage, type SkillsUsage } from './usage';
 // retiring a skill for having been unlucky, and the cost of retiring one too late
 // is a line in a list.
 //
+// The window is not one number. A skill carries an estimate of how often its task
+// comes up again (`recurs`, contract.ts), written by whoever wrote the skill and
+// correctable by the user in Manage, and the clock waits several of those periods
+// before it gives up: a yearly task is not retired between two years, and a
+// weekly one that has sat for two months was estimated wrong or is dead. No
+// estimate reads as `occasional`, the 90 days every skill had before.
+//
 // It is also NOT gated on `isRecallEnabled()` or on the library being large enough
 // to be worth a model call. Those are the curator's gates, and they belong to the
 // thing that spends money. A lifecycle that stops running when the memory toggle
 // is off is not a lifecycle; the callers therefore run this before, and outside,
 // curateSkills' own early returns.
 
-/** Untouched for this long → archived. See the header for why it is not shorter. */
+/**
+ * Untouched for this long → archived, for a skill with no rhythm or no estimate.
+ * See the header for why it is not shorter.
+ */
 export const ARCHIVE_AFTER_DAYS = 90;
+
+/**
+ * Days without anything happening before a skill is archived, by how often its
+ * task is expected. Each is several missed periods, never one: the estimate is a
+ * guess, a holiday is a month, and an archive is a one-way door (see the header).
+ * `weekly` is the only one shorter than the old fixed window.
+ */
+export const ARCHIVE_AFTER_DAYS_BY_RECURRENCE: Readonly<Record<SkillRecurrence, number>> = {
+  weekly: 60,
+  monthly: 150,
+  quarterly: 400,
+  yearly: 800,
+  occasional: ARCHIVE_AFTER_DAYS
+};
+
+/** How long a skill with this estimate may sit untouched. */
+export function archiveAfterDays(recurs: SkillRecurrence | undefined): number {
+  return recurs ? ARCHIVE_AFTER_DAYS_BY_RECURRENCE[recurs] : ARCHIVE_AFTER_DAYS;
+}
+
+/**
+ * The estimate with the longest window. A merge keeps this one: the merged skill
+ * serves every job it absorbed, and the slowest of them sets how long it waits.
+ */
+export function slowestRecurrence(estimates: ReadonlyArray<SkillRecurrence | undefined>): SkillRecurrence | undefined {
+  let slowest: SkillRecurrence | undefined;
+  for (const recurs of estimates) {
+    if (recurs && (!slowest || archiveAfterDays(recurs) > archiveAfterDays(slowest))) slowest = recurs;
+  }
+  return slowest;
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -56,6 +98,7 @@ export interface LifecycleSkill {
   enabled: boolean;
   created: string;
   updated: string;
+  recurs?: SkillRecurrence;
 }
 
 /** Epoch ms for an ISO string, or null for absent/blank/unparseable. */
@@ -100,7 +143,6 @@ export function skillsToExpire(
   usage: SkillsUsage,
   now: Date = new Date()
 ): string[] {
-  const cutoff = now.getTime() - ARCHIVE_AFTER_DAYS * DAY_MS;
   const expired: string[] = [];
   for (const skill of skills) {
     if (skill.source !== 'agent') continue; // never the user's own files
@@ -109,7 +151,7 @@ export function skillsToExpire(
     let latest: number | null = null;
     for (const ms of anchors) if (ms !== null && (latest === null || ms > latest)) latest = ms;
     if (latest === null) continue; // see the doc comment: unknown age keeps the skill
-    if (latest < cutoff) expired.push(skill.slug);
+    if (latest < now.getTime() - archiveAfterDays(skill.recurs) * DAY_MS) expired.push(skill.slug);
   }
   return expired;
 }
@@ -130,13 +172,14 @@ export function applyAutomaticTransitions(now: Date = new Date()): number {
   const expired = skillsToExpire(records, readUsage(), now);
   if (expired.length === 0) return 0;
 
+  const bySlug = new Map(records.map((r) => [r.slug, r]));
   const root = skillsRoot();
   let archived = 0;
   for (const slug of expired) {
     try {
       writeFileSync(
         join(root, slug, DISABLED_MARKER),
-        `archived by the Stem skills lifecycle clock: untouched for over ${ARCHIVE_AFTER_DAYS} days\n`,
+        `archived by the Stem skills lifecycle clock: untouched for over ${archiveAfterDays(bySlug.get(slug)?.recurs)} days\n`,
         'utf8'
       );
       archived += 1;

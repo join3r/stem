@@ -8,18 +8,33 @@ import type { LlmClient } from '../recall/llm';
 import type { EmbeddingsClient } from '../recall/embeddings';
 import { getEmbeddingsClient } from '../recall/retrieval';
 import { dot, magnitude } from '../recall/vector';
-import { SKILL_CONTRACT_TEXT, SKILL_SLUG_RE, formatViolations, opensWithSituation, validateSkill, type SkillDraft } from './contract';
+import {
+  MAX_SKILL_TOOLS,
+  SKILL_CONTRACT_TEXT,
+  SKILL_NAME_MAX,
+  SKILL_SLUG_RE,
+  formatViolations,
+  holdableSkillTools,
+  opensWithSituation,
+  parseRecurrence,
+  validateSkill,
+  type SkillDraft,
+  type SkillRecurrence
+} from './contract';
 import { DISABLED_MARKER, syncSkillsIgnore } from './ignore';
-import { listSkillRecords, saveSkill, type SkillOrigin, type SkillRecord } from './store';
+import { slowestRecurrence } from './lifecycle';
+import { listSkillRecords, readSkillRecord, saveSkill, setSkillRecurrence, type SkillOrigin, type SkillRecord } from './store';
 import { mergeUsage, pruneUsage, readUsage, type SkillsUsage } from './usage';
 import { ensureSkillVectors } from './vectors';
 
 // Level-2 cleanup for self-authored skills, mirroring recall/consolidate.ts for
-// durable facts. Three operations, in this order:
+// durable facts. Four operations, in this order:
 //
-//   split   — a skill whose sections are different jobs becomes one skill per job.
-//   merge   — two write-ups of the SAME job become one.
-//   archive — a skill another one has made redundant is switched off.
+//   estimate — a skill nobody has said a rhythm for gets one (see `estimateRecurrence`).
+//   split    — a skill whose sections are different jobs becomes one skill per job.
+//   merge    — two write-ups of the SAME job become one, and so does one procedure
+//              written once per target (a "family", see below).
+//   archive  — a skill another one has made redundant is switched off.
 //
 // One skill, one job (2026-10-10). This reverses the "umbrella" posture of
 // SKILLS-UPKEEP.md's Defect 2, which merged by "would a maintainer write one skill
@@ -34,6 +49,16 @@ import { ensureSkillVectors } from './vectors';
 // selection failure the 2026-10 audits found. Published work agrees: selection
 // accuracy falls with semantic confusability between skills rather than with library
 // size, and focused skills beat comprehensive ones (arXiv 2601.04748, 2602.12670).
+//
+// Families (2026-11-17). "One job" was read too narrowly by the merge prompt: it
+// only merged a job written twice, so one procedure done for four apps stayed four
+// skills. The server's library had `install-busycal-mcp-for-stem`,
+// `connect-things-mcp-to-stem`, `install-davinci-resolve-mcp-for-stem` and
+// `install-superwhisper-cli-for-stem` at 0.85 to 0.91 cosine to each other, the
+// closest pairs in 86 skills, and five weeks of passes merged none of them. They
+// are one job with a parameter, and the confusability the one-job rule exists to
+// remove is highest exactly between such siblings. A family becomes one skill
+// under a name for the general job, with what differs per target listed in it.
 //
 // The pass works on small groups, never the whole library at once. Splits look at
 // one skill; merges look at one skill and its nearest neighbours by the same
@@ -72,6 +97,15 @@ const MERGE_NEIGHBOURS = 3;
 const MERGE_MIN_COSINE = 0.7;
 /** Most parts a split may produce. More than this is a reading error, not a skill. */
 const MAX_SPLIT_PARTS = 4;
+/**
+ * A skill this close to another one is looked at once for a family, even when
+ * neither changed since the last pass: libraries reviewed under the old merge
+ * rule hold families that no later pass would return to. On the server's library
+ * 12 of 3,655 pairs reach it and every pair of the install family does.
+ */
+const FAMILY_RECHECK_COSINE = 0.8;
+/** Skills per recurrence-estimate call. Name, description and a usage line each. */
+const ESTIMATE_BATCH = 40;
 /** Backup runs kept in `.curator-history`. */
 const HISTORY_KEEP = 10;
 
@@ -92,6 +126,9 @@ interface AgentSkill {
   origin: SkillOrigin;
   created: string;
   body: string;
+  /** Tools whose calls hand the skill over; a merge keeps every member's. */
+  tools: string[];
+  recurs?: SkillRecurrence;
   /** Not Stem's own idea (see CURATED_ORIGINS): never split, merged, archived or re-described. */
   locked: boolean;
   useCount: number;
@@ -101,7 +138,8 @@ interface AgentSkill {
 }
 
 interface CurateOps {
-  merge: { slugs: string[]; description: string; content: string }[];
+  /** `name`: a family merged under a new name for the general job; absent keeps the first slug's. */
+  merge: { slugs: string[]; description: string; content: string; name?: string }[];
   archive: string[];
 }
 const EMPTY_OPS: CurateOps = { merge: [], archive: [] };
@@ -146,7 +184,7 @@ The rules every skill follows:
 
 ${SKILL_CONTRACT_TEXT}`;
 
-const MERGE_INSTRUCTIONS = `You check a small group of skills from an assistant's library of reusable procedures for DUPLICATES.
+const MERGE_INSTRUCTIONS = `You check a small group of skills from an assistant's library of reusable procedures for skills that are ONE job written more than once.
 
 ${RETRIEVAL_NOTE}
 
@@ -156,10 +194,20 @@ Return ONLY a JSON object (no prose, no markdown fences) with this shape:
   "archive": ["<slug>"]
 }
 
-merge — ONLY two or more write-ups of the SAME job:
+merge — ONLY in these two cases:
+
+1. Two or more write-ups of the SAME job.
 - The test: would someone in the situation one skill describes follow the other skill's steps from start to finish? Then they are the same job written twice. Merge them.
-- Sharing a tool, a service, a server, or a domain is NOT a reason to merge. Different jobs stay separate skills, each with its own description — that is what lets the right one be found.
-- Mechanics: the FIRST slug in "slugs" is kept, keeps its name, and is rewritten with your "description" and "content"; the rest are retired. List at least two slugs. Keep every exact command, argument and trap from both; drop only what is said twice.
+
+2. One procedure written once per target (a family).
+- The steps are the same from start to finish and only the particulars differ: which app, server, account, device or site. The test: put one skill's particulars into the other skill's steps. If that would have worked, they are one job with a parameter.
+- Merge a family into ONE skill that gives the steps once, with the target as its input, and lists under the steps what differs per target: the exact commands, package names, ids, paths and traps of each one.
+- Add "name" to the merge: a name for the general job, because no member's name fits it. Lowercase words joined by single hyphens, at most 64 characters, not the name of a skill listed below. The description names the general situation, not one target.
+- When what differs per target does not fit beside the steps in 4096 bytes, do not merge.
+
+Both cases:
+- Sharing a tool, a service, a server, or a domain is NOT a reason to merge. Different jobs stay separate skills, each with its own description — that is what lets the right one be found. Installing an app and diagnosing that app are two jobs.
+- Mechanics: the FIRST slug in "slugs" is kept, keeps its name, and is rewritten with your "description" and "content"; the rest are retired. With a "name", the merged skill is saved under that name and every slug listed is retired. List at least two slugs. Keep every exact command, argument and trap from all of them; drop only what is said twice.
 - The merged body must be under 4096 bytes with the headings "## When to use", "## Steps", "## Verification", in that order, and the description must start "Use when". A merge that breaks a rule is rejected.
 
 archive — DEFAULT TO KEEP:
@@ -170,7 +218,21 @@ Both lists:
 - A skill marked READ-ONLY is the user's own (they asked for it, imported it, taught it or recorded it). Never list it in "merge" or "archive". An agent-written skill that duplicates it may be archived in its favour.
 - Do NOT reword a body you are keeping.
 - Use ONLY the slugs listed below. Never invent one.
-- If nothing is a duplicate — the usual answer — return {"merge":[],"archive":[]}.`;
+- If nothing is one job written more than once — the usual answer — return {"merge":[],"archive":[]}.`;
+
+const ESTIMATE_INSTRUCTIONS = `You estimate, for each skill in an assistant's library of reusable procedures, how often its task comes up again. The assistant keeps an unused skill for several such periods before switching it off, so the estimate decides whether a slow task survives until its next run.
+
+One answer per skill:
+- "weekly": every week or more often.
+- "monthly"
+- "quarterly": a few times a year.
+- "yearly": tied to the calendar, such as a tax return, an annual renewal or a yearly report.
+- "occasional": no rhythm. It comes up when something breaks or the need arises.
+
+Go by the description and the recorded use. A period named in the task itself (a monthly invoice, a quarterly statement) decides. Several uses spread over time show the rhythm. Answer "occasional" when nothing shows one; a longer period is not the safe guess.
+
+Return ONLY a JSON object (no prose, no markdown fences), with every name listed below:
+{"recurs": {"<skill name>": "<one of the five>"}}`;
 
 // ---- library state ----
 
@@ -183,12 +245,16 @@ interface CuratedState {
   version: 1;
   /** slug → hash of the skill as last reviewed. A mismatch means "look again". */
   seen: Record<string, string>;
+  /** The one look at close neighbours for families has run (see FAMILY_RECHECK_COSINE). */
+  families?: true;
 }
 
 function readCurated(): CuratedState {
   try {
     const parsed = JSON.parse(readFileSync(join(skillsRoot(), SKILLS_CURATED_FILE), 'utf8')) as Partial<CuratedState>;
-    if (parsed?.version === 1 && parsed.seen && typeof parsed.seen === 'object') return { version: 1, seen: parsed.seen };
+    if (parsed?.version === 1 && parsed.seen && typeof parsed.seen === 'object') {
+      return { version: 1, seen: parsed.seen, ...(parsed.families === true ? { families: true as const } : {}) };
+    }
   } catch {
     // quiet: no state means every skill is reviewed once, which is the right answer for a first pass.
   }
@@ -215,6 +281,8 @@ function loadAgentSkills(usage: SkillsUsage): AgentSkill[] {
       origin: r.origin,
       created: r.created,
       body: r.body,
+      tools: r.tools,
+      ...(r.recurs ? { recurs: r.recurs } : {}),
       locked: !CURATED_ORIGINS.includes(r.origin),
       useCount: usage.skills[r.slug]?.count ?? 0,
       lastUsedAt: usage.skills[r.slug]?.lastUsedAt,
@@ -342,7 +410,7 @@ export function parseCurate(output: string): CurateOps {
   if (Array.isArray(obj.merge)) {
     for (const m of obj.merge) {
       if (!m || typeof m !== 'object') continue;
-      const { slugs, description, content } = m as Record<string, unknown>;
+      const { slugs, description, content, name } = m as Record<string, unknown>;
       if (
         Array.isArray(slugs) &&
         slugs.every((s) => typeof s === 'string') &&
@@ -351,9 +419,14 @@ export function parseCurate(output: string): CurateOps {
         typeof content === 'string' &&
         content.trim()
       ) {
-        // A merge never renames: the winner's slug IS its name, and a rename
-        // would mean a new directory rather than a merge.
-        merge.push({ slugs: slugs as string[], description, content });
+        // Only a family is renamed (MERGE_INSTRUCTIONS case 2); a same-job merge
+        // keeps the winner's slug, which IS its name.
+        merge.push({
+          slugs: slugs as string[],
+          description,
+          content,
+          ...(typeof name === 'string' && name.trim() ? { name: name.trim() } : {})
+        });
       }
     }
   }
@@ -452,55 +525,148 @@ function archiveSkill(slug: string): void {
   writeFileSync(join(skillsRoot(), slug, DISABLED_MARKER), 'archived by Stem curator\n', 'utf8');
 }
 
-function applyMerges(skills: AgentSkill[], ops: CurateOps, history: History): { merged: number; archived: number } {
+function applyMerges(
+  skills: AgentSkill[],
+  ops: CurateOps,
+  history: History
+): { merged: number; archived: number; gone: string[] } {
   const bySlug = new Map(skills.map((s) => [s.slug, s]));
   let merged = 0;
   let archived = 0;
+  const gone: string[] = [];
 
   for (const m of ops.merge) {
-    const [winnerSlug, ...losers] = m.slugs;
-    const winner = bySlug.get(winnerSlug);
+    const winner = bySlug.get(m.slugs[0]);
     if (!winner) continue;
-    const draft = { name: winnerSlug, description: m.description || winner.description, body: m.content };
+    const members = m.slugs.map((slug) => bySlug.get(slug)).filter((x): x is AgentSkill => !!x);
+    // A family is saved under a name for the general job. A name that is not a
+    // free slug is dropped rather than refused: the merge is still right, and the
+    // first member's name is a worse label, not a broken skill.
+    const wanted = m.name && m.name !== winner.slug ? m.name : '';
+    const renamed = !!wanted && SKILL_SLUG_RE.test(wanted) && wanted.length <= SKILL_NAME_MAX && !readSkillRecord(wanted);
+    if (wanted && !renamed) console.warn(`[skills curator] merge into "${winner.slug}" kept that name: "${wanted}" is taken or not a valid name.`);
+    const target = renamed ? wanted : winner.slug;
+    const retired = renamed ? m.slugs : m.slugs.slice(1);
+    // What the members carried besides their text goes with the merged skill:
+    // every tool that handed one of them over, and the slowest rhythm among them.
+    const tools = [...new Set(members.flatMap((s) => holdableSkillTools(s.tools)))].slice(0, MAX_SKILL_TOOLS);
+    const recurs = slowestRecurrence(members.map((s) => s.recurs));
+    const draft: SkillDraft = {
+      name: target,
+      description: m.description || winner.description,
+      body: m.content,
+      ...(tools.length ? { tools } : {}),
+      ...(recurs ? { recurs } : {})
+    };
     const violations = validateSkill(draft, { authored: true });
     if (violations.length) {
       // Said out loud: a rejected merge used to be indistinguishable from "nothing to merge".
-      console.warn(`[skills curator] merge into "${winnerSlug}" rejected (losers: ${losers.join(', ')}): ${formatViolations(violations)}`);
+      console.warn(`[skills curator] merge into "${target}" rejected (from: ${m.slugs.join(', ')}): ${formatViolations(violations)}`);
       continue;
     }
     try {
       for (const slug of m.slugs) history.keep(slug);
     } catch (error) {
-      degrade('skills.curate', `left "${winnerSlug}" unmerged because it could not be backed up first`, error);
+      degrade('skills.curate', `left "${winner.slug}" unmerged because it could not be backed up first`, error);
       continue;
     }
-    // Losers are only deleted once the winner is safely on disk.
-    const written = saveSkill(draft, { expectExisting: true, origin: 'unknown' });
+    // The retired skills are only deleted once the merged one is safely on disk.
+    const change = `Merged ${renamed ? 'from' : 'with'} ${retired.join(', ')}`;
+    const written = renamed
+      ? saveSkill(draft, { origin: winner.origin, change })
+      : saveSkill(draft, { expectExisting: true, origin: 'unknown', change });
     if (!written.ok) {
-      console.warn(`[skills curator] merge into "${winnerSlug}" rejected (losers: ${losers.join(', ')}): ${written.error}`);
+      console.warn(`[skills curator] merge into "${target}" rejected (from: ${m.slugs.join(', ')}): ${written.error}`);
       continue;
     }
     try {
-      for (const loser of losers) rmSync(join(skillsRoot(), loser), { recursive: true, force: true });
+      for (const slug of retired) rmSync(join(skillsRoot(), slug), { recursive: true, force: true });
     } catch {
-      // quiet: a loser left behind is a duplicate, not a broken library, and the
-      // next pass sees it beside the winner that now contains it.
+      // quiet: a skill left behind is a duplicate, not a broken library, and the
+      // next pass sees it beside the one that now contains it.
     }
-    // Proven utility survives the merge: the winner inherits the losers' counts.
-    mergeUsage(winnerSlug, losers);
+    // Proven utility survives the merge: the merged skill inherits the counts.
+    mergeUsage(target, retired);
+    gone.push(...retired);
     merged += 1;
   }
 
   for (const slug of ops.archive) {
     try {
       archiveSkill(slug);
+      gone.push(slug);
       archived += 1;
     } catch (error) {
       // A marker the filesystem refused looks exactly like a pass that kept everything.
       console.warn(`[skills curator] could not archive "${slug}": ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return { merged, archived };
+  return { merged, archived, gone };
+}
+
+// ---- recurrence estimates ----
+
+function buildEstimatePrompt(batch: AgentSkill[]): string {
+  const lines = batch.map((s) => {
+    const usage = s.useCount ? `used ${s.useCount}×, last ${isoDay(s.lastUsedAt ?? '')}` : 'never used';
+    return `- ${s.slug}: ${s.description} (created ${isoDay(s.created)}, ${usage})`;
+  });
+  return `${ESTIMATE_INSTRUCTIONS}\n\nToday is ${isoDay(new Date().toISOString())}.\n\nSkills:\n${lines.join('\n')}`;
+}
+
+/** Read an estimate reply: name → rhythm. Null when the reply is not the JSON shape at all. */
+export function parseEstimates(output: string): Map<string, SkillRecurrence> | null {
+  const obj = jsonObject(output);
+  if (!obj) return null;
+  const out = new Map<string, SkillRecurrence>();
+  const recurs = obj.recurs;
+  if (recurs && typeof recurs === 'object') {
+    for (const [slug, value] of Object.entries(recurs as Record<string, unknown>)) {
+      const estimate = parseRecurrence(value);
+      if (estimate) out.set(slug, estimate);
+    }
+  }
+  return out;
+}
+
+/**
+ * Give every skill without a rhythm an estimate of one (contract.ts
+ * SkillRecurrence), so the lifecycle clock can wait as long as the task needs.
+ *
+ * New skills get theirs from whoever writes them (author.ts). This is for the
+ * ones that have none: everything saved before the field existed, and writers
+ * that left it out. It reads names, descriptions and usage only, a few calls for
+ * a whole library, and writes Stem's own bookkeeping, never the skill's text —
+ * which is why it also covers skills the user asked for or imported, which no
+ * other step here touches. The user's own estimate, set in Manage, is never
+ * asked about again: only an absent one is.
+ *
+ * A reply that answers for only some skills leaves the rest at `occasional`, the
+ * window an absent estimate already had, so a model that cannot do this is asked
+ * once per skill and not every night. A call that fails outright is tried again.
+ */
+async function estimateRecurrence(llm: LlmClient, skills: AgentSkill[]): Promise<number> {
+  const missing = skills.filter((s) => !s.recurs);
+  let written = 0;
+  for (let at = 0; at < missing.length; at += ESTIMATE_BATCH) {
+    const batch = missing.slice(at, at + ESTIMATE_BATCH);
+    let estimates: Map<string, SkillRecurrence> | null;
+    try {
+      estimates = parseEstimates(await llm.complete(buildEstimatePrompt(batch)));
+    } catch (error) {
+      degrade('skills.curate', 'left some skills without an estimate of how often they are needed', error);
+      continue;
+    }
+    if (!estimates) continue;
+    for (const skill of batch) {
+      const recurs = estimates.get(skill.slug) ?? 'occasional';
+      if (setSkillRecurrence(skill.slug, recurs).ok) {
+        skill.recurs = recurs;
+        written += 1;
+      }
+    }
+  }
+  return written;
 }
 
 // ---- merge groups ----
@@ -516,20 +682,38 @@ export async function mergeGroups(
   changed: Set<string>,
   embeddings: EmbeddingsClient | null = getEmbeddingsClient()
 ): Promise<AgentSkill[][]> {
-  if (!embeddings || skills.length < 2 || changed.size === 0) return [];
+  return (await rankedGroups(skills, changed, embeddings)) ?? [];
+}
+
+/**
+ * `mergeGroups`, told apart from "could not rank": null when there were no
+ * embeddings to rank with, so the caller knows the look did not happen.
+ *
+ * `familyFloor` widens the pass for the one family look (FAMILY_RECHECK_COSINE):
+ * a skill that did not change still gets its group when its nearest neighbour is
+ * at least that close.
+ */
+async function rankedGroups(
+  skills: AgentSkill[],
+  changed: Set<string>,
+  embeddings: EmbeddingsClient | null,
+  opts: { familyFloor?: number } = {}
+): Promise<AgentSkill[][] | null> {
+  if (!embeddings) return null;
+  if (skills.length < 2 || (changed.size === 0 && opts.familyFloor === undefined)) return [];
   try {
-    if (!(await embeddings.available())) return [];
+    if (!(await embeddings.available())) return null;
     const model = await embeddings.modelId();
-    if (!model) return [];
+    if (!model) return null;
     const vectors = await ensureSkillVectors(skills, { model, embed: (texts) => embeddings.embed(texts, 'passage') });
     const groups: AgentSkill[][] = [];
     const keys: Set<string>[] = [];
     for (const skill of skills) {
-      if (!changed.has(skill.slug)) continue;
+      if (!changed.has(skill.slug) && opts.familyFloor === undefined) continue;
       const v = vectors.get(skill.slug);
       if (!v) continue;
       const mag = magnitude(v) || 1;
-      const near = skills
+      const ranked = skills
         .filter((o) => o.slug !== skill.slug)
         .map((o) => {
           const w = vectors.get(o.slug);
@@ -537,8 +721,9 @@ export async function mergeGroups(
         })
         .filter((x) => x.cos >= MERGE_MIN_COSINE)
         .sort((a, b) => b.cos - a.cos)
-        .slice(0, MERGE_NEIGHBOURS)
-        .map((x) => x.o);
+        .slice(0, MERGE_NEIGHBOURS);
+      if (!changed.has(skill.slug) && !((ranked[0]?.cos ?? -1) >= (opts.familyFloor ?? Infinity))) continue;
+      const near = ranked.map((x) => x.o);
       const group = [skill, ...near];
       if (group.length < 2 || group.filter((s) => !s.locked).length === 0) continue;
       const key = new Set(group.map((s) => s.slug));
@@ -549,7 +734,7 @@ export async function mergeGroups(
     return groups;
   } catch (error) {
     degrade('skills.curate', 'skipped looking for duplicate skills this pass', error);
-    return [];
+    return null;
   }
 }
 
@@ -577,6 +762,10 @@ export async function curateSkills(
   const history = new History();
   const result: CurateResult = { ...ZERO };
   let budget = retireBudget(skills.length);
+
+  // 0. Estimate. Bookkeeping only, so it does not count as a change to review.
+  const estimated = await estimateRecurrence(llm, skills);
+  if (estimated) console.info(`[skills curator] estimated how often ${estimated} skill${estimated === 1 ? ' is' : 's are'} needed`);
 
   // 1. Split. One skill per call.
   for (const skill of skills.filter((s) => isChanged(s) && splitCandidate(s))) {
@@ -616,7 +805,19 @@ export async function curateSkills(
   skills = loadAgentSkills(readUsage());
   const changed = new Set(skills.filter(isChanged).map((s) => s.slug));
   const gone = new Set<string>();
-  for (const group of await mergeGroups(skills, changed, opts.embeddings === undefined ? getEmbeddingsClient() : opts.embeddings)) {
+  // The one look for families among skills earlier passes already reviewed. It is
+  // marked done only when it ran in full: no embeddings, or a call that failed,
+  // leaves it for the next pass.
+  const familyLook = !state.families && !opts.force;
+  let familiesDone = state.families === true;
+  const groups = await rankedGroups(
+    skills,
+    changed,
+    opts.embeddings === undefined ? getEmbeddingsClient() : opts.embeddings,
+    familyLook ? { familyFloor: FAMILY_RECHECK_COSINE } : {}
+  );
+  if (groups && (familyLook || opts.force)) familiesDone = true;
+  for (const group of groups ?? []) {
     const live = group.filter((s) => !gone.has(s.slug));
     if (live.length < 2 || live.every((s) => s.locked)) continue;
     let ops: CurateOps;
@@ -625,6 +826,7 @@ export async function curateSkills(
     } catch (error) {
       degrade('skills.curate', 'skipped one group of similar skills this pass', error);
       for (const s of live) if (changed.has(s.slug)) failed.add(s.slug);
+      if (familyLook) familiesDone = false;
       continue;
     }
     const writable = new Set(live.filter((s) => !s.locked).map((s) => s.slug));
@@ -635,8 +837,7 @@ export async function curateSkills(
     const applied = applyMerges(live, clamped, history);
     result.merged += applied.merged;
     result.archived += applied.archived;
-    for (const m of clamped.merge) for (const s of m.slugs.slice(1)) gone.add(s);
-    for (const s of clamped.archive) gone.add(s);
+    for (const s of applied.gone) gone.add(s);
     budget -= clamped.archive.length + clamped.merge.reduce((n, m) => n + m.slugs.length - 1, 0);
   }
 
@@ -651,6 +852,6 @@ export async function curateSkills(
   for (const s of loadAgentSkills(readUsage())) {
     if (!failed.has(s.slug)) seen[s.slug] = hashSkill(s);
   }
-  writeCurated({ version: 1, seen });
+  writeCurated({ version: 1, seen, ...(familiesDone ? { families: true as const } : {}) });
   return result;
 }

@@ -46,6 +46,32 @@ export interface SkillDraft {
    * made the ranking pick. Absent on a patch means "keep what the skill had".
    */
   tools?: string[];
+  /**
+   * How often the task is expected to come up again (see SkillRecurrence).
+   * Absent on a patch means "keep what the skill had".
+   */
+  recurs?: SkillRecurrence;
+}
+
+/**
+ * How often a skill's task is expected to come up again: the writer's estimate,
+ * which the user can change in Manage. The lifecycle clock (lifecycle.ts) reads
+ * it to decide how long a skill may sit unused before it is switched off.
+ *
+ * It exists because one fixed window cannot be right. On 2026-11-17 the live
+ * library held 86 skills and 40 had never been used, so a short window was the
+ * obvious fix, and it would have retired the monthly invoice skill between two
+ * invoices and every yearly task long before its second run. `occasional` is the
+ * answer for work with no rhythm (it comes up when something breaks), and is
+ * what a skill with no estimate counts as.
+ */
+export const SKILL_RECURRENCES = ['weekly', 'monthly', 'quarterly', 'yearly', 'occasional'] as const;
+export type SkillRecurrence = (typeof SKILL_RECURRENCES)[number];
+
+/** A recurrence read from model output, a tool call or a file; anything else is "not said". */
+export function parseRecurrence(value: unknown): SkillRecurrence | undefined {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return (SKILL_RECURRENCES as readonly string[]).includes(text) ? (text as SkillRecurrence) : undefined;
 }
 
 /** One `tools` entry: `server.tool`, `server.*`, or a bare tool name. */

@@ -4,7 +4,7 @@ import { parse as parseYaml } from 'yaml';
 import { degrade } from '../degrade';
 import { SKILLS_REV_FILE } from '../pi/protocol';
 import { skillsRoot } from '../workspace/paths';
-import { GENERAL_SKILL_TOOLS, SKILL_SLUG_RE, validateSkill, type SkillDraft, type SkillViolation } from './contract';
+import { GENERAL_SKILL_TOOLS, SKILL_SLUG_RE, parseRecurrence, validateSkill, type SkillDraft, type SkillRecurrence, type SkillViolation } from './contract';
 import { DISABLED_MARKER, syncSkillsIgnore } from './ignore';
 import { pruneUsage } from './usage';
 import { pruneCases } from './cases';
@@ -58,6 +58,8 @@ export interface SkillRecord {
   enabled: boolean;
   /** Tools whose calls hand this skill over (contract.ts SkillDraft.tools); [] = none. */
   tools: string[];
+  /** How often the task is expected to come up again, when anyone has said (contract.ts SkillRecurrence). */
+  recurs?: SkillRecurrence;
   /** Why this version was written, in one line, when the writer said (see SaveOptions.change). */
   change?: string;
 }
@@ -76,6 +78,7 @@ export interface SkillFront {
   created?: string;
   updated?: string;
   tools?: string[];
+  recurs?: SkillRecurrence;
   change?: string;
 }
 
@@ -99,6 +102,7 @@ export function composeSkillMd(input: {
   /** Defaults to now; passed explicitly so a caller can report what it wrote. */
   updated?: string;
   tools?: readonly string[];
+  recurs?: SkillRecurrence;
   change?: string;
 }): string {
   const fm = [
@@ -113,6 +117,7 @@ export function composeSkillMd(input: {
     `    created: ${JSON.stringify(input.created)}`,
     `    updated: ${JSON.stringify(input.updated ?? new Date().toISOString())}`,
     ...(input.tools?.length ? [`    tools: ${JSON.stringify(input.tools)}`] : []),
+    ...(input.recurs ? [`    recurs: ${input.recurs}`] : []),
     ...(input.change?.trim() ? [`    change: ${JSON.stringify(oneLine(input.change, SKILL_CHANGE_MAX))}`] : []),
     '---'
   ].join('\n');
@@ -144,6 +149,7 @@ export function parseSkillMd(text: string): SkillFront {
     created: str(stem.created),
     updated: str(stem.updated),
     tools: Array.isArray(stem.tools) ? stem.tools.filter((t): t is string => typeof t === 'string') : undefined,
+    recurs: parseRecurrence(stem.recurs),
     change: str(stem.change)
   };
 }
@@ -193,6 +199,7 @@ function readRecordIn(root: string, slug: string): SkillRecord | null {
     updated: fm.updated ?? fm.created ?? '',
     enabled: !existsSync(join(root, slug, DISABLED_MARKER)),
     tools: fm.tools ?? [],
+    ...(fm.recurs ? { recurs: fm.recurs } : {}),
     ...(fm.change ? { change: fm.change } : {})
   };
 }
@@ -299,6 +306,8 @@ export function saveSkill(draft: SkillDraft, opts: SaveOptions): WriteResult {
     // them, so leaving them out is not a decision to drop them. A kept general
     // tool is dropped: it never holds a call, and the next write cleans the file.
     tools: draft.tools ? draft.tools.map((t) => t.trim()) : (existing?.tools ?? []).filter((t) => !GENERAL_SKILL_TOOLS.has(t)),
+    // Like tools: a write that does not say keeps the skill's estimate.
+    ...((draft.recurs ?? existing?.recurs) ? { recurs: draft.recurs ?? existing?.recurs } : {}),
     ...(opts.change?.trim() ? { change: oneLine(opts.change, SKILL_CHANGE_MAX) } : {})
   };
 
@@ -335,6 +344,29 @@ export function relabelSkill(slug: string, origin: SkillOrigin): WriteResult {
   }
   bumpSkillsRev(root);
   return { ok: true, slug, record, created: false };
+}
+
+/**
+ * Set or clear how often a skill's task is expected to come up again, leaving its
+ * text, version and dates as they are. `updated` in particular: the lifecycle
+ * clock anchors on it, so an estimate written for every skill at once must not
+ * read as every skill having just been worked on. Like `relabelSkill`, this
+ * touches Stem's own bookkeeping only, so it is allowed on a skill of any origin.
+ */
+export function setSkillRecurrence(slug: string, recurs: SkillRecurrence | null): WriteResult {
+  const existing = readSkillRecord(slug);
+  if (!existing) return { ok: false, error: `No skill "${slug}".` };
+  const root = skillsRoot();
+  const record: SkillRecord = { ...existing };
+  if (recurs) record.recurs = recurs;
+  else delete record.recurs;
+  try {
+    writeAtomic(join(root, existing.slug, SKILL_FILE), composeSkillMd(record));
+  } catch (error) {
+    // quiet: the caller gets the reason; the estimate stays as it was.
+    return { ok: false, error: `Could not update skill "${existing.slug}": ${message(error)}` };
+  }
+  return { ok: true, slug: existing.slug, record, created: false };
 }
 
 /**

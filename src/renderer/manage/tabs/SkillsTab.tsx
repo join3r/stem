@@ -3,6 +3,7 @@ import { History, RotateCcw, Trash2, Wand2 } from 'lucide-react';
 import type {
   DefaultsSettings,
   ModelSummary,
+  SkillRecurrence,
   SkillsMode,
   SkillSummary,
   SkillVersionSummary
@@ -18,6 +19,16 @@ import { plainLine } from '../../../shared/plain-text';
 // another tab mid-run and come back, and the button is still spinning — and the
 // outcome message still lands — instead of the pass silently vanishing.
 const tidyJob = createJobStore();
+
+// The answers to "how often is this skill needed" (server/skills/contract.ts),
+// in the words of the select.
+const RECURRENCES: ReadonlyArray<[SkillRecurrence, string]> = [
+  ['weekly', 'Every week or more'],
+  ['monthly', 'About every month'],
+  ['quarterly', 'A few times a year'],
+  ['yearly', 'About once a year'],
+  ['occasional', 'Now and then, no rhythm']
+];
 
 export function SkillsTab({ models }: { models: ModelSummary[] }) {
   const [skills, setSkills] = useState<SkillSummary[]>([]);
@@ -111,6 +122,17 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
     window.stem.updateSkillsSettings({ mode: next }).then((s) => setMode(s.skills.mode));
   }
 
+  // Stem's estimate of how often the task comes up is a guess; the person who
+  // sends the invoice knows it is monthly. Their answer replaces it.
+  async function setRecurs(slug: string, recurs: SkillRecurrence) {
+    setRemoveError(null);
+    try {
+      setSkills(await window.stem.setSkillRecurrence(slug, recurs));
+    } catch (error) {
+      setRemoveError(error instanceof Error ? error.message : 'Could not change that.');
+    }
+  }
+
   async function toggle(slug: string, enabled: boolean) {
     setSkills(await window.stem.setSkillEnabled(slug, enabled));
   }
@@ -147,9 +169,9 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
         // A pass that merged nothing and one that merged three both end with the
         // list simply redrawn, so say which happened — otherwise the only way to
         // tell is to have memorised the library beforehand.
-        // "90 days" is ARCHIVE_AFTER_DAYS in server/skills/lifecycle.ts, spelled out
-        // here rather than plumbed through IPC: it is a sentence, not a setting.
-        const retired = r.expired ? `, retired ${r.expired} unused >90 days` : '';
+        // How long "too long" is depends on each skill's "Needed" answer below
+        // (server/skills/lifecycle.ts), so the sentence does not name a number.
+        const retired = r.expired ? `, retired ${r.expired} unused too long` : '';
         const split = r.split ?? 0;
         const splitText = split ? `Split ${split} into one skill per job, ` : '';
         return split + r.merged + r.archived + r.expired === 0
@@ -291,6 +313,33 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
           >
             <History size={15} />
           </button>
+        </div>
+      )}
+      {selectedSkill?.retiresAfterDays !== undefined && (
+        <div className="formgroup">
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <label htmlFor="skill-recurs" className="muted" style={{ flexShrink: 0 }}>
+              Needed
+            </label>
+            <select
+              id="skill-recurs"
+              className="vfield"
+              value={selectedSkill.recurs ?? ''}
+              onChange={(e) => e.target.value && setRecurs(selectedSkill.slug, e.target.value as SkillRecurrence)}
+              style={{ flex: 1, minWidth: 0 }}
+            >
+              {!selectedSkill.recurs && <option value="">Not estimated yet</option>}
+              {RECURRENCES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="muted">
+            Stem switches this skill off after {selectedSkill.retiresAfterDays} days without use. It stays on
+            disk and you can switch it back on.
+          </p>
         </div>
       )}
       {historyOpen && selectedSkill && versions.length > 0 && (
