@@ -16,6 +16,7 @@ import { piModelsConfigPath } from '../workspace/paths';
 import { readSettings } from '../workspace/settings';
 import { replaceFile } from '../replace-file';
 import { llmRelay } from '../llm-device/router';
+import { applyCatalogBackfill } from './catalog-backfill';
 
 // Stem's custom-providers config for the pi backend (models.json under the
 // isolated pi home). OpenAI-compatible servers (Ollama, LM Studio, and a custom
@@ -522,6 +523,10 @@ export function syncModelsConfig(): Promise<boolean> {
       if (models.length) config.providers[id] = localProviderBlock(base, models, apiKey, api, overrides);
       else delete config.providers[id];
     }
+
+    // Models a built-in provider already serves but this pi release doesn't
+    // list yet (see catalog-backfill.ts).
+    applyCatalogBackfill(config.providers);
 
     const changed = JSON.stringify(config) !== before;
     if (changed) await writeModelsConfig(config);
