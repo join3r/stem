@@ -34,7 +34,8 @@ with every chat that can see your memory. It is at the top of **Memory → Facts
   later rewrites keep your corrections. **Rewrite** starts over and drops them,
   after asking.
 - It leaves out sensitive details (health, money, addresses) and facts learned
-  from connected folders.
+  from connected folders. Facts from the **Claude Code** folder are the exception:
+  they come from your own sessions there, so they count like facts from your chats.
 - The one exception is **Current situation**, the first section: where you are
   and what you are in the middle of right now, such as a hospital stay, recovery
   after an operation, or a trip, with its dates. It names the circumstance, not
@@ -48,6 +49,32 @@ with every chat that can see your memory. It is at the top of **Memory → Facts
 Connected folders can also teach Stem facts. **Remember what it reads** allows retention;
 **Learn facts** chooses when learning happens. See
 [Connected folders](../connected-folders.md).
+
+## People
+
+Memory also learns about the people in your life, not only about you: "Peter uses
+Linux", "Jana is my accountant". Contact details, payment details and how far to
+trust someone are kept only when you said them yourself, never from someone else's
+words.
+
+**Personas & people → People** in the side panel lists who is who. Each person has
+a card with **Who they are to you**, **Also called** (nicknames and other spellings),
+**Stem address**, **Email**, **Other ways to reach them** and **Notes**, and a
+**Facts** tab with every fact that names them. **+** (**New person**) adds someone;
+nothing is saved until you press **Save**.
+
+When a chat or mail names a person on the list, Stem gets their card, your notes
+and the facts about them with that message, even when the message reads nothing
+like those facts ("write Peter how to install the VPN" brings "Peter uses Linux").
+A fact belongs to a person when it names them, so add the names you use for them
+under **Also called**. Sensitive facts about a person still need a close match to be
+sent. Private chats and personas without memory access get none of this.
+
+Stem also suggests people your memory already names. Suggestions wait under
+**Suggested** and are not used until you accept one with the check button (**Add
+to People**); the
+sparkle button in the header (**Suggest people from memory**) asks for suggestions
+right away. No card is ever made from what someone on another Stem wrote to you.
 
 ## Models, and machines that cannot reach the internet
 

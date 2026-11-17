@@ -42,6 +42,28 @@ the link can read what you see there. Then:
 Press **Create link**. Stem copies the link to the clipboard and shows it with
 **Copy link**, **Open in the browser** and **Revoke**.
 
+## Only people you choose
+
+**Who can open it** in the dialog is **Anyone with the link** by default. Pick
+**Only people I choose** and type their email addresses, separated by commas (up
+to 20). Then:
+
+- You send the link yourself. Stem does not mail it to anyone.
+- To open the page, a person picks their address (shown partly hidden, like
+  `m•••@gmail.com`) and presses **Send a code to …**. The share server mails them a
+  six-digit code that works for 15 minutes; they type it and press **Open**. That
+  browser then stays unlocked for that link for 7 days.
+- A forwarded link shows nothing to anyone else, and the page is still encrypted,
+  so the share server cannot read it.
+- Stem tells you when each person opens it for the first time, with a private mail
+  ("Shared link opened: …"), and the link's page in Settings lists who opened it
+  and when.
+- The preview card starts switched off, since it is not encrypted. You can switch it
+  on.
+
+Links for chosen people are made on the computer. The iPhone app makes public links
+only.
+
 ## What is left out
 
 Tool steps, memory cards and in-app links are left out. Links to places inside
@@ -83,11 +105,18 @@ The link is published under your verified address.
 
 ## Take a link down
 
-Settings → Features → **Shared links** → **Public links you made** lists your
-working links with what they share and their end date. The section appears once
-you have made a link. Each row has **Copy link** and a revoke button (**Revoke —
-the link stops opening**). A revoked link opens as *This link was turned off*.
-Anyone who already saved the page keeps their copy.
+Settings → Features → **Shared links** → **Links you shared** opens the list of your
+working links, newest first, with what each shares and when it stops. The section
+appears once you have made a link. **Find a link or a person** searches by title or
+by an address a link was shared with. A clock marks a link that stops within three
+days; an eye marks one that people you chose have opened.
+
+Click a link to open its page: what it shows, where it came from, when it was
+shared, **Works until**, and the link itself. For a link shared with chosen people,
+**Who can open it** lists each address with when they first opened it, or *Not
+opened yet*. The header has **Copy link** and **Revoke link**, which asks first. A
+revoked link opens as *This link was turned off*. Anyone who already saved the page
+keeps their copy.
 
 Each shared page also has a **Report** button for readers. A link taken down after a
 report opens as *This link was removed*.

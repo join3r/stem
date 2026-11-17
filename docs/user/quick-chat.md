@@ -69,6 +69,18 @@ not on top of it, with a chip showing which window it captured. She asks
 - Pressing it in a window whose panel is open puts you back in that panel;
   pressing it while typing in a panel closes that one. Pressing it again in a
   window you asked about earlier continues that window's conversation.
+- **+** in the panel's header (**New tab about this window**, `⌘T`) starts another
+  conversation about the same window, as a tab, with a fresh picture of it. A
+  window holds up to five tabs. Each tab is named after its first question; a dot
+  marks one that is answering or has a new answer. `⌘W` closes the tab you are in
+  (stopping its answer), and `⌘⇧[` / `⌘⇧]` go to the tab before or after. On
+  Windows and Linux, use Ctrl.
+- **Shrink** in the header, or `⌘M`, shrinks the panel to a small pill beside its
+  window and gives the keyboard back to that window. Clicking back into the window
+  while an answer runs does the same. The pill shows the answer's progress; click it
+  to open the panel again, with your draft and the conversation as you left them.
+- On a Mac, a window that floats above the others, such as an app's hotkey
+  window, counts as the window in front.
 - On a Mac it needs **Screen Recording** for the picture and **Accessibility**
   for the text. If one is off, the chip says which and opens the right System
   Settings pane. On Windows it needs no setup. On Linux it needs the GNOME
@@ -78,6 +90,11 @@ Set the shortcut under **Settings → Quick Chat → Ask about this window**. It
 off until you record one. On GNOME (Wayland) apps can't set global shortcuts:
 copy the command shown there and add it as a custom shortcut in GNOME's
 Keyboard settings.
+
+On a Mac, **Keep with its window** below the shortcut makes a panel behave like
+part of its window instead of floating over everything: other windows can cover
+it, it comes forward with its window, and it hides while that window is minimized,
+hidden or on another Space, then comes back with it. It is off by default.
 
 Quick Chat has its own thread. Set its defaults in
 [**Settings → Quick Chat**](settings.md).

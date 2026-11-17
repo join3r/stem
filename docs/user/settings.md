@@ -19,6 +19,16 @@ address, shared links, image generation, commands, coding agents, computer contr
 browser control), **Server** (where Stem runs, your devices, moving or backing up) and
 **Models** (providers, which model does which job, memory recall, web search).
 
+## Search settings
+
+**Search settings**, the field above the four tabs, finds a setting by its name, the
+line under it, or the text of its ⓘ explanation, across all four tabs. When you open
+Settings yourself (⌘, or Ctrl+,, the menu, or the side-panel button), the cursor is
+already in it. Matches found only in an explanation are listed under **In
+explanations**. Click a result, or pick one with the arrow keys and Enter: Stem
+switches to its tab, opens the groups it sits in and scrolls to it. **Esc** clears
+the field; a second **Esc** leaves it.
+
 ## Providers and models
 
 Add a provider with:
@@ -40,6 +50,12 @@ and the buttons to check it again, reconnect, or disconnect. The dot on each til
 is red when the last check got no answer, and the page says why. A server that
 stops answering keeps the models it listed last, so a chat already on one of them
 does not lose its model.
+
+With a ChatGPT sign-in, the **ChatGPT** tile shows how much of your plan's usage is
+left ("5h 62% · week 80% left"). Its page has a bar for each limit, **5-hour limit**
+and **Weekly limit**, with the percentage left and when it resets. The bar changes
+colour as a warning at 25% left and again at 10%. If Stem cannot read the figures,
+**Plan usage** on the page says why.
 
 ### A model server on your Mac, with Stem on a server
 
@@ -106,7 +122,8 @@ runs on now, and a role left unset follows its group:
   the Deep check), **Skills** (writes skills, `/learn`, skill tidy-up) and the **Command
   safety check**'s review. Unset, they follow the model you chat with.
 - **Quick tasks** — small jobs a fast model does well: chat subjects, filing chats into
-  folders, and the safety check's quick first pass.
+  folders, picking which of your skills a message needs, and the safety check's quick
+  first pass.
 
 **Memory recall**, below the roles, sets how many facts go with each message and the
 models that pick them (see [Memory](memory/README.md#models-and-machines-that-cannot-reach-the-internet)).
@@ -155,7 +172,7 @@ to you; it wins over everything else), and **About my setup** (which machines, f
 and services are yours and how much they matter).
 
 A command may run for up to an hour; longer jobs are started in the background and
-checked on.
+checked on. Up to eight commands run at the same time; further ones wait their turn.
 
 On an approval card, **Always allow** saves a command prefix for future turns.
 Keep prefixes narrow; `git status` grants less access than `git`. Approval cards
@@ -338,7 +355,8 @@ image used as a starting point, go to OpenAI, even in a private chat.
 Under **Settings → App → Appearance**, set per computer:
 
 - **Theme** — **System** follows the OS; the others include Catppuccin, Gruvbox,
-  Solarized, Nord, Rosé Pine, One, Everforest, Kanagawa and Dracula. For a theme with
+  Solarized, Nord, Rosé Pine, One, Everforest, Kanagawa, Dracula, TokyoNight Storm and
+  Cotton Candy (pink, light and dark). For a theme with
   both palettes, **Light or dark** picks **Follow the OS**, **Always light** or
   **Always dark**. **Themes folder** opens the folder where you can add your own; copy
   `_example.json` to start one.
@@ -346,6 +364,10 @@ Under **Settings → App → Appearance**, set per computer:
 - **Chat width** — **Comfortable**, **Wide**, **Wider** or **Full**, for large screens.
 - **Translucent sidebar** (macOS) — lets the desktop show through the toolbar and
   side panel.
+
+To make everything in the main window bigger or smaller, press ⌘+ (or ⌘=), ⌘- and
+⌘0 for actual size; on Windows and Linux, Ctrl with the same keys. The same items are
+in the **View** menu. Stem remembers the zoom. Quick Chat keeps its own size.
 
 ## Dictation
 
@@ -399,6 +421,10 @@ are added on top of the standing instructions.
 
 **Show on all displays** lets the overlay follow Spaces and displays. **Show progress
 on other Spaces** can also show progress for the main Stem window.
+
+**Keep with its window** (Mac, under **Ask about this window**; off by default) keeps
+an [Ask about this window](quick-chat.md#ask-about-this-window) panel with the window
+it is about instead of floating over everything (see that page).
 
 **Skip the Inbox** sends quick chats straight to **Archived** once answered, so a
 throwaway question never waits in the Inbox. **Open in Stem** brings the

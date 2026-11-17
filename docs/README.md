@@ -12,6 +12,7 @@ Pick the feature you see in Stem.
 | [Memory](user/memory/README.md) | Learn useful context and recall earlier chats |
 | └ [Facts](user/memory/facts.md) | Durable details: preferences, people, projects |
 | └ [Past chats](user/memory/recall.md) | Recall: find relevant parts of past conversations |
+| └ [People](user/memory/README.md#people) | Who is who in your life, and what Stem knows about each |
 | [Tools](user/tools/README.md) | Give Stem more capabilities |
 | └ [MCP servers](user/tools/mcp-servers.md) | Connect services and tools, on this Stem or on your own computer |
 | └ [Skills](user/tools/skills.md) | Reuse procedures that work |

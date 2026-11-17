@@ -20,7 +20,10 @@ email drafts as Stem, on behalf of me" or "write to my doctors formally, from my
 address", and it saves that in a skill for drafting your mail rather than in your
 custom instructions. Every chat and scheduled task that drafts mail then follows it,
 and later corrections update the same skill. Stem also proposes one on its own after
-it drafts a message for you, under the **Saving skills** setting.
+it drafts a message for you, under the **Saving skills** setting. When Memory learns
+how you want a kind of work done ("always put the invoice number in the subject"),
+Stem folds that into the skill for that work too; a mere taste or a one-off stays a
+fact.
 
 Open **Tools → Skills**.
 
@@ -51,8 +54,10 @@ Open **Tools → Skills**.
   their **Needed** answer allows. Archiving is the same reversible switch as
   above, so an archived skill can be switched back on. Anything it rewrites is
   backed up first. Stem runs the same pass by itself once a day.
-- **Saving skills** decides how much Stem may save on its own. Asking it to save
-  one always works, whichever you pick.
+- **Saving skills** decides how much Stem may save on its own: **Only when I ask**,
+  **Ask first** (each proposal comes as a card you approve) or **Save automatically**
+  (Stem saves what it learns and the Skills list shows it), which is the default.
+  Asking it to save one always works, whichever you pick.
 - **Skills model** does the model-driven skills work: writing, `/learn`, tidy-up.
   It is also under **Settings → Models → Judgment work**.
 
@@ -94,7 +99,8 @@ leave no record, and deleting a chat deletes its records.
 ## Recording a skill
 
 Recording is in **Alpha**. On the Mac app, press **Record** under the message box
-(or type `/record`, or ⌃⌥R) and do the task in your own apps as usual; press **Stop** when done. Stem
+(or type `/record`, or ⌃⌥R; in a narrow window the button gives way and only these
+remain) and do the task in your own apps as usual; press **Stop** when done. Stem
 notes what you click, type and switch to, plus the settings of any dialog you
 confirm, and writes a draft skill card in the chat. It may ask up to three
 questions in the card; answer in a sentence. **Save skill** adds it to your library.
@@ -125,6 +131,13 @@ is not. A skill already used earlier in the same chat is not loaded again.
 
 The **used N×** figure on the Skills list is a different, stricter count: it credits a skill only
 when the turn ran something the skill's steps name.
+
+A skill can also belong to a tool, such as your mail-drafting skill to the tool that
+writes drafts. Then Stem reads it just before it uses that tool, however your request
+was worded, so how you want that action done is followed even when the message
+looked unrelated. The Skills list shows this under the skill's name: *Read before
+fastmail · draft_email*, or *Read before any busycal tool*. A skill that does not fit
+the job at hand is ignored.
 
 ## Skills and the machine they run on
 

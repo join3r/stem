@@ -129,6 +129,18 @@ works. A URL server that runs on your Stem server signs in as it always has.
 - When Stem proposes a server, verify the URL or command in the approval card.
   Reject anything unexpected.
 
+Stem can also change a server you already have, when you ask it to fix or update one.
+The card, **Change MCP server**, shows only what changes, old next to new: the
+command, the URL, environment variables and headers set or removed. Values of
+secrets stay hidden. Everything not listed, stored tokens and sign-ins included,
+stays as it is. When the change points the server at a new URL or command, **Goes
+along** names the stored secrets the new one will get; approve only if you trust it
+with them.
+
+A server Stem builds or downloads for you is kept in a folder of its own inside
+Stem's tools folder, never in a chat's scratch folder or in your Files, so deleting a
+chat or tidying your Files cannot break it.
+
 The switch in a server's header stops connecting but keeps the configuration and
 sign-in. **Remove server** removes both.
 

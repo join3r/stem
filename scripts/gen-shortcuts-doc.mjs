@@ -45,7 +45,15 @@ const TRICKS = `## Tricks
   range, then mark, move or delete them together. **Esc** clears the selection.
 - Drop a file on **This chat** to use it for one message. Drop it on **Files** to copy
   it into Stem and reuse it across chats.
-- **Enter** sends. **Shift+Enter** starts a new line.`;
+- **Enter** sends. **Shift+Enter** starts a new line. In mail, **Enter** starts a new
+  line and **⌘↵** (**Ctrl+Enter**) sends.
+- **⌘+** (or **⌘=**), **⌘-** and **⌘0** zoom the main window in, out and back to actual
+  size; on Windows and Linux use **Ctrl**. Stem remembers the zoom. Quick Chat keeps its
+  own size.
+- In an **Ask about this window** panel: **⌘T** opens another tab about the same
+  window, **⌘W** closes the tab you are in, **⌘⇧[** and **⌘⇧]** switch tabs, and
+  **⌘M** shrinks the panel to a pill beside its window. Use **Ctrl** on Windows and
+  Linux.`;
 
 /** Escape the characters a keycap can contain that Markdown tables would eat. */
 const cell = (text) => text.replace(/\\/g, '\\\\').replace(/\|/g, '\\|');

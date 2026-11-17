@@ -25,7 +25,9 @@ control) are not built in. You make them in the Personas tab.
 
 ## The Personas tab
 
-The list groups personas by what they run as: **Assistants**, **Coding agents** and
+Open **Personas & people** in the side panel and choose **Personas** at the top
+(**People** is the list of real people in your life; see
+[Memory](memory/README.md#people)). The list groups personas by what they run as: **Assistants**, **Coding agents** and
 **Computer control**. **New** starts one of each kind. Click a persona to edit it;
 its header has buttons to duplicate it and, for your own personas, **Delete
 persona**. Nothing changes until you press **Save**. Three tabs:
@@ -66,14 +68,27 @@ To let Normal use one of them, add it to the conversation yourself.
 
 ## Write and read mail
 
-**New mail** (`⌘⇧N`) starts addressed to whoever your last mail went to. In
+**New mail** (`⌘⇧N`) opens as one letter: **To** and **Subject** lines on top, your
+message below, and the attach, dictation, discard and Send buttons underneath. It
+starts addressed to whoever your last mail went to. In
 **To**, type a persona's name to add it. The first one leads: it gets your mail
 and answers you. Click the crown on another to make it lead. The subject is
 optional; Stem names the conversation after the first reply. **Private** in the
 header makes the whole conversation private: nothing in it is saved to memory or
 read from it, and the personas keep no notes of it. It is fixed once sent. Send
-names the lead ("Send to Normal"). Closing the pane keeps an unsent draft, which
-waits as a **Draft** row at the top of the Inbox; **Discard** asks first.
+names the lead ("Send to Normal"); `⌘↵` (Ctrl+Enter) sends too. Closing the pane
+keeps an unsent draft, which waits as a **Draft** row at the top of the Inbox; the
+trash button (**Discard this draft**) asks first.
+
+Attachments start uploading the moment you add them, so Send does not wait for
+them. A file still uploading shows a spinner; one that failed shows a warning and
+is tried again when you send.
+
+Sending works like email: the mail closes and the conversation goes to **Sent**.
+It comes back to the Inbox when the reply arrives. A reply you send closes its
+conversation the same way. If a send fails, the mail stays open with your text and
+the error. Every mail you write gets a reply, even one that asks nothing; then the
+reply is a short line that shows it was read.
 
 A conversation reads newest first. The reply box sits on top, under the header,
 and says who gets your reply. Each conversation keeps its own reply draft. While
@@ -88,13 +103,15 @@ other mail just waits for the run to end. A reply the server refused stays in th
 with Retry, Edit and Delete, so its text is never lost. **Forward** sends a mail on
 to other personas with a note of your own.
 
-The Inbox lists **Waiting on you** first, then **Working** (conversations you
-sent that personas are still on), then **Requests** (first mail from people on
-other Stems you haven't accepted yet), then the folded **Snoozed**, **Archived** and
-**Sent** sections. A run that needs your approval for a command waits in its
-mail with **Allow once** and **Deny**. You can also answer in words in the reply
-box instead. Once you answer, the conversation moves out of **Waiting on you** to
-**Working**. The reply and compose boxes have the dictation mic too.
+The Inbox lists the mail waiting on you first (unread in bold), then **Requests**
+(first mail from people on other Stems you haven't accepted yet), then the folded
+**Snoozed**, **Archived** and **Sent** sections. Conversations the personas are
+still working on wait under **Sent** until their reply lands. A run that needs your
+approval for a command waits in its mail with **Allow once** and **Deny**. You can
+also answer in words in the reply box instead. Once you
+answer, the run carries on. The reply and compose boxes have the dictation mic too.
+
+Click a picture attached to a mail to open it full-window.
 
 ## Agents
 

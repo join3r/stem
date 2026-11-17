@@ -15,7 +15,11 @@ there:
 ## Ask
 
 - Drop a file on **This chat** for one message. Drop it on **Files** to copy it into
-  Stem for reuse across chats.
+  Stem for reuse across chats: **Top level**, or one of your Files subfolders shown as
+  tiles. When there are more subfolders than fit, the recent ones show, and the last
+  tile ("12 more…") lets you pick any folder after the drop.
+- Click a picture you attached to open it full-window. **Esc**, a click beside it or
+  **✕** closes it. This works for pictures in mail too.
 - Choose model, effort, and speed.
 - Each chat is **MDX** or plain **Markdown**. In an MDX chat, answers can include
   charts, tables, side-by-side comparisons, KPI tiles, diagrams, step lists, tabs,
@@ -39,13 +43,32 @@ there:
 - Web answers include cited sources: the sites' icons show under the answer;
   open them for a card per source.
 - Places in an answer (an address, a shop, a venue) are links that open Maps.
-- The context meter shows how full the conversation is.
+- The context meter shows how full the conversation is. In a narrow window the
+  controls under the message box stay on one row by giving things up: the context
+  meter goes first, then the button labels, then **Note** and **Record** (both stay
+  in the `/` menu), then the model name. The arrow beside it still opens the model
+  picker.
+- File paths in an answer are links. A click opens a document, a picture, a sound,
+  a video or a web page in Stem's own viewer window, or in its usual app; anything
+  else (a folder, a program, a script) is only shown in Finder (Explorer on Windows).
+  Right-click for **Open**, **Show in Finder** and **Copy Path**. Links to files in
+  your Files or in the chat's scratch folder work the same when Stem runs on a
+  server: Stem fetches the file first, and **Show in Finder** saves a copy to
+  Downloads.
+- A change shown as a diff gets a diff view: removed and added lines tinted, line
+  numbers, and the changed words marked. Switch between **One column** and **Side by
+  side** in its header, or **Copy diff**.
+- When Stem shares a sound (a recording it cut, a clip it made), it appears under the
+  answer as a player: play and pause, a waveform you can click or drag to seek, and
+  **Save to Downloads**.
 - Ask for a picture and Stem draws it with your ChatGPT subscription (see
   [Settings → Image generation](settings.md#image-generation)). Click it to enlarge.
   Under each picture, or on right-click: **Save to Downloads** (straight into your
   Downloads folder, no dialog) and **Copy**. On the phone, tap the picture and use
   **Share**, which has Save Image. To change a picture, just say what to change;
-  to edit a photo, attach it and say what to change. Stem can also save a picture
+  to edit a photo, attach it and say what to change, or name a picture that is
+  already in your Files or a connected folder ("use the logo in my project's art
+  folder"). Stem can also save a picture
   for you: "put it in my project's art folder" writes it to Files or to a folder you
   connected read & write, on its own computer when it lives on one (that computer
   must accept commands).
@@ -63,7 +86,9 @@ there:
   **Archive instead**. Tasks scheduled from the chat stay: they run on their own and
   report by mail.
 - **Archive** (`⌘⇧A`, `Ctrl+Shift+A`) moves a chat out of the list into the folded
-  **Archived** section at its foot. Nothing is lost: an archived chat still opens and
+  **Archived** section at its foot. Archiving the open chat opens the next one in the
+  list (the one above when it was the last), so you can work through a run of chats
+  one after another. Nothing is lost: an archived chat still opens and
   shows up in search, with an archive badge. Right-click it and choose **Move out of
   archive** to bring it back, or just continue it: a new message brings it back on
   its own.
@@ -92,7 +117,8 @@ model as chat subjects (**Settings → Models → Quick tasks**).
 The app's menu bar lists every action that has a shortcut, with its keys beside it,
 so it is a good place to learn them. **File** has new chat, new mail, Quick Chat and
 **Attach Files…**. **View** opens the side panel's tabs (**Chats**, **Memory**,
-**Tools**, **Personas**, **Sources**, **Scheduled Tasks**). **Chat** has Stop,
+**Tools**, **Personas & People**, **Sources**, **Scheduled Tasks**) and has **Actual
+Size**, **Zoom In** and **Zoom Out** for the main window. **Chat** has Stop,
 effort, Fast, **Archive**, **Snooze…**, read or unread, and **Delete Chat…**.
 **Window** lists the first nine chats under ⌘1–9 (Ctrl+1–9). **Settings** and
 **Check for Updates…** are under **Stem** on a Mac and under **File** on Windows and
@@ -130,7 +156,8 @@ Type `/` at the start of a message to see the commands the box understands:
 condenses a long chat's history so it takes less room, and says by how much
 ("142k → 31k tokens"). Add a focus to say what the condensed version must keep:
 `/compact keep the deployment steps`. It cannot run while an answer is still
-being written.
+being written. Only what you type starts a command: text you paste at the start of
+the box is sent as it is, even when it begins with `/` or `//`.
 
 Each chat keeps its selected model and effort. Changing them in one chat does not
 rewrite earlier answers.
