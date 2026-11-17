@@ -19,6 +19,7 @@ interface MdNode {
   value?: string;
   depth?: number;
   ordered?: boolean;
+  start?: number | null;
   checked?: boolean | null;
   url?: string;
   alt?: string;
@@ -215,7 +216,9 @@ function renderNode(node: MdNode, key: string): ReactNode {
       const task = (node.children ?? []).some((c) => typeof c.checked === 'boolean');
       const className = task ? 'task-list' : undefined;
       return node.ordered
-        ? <ol key={key} className={className}>{renderChildren(node, key)}</ol>
+        // Keep the source's first number: "4. – 9. septembra" parses as a
+        // list starting at 4, and dropping `start` showed it as "1.".
+        ? <ol key={key} className={className} start={node.start != null && node.start !== 1 ? node.start : undefined}>{renderChildren(node, key)}</ol>
         : <ul key={key} className={className}>{renderChildren(node, key)}</ul>;
     }
     case 'listItem':
