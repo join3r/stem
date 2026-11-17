@@ -5542,6 +5542,11 @@ export interface StemApi {
   onMailWorkChanged(listener: (event: { conversationId: string }) => void): () => void;
   /** Compose a new mail conversation and deliver it to its driver persona. */
   composeMail(input: MailComposeInput): Promise<MailListResult>;
+  /**
+   * Upload a draft's attachment to a remote server now (its `path` comes back as
+   * an upload handle); unchanged when the server shares this disk.
+   */
+  stageAttachment(att: TurnAttachment): Promise<TurnAttachment>;
   /** Reply into a conversation (resumes the driver persona with full context). */
   replyMail(
     conversationId: string,

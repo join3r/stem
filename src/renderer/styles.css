@@ -1053,6 +1053,8 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   font-size: var(--fs-12); color: var(--ink);
 }
 .attachment-chip > svg { flex: none; color: var(--muted); }
+.attachment-chip > svg.attachment-uploading { animation: activity-spin 0.9s linear infinite; }
+.attachment-chip.failed > svg { color: var(--danger); }
 .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-remove {
   flex: none; border: none; background: none; cursor: pointer;

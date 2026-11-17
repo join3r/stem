@@ -36,7 +36,9 @@ import {
   type LiveTurnInfo,
   type TurnAttachment
 } from '../shared/types';
-import { convertHeicAttachments } from '../server/pi/heic';
+import { convertHeicAttachment, convertHeicAttachments } from '../server/pi/heic';
+import { isUploadHandle } from '../server/files/staging';
+import type { ServerCredentials } from './server-endpoint';
 import { uploadBytes, uploadFile } from './file-transfer';
 import { createOfflineCache } from './offline-cache';
 import type { OAuthCourier } from './oauth-courier';
@@ -427,6 +429,28 @@ function openStream(url: string, options: Parameters<typeof httpRequest>[1], onR
   return (url.startsWith('https:') ? httpsRequest : httpRequest)(url, options, onRes);
 }
 
+/**
+ * Put one attachment on a remote server NOW and answer the attachment that
+ * stands for it there (`path` = an upload handle). The mail composer calls this
+ * the moment a file is attached, so pressing Send carries only handles and the
+ * text: the upload happened while the user was still writing.
+ *
+ * Unlike attachmentsForServer, pasted bytes go up too — a screenshot paste is
+ * the common case, and the whole point is that nothing heavy rides with Send.
+ * HEIC is decoded first, as at send time. Throws with the file's name, so a
+ * failure can be shown on its chip and tried again when the mail is sent.
+ */
+export async function stageAttachment(creds: ServerCredentials, att: TurnAttachment): Promise<TurnAttachment> {
+  if (att.path && isUploadHandle(att.path)) return att;
+  const ready = await convertHeicAttachment(att);
+  if (ready.dataBase64) {
+    const handle = await uploadBytes(creds, ready !== att ? jpegName(att.name) : att.name, Buffer.from(ready.dataBase64, 'base64'));
+    return { name: att.name, ...(ready.mime ? { mime: ready.mime } : {}), path: handle };
+  }
+  if (!ready.path) return att;
+  return { ...ready, path: await uploadFile(creds, ready.path) };
+}
+
 export function createServerProxy(deps: ProxyDeps): ServerProxy {
   const base = deps.url.replace(/\/$/, '');
   const auth = `Bearer ${deps.token}`;
@@ -483,6 +507,9 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     const converted = await convertHeicAttachments(atts);
     return Promise.all(
       converted.map(async (att, i) => {
+        // Already on the server: the mail composer stages a file the moment it
+        // is attached (stageAttachment below), so the send carries the handle.
+        if (att.path && isUploadHandle(att.path)) return att;
         // convertHeicAttachments returns a new object only for a decoded HEIC;
         // everything else comes back as the same reference.
         if (att !== atts[i] && att.dataBase64) {
@@ -539,6 +566,13 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         );
         const steps = await Promise.all(ex.steps.map(async (s) => (s.shot ? { ...s, shot: await uploadFile(creds, s.shot) } : s)));
         return [threadId, { ...ex, steps, unmatched }, draftId];
+      }
+    },
+    'mail:composeExternal': {
+      before: async ([input]) => {
+        const mail = input as { attachments?: TurnAttachment[] };
+        if (!mail?.attachments?.length) return;
+        return [{ ...mail, attachments: await attachmentsForServer(mail.attachments) }];
       }
     },
     'mail:reply': {

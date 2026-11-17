@@ -33,8 +33,11 @@ import {
   UserCheck,
   UserX,
   UserPlus,
-  Sparkles
+  Sparkles,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
+import { stageInBackground, useStageStates } from './staged-uploads';
 import { PERSON_MAIL_BETA_TITLE } from '../chats/ChatList';
 import { isExternalAddress } from '../../shared/types';
 import type {
@@ -240,6 +243,12 @@ function useAttachmentDraft(initial?: TurnAttachment[]) {
     if (more.length) setAttachments((prev) => [...prev, ...more]);
   }, []);
 
+  // Upload each file as soon as it is attached, while the user is still
+  // writing — Send then carries only the text and the handles.
+  useEffect(() => {
+    stageInBackground(attachments);
+  }, [attachments]);
+
   return { attachments, addFiles, pickFiles, onPaste, onDrop, remove, clear, add };
 }
 
@@ -270,12 +279,29 @@ function AttachmentChips({
   attachments: TurnAttachment[];
   onRemove: (idx: number) => void;
 }) {
+  const stages = useStageStates(attachments);
   if (!attachments.length) return null;
   return (
     <div className="composer-attachments mail-attachments-draft">
       {attachments.map((att, i) => (
-        <span className="attachment-chip" key={`${att.name}-${i}`}>
-          <File size={13} />
+        <span
+          className={`attachment-chip${stages[i]?.state === 'failed' ? ' failed' : ''}`}
+          key={`${att.name}-${i}`}
+          title={
+            stages[i]?.state === 'uploading'
+              ? 'Uploading…'
+              : stages[i]?.state === 'failed'
+                ? `${stages[i]?.error ?? 'Upload failed'} — tried again when you send`
+                : undefined
+          }
+        >
+          {stages[i]?.state === 'uploading' ? (
+            <Loader2 size={13} className="attachment-uploading" />
+          ) : stages[i]?.state === 'failed' ? (
+            <AlertCircle size={13} />
+          ) : (
+            <File size={13} />
+          )}
           <span className="attachment-name">{att.name}</span>
           <button type="button" className="attachment-remove" title="Remove" onClick={() => onRemove(i)}>
             <X size={13} />

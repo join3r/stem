@@ -540,6 +540,7 @@ const api: StemApi = {
     return () => ipcRenderer.removeListener('mail:workChanged', handler);
   },
   composeMail: (input: MailComposeInput) => ipcRenderer.invoke('mail:compose', input),
+  stageAttachment: (att: TurnAttachment) => ipcRenderer.invoke('attachments:stage', att),
   // The third argument rides only when there is something in it: a server
   // predating it rejects a 3-arg call outright, and a plain reply must keep
   // working across that skew.

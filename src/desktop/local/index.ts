@@ -16,6 +16,7 @@ import { exportState } from '../../server/workspace/state-transfer';
 import { readClientIdentity, storedServerUrl } from '../client-store';
 import { cancelDictation, dictationAudio, dictationLanguages, startDictation, stopDictation } from '../dictation';
 import { downloadFile } from '../file-transfer';
+import { stageAttachment } from '../proxy';
 import { markReleaseNotesRead, releaseNotesSnapshot } from '../release-notes';
 import { downloadsDir, saveAudioToDownloads, saveImageToDownloads } from '../save-image';
 import { pairWithServer, useBuiltInServer, type ServerCredentials } from '../server-endpoint';
@@ -40,6 +41,7 @@ import type {
   StateExportReport,
   ThemeSettings,
   ThemeState,
+  TurnAttachment,
   UpdatesSettings
 } from '../../shared/types';
 
@@ -396,6 +398,12 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
    * Answers with the path it landed at, so the renderer can name it if it wants.
    */
   handleLocal('files:download', (_e, rel: string): Promise<string> => downloadAndReveal(rel));
+  // The mail composer's background upload: a file attached to a draft goes up
+  // to a remote server at once, so Send carries only its handle. Against the
+  // built-in server the server reads the path itself and nothing is copied.
+  handleLocal('attachments:stage', (_e, att: TurnAttachment): Promise<TurnAttachment> | TurnAttachment =>
+    deps.connection().remote ? stageAttachment(deps.credentials(), att) : att
+  );
   async function downloadAndReveal(rel: string): Promise<string> {
     const saved = await downloadFile(deps.credentials(), rel, downloadsDir());
     // Opening a Finder window is the one part of this a test run must not do:

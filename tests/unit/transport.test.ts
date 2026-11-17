@@ -26,7 +26,7 @@ import {
   startTransport,
   type TransportEndpoint
 } from '../../src/server/startup/transport';
-import { createServerProxy, type ServerProxy } from '../../src/desktop/proxy';
+import { createServerProxy, stageAttachment, type ServerProxy } from '../../src/desktop/proxy';
 import { clientCredentials } from '../../src/desktop/server-endpoint';
 import { PillTurns } from '../../src/desktop/quickchat/pill-turns';
 import { noteTurnEvent } from '../../src/server/live-turns';
@@ -306,6 +306,25 @@ describe('when the server is somewhere else', () => {
       { input: 'look', attachments: [{ name: 'shot.png', mime: 'image/png', dataBase64: 'aGk=' }] }
     ])) as { attachments: { dataBase64: string; path?: string }[] };
     expect(result.attachments[0]).toEqual({ name: 'shot.png', mime: 'image/png', dataBase64: 'aGk=' });
+  });
+
+  it('stages a mail draft\'s files ahead of Send, pasted bytes included', async () => {
+    const creds = await clientCredentials(serverUrl, { external: false });
+    const fromDisk = await stageAttachment(creds, { name: 'note.txt', path: localFile });
+    expect(isUploadHandle(fromDisk.path!)).toBe(true);
+    expect(readFileSync((await resolveUploadHandle(fromDisk.path!))!, 'utf8')).toBe('the contents of a file on the client');
+
+    // A pasted screenshot goes up too: nothing heavy should ride with Send.
+    const pasted = await stageAttachment(creds, { name: 'shot.png', mime: 'image/png', dataBase64: 'aGk=' });
+    expect(pasted).toEqual({ name: 'shot.png', mime: 'image/png', path: pasted.path });
+    expect(readFileSync((await resolveUploadHandle(pasted.path!))!, 'utf8')).toBe('hi');
+
+    // Staging a staged file is a no-op, and so is sending one: the handle rides as is.
+    expect(await stageAttachment(creds, pasted)).toBe(pasted);
+    const result = (await far.invoke('backend:startTurn', [{ input: 'look', attachments: [pasted] }])) as {
+      attachments: unknown[];
+    };
+    expect(result.attachments[0]).toEqual(pasted);
   });
 
   it('uploads a drop onto the Files panel the same way', async () => {

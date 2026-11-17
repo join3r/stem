@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InboxState } from '../../shared/inbox';
 import { pruneReplyDrafts } from './mail-drafts';
+import { stagedForSend } from './staged-uploads';
 import { withArchived, withRead, withSnooze } from '../../shared/inbox';
 import type {
   MailComposeInput,
@@ -158,7 +159,9 @@ export function useMail(ready: boolean): MailApi {
 
   const compose = useCallback(
     async (input: MailComposeInput) => {
-      const list = await window.stem.composeMail(input);
+      const list = await window.stem.composeMail(
+        input.attachments?.length ? { ...input, attachments: await stagedForSend(input.attachments) } : input
+      );
       applyServer(list);
       return list;
     },
@@ -166,7 +169,9 @@ export function useMail(ready: boolean): MailApi {
   );
   const composeExternal = useCallback(
     async (input: { to: string; self?: string; subject?: string; body: string; attachments?: TurnAttachment[] }) => {
-      const list = await window.stem.composeExternalMail(input);
+      const list = await window.stem.composeExternalMail(
+        input.attachments?.length ? { ...input, attachments: await stagedForSend(input.attachments) } : input
+      );
       applyServer(list);
       return list;
     },
@@ -175,7 +180,8 @@ export function useMail(ready: boolean): MailApi {
   const deliver = useCallback(
     async (send: PendingSend): Promise<boolean> => {
       try {
-        const list = await window.stem.replyMail(send.conversationId, send.body, send.attachments);
+        const attachments = send.attachments?.length ? await stagedForSend(send.attachments) : undefined;
+        const list = await window.stem.replyMail(send.conversationId, send.body, attachments);
         // One batch: the real item lands as the placeholder leaves.
         applyServer(list);
         setPending((prev) => prev.filter((p) => p.id !== send.id));
