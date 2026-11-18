@@ -91,11 +91,11 @@ function page(slug: string, source: string, summary: string, markdown: string): 
 export const STEM_GUIDE_PAGES: readonly StemGuidePage[] = [
   page('guide', 'docs/README.md', 'index of every page below, plus the demo profile the screenshots use', guideMd),
   page('chats', 'docs/user/chats.md', 'asking, attaching files, dictation, tool rows, folders and auto-filing, selecting several chats, private chats, retry/edit/fork, the pinboard, /compact', chatsMd),
-  page('quick-chat', 'docs/user/quick-chat.md', 'the shortcut-summoned overlay for asking from any app, and Note mode', quickChatMd),
+  page('quick-chat', 'docs/user/quick-chat.md', 'the shortcut-summoned overlay for asking from any app, Note mode, and Ask about this window (tabs, the pill, keeping it with its window)', quickChatMd),
   page('mail', 'docs/user/mail.md', 'mailing personas: writing and reading mail, the Inbox, the built-in personas and who to mail first, the Personas tab editor, agents they start, scheduled-task mail, Work history', mailMd),
   page('other-stems', 'docs/user/other-stems.md', 'mail with other people\'s Stems: verifying your email address, writing to someone, Requests, held mail, persona drafts you approve, keys and blocking, relays and encryption, company policy', otherStemsMd),
   page('share-links', 'docs/user/share-links.md', 'public share links: the Share dialog and its scopes, what is left out, the preview card, encryption, expiry and limits, revoking links in Settings, what can\'t be shared', shareLinksMd),
-  page('memory', 'docs/user/memory/README.md', 'what Memory learns on its own, the summary of you, where Facts and Past chats live, and the memory models', memoryMd),
+  page('memory', 'docs/user/memory/README.md', 'what Memory learns on its own, the summary of you, People (the people Stem knows about), where Facts and Past chats live, and the memory models', memoryMd),
   page('memory-facts', 'docs/user/memory/facts.md', 'durable facts: how they arrive, reviewing them, the Deep check, conflicts, tidy-up, erasing them', memoryFactsMd),
   page('memory-recall', 'docs/user/memory/recall.md', 'Past chats (Recall): searchable chat history and summaries, its storage limit, erasing it', memoryRecallMd),
   page('tools', 'docs/user/tools/README.md', 'the Tools section: MCP servers vs skills', toolsMd),
