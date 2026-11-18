@@ -67,7 +67,9 @@ async function poolRuntime(): Promise<Harness> {
         requests.push(cmd);
         if (cmd.type === 'get_state') {
           nextSession += 1;
-          return { success: true, data: { sessionId: `session-${nextSession}` } };
+          const sessionId = `session-${nextSession}`;
+          // Like pi: the path is reported before anything is written there.
+          return { success: true, data: { sessionId, sessionFile: join(sessions, `2026-01-01T00-00-00-000Z_${sessionId}.jsonl`) } };
         }
         return { success: true };
       },
@@ -91,6 +93,27 @@ function settle(harness: Harness, worker: FakeWorker): void {
 }
 
 describe('runtime worker pool', () => {
+  it('runs a pre-created chat under its own id after its worker moved on', async () => {
+    // Quick Chat pre-creates the thread, then the window capture and upload take
+    // a while; another chat's turn switched the worker away meanwhile. pi had
+    // written nothing for the pre-created session, so the turn used to run on a
+    // freshly minted id the client never saw (Working… forever, a twin row).
+    const harness = await poolRuntime();
+    const { runtime, internal } = harness;
+    const id = await runtime.createThread();
+    const worker = internal.workers[0] as FakeWorker & { activeThreadId: string | null };
+    worker.activeThreadId = 'some-other-chat';
+
+    const started = await runtime.startTurn({ input: 'pomôž prosím', threadId: id });
+    expect(started.threadId).toBe(id);
+    expect(worker.currentTurn?.threadId).toBe(id);
+    const switched = harness.requestsByWorker.get(worker.id)!.filter((r) => r.type === 'switch_session');
+    expect(switched).toHaveLength(1);
+    const header = JSON.parse((await readFile(switched[0].sessionPath as string, 'utf8')).trim()) as { type: string; id: string };
+    expect(header).toMatchObject({ type: 'session', id });
+    settle(harness, worker);
+  });
+
   it('streams two threads in parallel on two isolated workers', async () => {
     const harness = await poolRuntime();
     const { runtime, internal } = harness;

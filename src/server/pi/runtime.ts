@@ -4995,13 +4995,47 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return id;
   }
 
+  /**
+   * A thread pre-created by createThread (Quick Chat) whose worker moved to
+   * another session before its first prompt. pi writes nothing until the first
+   * message, so the session is gone from pi — and minting a new one ran the
+   * turn under an id the client had never seen: its events went nowhere, the
+   * window assistant's chat said Working… forever, and the sidebar showed the
+   * question twice. Write the header pi would have written at the path it
+   * reported, so switch_session brings back the very id the client holds.
+   */
+  private async restorePreCreatedSession(threadId: string): Promise<string | null> {
+    const planned = this.unnamedThreads.has(threadId) ? this.sessionFiles.get(threadId) : undefined;
+    if (!planned) return null;
+    // A worker still showing the unwritten session would later try to create
+    // the same file and fail; make it load the restored one instead.
+    for (const w of this.workers) if (w.activeThreadId === threadId) w.activeThreadId = null;
+    const header = {
+      type: 'session',
+      version: 3,
+      id: threadId,
+      timestamp: new Date().toISOString(),
+      cwd: this.options.workspaceRoot
+    };
+    try {
+      await mkdir(dirname(planned), { recursive: true });
+      await writeFile(planned, `${JSON.stringify(header)}\n`, { flag: 'wx' });
+    } catch (e) {
+      // Already there: pi (or an earlier start) wrote it — switching to it is right.
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') {
+        degrade('pi.session', 'could not restore a pre-created chat; its first turn runs under a new id', e);
+        return null;
+      }
+    }
+    return planned;
+  }
+
   /** Make `threadId` the worker's active session, switching to its file if needed. */
   private async ensureActive(worker: PiWorker, threadId: string): Promise<string> {
     if (worker.activeThreadId === threadId) return threadId;
-    const file = await this.resolveSessionFile(threadId);
+    const file = (await this.resolveSessionFile(threadId)) ?? (await this.restorePreCreatedSession(threadId));
     if (!file) {
-      // Unknown/empty thread (e.g. pre-created, no messages yet): start fresh and
-      // adopt the id the caller expects by treating the new session as active.
+      // Unknown thread: start fresh. The caller gets a different id back.
       const id = await this.newSession(worker);
       return id;
     }
