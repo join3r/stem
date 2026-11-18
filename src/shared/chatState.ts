@@ -240,7 +240,12 @@ export function mergeQuickChatHandoff(
     // adopted slice needs no disk read behind it.
     hydrated: true
   };
-  if (!existing) return transferred;
+  // A slice painted from this Mac's cached copy (see openChat in App.tsx) is
+  // an older read of the very conversation the overlay hands over: its idle run
+  // state would mark a running turn as finished, and its disk-keyed message ids
+  // would show every overlay message a second time. The snapshot replaces it;
+  // the server read that follows the hand-off merges the disk's view back in.
+  if (!existing || (existing.hydrated === false && !existing.running)) return transferred;
 
   const newer = new Map(existing.messages.map((m) => [m.id, m]));
   const messages = payload.messages.map((m) => newer.get(m.id) ?? m);

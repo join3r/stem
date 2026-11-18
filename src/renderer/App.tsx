@@ -6,6 +6,7 @@ import type {
   AppSettings,
   AuthProviderId,
   ChatFormat,
+  ChatHistory,
   ChatListResult,
   ChatMessage,
   ChatSummary,
@@ -1109,6 +1110,10 @@ export default function App() {
         const existing = prev[threadId];
         return { ...prev, [threadId]: mergeQuickChatHandoff(existing, payload) };
       });
+      // The snapshot is what the panel saw, and a panel can miss events (a
+      // hidden or closing tab). A settled conversation is checked against the
+      // server's transcript; a running one is, when its turn settles here.
+      if (!transferredRunning) void refreshThreadHistory(threadId);
       if (transferredRunning && transferredTurnId) {
         const lastUser = [...adopted].reverse().find((m) => m.role === 'user');
         if (lastUser) {
@@ -1138,7 +1143,7 @@ export default function App() {
       }));
       refreshChats();
     });
-  }, [core, refreshChats, noteChatOpened]);
+  }, [core, refreshChats, noteChatOpened, refreshThreadHistory]);
 
   // Quick Chat session started → show the thread in the sidebar immediately
   // (the backend won't list it until its first turn persists), reusing the optimistic
@@ -1369,13 +1374,25 @@ export default function App() {
         setActiveThreadId(threadId);
         if (userNavigation) noteChatOpened(threadId);
       }
-      const history = await window.stem.openChat(threadId);
+      let history: ChatHistory;
+      try {
+        history = await window.stem.openChat(threadId);
+      } catch (e) {
+        // The open itself failed — most often a Quick Chat hand-off that never
+        // got its snapshot. A cached copy is already on screen and nothing else
+        // would ever replace it, so read the transcript plainly (no hand-off, no
+        // pre-warm) rather than leave the stale copy standing.
+        if (!shown) throw e;
+        history = await window.stem.readChatHistory(threadId);
+        if (history.offline) throw e;
+      }
       if (deletedThreadsRef.current.has(threadId)) return;
-      // A chat already painted from the cache takes the server's answer even if
-      // the user has clicked on since — otherwise the stale copy would be what
-      // they come back to.
+      // The server's answer is the transcript, whoever moved the view since: a
+      // chat painted from the cache, or adopted from a Quick Chat hand-off while
+      // this read was on the wire, takes it — otherwise the stale copy would be
+      // what the user comes back to. Only navigation is the gate's to cancel.
       const current = openGateRef.current.isCurrent(request);
-      if (!current && !shown) return;
+      if (!current && !shown && !core.store.getThread(history.threadId)) return;
       core.store.update((prev) => ({
         ...prev,
         // An entire turn can start and settle while the disk read is pending, so
