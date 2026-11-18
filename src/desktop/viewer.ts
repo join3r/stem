@@ -218,23 +218,28 @@ export function externalLinkGate(ask: (url: string) => Promise<LinkAnswer>, open
   };
 }
 
-/** Long enough to see where it goes and what it carries, short enough for a dialog. */
-const SHOWN_URL_MAX = 600;
+/**
+ * The dialog shows the whole address, since that is what the user approves.
+ * A longer one would not fit, so it is not offered at all.
+ */
+export const LINK_MAX_CHARS = 2000;
 
 async function askOpenLink(win: BrowserWindow, url: string): Promise<LinkAnswer> {
   if (win.isDestroyed()) return { open: false, block: false };
-  const shown = url.length > SHOWN_URL_MAX ? `${url.slice(0, SHOWN_URL_MAX)}…` : url;
+  const tooLong = url.length > LINK_MAX_CHARS;
   const r = await dialog.showMessageBox(win, {
-    type: 'question',
-    message: 'Open this link in your browser?',
-    detail: `The page you are viewing wants to open:\n\n${shown}\n\nAnything in the address goes to that site.`,
-    buttons: ['Cancel', 'Open in Browser'],
+    type: tooLong ? 'warning' : 'question',
+    message: tooLong ? 'This page tried to open a link that is too long to show.' : 'Open this link in your browser?',
+    detail: tooLong
+      ? `It goes to ${new URL(url).host} and was not opened. Copy the link from the page if you trust it.`
+      : `The page you are viewing wants to open:\n\n${url}\n\nAnything in the address goes to that site.`,
+    buttons: tooLong ? ['OK'] : ['Cancel', 'Open in Browser'],
     defaultId: 0,
     cancelId: 0,
     checkboxLabel: 'Block other links from this page',
     checkboxChecked: false
   });
-  return { open: r.response === 1, block: r.checkboxChecked };
+  return { open: !tooLong && r.response === 1, block: r.checkboxChecked };
 }
 
 function guardContents(win: BrowserWindow, title: string): void {

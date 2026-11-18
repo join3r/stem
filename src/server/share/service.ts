@@ -137,8 +137,6 @@ const DRAFT_MAX = 8;
  */
 interface Draft {
   id: string;
-  /** source + the options that shape the snapshot (draftKey). */
-  key: string;
   source: ShareSource;
   scope: ShareOptions['scope'];
   snapshot: SharePreview['snapshot'];
@@ -147,11 +145,6 @@ interface Draft {
 
 function sourceKey(source: ShareSource): string {
   return source.kind === 'chat' ? `chat:${source.threadId}` : `mail:${source.conversationId}`;
-}
-
-/** What tells one preview's snapshot from another's; ttl, card and recipients do not change it. */
-function draftKey(source: ShareSource, opts: ShareOptions): string {
-  return JSON.stringify([sourceKey(source), opts.scope ?? 'thread', opts.anchorId ?? '', !!opts.includeAttachments, opts.includeModel !== false]);
 }
 
 /** How often the server asks the relay who opened its locked links. */
@@ -281,25 +274,19 @@ export class ShareService {
     // Map order is insertion order: the first is the oldest.
     while (this.drafts.size >= DRAFT_MAX) this.drafts.delete(this.drafts.keys().next().value!);
     const id = randomUUID();
-    this.drafts.set(id, { id, key: draftKey(source, opts), source, scope: opts.scope, snapshot: built.snapshot, at: now });
+    this.drafts.set(id, { id, source, scope: opts.scope, snapshot: built.snapshot, at: now });
     return { ...built, draftId: id };
   }
 
   /**
-   * The draft the user saw. A client that names none (iOS and desktop builds
-   * from before drafts) gets the newest preview of the same options.
+   * The draft the user saw, by its id. Without one there is no telling what
+   * the user looked over (another device may have previewed the same chat
+   * since, with a newer message in it), so nothing is published.
    */
   private draft(source: ShareSource, opts: ShareOptions): Draft {
-    const now = this.now();
-    let found: Draft | undefined;
-    if (opts.draftId) {
-      found = this.drafts.get(opts.draftId);
-      if (found && sourceKey(found.source) !== sourceKey(source)) found = undefined;
-    } else {
-      const key = draftKey(source, opts);
-      for (const d of this.drafts.values()) if (d.key === key && (!found || d.at >= found.at)) found = d;
-    }
-    if (!found || now - found.at > DRAFT_TTL_MS) {
+    if (!opts.draftId) throw new ShareInputError('Update Stem on this device to create share links.');
+    const found = this.drafts.get(opts.draftId);
+    if (!found || sourceKey(found.source) !== sourceKey(source) || this.now() - found.at > DRAFT_TTL_MS) {
       throw new ShareInputError('The preview is out of date. Look it over again, then create the link.');
     }
     return found;

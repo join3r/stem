@@ -157,8 +157,8 @@ The browser decrypts with WebCrypto and `DecompressionStream('gzip')`.
   `share:list()`, `share:revoke(id)`; `source = {kind:'chat', threadId} |
   {kind:'mail', conversationId}`, `opts = {scope: 'thread'|'pair'|'answer',
   anchorId, includeAttachments?, includeModel?, ttlDays?, draftId?}`. The
-  preview answers with a `draftId`; `share:create` publishes that draft. A
-  client that sends none gets the newest preview of the same options.
+  preview answers with a `draftId`; `share:create` publishes that draft and
+  refuses a call without one (an older client is told to update).
 
 ## Desktop UI
 

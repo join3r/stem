@@ -356,8 +356,8 @@ describe('ShareService', () => {
     await expect(svc.create(src, { draftId: shown.draftId })).rejects.toThrow(/preview is out of date/);
     const other = await svc.preview(src);
     await expect(svc.create({ kind: 'chat', threadId: 'other' }, { draftId: other.draftId })).rejects.toThrow(/out of date/);
-    await expect(svc.create(src)).resolves.toBeTruthy(); // an older client: the newest preview of the same options
-    await expect(svc.create(src, { scope: 'answer', anchorId: 't1' })).rejects.toThrow(/out of date/);
+    // An older client names no preview: refused, never guessed.
+    await expect(svc.create(src)).rejects.toThrow(/Update Stem/);
   });
 
   it('refuses a preview that has gone stale', async () => {
