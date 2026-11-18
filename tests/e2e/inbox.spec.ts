@@ -113,6 +113,26 @@ test('the reply box\'s To row adds a persona to an open conversation', async ({ 
   await expect(mainWindow.locator('.mail-reply .mail-to-token.lead')).toContainText('Normal');
 });
 
+test('clicking the reply\'s To row by mouse opens the persona list instead of collapsing the reply', async ({
+  mainWindow
+}) => {
+  await compose(mainWindow, 'Add by mouse', 'start alone');
+  const reply = mainWindow.locator('.mail-reply');
+  await mainWindow.getByPlaceholder(/Reply to/).click();
+  await expect(reply).toHaveClass(/expanded/);
+  // The names in the To row are plain text, not inputs: clicking one used to
+  // blur the empty reply, fold it away and swallow the click.
+  await reply.locator('.mail-to-token.lead').click();
+  await expect(reply).toHaveClass(/expanded/);
+  await expect(reply.getByRole('combobox', { name: 'Add a persona' })).toBeFocused();
+  await reply.getByRole('option', { name: /Critic/ }).click();
+  await expect(reply.locator('.mail-to-token', { hasText: 'Critic' })).toBeVisible();
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Critic');
+  // Clicking the "To" label keeps it open too.
+  await reply.locator('.mail-reply-to > span').first().click();
+  await expect(reply).toHaveClass(/expanded/);
+});
+
 test('chats never appear in the Inbox, and mail never appears under Chats', async ({ mainWindow }) => {
   await sendChat(mainWindow, 'plain chat');
   await compose(mainWindow, 'Mail thing', 'do it');

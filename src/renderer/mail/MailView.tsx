@@ -1077,6 +1077,10 @@ function ReplyBox({
     <div
       ref={boxRef}
       className={`mail-reply${expanded ? ' expanded' : ''}`}
+      // Focusable, so a click on the box's plain text (the To row's names, its
+      // label, the padding) moves focus to the box instead of nowhere — which
+      // read as leaving it and folded an empty reply away under the click.
+      tabIndex={-1}
       onDragOver={(e) => e.preventDefault()}
       onDrop={files.onDrop}
       onFocus={() => setFocused(true)}

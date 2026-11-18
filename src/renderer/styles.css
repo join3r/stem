@@ -4161,12 +4161,13 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 /* The reply box sits on top, above the mail it answers: one line until used. */
 .mail-reply { display: flex; flex-direction: column; gap: var(--sp-3); border: 0.5px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: var(--radius-md); padding: var(--sp-3) var(--sp-5); background: transparent; }
 .mail-reply.expanded { border-color: var(--accent); background: var(--content); padding: var(--sp-4) var(--sp-5); }
+.mail-reply:focus { outline: none; }
 .mail-reply textarea { resize: none; border: none; padding: var(--sp-2) 0; font: inherit; background: transparent; color: inherit; outline: none; }
 .mail-reply-to { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); font-size: var(--fs-12); color: var(--muted); }
 .mail-reply-recipient { padding: 1px var(--sp-4); border: 0.5px solid var(--accent); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--ink); }
 .mail-reply-to-field .mail-to-box, .mail-reply-to-field .mail-to-box:focus-within { border: none; padding: 0; }
 .mail-reply-to-field .mail-to-token { color: var(--ink); }
-.mail-reply-to-field .mail-to-token:not(.lead) { padding-right: var(--sp-5); }
+.mail-reply-to-field .mail-to-token { padding-right: var(--sp-5); }
 .mail-to-token.adding { opacity: 0.55; border-style: dashed; padding-right: var(--sp-5); }
 .mail-reply-to-note { flex-basis: 100%; }
 .mail-reply-note { margin: 0; display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--ink) 5%, transparent); font-size: var(--fs-12); color: var(--muted); }
