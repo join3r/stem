@@ -5571,6 +5571,8 @@ export interface StemApi {
   ): Promise<MailListResult>;
   /** Pull another persona into an existing conversation's participant set. */
   addMailParticipant(conversationId: string, personaId: string): Promise<MailListResult>;
+  /** Replace the conversation's personas; the first leads. */
+  setMailParticipants(conversationId: string, personaIds: string[]): Promise<MailListResult>;
   /** Stop a conversation's in-flight deliveries (queued dropped, turns interrupted). */
   stopMail(conversationId: string): Promise<{ stopped: boolean }>;
   /** Allow or deny a parked run's command (an approval item in a conversation). */

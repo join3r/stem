@@ -18,6 +18,7 @@ import {
   readMailConversation,
   readMailSummary,
   setConversationSession,
+  setParticipants,
   setConversationStatus,
   setConversationSubject,
   setMailArchived,
@@ -180,6 +181,18 @@ describe('conversations and items', () => {
     await addParticipant(c.id, 'verifier');
     await addParticipant(c.id, 'verifier');
     expect((await readMail()).conversations[0].participants).toEqual(['secretary', 'verifier']);
+  });
+
+  it('setParticipants reorders, removes and dedupes, keeps sessions, and never empties the set', async () => {
+    const c = await createConversation('edit', ['normal', 'critic', 'verifier']);
+    await setConversationSession(c.id, 'critic', 'thread-critic');
+    await setParticipants(c.id, ['verifier', 'normal', 'verifier']);
+    const after = (await readMail()).conversations[0];
+    expect(after.participants).toEqual(['verifier', 'normal']);
+    // Critic left but keeps its thread, so adding it back resumes it.
+    expect(after.sessions.critic).toBe('thread-critic');
+    await expect(setParticipants(c.id, [])).rejects.toThrow(/at least one/);
+    expect((await readMail()).conversations[0].participants).toEqual(['verifier', 'normal']);
   });
 
   it('display attachments survive the reload coerce; junk entries are dropped', async () => {

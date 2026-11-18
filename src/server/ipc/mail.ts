@@ -57,6 +57,9 @@ export function registerMailIpc(deps: { router(): MailRouter | null; runtime(): 
   registerServer('mail:addParticipant', (_e, conversationId: string, personaId: string) =>
     router().addParticipant(conversationId, personaId)
   );
+  registerServer('mail:setParticipants', (_e, conversationId: string, personaIds: string[]) =>
+    router().setParticipants(conversationId, personaIds)
+  );
   registerServer('mail:stop', (_e, conversationId: string) => router().stopConversation(conversationId));
   // The optional body is a send draft the user edited before sending it.
   registerServer('mail:resolveApproval', (_e, itemId: string, decision: 'allow' | 'deny', body?: string | null) =>

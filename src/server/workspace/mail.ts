@@ -705,6 +705,20 @@ export function addParticipant(conversationId: string, personaId: string): Promi
 }
 
 /**
+ * Replace a conversation's participant set (the reply box's To: field): the
+ * first id drives. Sessions and send counts stay, so a persona dropped and
+ * added back resumes its own thread. Duplicates collapse; an empty set is
+ * refused (a conversation always has someone to answer the user).
+ */
+export function setParticipants(conversationId: string, personaIds: readonly string[]): Promise<MailListResult> {
+  const next = [...new Set(personaIds)];
+  if (!next.length) return Promise.reject(new Error('A conversation needs at least one persona.'));
+  return update((store) => {
+    conversationOf(store, conversationId).participants = next;
+  });
+}
+
+/**
  * Hand a removed persona's seats to its successor (old -> new): each
  * conversation it was in gets the successor in its place, at the same position
  * so a driver stays the driver, and its session and send count are dropped so

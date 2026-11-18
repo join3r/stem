@@ -60,7 +60,7 @@ import { formatSystemVersion, sameSystem } from '../../shared/sys-version';
 import { forwardAttachments, forwardCompose, forwardQuote, forwardSubject } from '../../shared/mail-forward';
 import { mailPreviewText } from '../../shared/mail-subject';
 import { exchangeLabel, layoutThread, type ThreadEntry } from './thread';
-import { MailToField, PersonaPicker } from './MailToField';
+import { MailToField } from './MailToField';
 import { personaName, type PendingSend } from './useMail';
 import {
   EMPTY_COMPOSE,
@@ -329,8 +329,11 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   pending: PendingSend[];
   onRetrySend: (id: string) => void;
   onDropSend: (id: string) => void;
-  /** Resolves once the persona is in; rejection shows its message inline. */
-  onAddParticipant: (personaId: string) => Promise<void>;
+  /**
+   * Replace the conversation's personas (the reply's To: field); the first
+   * leads. Resolves once the server has them; rejection shows inline.
+   */
+  onSetParticipants: (to: string[]) => Promise<void>;
   /** Stop the working personas: queued deliveries dropped, running turns interrupted. */
   onStop: () => void;
   /** Open the compose form forwarding one of this conversation's mails. */
@@ -352,7 +355,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
     pending,
     onRetrySend,
     onDropSend,
-    onAddParticipant,
+    onSetParticipants,
     onStop,
     onForward,
     onShare,
@@ -382,10 +385,26 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   );
   const work = useMailWork(conversation.id);
   const layout = useMemo(() => layoutThread(mails, work.groups), [mails, work.groups]);
-  const addable = useMemo(
-    () => personas.filter((p) => !conversation.participants.includes(p.id)),
-    [personas, conversation.participants]
-  );
+  // The To: field's edit while the server takes it in, so tokens, the header
+  // and the reply's addressee move at once. Cleared when the newest edit
+  // settles (the list then carries it) or fails (and shows why).
+  const [pendingTo, setPendingTo] = useState<string[] | null>(null);
+  const [toError, setToError] = useState<string | null>(null);
+  const toSeq = useRef(0);
+  const participants = pendingTo ?? conversation.participants;
+  const setTo = (next: string[]) => {
+    if (!next.length) return;
+    const seq = ++toSeq.current;
+    setToError(null);
+    setPendingTo(next);
+    onSetParticipants(next)
+      .catch((err) =>
+        setToError(err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(err))
+      )
+      .finally(() => {
+        if (seq === toSeq.current) setPendingTo(null);
+      });
+  };
   // Inter-Stem: the conversation is with another Stem's owner; replies go to
   // them, and personas only ever draft.
   const ext = conversation.external;
@@ -394,7 +413,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   const name = (id: string) =>
     id === 'user' ? 'You' : isExternalAddress(id) ? interStem.contact(id)?.name ?? id : personaName(personas, id);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const lead = ext ? ext.address : conversation.participants[0];
+  const lead = ext ? ext.address : participants[0];
   // A run parked on the user's Allow/Deny takes the next mail instead of the lead.
   const parkedBy = ext ? undefined : layout.entries.find((e) => e.item.approval?.status === 'pending')?.item.from;
   const recipient = parkedBy ?? lead;
@@ -808,7 +827,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
     []
   );
   const newestFromThem = [...mails].reverse().find((m) => m.from !== 'user')?.id;
-  const showOthers = ext ? [] : conversation.participants.filter((p) => p !== recipient);
+  const showOthers = ext ? [] : participants.filter((p) => p !== recipient);
 
   return (
     <MdxActionContext.Provider value={mdxActions}>
@@ -871,8 +890,8 @@ export const MailConversationView = forwardRef<MailViewHandle, {
             ) : (
               <span>
                 <strong>{name(lead)}</strong>
-                {conversation.participants.length > 1 && ' leads'}
-                {conversation.participants.slice(1).map((p) => ` · ${name(p)}`)}
+                {participants.length > 1 && ' leads'}
+                {participants.slice(1).map((p) => ` · ${name(p)}`)}
                 {conversation.outside && (
                   <span
                     className="muted"
@@ -945,7 +964,9 @@ export const MailConversationView = forwardRef<MailViewHandle, {
           recipient={name(recipient)}
           others={showOthers.map(name)}
           parked={!!parkedBy}
-          picker={ext ? undefined : { candidates: addable, onAdd: onAddParticipant }}
+          toField={
+            ext || conversation.owner ? undefined : { personas, to: participants, onChange: setTo, error: toError }
+          }
           working={working}
           onSend={send}
           focusRef={replyFocus}
@@ -1020,7 +1041,7 @@ function ReplyBox({
   onSend,
   focusRef,
   canAttach = true,
-  picker
+  toField
 }: {
   draft: string;
   setDraft: (text: string) => void;
@@ -1034,28 +1055,13 @@ function ReplyBox({
   focusRef?: React.MutableRefObject<() => void>;
   canAttach?: boolean;
   /**
-   * Type-to-add in the To row, like New mail's: a picked persona joins the
-   * conversation at once (its token shows while the server takes it in).
+   * New mail's To: field, editing this conversation's personas: add, remove,
+   * or crown another to lead (it gets this reply). Absent where personas
+   * can't change (another person's conversation, Stem's own).
    */
-  picker?: { candidates: Persona[]; onAdd: (personaId: string) => Promise<void> };
+  toField?: { personas: Persona[]; to: string[]; onChange: (to: string[]) => void; error: string | null };
 }) {
   const [focused, setFocused] = useState(false);
-  const pickerRef = useRef<HTMLInputElement>(null);
-  // Picked personas the server hasn't confirmed yet; they leave this list once
-  // the conversation's participants carry them (or the add fails).
-  const [adding, setAdding] = useState<Persona[]>([]);
-  const [addError, setAddError] = useState<string | null>(null);
-  const addPersona = (id: string) => {
-    const persona = picker?.candidates.find((p) => p.id === id);
-    if (!picker || !persona) return;
-    setAddError(null);
-    setAdding((cur) => [...cur, persona]);
-    picker
-      .onAdd(id)
-      .catch((err) => setAddError(err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(err)))
-      .finally(() => setAdding((cur) => cur.filter((p) => p.id !== id)));
-  };
-  const candidates = picker?.candidates.filter((p) => !adding.some((a) => a.id === p.id)) ?? [];
   const boxRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   if (focusRef) {
@@ -1092,45 +1098,29 @@ function ReplyBox({
       {expanded && (
         <div className="mail-reply-to">
           <span>To</span>
-          {picker && !parked ? (
-            <div className="mail-to-field mail-reply-to-field">
-              <div className="mail-to-box" onClick={() => pickerRef.current?.focus()}>
-                <span className="mail-to-token lead">{recipient}</span>
-                {others.map((o) => (
-                  <span key={o} className="mail-to-token">
-                    {o}
-                  </span>
-                ))}
-                {adding.map((p) => (
-                  <span key={p.id} className="mail-to-token adding" title="Adding…">
-                    {p.name}
-                  </span>
-                ))}
-                {candidates.length > 0 && (
-                  <PersonaPicker
-                    candidates={candidates}
-                    onPick={addPersona}
-                    placeholder="Add a persona"
-                    hint="↑↓ to pick · ↵ to add · it joins this conversation"
-                    inputRef={pickerRef}
-                  />
-                )}
-              </div>
-            </div>
+          {toField && !parked ? (
+            <MailToField
+              personas={toField.personas}
+              to={toField.to}
+              onChange={toField.onChange}
+              keepOne
+              addPlaceholder="Add a persona"
+              className="mail-reply-to-field"
+            />
           ) : (
             <span className="mail-reply-recipient">{recipient}</span>
           )}
           {parked ? (
             <span>instead of answering its Allow or Deny.</span>
           ) : (
-            others.length + adding.length > 0 && (
-              <span className="mail-reply-to-note">
-                {[...others, ...adding.map((p) => p.name)].join(', ')}{' '}
-                {others.length + adding.length === 1 ? 'hears' : 'hear'} this only if {recipient} asks.
+            !toField &&
+            others.length > 0 && (
+              <span>
+                {others.join(', ')} {others.length === 1 ? 'hears' : 'hear'} this only if {recipient} asks.
               </span>
             )
           )}
-          {addError && <span className="task-failed">{addError}</span>}
+          {toField?.error && <span className="task-failed">{toField.error}</span>}
         </div>
       )}
       {expanded && working && (

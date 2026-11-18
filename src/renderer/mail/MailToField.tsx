@@ -19,13 +19,14 @@ function roleHint(p: Persona): string {
  * Renders as siblings, so it sits inside a `.mail-to-box` next to the tokens and
  * the list anchors to the surrounding `.mail-to-field`.
  */
-export function PersonaPicker({
+function PersonaPicker({
   candidates,
   onPick,
   onBackspaceEmpty,
   placeholder,
   hint,
-  inputRef
+  inputRef,
+  openRef
 }: {
   /** Personas that can still be added. */
   candidates: Persona[];
@@ -35,9 +36,17 @@ export function PersonaPicker({
   placeholder?: string;
   hint: string;
   inputRef: React.RefObject<HTMLInputElement | null>;
+  /** Filled with "focus the input and show the list" (a click anywhere on the field). */
+  openRef: React.RefObject<() => void>;
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  // A click must show the list even when the input already has focus (right
+  // after a pick, say), so opening can't hang on the focus event alone.
+  openRef.current = () => {
+    inputRef.current?.focus();
+    setOpen(true);
+  };
   const [active, setActive] = useState(0);
   const listId = useId();
 
@@ -73,6 +82,7 @@ export function PersonaPicker({
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
+        onClick={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onKeyDown={(e) => {
           if (e.key === 'ArrowDown') {
@@ -123,27 +133,42 @@ export function PersonaPicker({
 export function MailToField({
   personas,
   to,
-  onChange
+  onChange,
+  keepOne = false,
+  addPlaceholder = '',
+  className
 }: {
   personas: Persona[];
   to: string[];
   onChange: (to: string[]) => void;
+  /** The last name can't be removed (an existing conversation always has someone). */
+  keepOne?: boolean;
+  /** The input's placeholder once names are in. */
+  addPlaceholder?: string;
+  className?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const openRef = useRef<() => void>(() => inputRef.current?.focus());
   const name = (id: string) => personas.find((p) => p.id === id)?.name ?? 'Deleted persona';
   const candidates = useMemo(() => personas.filter((p) => !to.includes(p.id)), [personas, to]);
 
-  const remove = (id: string) => onChange(to.filter((t) => t !== id));
+  const canRemove = !keepOne || to.length > 1;
+  const remove = (id: string) => {
+    if (canRemove) onChange(to.filter((t) => t !== id));
+  };
   const makeLead = (id: string) => onChange([id, ...to.filter((t) => t !== id)]);
 
   const lead = to[0];
   const others = to.slice(1).map(name);
 
   return (
-    <div className="mail-to-field">
-      <div className="mail-to-box" onClick={() => inputRef.current?.focus()}>
+    <div className={`mail-to-field${className ? ` ${className}` : ''}`}>
+      <div className="mail-to-box" onClick={() => openRef.current()}>
         {to.map((id, i) => (
-          <span key={id} className={`mail-to-token${i === 0 ? ' lead' : ''}`}>
+          <span
+            key={id}
+            className={`mail-to-token${i === 0 ? ' lead' : ''}${i === 0 && !canRemove ? ' bare' : ''}`}
+          >
             {name(id)}
             {i === 0 && to.length > 1 && <em className="mail-to-lead">leads</em>}
             {i > 0 && (
@@ -160,27 +185,30 @@ export function MailToField({
                 <Crown size={11} />
               </button>
             )}
-            <button
-              type="button"
-              className="mail-to-token-btn"
-              title={`Remove ${name(id)}`}
-              aria-label={`Remove ${name(id)}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                remove(id);
-              }}
-            >
-              <X size={11} />
-            </button>
+            {canRemove && (
+              <button
+                type="button"
+                className="mail-to-token-btn"
+                title={`Remove ${name(id)}`}
+                aria-label={`Remove ${name(id)}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  remove(id);
+                }}
+              >
+                <X size={11} />
+              </button>
+            )}
           </span>
         ))}
         <PersonaPicker
           candidates={candidates}
           onPick={(id) => onChange([...to, id])}
           onBackspaceEmpty={() => to.length && remove(to[to.length - 1])}
-          placeholder={to.length ? '' : 'Type a persona’s name'}
+          placeholder={to.length ? addPlaceholder : 'Type a persona’s name'}
           hint="↑↓ to pick · ↵ to add · the crown makes a name lead"
           inputRef={inputRef}
+          openRef={openRef}
         />
       </div>
       <p className="mail-to-hint">

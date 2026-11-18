@@ -79,6 +79,10 @@ test('the To: field builds a multi-persona conversation with the first name lead
   await expect(mainWindow.locator('.mail-to-token', { hasText: 'Verifier' })).toBeVisible();
   await expect(mainWindow.locator('.mail-to-token.lead')).toContainText('Normal');
   await expect(mainWindow.locator('.mail-to-token.lead .mail-to-lead')).toBeVisible();
+  // A click on the still-focused input after a pick shows the list again.
+  await to.click();
+  await expect(mainWindow.getByRole('listbox', { name: 'Personas' })).toBeVisible();
+  await to.press('Escape');
   await mainWindow.getByPlaceholder(/Stem names it/).fill('Team errand');
   await mainWindow.getByPlaceholder(/Write the task/).fill('check it twice');
   await mainWindow.getByRole('button', { name: 'Send to Normal' }).click();
@@ -101,36 +105,148 @@ test('replying resumes the same conversation and the exchange stays threaded', a
   await expect(mainWindow.locator('.mail-row')).toHaveCount(1);
 });
 
-test('the reply box\'s To row adds a persona to an open conversation', async ({ mainWindow }) => {
+// The reply box's To row is New mail's To: field editing the open
+// conversation's personas. Driven by mouse as well as keys: a To row that
+// worked only through fill()/press() once collapsed under every real click.
+
+/** Click into the reply box (as a user does) and return it, unfolded. */
+async function openReply(win: Page) {
+  await win.getByPlaceholder(/Reply to/).click();
+  const box = win.locator('.mail-reply');
+  await expect(box).toHaveClass(/expanded/);
+  return box;
+}
+
+/** Add a persona to the open conversation by clicking it in the reply's To list. */
+async function clickToAdd(win: Page, persona: string) {
+  const box = win.locator('.mail-reply');
+  await box.getByRole('combobox', { name: 'Add a persona' }).click();
+  await box.getByRole('option', { name: new RegExp(persona) }).click();
+  await expect(box.locator('.mail-to-token', { hasText: persona })).toBeVisible();
+}
+
+/**
+ * Each To pill's name, with the room left of it and the room right of it up
+ * to the pill's edge (past its buttons, if it has any).
+ */
+async function pillInsets(win: Page) {
+  return win.locator('.mail-reply .mail-to-token').evaluateAll((pills) =>
+    pills.map((pill) => {
+      const box = pill.getBoundingClientRect();
+      const text = [...pill.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
+      const range = document.createRange();
+      range.selectNodeContents(text!);
+      const name = range.getBoundingClientRect();
+      return {
+        name: text!.textContent!.trim(),
+        left: name.left - box.left,
+        right: box.right - name.right,
+        clipped: pill.scrollWidth > pill.clientWidth + 1
+      };
+    })
+  );
+}
+
+test('the reply box\'s To row adds a persona from the keyboard', async ({ mainWindow }) => {
   await compose(mainWindow, 'Add later', 'start alone');
-  await mainWindow.getByPlaceholder(/Reply to/).click();
-  const to = mainWindow.locator('.mail-reply').getByRole('combobox', { name: 'Add a persona' });
+  const box = await openReply(mainWindow);
+  const to = box.getByRole('combobox', { name: 'Add a persona' });
   await to.fill('Crit');
   await to.press('Enter');
   // It joins at once: a token in the To row, a name in the header.
-  await expect(mainWindow.locator('.mail-reply .mail-to-token', { hasText: 'Critic' })).toBeVisible();
+  await expect(box.locator('.mail-to-token', { hasText: 'Critic' })).toBeVisible();
   await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Critic');
-  await expect(mainWindow.locator('.mail-reply .mail-to-token.lead')).toContainText('Normal');
+  await expect(box.locator('.mail-to-token.lead')).toContainText('Normal');
 });
 
-test('clicking the reply\'s To row by mouse opens the persona list instead of collapsing the reply', async ({
+test('the reply box\'s To row works by mouse: clicking names opens the list and a click adds', async ({
   mainWindow
 }) => {
   await compose(mainWindow, 'Add by mouse', 'start alone');
-  const reply = mainWindow.locator('.mail-reply');
-  await mainWindow.getByPlaceholder(/Reply to/).click();
-  await expect(reply).toHaveClass(/expanded/);
-  // The names in the To row are plain text, not inputs: clicking one used to
-  // blur the empty reply, fold it away and swallow the click.
-  await reply.locator('.mail-to-token.lead').click();
-  await expect(reply).toHaveClass(/expanded/);
-  await expect(reply.getByRole('combobox', { name: 'Add a persona' })).toBeFocused();
-  await reply.getByRole('option', { name: /Critic/ }).click();
-  await expect(reply.locator('.mail-to-token', { hasText: 'Critic' })).toBeVisible();
+  const box = await openReply(mainWindow);
+  // Clicking the names (plain text) used to blur the empty reply and fold it
+  // away under the click.
+  await box.locator('.mail-to-token.lead').click();
+  await expect(box).toHaveClass(/expanded/);
+  await expect(box.getByRole('combobox', { name: 'Add a persona' })).toBeFocused();
+  await expect(box.getByRole('listbox', { name: 'Personas' })).toBeVisible();
+  await box.getByRole('option', { name: /Critic/ }).click();
+  await expect(box.locator('.mail-to-token', { hasText: 'Critic' })).toBeVisible();
   await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Critic');
-  // Clicking the "To" label keeps it open too.
-  await reply.locator('.mail-reply-to > span').first().click();
-  await expect(reply).toHaveClass(/expanded/);
+  // Every part of the row keeps the reply open: the label, the line under it.
+  await box.locator('.mail-reply-to > span').first().click();
+  await expect(box).toHaveClass(/expanded/);
+  await box.locator('.mail-to-hint').click();
+  await expect(box).toHaveClass(/expanded/);
+  // And the list still adds after all that clicking around.
+  await clickToAdd(mainWindow, 'Verifier');
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Critic · Verifier');
+});
+
+test('the crown in the reply\'s To row makes another persona lead, and the reply goes to it', async ({
+  mainWindow
+}) => {
+  await compose(mainWindow, 'Hand over', 'start with Normal');
+  const box = await openReply(mainWindow);
+  await clickToAdd(mainWindow, 'Critic');
+  await box.getByRole('button', { name: 'Make Critic lead' }).click();
+  await expect(box).toHaveClass(/expanded/);
+  await expect(box.locator('.mail-to-token.lead')).toContainText('Critic');
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Critic leads · Normal');
+  await expect(mainWindow.getByPlaceholder('Reply to Critic')).toBeVisible();
+
+  await mainWindow.getByPlaceholder('Reply to Critic').fill('your turn');
+  await mainWindow.getByRole('button', { name: 'Send' }).click();
+  await expect(mailRow(mainWindow, 'Hand over')).toBeVisible({ timeout: 15_000 });
+  await mailRow(mainWindow, 'Hand over').click();
+  const answer = mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: your turn' });
+  await expect(answer).toBeVisible({ timeout: 15_000 });
+  await expect(answer).toContainText('Critic');
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Critic leads · Normal');
+});
+
+test('the reply\'s To row removes personas but always keeps one, and the change survives a reload', async ({
+  mainWindow
+}) => {
+  await compose(mainWindow, 'Trim down', 'start alone');
+  const box = await openReply(mainWindow);
+  // One persona: nothing to remove.
+  await expect(box.getByRole('button', { name: /^Remove / })).toHaveCount(0);
+  await clickToAdd(mainWindow, 'Critic');
+  await clickToAdd(mainWindow, 'Verifier');
+  await box.getByRole('button', { name: 'Remove Critic' }).click();
+  await expect(box).toHaveClass(/expanded/);
+  await expect(box.locator('.mail-to-token', { hasText: 'Critic' })).toHaveCount(0);
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Verifier');
+  // Removing the lead hands the lead to the next name.
+  await box.getByRole('button', { name: 'Remove Normal' }).click();
+  await expect(box.locator('.mail-to-token.lead')).toContainText('Verifier');
+  await expect(box.getByRole('button', { name: /^Remove / })).toHaveCount(0);
+
+  await mainWindow.reload();
+  await mainWindow.waitForLoadState('domcontentloaded');
+  await tab(mainWindow, 'Inbox').click();
+  await mailRow(mainWindow, 'Trim down').click();
+  await expect(mainWindow.locator('.mail-head-to')).toHaveText(/^Verifier$/);
+});
+
+test('the reply\'s To pills give their names room on both sides', async ({ mainWindow }) => {
+  await compose(mainWindow, 'Pill room', 'start alone');
+  await openReply(mainWindow);
+  const check = async () => {
+    const pills = await pillInsets(mainWindow);
+    expect(pills.length).toBeGreaterThan(0);
+    for (const pill of pills) {
+      expect(pill.clipped, `${pill.name} is cut off`).toBe(false);
+      expect(pill.left, `${pill.name} touches its left edge`).toBeGreaterThanOrEqual(6);
+      // At least the left's room on the right (its buttons add more).
+      expect(pill.right, `${pill.name} sits against its right edge`).toBeGreaterThanOrEqual(pill.left - 1);
+    }
+  };
+  // The lone lead pill has no buttons: this is where the name hit the edge.
+  await check();
+  await clickToAdd(mainWindow, 'Critic');
+  await check();
 });
 
 test('chats never appear in the Inbox, and mail never appears under Chats', async ({ mainWindow }) => {

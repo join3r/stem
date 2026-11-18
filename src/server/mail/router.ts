@@ -36,6 +36,7 @@ import { cleanMailSubject } from '../../shared/mail-subject';
 import {
   addAgent,
   addParticipant,
+  setParticipants,
   appendMailItem,
   settleMailApproval,
   settleSendDraft,
@@ -991,6 +992,33 @@ export class MailRouter {
     const persona = await getPersona(personaId);
     if (!persona) throw new Error(`No persona "${personaId}" exists.`);
     const result = await addParticipant(conversationId, persona.id);
+    this.opts.onChange();
+    return result;
+  }
+
+  /**
+   * The user editing a conversation's To: set from the reply box: personas
+   * added, removed, or a new one put first to lead (it gets the user's next
+   * reply and answers it). A persona already in the conversation may stay
+   * even if it was deleted since; a new one must exist.
+   */
+  async setParticipants(conversationId: string, personaIds: string[]): Promise<MailListResult> {
+    const { conversations } = await readMail();
+    const conversation = conversations.find((c) => c.id === conversationId);
+    if (!conversation) throw new Error('That mail conversation no longer exists.');
+    if (conversation.owner) throw new Error('Personas cannot join this conversation: Stem answers it itself.');
+    if (conversation.external) throw new Error('This conversation is with another person; its personas only draft.');
+    const next: string[] = [];
+    for (const id of personaIds) {
+      if (conversation.participants.includes(id)) {
+        next.push(id);
+        continue;
+      }
+      const persona = await getPersona(id);
+      if (!persona) throw new Error(`No persona "${id}" exists.`);
+      next.push(persona.id);
+    }
+    const result = await setParticipants(conversationId, next);
     this.opts.onChange();
     return result;
   }

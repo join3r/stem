@@ -693,6 +693,37 @@ describe('mail router', () => {
     expect(fake.starts.map((s) => s.persona?.id)).toEqual(['verifier', 'verifier']);
   });
 
+  it('the reply box can crown another persona to lead, and drop one', async () => {
+    const fake = fakeBackend();
+    const changed = vi.fn();
+    const router = makeRouter(fake, changed);
+    const { conversations } = await router.compose({ to: ['verifier', 'secretary'], subject: 's', body: 'q' });
+    const id = conversations[0].id;
+    await settledMail();
+
+    await expect(router.setParticipants(id, ['verifier', 'ghost'])).rejects.toThrow(/ghost/);
+    await expect(router.setParticipants(id, [])).rejects.toThrow(/at least one/);
+    expect((await readMail()).conversations[0].participants).toEqual(['verifier', 'secretary']);
+
+    changed.mockClear();
+    await router.setParticipants(id, ['secretary', 'verifier']);
+    expect(changed).toHaveBeenCalled();
+    expect((await readMail()).conversations[0].participants).toEqual(['secretary', 'verifier']);
+
+    // The crowned persona now gets the user's reply.
+    fake.script = { mode: 'ok', reply: 'on it' };
+    await router.reply(id, 'you take this');
+    await vi.waitFor(async () => {
+      const m = await readMail();
+      expect(m.items.some((i) => i.body === 'on it')).toBe(true);
+      expect(m.conversations[0].status).not.toBe('working');
+    });
+    expect(fake.starts.at(-1)?.persona?.id).toBe('secretary');
+
+    await router.setParticipants(id, ['secretary']);
+    expect((await readMail()).conversations[0].participants).toEqual(['secretary']);
+  });
+
   it('a mid-chain mail to the user does not change how the conversation ends', async () => {
     const fake = fakeBackend();
     const router = makeRouter(fake);

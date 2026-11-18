@@ -2162,8 +2162,8 @@ export default function App() {
                   pending={mailApi.pending.filter((p) => p.conversationId === conversation.id)}
                   onRetrySend={mailApi.retrySend}
                   onDropSend={mailApi.dropSend}
-                  onAddParticipant={(personaId) =>
-                    mailApi.addParticipant(conversation.id, personaId)
+                  onSetParticipants={(to) =>
+                    mailApi.setParticipants(conversation.id, conversation.participants, to)
                   }
                   onStop={() => void mailApi.stop(conversation.id)}
                   onShare={(itemId) =>

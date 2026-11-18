@@ -52,7 +52,12 @@ export interface MailApi {
   pending: PendingSend[];
   retrySend: (id: string) => void;
   dropSend: (id: string) => void;
-  addParticipant: (conversationId: string, personaId: string) => Promise<void>;
+  /**
+   * Change a conversation's personas from `from` to `to` (the first leads).
+   * Pure additions go one by one through mail:addParticipant, which every
+   * server has; removing or reordering needs mail:setParticipants.
+   */
+  setParticipants: (conversationId: string, from: string[], to: string[]) => Promise<void>;
   /** Stop the conversation's in-flight work; resolves once the interrupts are sent. */
   stop: (conversationId: string) => Promise<void>;
   archive: (ids: string[], archived: boolean) => void;
@@ -222,9 +227,16 @@ export function useMail(ready: boolean): MailApi {
   const dropSend = useCallback((id: string) => {
     setPending((prev) => prev.filter((p) => p.id !== id));
   }, []);
-  const addParticipant = useCallback(
-    async (conversationId: string, personaId: string) => {
-      applyServer(await window.stem.addMailParticipant(conversationId, personaId));
+  const setParticipants = useCallback(
+    async (conversationId: string, from: string[], to: string[]) => {
+      const onlyAdds = from.length <= to.length && from.every((id, i) => to[i] === id);
+      if (!onlyAdds) {
+        applyServer(await window.stem.setMailParticipants(conversationId, to));
+        return;
+      }
+      for (const id of to.slice(from.length)) {
+        applyServer(await window.stem.addMailParticipant(conversationId, id));
+      }
     },
     [applyServer]
   );
@@ -263,7 +275,7 @@ export function useMail(ready: boolean): MailApi {
     pending,
     retrySend,
     dropSend,
-    addParticipant,
+    setParticipants,
     stop,
     archive,
     snooze,

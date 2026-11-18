@@ -552,6 +552,8 @@ const api: StemApi = {
       : ipcRenderer.invoke('mail:reply', conversationId, body),
   addMailParticipant: (conversationId: string, personaId: string) =>
     ipcRenderer.invoke('mail:addParticipant', conversationId, personaId),
+  setMailParticipants: (conversationId: string, personaIds: string[]) =>
+    ipcRenderer.invoke('mail:setParticipants', conversationId, personaIds),
   stopMail: (conversationId: string) => ipcRenderer.invoke('mail:stop', conversationId),
   // The edited draft body rides only for a send draft (older servers reject a 3rd arg).
   resolveMailApproval: (itemId: string, decision: 'allow' | 'deny', body?: string) =>

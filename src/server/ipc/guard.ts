@@ -232,6 +232,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'mail:work': [a.string],
   'mail:reply': [a.string, a.string, a.optional(a.nullish(a.objectArray))],
   'mail:addParticipant': [a.string, a.string],
+  'mail:setParticipants': [a.string, a.stringArray],
   'mail:stop': [a.string],
   'mail:resolveApproval': [a.string, a.oneOf(['allow', 'deny']), a.optional(a.nullish(a.string))],
   // Inter-Stem mail (ipc/interstem.ts).
