@@ -44,6 +44,7 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   'image:copy': [a.string],
   'cfolders:reveal': [a.string],
   'client:pair': [a.string, a.string],
+  'chats:cached': [a.string],
   'stem:exportState': [a.object],
   'settings:updateReleaseNotes': [a.object],
   'settings:updateUpdates': [a.object],

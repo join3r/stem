@@ -119,6 +119,8 @@ export interface LocalIpcDeps {
   claudeExport: ClaudeExportHost;
   /** The theme changed: push the new state to all three windows at once. */
   themeChanged(state: ThemeState): void;
+  /** The offline cache's copy of a transcript (see ServerProxy.cachedThread). */
+  cachedThread(threadId: string): unknown;
 }
 
 export function registerLocalIpc(deps: LocalIpcDeps): void {
@@ -145,6 +147,12 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
   // Deliberately client-owned, and obviously so: a server cannot be asked
   // whether it can be reached.
   handleLocal('client:connection', () => ({ reachable: deps.reachable() }));
+
+  // The offline cache's copy of one transcript, read off this disk. The sidebar
+  // shows it the moment a chat is clicked while the server's own answer is on
+  // its way — on a slow link, or one busy streaming two running chats, that
+  // round trip is seconds the person used to stare at the previous chat for.
+  handleLocal('chats:cached', (_e, threadId: string) => deps.cachedThread(threadId) ?? null);
 
   // Settings → Server. Pairing is the whole act: the address and the credential
   // are written together, because a token means nothing to a server that never

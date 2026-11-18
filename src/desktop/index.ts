@@ -755,7 +755,8 @@ app.whenReady().then(async () => {
     recorder,
     mirrorHost,
     claudeExport: claudeExport!,
-    themeChanged
+    themeChanged,
+    cachedThread: (threadId) => proxy?.cachedThread(threadId)
   });
   // A theme file saved, added or removed in the themes folder is the same event
   // as picking one: every window repaints and the picker re-lists.

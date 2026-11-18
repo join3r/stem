@@ -378,6 +378,13 @@ export interface ServerProxy {
   start(): Promise<string[]>;
   /** Call a server channel: wrapped client behavior, then POST /rpc. */
   invoke(channel: string, args: unknown[]): Promise<unknown>;
+  /**
+   * The offline cache's copy of one transcript, flagged `offline`, without a
+   * call on the wire — what lets the sidebar open a chat at once on a slow
+   * link (the renderer still asks the server and merges its answer over it).
+   * Undefined on an embedded install, which keeps no cache.
+   */
+  cachedThread(threadId: string): unknown;
   /** Drop the stream and stop reconnecting (quit; tests). */
   close(): void;
 }
@@ -1337,6 +1344,9 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       return list;
     },
     invoke,
+    // replay() and not peek(): the copy goes out flagged `offline`, which is
+    // what keeps the renderer from treating it as a complete, current read.
+    cachedThread: (threadId) => cache.replay('chats:open', [threadId]),
     close() {
       closed = true;
       clearRetry();

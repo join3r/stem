@@ -5824,6 +5824,12 @@ export interface StemApi {
   openChat(threadId: string): Promise<ChatHistory>;
   /** Refresh a transcript without opening/prewarming its backend session. */
   readChatHistory(threadId: string): Promise<ChatHistory>;
+  /**
+   * This machine's cached copy of a transcript (remote installs only), flagged
+   * `offline`, or null. Answered locally without touching the network, so a
+   * chat opens at once and the server's answer replaces it when it lands.
+   */
+  cachedChat?(threadId: string): Promise<ChatHistory | null>;
   /** One image a thread holds (see GeneratedImageRef), as a data URL; null when gone. */
   getChatImage(threadId: string, imageId: string): Promise<{ dataUrl: string; mime: string } | null>;
   /** One sound a thread holds (see ChatAudioRef), as a data URL; null when gone. */

@@ -471,6 +471,7 @@ const api: StemApi = {
   searchChats: (query: string) => ipcRenderer.invoke('chats:search', query),
   openChat: (threadId: string) => ipcRenderer.invoke('chats:open', threadId),
   readChatHistory: (threadId: string) => ipcRenderer.invoke('chats:history', threadId),
+  cachedChat: (threadId: string) => ipcRenderer.invoke('chats:cached', threadId),
   getChatImage: (threadId: string, imageId: string) => ipcRenderer.invoke('chats:image', threadId, imageId),
   getChatAudio: (threadId: string, audioId: string) => ipcRenderer.invoke('chats:audio', threadId, audioId),
   saveAudioToDownloads: (dataUrl: string, name: string) => ipcRenderer.invoke('audio:saveToDownloads', dataUrl, name),

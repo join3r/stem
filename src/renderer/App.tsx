@@ -1350,15 +1350,40 @@ export default function App() {
         void refreshThreadHistory(threadId);
         return;
       }
+      // Not loaded in this window yet. A remote install keeps this Mac's own copy
+      // of recent transcripts on disk: paint that now, and let the server's
+      // answer replace it when it lands. On a slow link — or one busy streaming
+      // two running chats — that round trip used to leave the previous chat on
+      // screen for seconds. The copy stays un-hydrated (it is not a complete,
+      // current read), so a failed fetch leaves the next open asking again.
+      let atRequest = existing;
+      let shown = false;
+      const cached = await window.stem.cachedChat?.(threadId).catch(() => null);
+      if (cached && openGateRef.current.isCurrent(request) && !deletedThreadsRef.current.has(threadId)) {
+        core.store.update((prev) => ({
+          ...prev,
+          [threadId]: { ...mergeRefreshedThread(cached, prev[threadId], existing), hydrated: false }
+        }));
+        atRequest = core.store.getThread(threadId);
+        shown = true;
+        setActiveThreadId(threadId);
+        if (userNavigation) noteChatOpened(threadId);
+      }
       const history = await window.stem.openChat(threadId);
-      if (!openGateRef.current.isCurrent(request) || deletedThreadsRef.current.has(threadId)) return;
+      if (deletedThreadsRef.current.has(threadId)) return;
+      // A chat already painted from the cache takes the server's answer even if
+      // the user has clicked on since — otherwise the stale copy would be what
+      // they come back to.
+      const current = openGateRef.current.isCurrent(request);
+      if (!current && !shown) return;
       core.store.update((prev) => ({
         ...prev,
         // An entire turn can start and settle while the disk read is pending, so
         // `running` alone cannot identify a raced live slice. Compare against the
         // state captured when the request began and merge any newer events.
-        [history.threadId]: mergeRefreshedThread(history, prev[history.threadId], existing)
+        [history.threadId]: mergeRefreshedThread(history, prev[history.threadId], atRequest)
       }));
+      if (!current || shown) return;
       setActiveThreadId(history.threadId);
       if (userNavigation) noteChatOpened(history.threadId);
     },
