@@ -18,7 +18,6 @@ import {
   Forward,
   Lock,
   Paperclip,
-  Plus,
   RotateCcw,
   Send,
   Share2,
@@ -61,7 +60,7 @@ import { formatSystemVersion, sameSystem } from '../../shared/sys-version';
 import { forwardAttachments, forwardCompose, forwardQuote, forwardSubject } from '../../shared/mail-forward';
 import { mailPreviewText } from '../../shared/mail-subject';
 import { exchangeLabel, layoutThread, type ThreadEntry } from './thread';
-import { MailToField } from './MailToField';
+import { MailToField, PersonaPicker } from './MailToField';
 import { personaName, type PendingSend } from './useMail';
 import {
   EMPTY_COMPOSE,
@@ -371,8 +370,6 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   useImperativeHandle(ref, () => ({
     addAttachments: (dropped) => void files.addFiles(dropped)
   }));
-  const [addingTo, setAddingTo] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
   // Mails the user opened or folded, flipping their default (see layoutThread).
   const [flipped, setFlipped] = useState<Set<string>>(new Set());
   // Mails whose folded-in persona exchange is shown.
@@ -914,17 +911,6 @@ export const MailConversationView = forwardRef<MailViewHandle, {
             <Sparkles size={12} /> Auto-draft
           </button>
         )}
-        {!ext && addable.length > 0 && (
-          <button
-            className="icon-action mail-add-toggle"
-            onClick={() => setAddingTo((v) => !v)}
-            title="Add a persona to this conversation"
-            aria-label="Add a persona to this conversation"
-            aria-expanded={addingTo}
-          >
-            <Plus size={14} />
-          </button>
-        )}
       </header>
       {ext && counterpart?.state === 'request' && (
         <div className="mail-ext-banner" role="note">
@@ -950,28 +936,6 @@ export const MailConversationView = forwardRef<MailViewHandle, {
       )}
       {ext && <CollabCard collab={conversation.collab} turn={turnOf(mails, ext.address)} who={name(ext.address)} />}
       {actionError && <p className="task-failed">{actionError}</p>}
-      {!ext && addingTo && addable.length > 0 && (
-        <div className="mail-add-row">
-          <div className="mail-to-chips mail-add-chips" role="group" aria-label="Personas to add">
-            {addable.map((p) => (
-              <button
-                key={p.id}
-                className="mail-to-chip"
-                onClick={() => {
-                  setAddError(null);
-                  onAddParticipant(p.id)
-                    .then(() => setAddingTo(false))
-                    .catch((err) => setAddError(err instanceof Error ? err.message : String(err)));
-                }}
-                title={`Add ${p.name} — the personas here can then mail it, and your replies reach it too`}
-              >
-                {p.name}
-              </button>
-            ))}
-          </div>
-          {addError && <p className="task-failed">{addError}</p>}
-        </div>
-      )}
       <div className="mail-items" ref={scrollRef}>
         <ReplyBox
           key={conversation.id}
@@ -981,6 +945,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
           recipient={name(recipient)}
           others={showOthers.map(name)}
           parked={!!parkedBy}
+          picker={ext ? undefined : { candidates: addable, onAdd: onAddParticipant }}
           working={working}
           onSend={send}
           focusRef={replyFocus}
@@ -1054,7 +1019,8 @@ function ReplyBox({
   working,
   onSend,
   focusRef,
-  canAttach = true
+  canAttach = true,
+  picker
 }: {
   draft: string;
   setDraft: (text: string) => void;
@@ -1067,8 +1033,29 @@ function ReplyBox({
   /** Filled with a function that puts the caret at the end of the reply. */
   focusRef?: React.MutableRefObject<() => void>;
   canAttach?: boolean;
+  /**
+   * Type-to-add in the To row, like New mail's: a picked persona joins the
+   * conversation at once (its token shows while the server takes it in).
+   */
+  picker?: { candidates: Persona[]; onAdd: (personaId: string) => Promise<void> };
 }) {
   const [focused, setFocused] = useState(false);
+  const pickerRef = useRef<HTMLInputElement>(null);
+  // Picked personas the server hasn't confirmed yet; they leave this list once
+  // the conversation's participants carry them (or the add fails).
+  const [adding, setAdding] = useState<Persona[]>([]);
+  const [addError, setAddError] = useState<string | null>(null);
+  const addPersona = (id: string) => {
+    const persona = picker?.candidates.find((p) => p.id === id);
+    if (!picker || !persona) return;
+    setAddError(null);
+    setAdding((cur) => [...cur, persona]);
+    picker
+      .onAdd(id)
+      .catch((err) => setAddError(err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(err)))
+      .finally(() => setAdding((cur) => cur.filter((p) => p.id !== id)));
+  };
+  const candidates = picker?.candidates.filter((p) => !adding.some((a) => a.id === p.id)) ?? [];
   const boxRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   if (focusRef) {
@@ -1101,16 +1088,45 @@ function ReplyBox({
       {expanded && (
         <div className="mail-reply-to">
           <span>To</span>
-          <span className="mail-reply-recipient">{recipient}</span>
+          {picker && !parked ? (
+            <div className="mail-to-field mail-reply-to-field">
+              <div className="mail-to-box" onClick={() => pickerRef.current?.focus()}>
+                <span className="mail-to-token lead">{recipient}</span>
+                {others.map((o) => (
+                  <span key={o} className="mail-to-token">
+                    {o}
+                  </span>
+                ))}
+                {adding.map((p) => (
+                  <span key={p.id} className="mail-to-token adding" title="Adding…">
+                    {p.name}
+                  </span>
+                ))}
+                {candidates.length > 0 && (
+                  <PersonaPicker
+                    candidates={candidates}
+                    onPick={addPersona}
+                    placeholder="Add a persona"
+                    hint="↑↓ to pick · ↵ to add · it joins this conversation"
+                    inputRef={pickerRef}
+                  />
+                )}
+              </div>
+            </div>
+          ) : (
+            <span className="mail-reply-recipient">{recipient}</span>
+          )}
           {parked ? (
             <span>instead of answering its Allow or Deny.</span>
           ) : (
-            others.length > 0 && (
-              <span>
-                {others.join(', ')} {others.length === 1 ? 'hears' : 'hear'} this only if {recipient} asks.
+            others.length + adding.length > 0 && (
+              <span className="mail-reply-to-note">
+                {[...others, ...adding.map((p) => p.name)].join(', ')}{' '}
+                {others.length + adding.length === 1 ? 'hears' : 'hear'} this only if {recipient} asks.
               </span>
             )
           )}
+          {addError && <span className="task-failed">{addError}</span>}
         </div>
       )}
       {expanded && working && (

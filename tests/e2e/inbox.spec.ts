@@ -101,6 +101,18 @@ test('replying resumes the same conversation and the exchange stays threaded', a
   await expect(mainWindow.locator('.mail-row')).toHaveCount(1);
 });
 
+test('the reply box\'s To row adds a persona to an open conversation', async ({ mainWindow }) => {
+  await compose(mainWindow, 'Add later', 'start alone');
+  await mainWindow.getByPlaceholder(/Reply to/).click();
+  const to = mainWindow.locator('.mail-reply').getByRole('combobox', { name: 'Add a persona' });
+  await to.fill('Crit');
+  await to.press('Enter');
+  // It joins at once: a token in the To row, a name in the header.
+  await expect(mainWindow.locator('.mail-reply .mail-to-token', { hasText: 'Critic' })).toBeVisible();
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Critic');
+  await expect(mainWindow.locator('.mail-reply .mail-to-token.lead')).toContainText('Normal');
+});
+
 test('chats never appear in the Inbox, and mail never appears under Chats', async ({ mainWindow }) => {
   await sendChat(mainWindow, 'plain chat');
   await compose(mainWindow, 'Mail thing', 'do it');
