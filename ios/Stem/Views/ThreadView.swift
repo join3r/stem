@@ -349,7 +349,8 @@ struct MessageRow: View {
                 if let sources = message.sources, !sources.isEmpty { SourcesList(sources: sources) }
             }
             .contextMenu {
-                Button("Copy") { UIPasteboard.general.string = message.content }
+                // The reply as clean Markdown, without its component tags.
+                Button("Copy") { UIPasteboard.general.string = MdxCopy.markdown(message.content) }
                 if let onShare, let turn = message.turnId, !message.content.isEmpty, !store.busy || !isLatest {
                     Button("Share as Link…", systemImage: "square.and.arrow.up") { onShare(turn) }
                 }

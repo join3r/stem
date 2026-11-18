@@ -576,7 +576,7 @@ struct MailItemCard: View {
         .background(mine ? Color.accentColor.opacity(0.10) : Color(.secondarySystemBackground).opacity(0.7),
                     in: RoundedRectangle(cornerRadius: 14))
         .contextMenu {
-            Button("Copy") { UIPasteboard.general.string = item.body }
+            Button("Copy") { UIPasteboard.general.string = MdxCopy.markdown(item.body) }
             if let onShare { Button("Share as Link…", systemImage: "square.and.arrow.up") { onShare() } }
         }
     }

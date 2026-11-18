@@ -36,6 +36,7 @@ import type {
   TurnAttachment,
   TurnTiming
 } from '../../shared/types';
+import { copyReply } from '../mdx/copyReply';
 import { formatSystemVersion } from '../../shared/sys-version';
 import { ActivityRows, SourcesList } from './ActivityRows';
 import { GeneratedImages, ZoomableImage } from './GeneratedImage';
@@ -467,7 +468,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   }, []);
 
   const copyMessage = useCallback((m: ChatMessage) => {
-    void navigator.clipboard.writeText(m.content).then(() => {
+    // A reply copies as clean Markdown (+ HTML), without its component tags; the user's own text as typed.
+    const write = m.role === 'user' ? navigator.clipboard.writeText(m.content) : copyReply(m.content);
+    void write.then(() => {
       setCopiedId(m.id);
       window.setTimeout(() => setCopiedId((c) => (c === m.id ? null : c)), 1500);
     });
