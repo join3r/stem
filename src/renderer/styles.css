@@ -2559,6 +2559,9 @@ button.inbox-return-main:focus-visible { outline: none; box-shadow: var(--shadow
 .inbox-return-main strong { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-return-dismiss { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; color: var(--muted); cursor: pointer; border-radius: var(--radius-sm); }
 .inbox-return-dismiss:hover { color: var(--ink); }
+.sending-draft .spin { animation: link-btn-spin 0.9s linear infinite; }
+.sending-draft.failed .inbox-return-icon, .sending-draft.failed .inbox-return-label { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) { .sending-draft .spin { animation: none; } }
 .inbox-return-dismiss:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 /* An Inbox row reads like mail: subject over an excerpt of the newest message,
    clamped to the chosen number of lines. The tree keeps one line per thread. */

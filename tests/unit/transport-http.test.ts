@@ -1230,3 +1230,113 @@ describe('close()', () => {
     await res.body?.cancel().catch(() => undefined);
   });
 });
+
+// A slow upload is a live one: Node's default 300 s requestTimeout cut a 10 MB
+// PDF on a ~25 KB/s uplink every time. What the server drops instead is a body
+// that stops moving — slowloris, or a dead link — so neither half regresses.
+describe('request bodies that crawl or stall', () => {
+  let slow: TransportServer;
+  const STALL_MS = 300;
+
+  beforeAll(async () => {
+    slow = await startTransportServer({
+      port: 0,
+      bodyStallMs: STALL_MS,
+      authenticate: () => ({ id: 'dev-1', role: 'device' }),
+      dispatch: dispatchLocal,
+      registeredChannels: serverChannels,
+      stageUpload: (name, body) => stageUpload(name, body)
+    });
+  });
+  afterAll(async () => {
+    await slow.close();
+  });
+
+  function rawUpload(): { req: ReturnType<typeof httpRequest>; done: Promise<number | 'dropped'> } {
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port: slow.port,
+      method: 'POST',
+      path: '/upload?name=crawl.bin',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-length': '6' }
+    });
+    const done = new Promise<number | 'dropped'>((resolve) => {
+      req.on('response', (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('error', () => resolve('dropped'));
+    });
+    req.flushHeaders();
+    return { req, done };
+  }
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('keeps a body that is still moving, however slowly, past the stall window', async () => {
+    const { req, done } = rawUpload();
+    // Six bytes over ~4× the stall window, never quiet for a whole one.
+    for (let i = 0; i < 6; i++) {
+      req.write('x');
+      await wait(STALL_MS / 2);
+    }
+    req.end();
+    expect(await done).toBe(200);
+  });
+
+  it('drops a body that stops arriving', async () => {
+    const { req, done } = rawUpload();
+    req.write('xx');
+    expect(await done).toBe('dropped');
+  });
+
+  it('does not cut a request whose body is in while its answer is slow', async () => {
+    registerServer('test:slowAnswer', async () => {
+      await wait(STALL_MS * 3);
+      return 'late';
+    });
+    const res = await fetch(`http://127.0.0.1:${slow.port}/rpc`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'test:slowAnswer', args: [] })
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, result: 'late' });
+  });
+});
+
+describe('the stall watch leaves early answers and keep-alive alone', () => {
+  let slow: TransportServer;
+  const STALL_MS = 300;
+  beforeAll(async () => {
+    slow = await startTransportServer({
+      port: 0,
+      bodyStallMs: STALL_MS,
+      authenticate: (presented) => (presented === TOKEN ? { id: 'dev-1', role: 'device' } : null),
+      dispatch: dispatchLocal,
+      registeredChannels: serverChannels,
+      stageUpload: (name, body) => stageUpload(name, body)
+    });
+  });
+  afterAll(async () => {
+    await slow.close();
+  });
+
+  it('still drops a refused request whose body then stops arriving', async () => {
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port: slow.port,
+      method: 'POST',
+      path: '/upload?name=x.bin',
+      headers: { authorization: 'Bearer nope', 'content-length': '1000000' }
+    });
+    const closed = new Promise<void>((resolve) => {
+      req.on('response', (res) => {
+        res.resume();
+        res.socket.once('close', () => resolve());
+      });
+      req.on('error', () => resolve());
+    });
+    req.write('x'.repeat(10));
+    await closed; // resolves only if the server lets go of the socket
+  });
+});

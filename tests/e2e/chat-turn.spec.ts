@@ -185,3 +185,56 @@ test('⌘1…⌘9 open the chats by their position in the Chats list', async ({ 
   await mainWindow.keyboard.press('ControlOrMeta+3');
   await expect(opened).toContainText(titles[0]);
 });
+
+// A new chat has no thread id until the server takes its first message, and a
+// big attachment's upload can hold that up for minutes. Leaving it meanwhile
+// used to make the chat vanish — and, when the start then failed, lose the
+// message for good.
+test('a new chat stays reachable while its first message is still sending', async ({ mainWindow }) => {
+  await send(mainWindow, 'first');
+  await expect(
+    mainWindow.locator('.message-assistant:not(.activity-row) .message-body').last()
+  ).toContainText('Echo: first');
+
+  await mainWindow.keyboard.press('ControlOrMeta+n');
+  await send(mainWindow, '[e2e:slowstart] here is my PDF');
+  const sending = mainWindow.locator('.sending-draft');
+  // On the draft itself: no row, the draft shows itself.
+  await expect(sending).toHaveCount(0);
+
+  // Leave for the other chat: the new one is a Sending… row, not gone.
+  await mainWindow.locator('.chats-modes').getByRole('button', { name: 'Chats', exact: true }).click();
+  await mainWindow.locator('.chat-row').first().click();
+  await expect(sending).toContainText('Sending…');
+  await expect(sending).toContainText('here is my PDF');
+
+  // Back to it: the sent bubble is there, and the start adopts its thread.
+  await sending.click();
+  await expect(mainWindow.locator('.message-user').last()).toContainText('here is my PDF');
+  await expect(
+    mainWindow.locator('.message-assistant:not(.activity-row) .message-body').last()
+  ).toContainText('Echo: here is my PDF');
+  await expect(sending).toHaveCount(0);
+  await expect(mainWindow.locator('.chat-row')).toHaveCount(2);
+});
+
+test('a new chat whose first message failed while away comes back with Retry', async ({ mainWindow }) => {
+  await send(mainWindow, 'first');
+  await expect(
+    mainWindow.locator('.message-assistant:not(.activity-row) .message-body').last()
+  ).toContainText('Echo: first');
+
+  await mainWindow.keyboard.press('ControlOrMeta+n');
+  await send(mainWindow, '[e2e:startfail] here is my PDF');
+  await mainWindow.locator('.chats-modes').getByRole('button', { name: 'Chats', exact: true }).click();
+  await mainWindow.locator('.chat-row').first().click();
+  // Even a fresh New chat in between must not swallow it.
+  await mainWindow.keyboard.press('ControlOrMeta+n');
+
+  const sending = mainWindow.locator('.sending-draft');
+  await expect(sending).toContainText('Not sent');
+  await sending.click();
+  await expect(mainWindow.locator('.message-user').last()).toContainText('here is my PDF');
+  await expect(mainWindow.locator('.message-system')).toContainText('E2E scripted start failure');
+  await expect(sending).toHaveCount(0);
+});

@@ -222,6 +222,8 @@ export interface PairingGrant {
 export interface TransportServerOptions {
   /** Loopback port to bind. 0 picks a free one (callers read it back off `port`). */
   port: number;
+  /** Test seam: how long a request body may go without a byte (BODY_STALL_MS). */
+  bodyStallMs?: number;
   /** Loopback address to bind. Defaults to 127.0.0.1; see LOOPBACK_HOSTS. */
   host?: string;
   /**
@@ -390,6 +392,57 @@ async function sendJsonCompressed(req: IncomingMessage, res: ServerResponse, sta
     'cache-control': 'no-store'
   });
   res.end(zipped);
+}
+
+/**
+ * A request body that delivers no byte for this long is dropped. Short enough
+ * that a peer which opens a body and goes quiet (slowloris, or a dead uplink)
+ * does not hold a socket for long; long enough for any connection that is
+ * actually moving data, however slowly.
+ */
+const BODY_STALL_MS = 60_000;
+/** Whole-request backstop: 100 MB at ~15 KB/s. */
+const REQUEST_BACKSTOP_MS = 2 * 60 * 60_000;
+
+/**
+ * Drop the socket when a request body stalls: no new byte on the socket for
+ * `ms` while the body is still incomplete. A timer of its own that reads
+ * `socket.bytesRead`, deliberately not socket.setTimeout — Node uses that for
+ * keep-alive after the response, and not req 'data' — a listener would switch
+ * the body to flowing before the route has attached its reader.
+ *
+ * It stops only when the body is complete or the socket closes. An early
+ * answer (401, 413) does not stop it: Node drains an unread body after such a
+ * response, and a peer that never sends the rest is exactly what this drops.
+ * A request with no body is complete on arrival and is never watched; a long
+ * RPC waiting on its answer, or an SSE stream, has a complete body.
+ */
+function watchBodyStall(req: IncomingMessage, ms: number): void {
+  if (req.complete) return;
+  const socket = req.socket;
+  let seen = socket.bytesRead;
+  let quietSince = Date.now();
+  const stop = (): void => {
+    clearInterval(timer);
+    socket.off('close', stop);
+  };
+  const timer = setInterval(
+    () => {
+      if (req.complete || socket.destroyed) return stop();
+      if (socket.bytesRead !== seen) {
+        seen = socket.bytesRead;
+        quietSince = Date.now();
+        return;
+      }
+      if (Date.now() - quietSince < ms) return;
+      stop();
+      log('transport', 'dropped a request whose body stopped arriving', { path: (req.url ?? '/').split('?')[0], ms });
+      socket.destroy();
+    },
+    Math.max(10, Math.floor(ms / 4))
+  );
+  timer.unref();
+  socket.once('close', stop);
 }
 
 /**
@@ -958,7 +1011,9 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
     return Promise.resolve();
   }
 
+  const bodyStallMs = opts.bodyStallMs ?? BODY_STALL_MS;
   const server: Server = createServer((req, res) => {
+    watchBodyStall(req, bodyStallMs);
     const path = (req.url ?? '/').split('?')[0];
     const route =
       path === '/rpc' && req.method === 'POST'
@@ -982,6 +1037,15 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
       else res.destroy();
     });
   });
+
+  // Node caps a whole request at 300 s by default (requestTimeout). An upload
+  // is one request, so a 10 MB PDF over a hospital uplink (~25 KB/s) was cut
+  // at five minutes every time — the user's message vanished with it, and the
+  // Mac's mirror retried the same big files forever on the same cut. What
+  // matters is a body that stops moving, not one that moves slowly: that is
+  // watchBodyStall's job. This cap stays only as a backstop, sized for the
+  // largest upload (MAX_UPLOAD_BYTES) at a crawl.
+  server.requestTimeout = REQUEST_BACKSTOP_MS;
 
   server.on('connection', (socket) => {
     sockets.add(socket);

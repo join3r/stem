@@ -7,6 +7,7 @@ import type {
   AuthProviderId,
   ChatFormat,
   ChatListResult,
+  ChatMessage,
   ChatSummary,
   EscapeAction,
   MessageMeta,
@@ -40,7 +41,7 @@ import { useApprovals } from './manage/approvalStore';
 import { DeleteThreadDialog } from './DeleteThreadDialog';
 import { ShareDialog } from './share/ShareDialog';
 import type { ShareSource } from '../shared/share';
-import { CHATS_TAB_IDS, CHATS_TAB_KEY, type ChatsTab } from './chats/ChatList';
+import { CHATS_TAB_IDS, CHATS_TAB_KEY, type ChatsTab, type SendingDraftRow } from './chats/ChatList';
 import {
   persistReturnChatId,
   readReturnChatId,
@@ -98,6 +99,20 @@ import { requestManageIntent } from './manage/intents';
 const DRAFT = '__draft__';
 /** How long a spoken request waits for the chat to finish its current reply. */
 const VOICE_IDLE_WAIT_MS = 3 * 60_000;
+
+/** A new chat between Enter and the server taking its first message (see sendingDrafts). */
+interface SendingDraft {
+  turnId: string;
+  /** The DRAFT generation it was sent from. */
+  seq: number;
+  title: string;
+  /** The draft's messages as sent, the user's own bubble last. */
+  messages: ChatMessage[];
+  folderId: string | null;
+  private: boolean;
+  /** Set when the start failed: the message never reached the server. */
+  error?: unknown;
+}
 
 // "This smells like an auth failure" match on a failed turn's error text. Used as
 // the fallback classifier for API-key/local providers, where the getApiKey probe
@@ -207,6 +222,14 @@ export default function App() {
   // returned yet (a brand-new thread isn't listed until its first turn persists).
   // Keyed by threadId; dropped once the real list includes them.
   const [pendingChats, setPendingChats] = useState<Record<string, ChatSummary>>({});
+  // New chats whose first send has not been taken by the server yet, keyed by
+  // the turn id. Until the start returns there is no thread id and so no row
+  // in pendingChats: a 10 MB PDF on a slow uplink is minutes of that, and a
+  // user who opened another chat meanwhile lost sight of theirs — for good if
+  // the upload then failed. ChatList shows these as Sending… / Not sent rows.
+  const [sendingDrafts, setSendingDrafts] = useState<Record<string, SendingDraft>>({});
+  const sendingDraftsRef = useRef(sendingDrafts);
+  sendingDraftsRef.current = sendingDrafts;
   const inspectorScroll = useOverlayScrollbar();
   // Imperative handle to the active ChatView so the drop overlay can push files
   // ("Add to this conversation") into its composer.
@@ -862,21 +885,48 @@ export default function App() {
         ...(sendKey === DRAFT ? { draftGeneration: sendSeq, captureDraftMessages: true } : {}),
         start: async (input) => {
           hooks?.onTurnId?.(input.turnId);
-          const result = await window.stem.startTurn({
-            input: input.text,
-            turnId: input.turnId,
-            threadId: sendKey === DRAFT ? undefined : sendKey,
-            // Only meaningful on the creating turn; the server stores it with the thread.
-            ...(sendKey === DRAFT && sendPrivate ? { private: true } : {}),
-            model: modelId ?? undefined,
-            effort: effort ?? undefined,
-            serviceTier,
-            // Only meaningful on the creating turn, like `private`.
-            ...(sendKey === DRAFT ? { format: defaultFormat } : {}),
-            attachments: input.attachments.length ? input.attachments : undefined,
-            // A draft card's "Practice run": this send starts it (recorder-store).
-            ...(sendKey !== DRAFT ? practiceInput(sendKey) : {})
-          });
+          const tracked = sendKey === DRAFT ? input.turnId : null;
+          if (tracked) {
+            const draft: SendingDraft = {
+              turnId: tracked,
+              seq: sendSeq,
+              title: previewText(text) || 'New chat',
+              // Registered by sendTurn before it calls start.
+              messages: core.pendingSends.get(DRAFT)?.draftMessages ?? [],
+              folderId: sendFolder ?? null,
+              private: sendPrivate
+            };
+            setSendingDrafts((prev) => ({ ...prev, [tracked]: draft }));
+          }
+          let result: StartTurnResult;
+          try {
+            result = await window.stem.startTurn({
+              input: input.text,
+              turnId: input.turnId,
+              threadId: sendKey === DRAFT ? undefined : sendKey,
+              // Only meaningful on the creating turn; the server stores it with the thread.
+              ...(sendKey === DRAFT && sendPrivate ? { private: true } : {}),
+              model: modelId ?? undefined,
+              effort: effort ?? undefined,
+              serviceTier,
+              // Only meaningful on the creating turn, like `private`.
+              ...(sendKey === DRAFT ? { format: defaultFormat } : {}),
+              attachments: input.attachments.length ? input.attachments : undefined,
+              // A draft card's "Practice run": this send starts it (recorder-store).
+              ...(sendKey !== DRAFT ? practiceInput(sendKey) : {})
+            });
+          } catch (e) {
+            if (tracked) {
+              // Failed in plain sight: the draft shows the error and Retry itself.
+              const seen = draftSeqRef.current === sendSeq && activeThreadIdRef.current === null;
+              setSendingDrafts(({ [tracked]: draft, ...rest }) =>
+                draft && !seen ? { ...rest, [tracked]: { ...draft, error: e ?? 'failed' } } : rest
+              );
+            }
+            throw e;
+          }
+          // Taken: onStarted gives it a real row (or it was handled in place).
+          if (tracked) setSendingDrafts(({ [tracked]: _gone, ...rest }) => rest);
           hooks?.onResult?.(result);
           return result;
         },
@@ -1206,6 +1256,62 @@ export default function App() {
     setManageTab('settings');
     requestManageIntent({ kind: 'settings-search' });
   });
+
+  // Back to a new chat whose first message the server has not taken (see
+  // sendingDrafts). Opening another chat leaves the DRAFT slice in place, but
+  // New chat replaces it — then the sent snapshot is put back. Reclaiming the
+  // draft generation is what lets a start that is still running adopt its real
+  // thread id and keep focus, exactly as if the user had never left.
+  const openSendingDraft = useCallback(
+    (turnId: string) => {
+      const draft = sendingDraftsRef.current[turnId];
+      if (!draft) return;
+      const pending = core.pendingSends.get(DRAFT);
+      // A newer new-chat send owns the DRAFT key right now; taking it back would
+      // put this chat over that one. The row stays; it resolves on its own.
+      if (pending && pending.turnId !== turnId) return;
+      // Still running but no longer pending: the start has just returned, and
+      // the real row is about to replace this one.
+      if (!draft.error && !pending) return;
+      draftSeqRef.current = draft.seq;
+      openGateRef.current.invalidate();
+      const userMsg = draft.messages[draft.messages.length - 1];
+      const slice = core.store.getThread(DRAFT);
+      if (userMsg && !slice?.messages.some((m) => m.id === userMsg.id)) {
+        core.store.replace(
+          DRAFT,
+          draft.error
+            ? appendSystemMessage(
+                {
+                  ...EMPTY_STATE,
+                  messages: draft.messages.map((m) => (m.id === userMsg.id ? { ...m, sendFailed: true } : m))
+                },
+                draft.error
+              )
+            : { ...EMPTY_STATE, messages: draft.messages, running: true, status: 'running' }
+        );
+      }
+      pendingDraftFolderRef.current = draft.folderId;
+      setDraftFolderId(draft.folderId);
+      pendingDraftPrivateRef.current = draft.private;
+      setDraftPrivate(draft.private);
+      setMailView(null);
+      activeThreadIdRef.current = null;
+      setActiveThreadId(null);
+      // A failed one now lives in the draft itself, with Retry on its bubble.
+      if (draft.error) setSendingDrafts(({ [turnId]: _gone, ...rest }) => rest);
+    },
+    [core]
+  );
+  // Only the ones the user is not looking at: the open draft shows itself.
+  const viewingDraftSeq = activeThreadId === null && mailView === null ? draftSeqRef.current : null;
+  const sendingDraftRows = useMemo<SendingDraftRow[]>(
+    () =>
+      Object.values(sendingDrafts)
+        .filter((d) => d.error !== undefined || d.seq !== viewingDraftSeq)
+        .map((d) => ({ id: d.turnId, title: d.title, failed: d.error !== undefined })),
+    [sendingDrafts, viewingDraftSeq]
+  );
 
   const openChat = useCallback(
     // `userNavigation` separates the user opening a chat (clicks, alerts, forks —
@@ -2094,6 +2200,8 @@ export default function App() {
               modelId={modelId}
               onSelectModel={onSelectModel}
               onOpen={openChat}
+              sendingDrafts={sendingDraftRows}
+              onOpenSendingDraft={openSendingDraft}
               onNewChat={newConversation}
               onCreateFolder={onCreateFolder}
               onRenameFolder={onRenameFolder}

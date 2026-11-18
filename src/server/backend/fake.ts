@@ -139,6 +139,9 @@ function cannedSubject(prompt: string): string {
 //   [e2e:burst] — stream BURST_DELTAS deltas back to back, with no pacing
 //   [e2e:slow]  — the same script, paced slowly enough that a test can take the
 //                 network away underneath it and put it back
+//   [e2e:slowstart] — the start itself takes SLOW_START_MS before any thread
+//                 exists, the way a big attachment's upload holds a real one up
+//   [e2e:startfail] — the same wait, then the start rejects (no thread, no turn)
 //   otherwise  — stream "Echo: <text>" in a few deltas, then complete
 //
 // STEM_E2E_ONBOARDING starts the fake UNAUTHENTICATED; login() (wired to the
@@ -167,6 +170,8 @@ const STEP_MS = 15;
  * turn is exactly where the replay buffer earns its keep.
  */
 const SLOW_STEP_MS = 700;
+/** `[e2e:slowstart]` / `[e2e:startfail]`: long enough to open another chat meanwhile. */
+const SLOW_START_MS = 2_500;
 
 /**
  * `[e2e:burst]`: how many deltas, and how big. Roughly a long reply's worth of
@@ -269,6 +274,10 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
   }
 
   async startTurn(input: StartTurnInput): Promise<StartTurnResult> {
+    if (input.input.includes('[e2e:slowstart]') || input.input.includes('[e2e:startfail]')) {
+      await new Promise((r) => setTimeout(r, SLOW_START_MS));
+      if (input.input.includes('[e2e:startfail]')) throw new Error('E2E scripted start failure');
+    }
     const threadId = input.threadId ?? (await this.createThread(input.model));
     // Adopt the client-minted id like the pi runtime does, so Stop-by-id works
     // in e2e the same way it does for real turns.
