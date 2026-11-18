@@ -14,6 +14,12 @@ interface StoredShare extends Omit<SharedLink, 'url'> {
   base: string;
   /** Encrypted base64url key. */
   key: string;
+  /**
+   * A locked link: the recipients whose first opening the user was told
+   * about. Kept apart from `opens` so a notice that failed is sent again.
+   * Absent on links stored before this: their stored opens count as told.
+   */
+  notified?: string[];
 }
 
 interface FileShape {
@@ -92,7 +98,26 @@ export class ShareStore {
       const f = await this.readFile();
       const s = f.shares.find((x) => x.id === id);
       if (!s) return;
+      s.notified ??= (s.opens ?? []).map((o) => o.address);
       s.opens = opens;
+      await this.writeFile(f);
+    });
+  }
+
+  /** The recipients whose first opening was announced (see StoredShare.notified). */
+  async notified(id: string): Promise<string[]> {
+    const s = (await this.readFile()).shares.find((x) => x.id === id);
+    return s ? (s.notified ?? (s.opens ?? []).map((o) => o.address)) : [];
+  }
+
+  /** Record that these recipients' first openings were announced. */
+  markNotified(id: string, addresses: string[]): Promise<void> {
+    return this.serial(async () => {
+      const f = await this.readFile();
+      const s = f.shares.find((x) => x.id === id);
+      if (!s) return;
+      const told = s.notified ?? (s.opens ?? []).map((o) => o.address);
+      s.notified = [...told, ...addresses.filter((a) => !told.includes(a))];
       await this.writeFile(f);
     });
   }

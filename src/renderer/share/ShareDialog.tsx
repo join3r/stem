@@ -87,7 +87,9 @@ export function ShareDialog({
     includeModel,
     ttlDays,
     card: cardOn ? { title, description: desc } : null,
-    ...(locked ? { recipients: recipients.ok } : {})
+    ...(locked ? { recipients: recipients.ok } : {}),
+    // Publish the snapshot on screen, not a fresh build.
+    ...(preview?.draftId ? { draftId: preview.draftId } : {})
   };
 
   useEffect(() => {

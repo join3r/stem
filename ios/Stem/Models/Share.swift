@@ -52,6 +52,8 @@ struct ShareDraftPreview: Decodable, Hashable {
     var omittedAttachments: Int
     /// Absent from servers before link previews.
     var card: ShareCard?
+    /// The snapshot "Create link" publishes; absent from older servers.
+    var draftId: String?
 }
 
 struct SharedLink: Decodable, Hashable, Identifiable {

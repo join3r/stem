@@ -145,6 +145,8 @@ struct ShareLinkSheet: View {
             "ttlDays": .number(Double(ttlDays))
         ]
         o["card"] = cardOn ? .object(["title": .string(title), "description": .string(desc)]) : .null
+        // Publish the snapshot on screen, not a fresh build.
+        if let draftId = preview?.draftId { o["draftId"] = .string(draftId) }
         return .object(o)
     }
 

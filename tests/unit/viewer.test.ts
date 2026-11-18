@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('electron', () => ({ BrowserWindow: class {}, net: {}, protocol: {}, session: {}, shell: {} }));
+vi.mock('electron', () => ({ BrowserWindow: class {}, dialog: {}, net: {}, protocol: {}, session: {}, shell: {} }));
 
-const { escapeHtml, splitRow, textPage, viewKind } = await import('../../src/desktop/viewer');
+const { escapeHtml, externalLinkGate, readTextHead, splitRow, textPage, TEXT_MAX_BYTES, viewKind } = await import('../../src/desktop/viewer');
 const { openFilesItem, openLink, setFileViewer } = await import('../../src/desktop/open-link');
 
 // Stem's own file viewer (desktop/viewer.ts): which files it shows, and the
@@ -82,5 +82,60 @@ describe('links try the viewer first', () => {
     openFilesItem(f.shell, '/tmp/stem-files-a/old.doc');
     await tick();
     expect(f.calls).toEqual(['reveal /tmp/stem-files-a/old.doc']);
+  });
+});
+
+describe('a page’s web links', () => {
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  it('open only after the user says yes, one question at a time', async () => {
+    const opened: string[] = [];
+    const asked: string[] = [];
+    let answer: (a: { open: boolean; block: boolean }) => void = () => undefined;
+    const go = externalLinkGate(
+      (url) => (asked.push(url), new Promise((r) => (answer = r))),
+      (url) => opened.push(url)
+    );
+    go('https://evil.test/?secret=1');
+    go('https://evil.test/?secret=2'); // while the first question is open: dropped
+    go('file:///etc/passwd');
+    expect(asked).toEqual(['https://evil.test/?secret=1']);
+    answer({ open: false, block: false });
+    await settle();
+    expect(opened).toEqual([]);
+    go('https://example.com/');
+    answer({ open: true, block: false });
+    await settle();
+    expect(opened).toEqual(['https://example.com/']);
+  });
+
+  it('stop asking once the user blocks the page', async () => {
+    const asked: string[] = [];
+    const go = externalLinkGate(async (url) => (asked.push(url), { open: false, block: true }), () => undefined);
+    go('https://a.test/');
+    await settle();
+    go('https://b.test/');
+    await settle();
+    expect(asked).toEqual(['https://a.test/']);
+  });
+});
+
+describe('readTextHead', () => {
+  it('reads at most the limit, and says when the file was longer', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'stem-viewer-'));
+    const exact = join(dir, 'exact.log');
+    writeFileSync(exact, Buffer.alloc(TEXT_MAX_BYTES, 'a'));
+    expect(await readTextHead(exact)).toMatchObject({ cut: false });
+    const long = join(dir, 'long.log');
+    writeFileSync(long, Buffer.alloc(TEXT_MAX_BYTES + 10, 'b'));
+    const r = await readTextHead(long);
+    expect(r.cut).toBe(true);
+    expect(r.text.length).toBe(TEXT_MAX_BYTES);
+    const small = join(dir, 'small.log');
+    writeFileSync(small, 'hello');
+    expect(await readTextHead(small)).toEqual({ text: 'hello', cut: false });
   });
 });

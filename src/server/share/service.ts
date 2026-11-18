@@ -2,6 +2,7 @@
 // or mail conversation (or one answer of it), encrypt it here, upload the blob to the global relay under
 // the user's verified address, and keep the link so it can be copied again
 // or revoked.
+import { randomUUID } from 'node:crypto';
 import type { ChatBackend } from '../backend';
 import { CLOSED_DOMAIN_SHARE, ShareUnavailableError, type InterStemService } from '../interstem/service';
 import { deleteShare, listShares, postShare, RelayError, type Identity } from '../interstem/relay-client';
@@ -125,6 +126,34 @@ export function cleanRecipients(raw: string[] | undefined): string[] {
   return out;
 }
 
+/** How long a preview stays publishable, and how many are kept at once. */
+export const DRAFT_TTL_MS = 30 * 60_000;
+const DRAFT_MAX = 8;
+
+/**
+ * A snapshot the server built for a preview. "Create link" publishes this one,
+ * never a fresh build: a whole-thread share must not pick up a message that
+ * arrived after the user looked the preview over.
+ */
+interface Draft {
+  id: string;
+  /** source + the options that shape the snapshot (draftKey). */
+  key: string;
+  source: ShareSource;
+  scope: ShareOptions['scope'];
+  snapshot: SharePreview['snapshot'];
+  at: number;
+}
+
+function sourceKey(source: ShareSource): string {
+  return source.kind === 'chat' ? `chat:${source.threadId}` : `mail:${source.conversationId}`;
+}
+
+/** What tells one preview's snapshot from another's; ttl, card and recipients do not change it. */
+function draftKey(source: ShareSource, opts: ShareOptions): string {
+  return JSON.stringify([sourceKey(source), opts.scope ?? 'thread', opts.anchorId ?? '', !!opts.includeAttachments, opts.includeModel !== false]);
+}
+
 /** How often the server asks the relay who opened its locked links. */
 export const OPENS_POLL_MS = 10 * 60_000;
 
@@ -138,6 +167,7 @@ export class ShareService {
   private readonly readMail: typeof readMailConversation;
   private readonly personas: () => Promise<Persona[]>;
   private readonly now: () => number;
+  private readonly drafts = new Map<string, Draft>();
 
   constructor(private readonly deps: ShareDeps) {
     this.store = deps.store ?? new ShareStore();
@@ -243,14 +273,43 @@ export class ShareService {
     };
   }
 
+  /** Builds the snapshot and keeps it as a draft: what "Create link" will publish. */
   async preview(source: ShareSource, opts: ShareOptions = {}): Promise<SharePreview> {
-    return buildSnapshot(await this.source(source), opts, this.now());
+    const built = await buildSnapshot(await this.source(source), opts, this.now());
+    const now = this.now();
+    for (const [id, d] of this.drafts) if (now - d.at > DRAFT_TTL_MS) this.drafts.delete(id);
+    // Map order is insertion order: the first is the oldest.
+    while (this.drafts.size >= DRAFT_MAX) this.drafts.delete(this.drafts.keys().next().value!);
+    const id = randomUUID();
+    this.drafts.set(id, { id, key: draftKey(source, opts), source, scope: opts.scope, snapshot: built.snapshot, at: now });
+    return { ...built, draftId: id };
+  }
+
+  /**
+   * The draft the user saw. A client that names none (iOS and desktop builds
+   * from before drafts) gets the newest preview of the same options.
+   */
+  private draft(source: ShareSource, opts: ShareOptions): Draft {
+    const now = this.now();
+    let found: Draft | undefined;
+    if (opts.draftId) {
+      found = this.drafts.get(opts.draftId);
+      if (found && sourceKey(found.source) !== sourceKey(source)) found = undefined;
+    } else {
+      const key = draftKey(source, opts);
+      for (const d of this.drafts.values()) if (d.key === key && (!found || d.at >= found.at)) found = d;
+    }
+    if (!found || now - found.at > DRAFT_TTL_MS) {
+      throw new ShareInputError('The preview is out of date. Look it over again, then create the link.');
+    }
+    return found;
   }
 
   async create(source: ShareSource, opts: ShareOptions = {}): Promise<SharedLink> {
     const ttlDays = Math.min(SHARE_MAX_TTL_DAYS, Math.max(1, Math.floor(opts.ttlDays ?? SHARE_MAX_TTL_DAYS)));
     const recipients = cleanRecipients(opts.recipients);
-    const { snapshot } = await this.preview(source, opts);
+    const draft = this.draft(source, opts);
+    const { snapshot } = draft;
     const { blob, key } = sealShare(JSON.stringify(snapshot));
     if (blob.length > MAX_SHARE_BYTES) throw relayMessage(new RelayError(413, 'too_large'));
     const { relay, identity } = await this.identity();
@@ -270,7 +329,7 @@ export class ShareService {
       id: made.id,
       url: `${made.url}#${keyFragment(key)}`,
       source,
-      scope: opts.scope ?? 'thread',
+      scope: draft.scope ?? 'thread',
       kind: snapshot.kind,
       title: snapshot.title,
       createdAt: this.now(),
@@ -279,6 +338,7 @@ export class ShareService {
       ...(recipients.length ? { recipients, opens: [] } : {})
     };
     await this.store.add(link);
+    this.drafts.delete(draft.id);
     return link;
   }
 
@@ -294,7 +354,8 @@ export class ShareService {
 
   /**
    * Ask the relay who opened the locked links, store it, and tell the user
-   * about each recipient's first opening. One run at a time.
+   * about each recipient's first opening, until the notice goes through. One
+   * run at a time.
    */
   syncOpens(): Promise<void> {
     this.syncing ??= this.doSyncOpens()
@@ -316,10 +377,20 @@ export class ShareService {
       const same =
         opens.length === before.length &&
         opens.every((o) => before.some((b) => b.address === o.address && b.lastAt === o.lastAt && b.count === o.count));
-      if (same) continue;
-      await this.store.setOpens(link.id, opens);
-      const fresh = opens.filter((o) => !before.some((b) => b.address === o.address));
-      if (fresh.length && this.deps.onOpened) await this.deps.onOpened(link, fresh);
+      if (!same) await this.store.setOpens(link.id, opens);
+      if (!this.deps.onOpened) continue;
+      // Delivery is tracked on its own: a notice that failed goes out on a
+      // later run, even when the openings themselves have not changed since.
+      const told = await this.store.notified(link.id);
+      const fresh = opens.filter((o) => !told.includes(o.address));
+      if (!fresh.length) continue;
+      try {
+        await this.deps.onOpened(link, fresh);
+      } catch (e) {
+        degrade('share', 'could not announce a first opening of a shared link; trying again on the next check', e);
+        continue;
+      }
+      await this.store.markNotified(link.id, fresh.map((o) => o.address));
     }
   }
 

@@ -1,6 +1,6 @@
-import { BrowserWindow, net, protocol, session, shell, type Session } from 'electron';
+import { BrowserWindow, dialog, net, protocol, session, shell, type Session } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { open, readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -16,7 +16,9 @@ import { pathToFileURL } from 'node:url';
 // - every request outside the one document is cancelled (no network at all),
 //   and a CSP with connect-src 'none' says the same thing a second time;
 // - no navigation, no new windows, no downloads, no permissions. A web link on
-//   the page opens in the user's browser instead.
+//   the page opens in the user's browser only after the user says yes in a
+//   Stem dialog that shows the whole address: the page's script can navigate
+//   on its own, and a URL it builds could carry what the document holds.
 //
 // HTML, images, audio, video and text go through the `stem-view:` scheme, which
 // serves only that one file. PDF is the exception: Electron's PDF viewer runs
@@ -133,10 +135,23 @@ export function textPage(name: string, text: string, kind: 'text' | 'table', cut
   return wrapperPage(name, `${note}${more}<table>${rows.join('')}</table>`);
 }
 
-async function readTextHead(path: string): Promise<{ text: string; cut: boolean }> {
-  const bytes = await readFile(path);
-  const cut = bytes.length > TEXT_MAX_BYTES;
-  return { text: (cut ? bytes.subarray(0, TEXT_MAX_BYTES) : bytes).toString('utf8'), cut };
+/** The first TEXT_MAX_BYTES of a file, read as such: a 2 GB log never lands in the main process whole. */
+export async function readTextHead(path: string): Promise<{ text: string; cut: boolean }> {
+  const file = await open(path, 'r');
+  try {
+    // One byte more tells a file of exactly the limit from a longer one.
+    const buf = Buffer.alloc(TEXT_MAX_BYTES + 1);
+    let got = 0;
+    while (got < buf.length) {
+      const { bytesRead } = await file.read(buf, got, buf.length - got, got);
+      if (bytesRead === 0) break;
+      got += bytesRead;
+    }
+    const cut = got > TEXT_MAX_BYTES;
+    return { text: buf.subarray(0, Math.min(got, TEXT_MAX_BYTES)).toString('utf8'), cut };
+  } finally {
+    await file.close();
+  }
 }
 
 /** What `stem-view://doc/` serves: the page, and for media the file itself. */
@@ -173,11 +188,61 @@ function lockDown(ses: Session, allowed: (url: string) => boolean): void {
   ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !allowed(details.url) }));
 }
 
+/** The answer from the "open this link?" dialog. */
+export interface LinkAnswer {
+  open: boolean;
+  /** The user ticked "block other links from this page": every later link is refused quietly. */
+  block: boolean;
+}
+
+/**
+ * What a viewer window does with a web address its page tries to open. Nothing
+ * opens without the user's yes: Electron does not say whether a click started
+ * a navigation, and a page script can navigate by itself. One question at a
+ * time; links that come while it is open are dropped, so a page cannot pile
+ * up dialogs. Exported for tests.
+ */
+export function externalLinkGate(ask: (url: string) => Promise<LinkAnswer>, openUrl: (url: string) => void): (url: string) => void {
+  let asking = false;
+  let blocked = false;
+  return (url) => {
+    if (blocked || asking || !/^https?:/i.test(url)) return;
+    asking = true;
+    void ask(url)
+      .then((a) => {
+        if (a.block) blocked = true;
+        if (a.open) openUrl(url);
+      })
+      .catch(() => undefined) // quiet: no answer (the window closed) opens nothing.
+      .finally(() => (asking = false));
+  };
+}
+
+/** Long enough to see where it goes and what it carries, short enough for a dialog. */
+const SHOWN_URL_MAX = 600;
+
+async function askOpenLink(win: BrowserWindow, url: string): Promise<LinkAnswer> {
+  if (win.isDestroyed()) return { open: false, block: false };
+  const shown = url.length > SHOWN_URL_MAX ? `${url.slice(0, SHOWN_URL_MAX)}…` : url;
+  const r = await dialog.showMessageBox(win, {
+    type: 'question',
+    message: 'Open this link in your browser?',
+    detail: `The page you are viewing wants to open:\n\n${shown}\n\nAnything in the address goes to that site.`,
+    buttons: ['Cancel', 'Open in Browser'],
+    defaultId: 0,
+    cancelId: 0,
+    checkboxLabel: 'Block other links from this page',
+    checkboxChecked: false
+  });
+  return { open: r.response === 1, block: r.checkboxChecked };
+}
+
 function guardContents(win: BrowserWindow, title: string): void {
   const wc = win.webContents;
-  const external = (url: string) => {
-    if (/^https?:/i.test(url)) void shell.openExternal(url).catch(() => undefined);
-  };
+  const external = externalLinkGate(
+    (url) => askOpenLink(win, url),
+    (url) => void shell.openExternal(url).catch(() => undefined)
+  );
   wc.setWindowOpenHandler(({ url }) => {
     external(url);
     return { action: 'deny' };

@@ -55,7 +55,10 @@ cleaned:
 | User attachments: only when the user ticks "Include my pictures" | `stem://` and `file:` links (become plain text) |
 
 The user always sees a preview of exactly what will be published before the
-upload. That preview is the main protection against leaking something private.
+upload. That preview is the main protection against leaking something private,
+so "Create link" publishes the very snapshot the server built for it (kept as
+a draft for 30 minutes, named by `draftId`), never a fresh build that could
+pick up a message that arrived after the user looked.
 
 Private chats can be shared: "private" means "not learned from", and sharing
 is an explicit act.
@@ -153,7 +156,9 @@ The browser decrypts with WebCrypto and `DecompressionStream('gzip')`.
 - IPC: `share:preview(source, opts)`, `share:create(source, opts)`,
   `share:list()`, `share:revoke(id)`; `source = {kind:'chat', threadId} |
   {kind:'mail', conversationId}`, `opts = {scope: 'thread'|'pair'|'answer',
-  anchorId, includeAttachments?, includeModel?, ttlDays?}`.
+  anchorId, includeAttachments?, includeModel?, ttlDays?, draftId?}`. The
+  preview answers with a `draftId`; `share:create` publishes that draft. A
+  client that sends none gets the newest preview of the same options.
 
 ## Desktop UI
 
@@ -186,7 +191,9 @@ dialog). Decided with Vlado:
 - **Stem says when someone opens it.** The server asks the relay every 10
   minutes (and when the Settings list opens) who opened its locked links,
   stores it in shares.json, and posts a private mail ("martin@… opened the
-  link you shared") for each recipient's first opening.
+  link you shared") for each recipient's first opening. Who was told is
+  stored apart from the openings (`notified`), so a notice that failed goes
+  out on the next check.
 - The visitor picks a masked address (`m•••@gmail.com`) by index, so the page
   never shows full addresses. The relay keeps the recipients in the clear
   while the share lives; revoking deletes them with the blob.

@@ -26,6 +26,7 @@ function options(raw: unknown): ShareOptions {
     ...(card && typeof card === 'object'
       ? { card: { title: String((card as ShareCard).title ?? ''), description: String((card as ShareCard).description ?? '') } }
       : {}),
+    ...(typeof o.draftId === 'string' && o.draftId ? { draftId: o.draftId } : {}),
     ...(Array.isArray(o.recipients) ? { recipients: o.recipients.filter((r): r is string => typeof r === 'string') } : {})
   };
 }

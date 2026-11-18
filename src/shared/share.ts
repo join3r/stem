@@ -150,6 +150,11 @@ export interface ShareOptions {
    * relay mails to one of them. Absent or empty = anyone with the link.
    */
   recipients?: string[];
+  /**
+   * The preview the user looked over (SharePreview.draftId): "Create link"
+   * publishes exactly that snapshot, never a fresh build.
+   */
+  draftId?: string;
 }
 
 /** One recipient's openings of a locked link. */
@@ -191,6 +196,8 @@ export interface SharePreview {
   omittedAttachments: number;
   /** The link preview this snapshot suggests (the dialog lets the user edit it). */
   card: ShareCard;
+  /** Pass back as ShareOptions.draftId to publish this snapshot. Absent from older servers. */
+  draftId?: string;
 }
 
 /** Whether this Stem can publish, and under which address. */
