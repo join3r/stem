@@ -27,19 +27,37 @@ interface FileShape {
   shares: StoredShare[];
 }
 
+function unreadable(err: unknown): Error {
+  degrade('share', 'shares.json is unreadable; leaving it as it is', err);
+  return new Error('Stem could not read your list of shared links, so it changed nothing. Your links still work.');
+}
+
 export class ShareStore {
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly path: () => string = sharesStorePath) {}
 
+  /**
+   * Only a missing file is an empty list. Anything else (unreadable, broken
+   * JSON) throws, so no write replaces the file: those links still work on the
+   * relay, and this list is the only place they can be revoked from.
+   */
   private async readFile(): Promise<FileShape> {
+    let raw: string;
     try {
-      const f = JSON.parse(await readFile(this.path(), 'utf8')) as FileShape;
-      return { version: 1, shares: Array.isArray(f.shares) ? f.shares : [] };
+      raw = await readFile(this.path(), 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') degrade('share', 'shares.json is unreadable; starting empty', err);
-      return { version: 1, shares: [] };
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, shares: [] };
+      throw unreadable(err);
     }
+    let f: Partial<FileShape>;
+    try {
+      f = JSON.parse(raw) as Partial<FileShape>;
+    } catch (err) {
+      throw unreadable(err);
+    }
+    if (!f || !Array.isArray(f.shares)) throw unreadable(new Error('no shares list'));
+    return { version: 1, shares: f.shares };
   }
 
   private async writeFile(f: FileShape): Promise<void> {

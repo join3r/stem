@@ -30,12 +30,16 @@ enum ShareScope: String, CaseIterable, Identifiable {
 
 struct ShareImage: Decodable, Hashable { var mime: String; var dataUrl: String; var alt: String? }
 
+/// A sound the answer shared; the link carries it playable, so the preview shows it.
+struct ShareAudio: Decodable, Hashable { var title: String?; var mime: String; var dataUrl: String }
+
 struct ShareMessage: Decodable, Hashable {
     var role: String
     var author: String?
     var text: String
     var model: String?
     var images: [ShareImage]?
+    var audio: [ShareAudio]?
 }
 
 struct ShareSnapshot: Decodable, Hashable {

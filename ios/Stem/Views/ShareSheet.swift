@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 /// Publish an answer, the question and answer, or the whole chat / mail thread
@@ -79,6 +80,9 @@ struct ShareLinkSheet: View {
                         if m.role == "user" { Text(m.text) } else { MarkdownView(m.text) }
                         if let n = m.images?.count, n > 0 {
                             Text(n == 1 ? "1 picture" : "\(n) pictures").font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(Array((m.audio ?? []).enumerated()), id: \.offset) { _, a in
+                            ShareAudioRow(audio: a)
                         }
                     }
                 }
@@ -188,5 +192,36 @@ struct ShareLinkSheet: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+/// A recording the link will carry, playable here so the user hears what they publish.
+private struct ShareAudioRow: View {
+    let audio: ShareAudio
+    @State private var player: AVAudioPlayer?
+    @State private var playing = false
+
+    var body: some View {
+        Button {
+            toggle()
+        } label: {
+            Label(audio.title?.isEmpty == false ? audio.title! : "Recording",
+                  systemImage: playing ? "stop.circle" : "play.circle")
+        }
+        .buttonStyle(.borderless)
+        .font(.callout)
+        .onDisappear { player?.stop() }
+    }
+
+    private func toggle() {
+        if playing { player?.stop(); playing = false; return }
+        if player == nil,
+           let comma = audio.dataUrl.firstIndex(of: ","),
+           let data = Data(base64Encoded: String(audio.dataUrl[audio.dataUrl.index(after: comma)...])) {
+            try? AVAudioSession.sharedInstance().setCategory(.playback)
+            player = try? AVAudioPlayer(data: data)
+        }
+        player?.currentTime = 0
+        playing = player?.play() ?? false
     }
 }

@@ -299,6 +299,8 @@ export class ShareService {
     const { snapshot } = draft;
     const { blob, key } = sealShare(JSON.stringify(snapshot));
     if (blob.length > MAX_SHARE_BYTES) throw relayMessage(new RelayError(413, 'too_large'));
+    // A list that cannot be read cannot take the new link either: stop before upload.
+    await this.store.list(this.now());
     const { relay, identity } = await this.identity();
     let made;
     try {
@@ -324,7 +326,13 @@ export class ShareService {
       size: blob.length,
       ...(recipients.length ? { recipients, opens: [] } : {})
     };
-    await this.store.add(link);
+    try {
+      await this.store.add(link);
+    } catch (err) {
+      // Unlisted means unrevocable: take the link down rather than leave it live.
+      await this.remove(relay, identity, made.id).catch((e) => degrade('share', 'could not take down an unrecorded link', e));
+      throw err;
+    }
     this.drafts.delete(draft.id);
     return link;
   }

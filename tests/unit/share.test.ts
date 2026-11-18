@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatMessage, MailConversation, MailItem } from '../../src/shared/types';
@@ -358,6 +358,39 @@ describe('ShareService', () => {
     await expect(svc.create({ kind: 'chat', threadId: 'other' }, { draftId: other.draftId })).rejects.toThrow(/out of date/);
     // An older client names no preview: refused, never guessed.
     await expect(svc.create(src)).rejects.toThrow(/Update Stem/);
+  });
+
+  it('leaves a broken shares.json alone and publishes nothing', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'stem-shares-')), 'shares.json');
+    writeFileSync(path, '{"version":1,"shares":[{"id":"OLD"');
+    let uploads = 0;
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: new ShareStore(() => path),
+      upload: async () => (uploads++, { id: 'HHHHHHHHHHHHHHHHHHHHHH', url: 'https://share.test/s/HHHHHHHHHHHHHHHHHHHHHH', expires: 99 })
+    });
+    await expect(svc.list()).rejects.toThrow(/could not read your list of shared links/);
+    await expect(publish(svc, { kind: 'chat', threadId: 'th' })).rejects.toThrow(/could not read/);
+    expect(uploads).toBe(0);
+    expect(readFileSync(path, 'utf8')).toBe('{"version":1,"shares":[{"id":"OLD"');
+  });
+
+  it('takes the link down when it could not be recorded', async () => {
+    const removed: string[] = [];
+    const st = store();
+    st.add = async () => {
+      throw new Error('disk full');
+    };
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: st,
+      upload: async () => ({ id: 'IIIIIIIIIIIIIIIIIIIIII', url: 'https://share.test/s/IIIIIIIIIIIIIIIIIIIIII', expires: 99 }),
+      remove: async (_r, _i, id) => void removed.push(id)
+    });
+    await expect(publish(svc, { kind: 'chat', threadId: 'th' })).rejects.toThrow(/disk full/);
+    expect(removed).toEqual(['IIIIIIIIIIIIIIIIIIIIII']);
   });
 
   it('refuses a preview that has gone stale', async () => {

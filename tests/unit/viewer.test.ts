@@ -76,6 +76,17 @@ describe('links try the viewer first', () => {
     expect(f.calls.sort()).toEqual(['external https://example.com/', 'open /tmp/a/data.csv', 'reveal /tmp/a/', 'reveal /tmp/a/x.boom'].sort());
   });
 
+  it('only reveals a page in Finder when the viewer fails, never opens it outside the sandbox', async () => {
+    setFileViewer(async () => {
+      throw new Error('viewer broke');
+    });
+    const f = fake();
+    openLink(f.shell, 'file:///tmp/a/page.html');
+    openFilesItem(f.shell, '/tmp/stem-files-a/report.html');
+    await tick();
+    expect(f.calls.sort()).toEqual(['reveal /tmp/a/page.html', 'reveal /tmp/stem-files-a/report.html']);
+  });
+
   it('a files/ item the viewer does not show keeps the reveal-only rule', async () => {
     setFileViewer(async () => false);
     const f = fake();

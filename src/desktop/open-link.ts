@@ -81,15 +81,19 @@ export function setFileViewer(viewer: FileViewer | null): void {
   fileViewer = viewer;
 }
 
-/** Try the viewer first; when it does not show the file (or fails), do `otherwise`. */
-function viewOr(path: string, otherwise: () => void): void {
+/**
+ * Try the viewer first; when it does not show the type, do `otherwise`. When
+ * the viewer fails, the file is only shown in Finder: an agent-written HTML
+ * page must not land in a browser, outside the sandbox the viewer exists for.
+ */
+function viewOr(shell: LinkShell, path: string, otherwise: () => void): void {
   if (!fileViewer) return otherwise();
   fileViewer(path).then(
     (shown) => {
       if (!shown) otherwise();
     },
-    // quiet: a viewer that fails falls back to the way this link opened before.
-    () => otherwise()
+    // quiet: the file is revealed instead; the user sees where it is.
+    () => shell.showItemInFolder(path)
   );
 }
 
@@ -98,7 +102,7 @@ export function openLink(shell: LinkShell, url: string): void {
   if (action.kind === 'open' || action.kind === 'reveal') {
     // A folder (trailing slash) is never a file to view.
     if (/[/\\]$/.test(action.path)) return actOn(shell, action);
-    return viewOr(action.path, () => actOn(shell, action));
+    return viewOr(shell, action.path, () => actOn(shell, action));
   }
   actOn(shell, action);
 }
@@ -125,7 +129,7 @@ const FILES_ITEM_REVEAL_ONLY = new Set(['.doc', '.xls', '.ppt', '.svg', '.zip'])
  * which runs no macros). Otherwise the file: rules, minus the types above.
  */
 export function openFilesItem(shell: LinkShell, path: string): void {
-  viewOr(path, () => {
+  viewOr(shell, path, () => {
     if (FILES_ITEM_REVEAL_ONLY.has(extname(path).toLowerCase())) shell.showItemInFolder(path);
     else actOn(shell, classifyLink(pathToFileURL(path).href));
   });
