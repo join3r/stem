@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Person } from '../../src/shared/types';
-import { nameTokenMatches, peopleIn } from '../../src/server/recall/people-match';
+import { namesPerson, nameTokenMatches, peopleIn } from '../../src/server/recall/people-match';
 import { addSuggestions, coercePerson, deletePerson, listPeople, peopleSnapshot, savePerson } from '../../src/server/workspace/people';
 import { peopleStorePath } from '../../src/server/workspace/paths';
 import { peopleForTurn, personFacts } from '../../src/server/recall/people-context';
@@ -70,6 +70,27 @@ describe('name matching', () => {
     const other = person({ name: 'Peter Malý' });
     expect(peopleIn('call Peter', [peter, other])).toEqual([]);
     expect(peopleIn('call Peter Malý', [peter, other])).toEqual([other]);
+  });
+
+  it('lets a full name win over a shared surname', () => {
+    const alice = person({ name: 'Alice Smith' });
+    const bob = person({ name: 'Bob Smith' });
+    expect(peopleIn('Alice Smith uses Linux', [alice, bob])).toEqual([alice]);
+    expect(peopleIn('Bob Smithovi pošli VPN', [alice, bob])).toEqual([bob]);
+    expect(peopleIn('Smith uses Linux', [alice, bob])).toEqual([]); // ambiguous: no one
+    expect(peopleIn('Alice Smith and Bob Smith met', [alice, bob])).toEqual([alice, bob]);
+    expect(namesPerson('Alice Smith uses Linux', bob, [alice, bob])).toBe(false);
+  });
+
+  it('lets a full name win over someone else’s lone name', () => {
+    const alice = person({ name: 'Alice Smith' });
+    const tom = person({ name: 'Tom Alice' }); // surname "alice", unique
+    expect(peopleIn('Alice Smith uses Linux', [alice, tom])).toEqual([alice]);
+    expect(peopleIn('Alice was here', [alice, tom])).toEqual([]); // ambiguous: no one
+    expect(peopleIn('Tom was here', [alice, tom])).toEqual([tom]);
+    const martin = person({ name: 'Martin' });
+    const kovac = person({ name: 'Martin Kováč' });
+    expect(peopleIn('Martin Kováč uses Linux', [martin, kovac])).toEqual([kovac]);
   });
 
   it('matches an address literally', () => {

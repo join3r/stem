@@ -22,7 +22,7 @@
 // which is what the TTL is for.
 
 import { createWriteStream } from 'node:fs';
-import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, rm, stat, utimes } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -46,6 +46,13 @@ export const STAGED_TTL_MS = 60 * 60_000;
 
 /** How often the sweep runs while the server is up. */
 const SWEEP_INTERVAL_MS = 10 * 60_000;
+
+/**
+ * Uploads still being written. The sweep leaves them alone: a slow upload may
+ * run longer than the TTL (the transport allows two hours), and writing into
+ * the file does not touch the directory's age.
+ */
+const activeUploads = new Set<string>();
 
 /** What POST /upload answers with. */
 export interface UploadReceipt {
@@ -106,15 +113,21 @@ export async function stageUpload(name: string, body: Readable): Promise<UploadR
   const id = randomUUID();
   const dir = join(uploadStagingRoot(), id);
   const stored = safeName(name);
-  await mkdir(dir, { recursive: true });
+  activeUploads.add(id);
   const target = join(dir, stored);
   try {
+    await mkdir(dir, { recursive: true });
     await pipeline(body, createWriteStream(target));
+    // The TTL counts from the end of the upload, not its start.
+    const done = new Date();
+    await utimes(dir, done, done);
   } catch (e) {
     // quiet: the upload's own failure is thrown on the next line, and a directory
     // that will not delete is one the age sweep collects.
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     throw e;
+  } finally {
+    activeUploads.delete(id);
   }
   const size = await stat(target).then((s) => s.size, () => 0);
   log('uploads', 'staged an upload', { name: stored, size });
@@ -145,7 +158,8 @@ export async function resolveUploadHandle(handle: string): Promise<string | null
 }
 
 /**
- * Delete staged uploads older than the TTL. Returns how many went, so a caller
+ * Delete staged uploads finished longer than the TTL ago; one still being
+ * written is never touched. Returns how many went, so a caller
  * (or a test) can see it did something. Errors on one entry never stop the rest:
  * a sweep that gives up on the first surprise is a sweep that stops running.
  */
@@ -159,7 +173,7 @@ export async function sweepStagedUploads(now = Date.now()): Promise<number> {
   }
   let removed = 0;
   for (const entry of entries) {
-    if (!entry.isDirectory() || !HANDLE_ID.test(entry.name)) continue;
+    if (!entry.isDirectory() || !HANDLE_ID.test(entry.name) || activeUploads.has(entry.name)) continue;
     const dir = join(root, entry.name);
     try {
       const { mtimeMs } = await stat(dir);
