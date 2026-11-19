@@ -1,4 +1,6 @@
 import { rmSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
+import { ortIntraOpThreads } from './ort-threads';
 import { isAbsolute, join } from 'node:path';
 import { applyPrefixes } from './embed-catalog';
 import type { LocalEmbedModelSpec } from './embed-catalog';
@@ -56,7 +58,20 @@ const PROGRESS_THROTTLE_MS = 250;
 // reranker 101 → 100 ms/pair, embedder 52 → 48 ms/text, RSS lower for both — the
 // arena buys nothing here, so it is off for the embedder too rather than one
 // model at a time.
-const SESSION_OPTIONS = { enableCpuMemArena: false } as const;
+//
+// Half the cores per session. Two of these processes run side by side (the
+// embedder and the Stem GTE fact/skill reranker), and on a turn both work at
+// once. With ORT's default every session spun up a thread per core, so 32
+// threads fought over 16 cores and each model ran about twice as slow as alone.
+// Measured on the 16-core server (2026-11-19, embed + 24 rerank pairs at once):
+// default threads embed p50 236 ms, rerank p50 1.6 s / p90 3.3 s; 8 threads
+// each 186 ms, 1.3 s / 1.8 s. A model alone is a little slower at half the
+// threads (embed 104 → 146 ms), a small price next to the contended tail.
+// STEM_ORT_THREADS overrides it for measuring (ort-threads.ts).
+const SESSION_OPTIONS = {
+  enableCpuMemArena: false,
+  intraOpNumThreads: ortIntraOpThreads(availableParallelism(), process.env.STEM_ORT_THREADS)
+} as const;
 
 type Extractor = ((
   texts: string[],

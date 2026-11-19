@@ -276,7 +276,7 @@ export function createEmbedWorkerManager(deps: {
       if (!p) return; // timed out already
       inflight.delete(msg.id);
       if (p.timer) clearTimeout(p.timer);
-      noteWorkerRequest(p.sink, Date.now() - p.requestedAt, msg.stats);
+      noteWorkerRequest(p.sink, p.requestedAt, Date.now(), msg.stats);
       p.resolve(msg.vectors);
       settled(p);
       return;
@@ -286,7 +286,7 @@ export function createEmbedWorkerManager(deps: {
       if (!p) return; // timed out already
       rerankInflight.delete(msg.id);
       if (p.timer) clearTimeout(p.timer);
-      noteWorkerRequest(p.sink, Date.now() - p.requestedAt, msg.stats);
+      noteWorkerRequest(p.sink, p.requestedAt, Date.now(), msg.stats);
       p.resolve(msg.results);
       return;
     }

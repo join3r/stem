@@ -15,16 +15,27 @@ export interface RunStats {
   runMs: number;
   /** The part of `runMs` during which another run was also in flight. */
   sharedMs: number;
+  /** Each run as [start, end] on the clock, flattened: where the request's runs sat in time. */
+  spans: number[];
 }
 
 /** What the worker reports back with a result. */
-export interface WorkerRequestStats extends RunStats {
+export interface WorkerRequestStats {
+  runMs: number;
+  sharedMs: number;
   /** Time between the request's arrival and its result that was not its own runs. */
   waitMs: number;
+  /**
+   * The request's runs as [start, end] pairs, flattened, in ms before the
+   * result was sent. Counted back from the result because the caller's clock
+   * and this process's clock share no zero: the caller places them by its own
+   * arrival time of the result (worker-timings.ts). Absent from older workers.
+   */
+  spans?: number[];
 }
 
 export function newRunStats(): RunStats {
-  return { runMs: 0, sharedMs: 0 };
+  return { runMs: 0, sharedMs: 0, spans: [] };
 }
 
 export interface RunClock {
@@ -53,7 +64,9 @@ export function createRunClock(now: () => number = () => performance.now()): Run
       } finally {
         tick();
         active -= 1;
-        stats.runMs += now() - start;
+        const end = now();
+        stats.runMs += end - start;
+        stats.spans.push(start, end);
         // This run was in flight the whole time, so every shared millisecond
         // since it started was shared with it.
         stats.sharedMs += shared - sharedAtStart;
@@ -67,6 +80,7 @@ export function finishRunStats(stats: RunStats, arrivedAt: number, now: number):
   return {
     runMs: Math.round(stats.runMs),
     sharedMs: Math.round(stats.sharedMs),
-    waitMs: Math.max(0, Math.round(now - arrivedAt - stats.runMs))
+    waitMs: Math.max(0, Math.round(now - arrivedAt - stats.runMs)),
+    spans: stats.spans.map((t) => Math.max(0, Math.round(now - t)))
   };
 }

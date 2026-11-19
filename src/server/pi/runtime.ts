@@ -4723,8 +4723,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         : ` recall=${fmt(r.total ?? null)}[facts=${fmt(r.facts ?? null)} embed=${fmt(r.embed ?? null)}` +
           ` rerank=${fmt(r.rerank ?? null)} search=${fmt(r.search ?? null)}]`;
     const w = breakdown.worker;
-    // The local worker's side of recall and skills: time its runs took, how much
-    // of that ran beside another run, and time the requests were not running.
+    // The local worker's side of recall and skills: time its runs took (summed),
+    // how much of that ran beside another run in its process, and the wall time
+    // the turn had a request out with none of its own runs going (worker-timings.ts).
     const workerStr = w ? ` worker[run=${w.runMs}ms shared=${w.sharedMs}ms wait=${w.waitMs}ms]` : '';
     const line =
       `build=${fmt(breakdown.buildMs)}${recallStr} skills=${fmt(breakdown.skillsMs)}${workerStr} ` +

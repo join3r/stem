@@ -507,6 +507,24 @@ describe('Stem Recall — fact relevance ranking', () => {
     expect(store.getFactsMissingVector('m2').some((f) => f.id === id)).toBe(true);
   });
 
+  it('stores the vector of a conflicted fact, so it stops counting as missing', () => {
+    // Every turn embeds the facts reported missing. A conflicted fact was
+    // reported missing but its vector was refused, so two facts on the server
+    // were embedded again on every turn for months.
+    store.resetFacts();
+    store.upsertFact('The user lives in Bratislava', 'distilled');
+    store.upsertFact('The user lives in Košice', 'distilled');
+    const [a, b] = store.getAllFacts();
+    store.createFactConflict(a.id, b.id, 'two home towns');
+    const missing = store.getFactsMissingVector('m1');
+    expect(missing.map((f) => f.id).sort()).toEqual([a.id, b.id].sort());
+    const gen = store.getFactsGeneration();
+    for (const f of missing) {
+      expect(store.upsertFactVectorForSnapshot(f.id, f.text, gen, 'm1', Float32Array.from([1, 0]))).toBe(true);
+    }
+    expect(store.getFactsMissingVector('m1')).toEqual([]);
+  });
+
   it('smart-chunks a large fact set and merges duplicates split far apart by id', async () => {
     store.resetFacts();
     store.setConsolidateChunkSize(4); // force chunking with a small set

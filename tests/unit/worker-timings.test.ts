@@ -11,6 +11,7 @@ import { createEmbedWorkerManager } from '../../src/server/recall/embed-manager'
 import { EMBED_CATALOG } from '../../src/server/recall/embed-catalog';
 import { RERANK_CATALOG } from '../../src/server/recall/rerank-catalog';
 import { newWorkerTimings, noteWorkerRequest, withWorkerTimings } from '../../src/server/recall/worker-timings';
+import { ortIntraOpThreads } from '../../src/server/recall/ort-threads';
 import { RecallStore } from '../../src/server/recall/store';
 import type { WorkerOutMessage } from '../../src/server/recall/embed-worker';
 import type { WorkerTransport } from '../../src/server/recall/embed-worker-host';
@@ -42,8 +43,8 @@ describe('the run clock', () => {
     t = 400;
     gb.open(); // B ends at 400: shared only until A left
     await runB;
-    expect(a).toEqual({ runMs: 250, sharedMs: 150 });
-    expect(b).toEqual({ runMs: 300, sharedMs: 150 });
+    expect(a).toEqual({ runMs: 250, sharedMs: 150, spans: [0, 250] });
+    expect(b).toEqual({ runMs: 300, sharedMs: 150, spans: [100, 400] });
   });
 
   it('counts a failed run too', async () => {
@@ -51,13 +52,15 @@ describe('the run clock', () => {
     const clock = createRunClock(() => t);
     const s = newRunStats();
     await expect(clock.run(async () => { t = 40; throw new Error('onnx'); }, s)).rejects.toThrow('onnx');
-    expect(s).toEqual({ runMs: 40, sharedMs: 0 });
+    expect(s).toEqual({ runMs: 40, sharedMs: 0, spans: [0, 40] });
   });
 
   it('reports the wait as the time since arrival that was not its own runs', () => {
-    expect(finishRunStats({ runMs: 120.4, sharedMs: 30.6 }, 1000, 1500)).toEqual({ runMs: 120, sharedMs: 31, waitMs: 380 });
+    // Spans go out counted back from the result: the caller has no other common reference.
+    expect(finishRunStats({ runMs: 120.4, sharedMs: 30.6, spans: [1200, 1320.4] }, 1000, 1500))
+      .toEqual({ runMs: 120, sharedMs: 31, waitMs: 380, spans: [300, 180] });
     // Rounding must not produce a negative wait.
-    expect(finishRunStats({ runMs: 500.4, sharedMs: 0 }, 1000, 1500).waitMs).toBe(0);
+    expect(finishRunStats({ runMs: 500.4, sharedMs: 0, spans: [] }, 1000, 1500).waitMs).toBe(0);
   });
 });
 
@@ -138,13 +141,58 @@ describe('a turn’s worker timings', () => {
 
   it('takes the wait from the caller’s own clock, so a hold before the worker counts', () => {
     const sink = newWorkerTimings();
-    // The caller waited 900 ms; the worker ran 200 ms and saw 50 ms of queue.
-    noteWorkerRequest(sink, 900, { runMs: 200, sharedMs: 0, waitMs: 50 });
+    // The caller waited 900 ms; the worker ran 200 ms just before answering.
+    noteWorkerRequest(sink, 0, 900, { runMs: 200, sharedMs: 0, waitMs: 50, spans: [200, 0] });
     expect(sink).toEqual({ requests: 1, waitMs: 700, runMs: 200, sharedMs: 0 });
     // A worker that sent no stats is counted, and guessed at nowhere.
-    noteWorkerRequest(sink, 400, undefined);
+    noteWorkerRequest(sink, 1000, 1400, undefined);
     expect(sink).toEqual({ requests: 2, waitMs: 700, runMs: 200, sharedMs: 0 });
-    noteWorkerRequest(undefined, 400, { runMs: 1, sharedMs: 1, waitMs: 1 });
+    noteWorkerRequest(undefined, 0, 400, { runMs: 1, sharedMs: 1, waitMs: 1 });
+  });
+
+  it('reports wall time, not a sum, when many requests wait at once', () => {
+    // Skill selection sends one request per rerank pair, all at t=0, and the
+    // worker scores them one after another, 100 ms each. Ten requests: the
+    // turn waited while nothing of its own ran for no time at all, but the
+    // old per-request sum read 0+100+…+900 = 4,500 ms.
+    const sink = newWorkerTimings();
+    for (let i = 0; i < 10; i++) {
+      const answeredAt = (i + 1) * 100;
+      noteWorkerRequest(sink, 0, answeredAt, { runMs: 100, sharedMs: 0, waitMs: i * 100, spans: [100, 0] });
+    }
+    expect(sink.waitMs).toBe(0);
+    expect(sink.runMs).toBe(1000);
+  });
+
+  it('counts the stretch where the turn’s requests sat behind work that was not its own', () => {
+    const sink = newWorkerTimings();
+    // A query embed waits 300 ms behind a background step, then runs 100 ms.
+    noteWorkerRequest(sink, 0, 400, { runMs: 100, sharedMs: 0, waitMs: 300, spans: [100, 0] });
+    // A rerank sent at 0 runs 200–600 in the other process: its wait (0–200) overlaps the first one's.
+    noteWorkerRequest(sink, 0, 600, { runMs: 400, sharedMs: 0, waitMs: 200, spans: [400, 0] });
+    // Nothing of the turn ran from 0 to 200.
+    expect(sink.waitMs).toBe(200);
+  });
+
+  it('places the runs at the end for a worker that sent no spans', () => {
+    const sink = newWorkerTimings();
+    noteWorkerRequest(sink, 0, 900, { runMs: 200, sharedMs: 0, waitMs: 700 });
+    expect(sink.waitMs).toBe(700);
+  });
+});
+
+describe('the retrieval models’ thread count', () => {
+  it('takes half the cores, so the two worker processes do not fight over them', () => {
+    expect(ortIntraOpThreads(16, undefined)).toBe(8);
+    expect(ortIntraOpThreads(10, undefined)).toBe(5);
+    expect(ortIntraOpThreads(1, undefined)).toBe(1);
+  });
+
+  it('follows STEM_ORT_THREADS when it is a positive whole number', () => {
+    expect(ortIntraOpThreads(16, '4')).toBe(4);
+    expect(ortIntraOpThreads(16, '0')).toBe(8);
+    expect(ortIntraOpThreads(16, 'many')).toBe(8);
+    expect(ortIntraOpThreads(16, '')).toBe(8);
   });
 });
 

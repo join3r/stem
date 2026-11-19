@@ -3090,7 +3090,9 @@ export class RecallStore {
   ): boolean => {
     if (this.getFactsGeneration() !== expectedGeneration) return false;
     const current = this.open()
-      .prepare(`SELECT text FROM facts WHERE id = ? AND status = 'active'`)
+      // The same statuses getFactsMissingVector reports. A conflicted fact left
+      // out here stayed "missing" forever and was embedded again on every turn.
+      .prepare(`SELECT text FROM facts WHERE id = ? AND status IN ('active', 'conflicted')`)
       .get(factId) as { text: string } | undefined;
     if (!current || current.text !== expectedText) return false;
     this.upsertFactVector(factId, model, vec);

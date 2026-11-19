@@ -99,7 +99,7 @@ export function createEmbedQueue(deps: EmbedQueueDeps): EmbedQueue {
   return {
     push(input) {
       if (input.texts.length === 0) {
-        deps.done(input.id, [], { runMs: 0, sharedMs: 0, waitMs: 0 });
+        deps.done(input.id, [], { runMs: 0, sharedMs: 0, waitMs: 0, spans: [] });
         return;
       }
       jobs.push({ ...input, cursor: 0, vectors: [], cancelled: false, arrivedAt: performance.now(), stats: newRunStats() });
