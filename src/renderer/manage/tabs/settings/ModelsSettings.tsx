@@ -747,9 +747,10 @@ function WebSearchSection({ providers }: { providers: string[] }) {
 }
 
 
+// No Claude: its plans don't cover third-party apps (billed from extra usage);
+// Claude goes through an Anthropic API key. Existing Claude sign-ins still reconnect.
 const OAUTH_CHOICES: { id: AuthProviderId; hint: string }[] = [
   { id: 'openai-codex', hint: 'Sign in with a ChatGPT Plus or Pro subscription.' },
-  { id: 'anthropic', hint: 'Sign in with a Claude Pro or Max subscription.' },
   { id: 'xai', hint: 'Sign in with a SuperGrok or X Premium subscription.' }
 ];
 
@@ -1315,7 +1316,7 @@ function ProviderDetail({
   );
 }
 
-/** Subscription sign-in (ChatGPT / Claude): pick the account, then Connect. */
+/** Subscription sign-in (ChatGPT / Grok; Claude plans don't cover third-party apps): pick the account, then Connect. */
 function ProviderAccountForm({
   onConnect,
   onCancel
