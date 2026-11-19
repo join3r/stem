@@ -463,7 +463,7 @@ function RerankerFields({
             onChange={(e) => {
               setTest(null);
               onPatch(e.target.value === GTE_FACT_MODEL
-                ? { localModel: 'qwen3-reranker-0.6b', factModel: GTE_FACT_MODEL }
+                ? { factModel: GTE_FACT_MODEL }
                 : { localModel: e.target.value, factModel: 'configured' });
             }}
           >
@@ -473,15 +473,14 @@ function RerankerFields({
               </option>
             ))}
             <option value={GTE_FACT_MODEL} disabled={!gteAvailable}>
-              Stem GTE Memory (~342 MB · recommended · best measured recall · fastest · CS/SK/DE/EN){!gteAvailable ? ' — unavailable' : ''}
+              Stem GTE Memory (~342 MB · recommended · fastest · CS/SK/DE/EN){!gteAvailable ? ' — unavailable' : ''}
             </option>
           </select>
           {gteSelected ? (
             <>
               <p className="muted">
-                Trained for Czech, Slovak, German, and English. Best recall and fastest reranking
-                measured in Stem benchmarks; the default for new installs. Runs on top of the Qwen3
-                reranker, which stays the fallback while this model prepares.
+                Trained for Czech, Slovak, German, and English. In Stem benchmarks it picked fewer
+                wrong memories than Qwen3 and ran about 10× faster; the default for new installs.
               </p>
               {!factStatus ? <p className="muted">Checking GTE availability…</p>
                 : !factStatus.installed && !factStatus.downloadable ? <p className="retrieval-status-error">Stem GTE Memory is unavailable on the connected host. Update Stem to download this model.</p>
@@ -523,16 +522,16 @@ function RerankerFields({
 }
 
 /**
- * Nudge toward the recommended recall setup (EmbeddingGemma 2 → Qwen3 reranker
- * → Stem GTE Memory), or null when the configured models already match it — a
+ * Nudge toward the recommended recall setup (EmbeddingGemma 2 → Stem GTE
+ * Memory), or null when the configured models already match it — a
  * setup that matches has nothing to review, so no line confirms the default back.
  */
 function recallHint(retrieval: RetrievalSettings): string | null {
-  const { embedOk: embedBest, rerankOk: rerankBest, factOk } = recallSetupStatus(retrieval);
-  if (embedBest && rerankBest && factOk) return null;
+  const { embedOk: embedBest, rerankOk: rerankBest } = recallSetupStatus(retrieval);
+  if (embedBest && rerankBest) return null;
   const rerankOn = retrieval.reranker.mode !== 'off';
-  return embedBest && rerankBest
-    ? 'Stem GTE Memory is recommended — best measured recall, fastest'
+  return embedBest && rerankOn
+    ? 'Stem GTE Memory is recommended — fewer wrong memories, fastest'
     : embedBest && !rerankOn
       ? 'Reranker is off'
       : embedBest

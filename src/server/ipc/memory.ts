@@ -52,6 +52,7 @@ import type {
 import { recallStore } from '../recall/store';
 import * as activity from '../activity';
 import { getFactRerankStatus } from '../recall/retrieval';
+import { usesGteMemory } from '../../shared/recall-recommended';
 const { getAutoResolvedConflicts, getEpisodicStats, getActiveFactIds, getFactsByIds, getFactDetails, getMemoryConflicts, setFactPinned: storeSetFactPinned, confirmFact: storeConfirmFact, resolveMemoryConflict: storeResolveMemoryConflict, restoreSupersededFact: storeRestoreSupersededFact } = recallStore;
 
 /** The Memory tab's surface: facts, episodic store, rebuild, and retrieval status. */
@@ -139,7 +140,7 @@ export function registerMemoryIpc(deps: IpcDeps): void {
   registerServer('reranker:localStatus', async (): Promise<LocalRerankStatus> => {
     // Same panel-open kick as embeddings:localStatus, for the reranker model.
     const retrieval = (await readSettings()).retrieval;
-    if (!deps.e2e && retrieval.reranker.mode === 'local') {
+    if (!deps.e2e && retrieval.reranker.mode === 'local' && !usesGteMemory(retrieval)) {
       deps.embedManager()?.ensureRerank(resolveRerankSpec(retrieval));
     }
     return deps.embedManager()?.rerankStatus() ?? { model: DEFAULT_LOCAL_RERANK_MODEL, state: 'idle' };

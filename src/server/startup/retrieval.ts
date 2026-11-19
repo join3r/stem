@@ -27,6 +27,7 @@ import * as activity from '../activity';
 import { log } from '../log';
 import { degrade } from '../degrade';
 import { recallStore } from '../recall/store';
+import { usesGteMemory } from '../../shared/recall-recommended';
 const { getEpisodicGeneration, pruneMessageVectorsExceptModel, pruneSummaryVectorsExceptModel, pruneVectorsExceptModel, getSummariesMissingVector, upsertSummaryVector } = recallStore;
 
 const GATE_CHECK_DELAY_MS = 30_000;
@@ -221,7 +222,7 @@ export function initRetrieval(deps: {
       });
     },
     onFailure(error) {
-      log('retrieval', 'GTE fact pilot unavailable; using configured reranker', {
+      log('retrieval', 'GTE fact pilot unavailable; recall runs without a reranker', {
         error: error instanceof Error ? error.message : String(error)
       });
       activity.fail('models.factRerank', error, 'Experimental memory model unavailable');
@@ -338,7 +339,7 @@ export function initRetrieval(deps: {
     setTimeout(() => {
       void getRetrieval().then((r) => {
         if (r.embeddings.mode === 'local') embedManager.ensure(resolveEmbedSpec(r));
-        if (r.reranker.mode === 'local') embedManager.ensureRerank(resolveRerankSpec(r));
+        if (r.reranker.mode === 'local' && !usesGteMemory(r)) embedManager.ensureRerank(resolveRerankSpec(r));
         void factPilot?.resolve();
       });
     }, 1_500);

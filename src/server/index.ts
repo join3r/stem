@@ -1,4 +1,5 @@
 import { eventTurnId, isSettledMethod } from '../shared/settledTurns';
+import { usesGteMemory } from '../shared/recall-recommended';
 import { onMailWorkChanged, recordInnerWork } from './mail/work';
 import { join } from 'node:path';
 import dns from 'node:dns';
@@ -750,10 +751,12 @@ function registerIpc(): void {
     }
     if (
       embedManager &&
-      (before.reranker.mode !== after.reranker.mode || before.reranker.localModel !== after.reranker.localModel)
+      (before.reranker.mode !== after.reranker.mode || before.reranker.localModel !== after.reranker.localModel
+        || usesGteMemory(before) !== usesGteMemory(after))
     ) {
-      if (after.reranker.mode === 'local') embedManager.reconfigureRerank(resolveRerankSpec(after));
-      else if (before.reranker.mode === 'local') embedManager.reconfigureRerank(null);
+      // GTE runs in its own worker (gte-fact-pilot.ts); choosing it unloads the catalog reranker.
+      if (after.reranker.mode === 'local' && !usesGteMemory(after)) embedManager.reconfigureRerank(resolveRerankSpec(after));
+      else if (before.reranker.mode === 'local' && !usesGteMemory(before)) embedManager.reconfigureRerank(null);
     }
     if (patch.reranker || patch.embeddings) emit('reranker:factStatus', await getFactRerankStatus());
     return next;

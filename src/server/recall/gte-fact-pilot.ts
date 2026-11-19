@@ -7,7 +7,7 @@ import type { FactRerankClient } from './retrieval';
 import type { LocalRerankModelSpec } from './rerank-catalog';
 import { RerankUnavailableError } from './rerank';
 import { formatFactQuery } from './fact-query';
-import { GTE_EMBED_MODELS } from '../../shared/recall-recommended';
+import { GTE_EMBED_MODELS, usesGteMemory } from '../../shared/recall-recommended';
 
 import { GTE_FACT_PILOT_ID, GTE_FACT_PILOT_FILES } from './gte-model-artifact';
 export { GTE_FACT_PILOT_ID, GTE_FACT_PILOT_FILES } from './gte-model-artifact';
@@ -47,9 +47,8 @@ export async function verifyGteFactModel(directory: string): Promise<void> {
 
 /** The installed files never override an explicit dropdown choice. */
 export function gteFactPilotEligible(r: RetrievalSettings): boolean {
-  return r.reranker.factModel === GTE_FACT_PILOT_ID
-    && r.embeddings.mode === 'local' && GTE_EMBED_MODELS.includes(r.embeddings.localModel)
-    && r.reranker.mode === 'local' && r.reranker.localModel === 'qwen3-reranker-0.6b';
+  return usesGteMemory(r)
+    && r.embeddings.mode === 'local' && GTE_EMBED_MODELS.includes(r.embeddings.localModel);
 }
 
 export function createGteFactPilot(deps: {
@@ -183,7 +182,7 @@ export function createGteFactPilot(deps: {
         : { installed: !disposed };
       if (disposed || !selected) return { ...availability, status: { model: spec.id, state: 'idle' } };
       const error = !gteFactPilotEligible(settings)
-        ? 'Stem GTE Memory requires built-in EmbeddingGemma 2 or Qwen3 Embedding and a compatible reranker configuration.' : verificationError;
+        ? 'Stem GTE Memory requires built-in EmbeddingGemma 2 or Qwen3 Embedding 0.6B.' : verificationError;
       return {
         ...availability,
         status: error ? { model: spec.id, state: 'error', error }

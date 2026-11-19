@@ -4,6 +4,7 @@ import { RerankUnavailableError } from './rerank';
 import type { RerankClient } from './rerank';
 import type { EmbedWorkerManager } from './embed-manager';
 import type { RerankerSettings, RetrievalSettings } from '../../shared/types';
+import { usesGteMemory } from '../../shared/recall-recommended';
 
 // RerankClient over the bundled local cross-encoder. Same contract as the local
 // embeddings client: available() NEVER awaits readiness — it kicks the worker
@@ -20,7 +21,9 @@ export function createLocalRerankClient(
 ): RerankClient {
   async function spec(): Promise<LocalRerankModelSpec | null> {
     const r = await getSettings();
-    return r.reranker.mode === 'local' ? resolveRerankSpec(r) : null;
+    // Stem GTE Memory is its own reranker (gte-fact-pilot.ts). While it is the
+    // choice, the catalog model is never loaded and never stands in for it.
+    return r.reranker.mode === 'local' && !usesGteMemory(r) ? resolveRerankSpec(r) : null;
   }
 
   return {

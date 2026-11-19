@@ -170,8 +170,9 @@ const DEFAULTS: ServerSettings = {
       // degrade gracefully rather than wait.
       mode: 'local',
       localModel: DEFAULT_LOCAL_RERANK_MODEL,
-      // Stem GTE Memory picks facts and skills on top of the Qwen3 pair: best
-      // recall and fastest reranking measured (docs/gte-memory-pilot.md). A
+      // Stem GTE Memory picks facts and skills in place of the catalog reranker
+      // (whose localModel then stays unloaded): fewer wrong picks and faster than
+      // Qwen3 in the benches (docs/gte-memory-pilot.md). A
       // fresh install gets it; a stored reranker section without the field is
       // a user who set up recall before it existed and is offered the switch
       // by the release popup instead (shared/recall-recommended.ts).
