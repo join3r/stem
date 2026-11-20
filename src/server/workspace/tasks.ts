@@ -104,6 +104,7 @@ function coerce(raw: unknown): ScheduledTask | null {
     enabled: r.enabled !== false, // default true
     createdAt: typeof r.createdAt === 'string' && r.createdAt ? r.createdAt : new Date().toISOString(),
     title: typeof r.title === 'string' && r.title ? r.title : titleFromPrompt(r.prompt),
+    ...(r.titleWritten === true && typeof r.title === 'string' && r.title ? { titleWritten: true } : {}),
     runsAs: coerceRunsAs(r.runsAs) ?? legacyRunsAs(r),
     ...(r.rewritten && typeof r.rewritten === 'object' && typeof r.rewritten.at === 'string' && typeof r.rewritten.original === 'string'
       ? { rewritten: { at: r.rewritten.at, original: r.rewritten.original, ...(r.rewritten.kind === 'edit' ? { kind: 'edit' as const } : {}) } }

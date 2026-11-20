@@ -1267,8 +1267,14 @@ export interface ScheduledTask {
    * firing vanished with the row stuck on "running".
    */
   inFlight?: { at: string; threadId?: string };
-  /** Short human label derived from the prompt, for the list + chat badge. */
+  /**
+   * Short human label for the list, the chat badge and the task's mail subject:
+   * the prompt's first line until a small model has written a name for it
+   * (scheduler/title.ts), then that name.
+   */
   title: string;
+  /** The title is a written name for the current prompt; cleared whenever the prompt changes. */
+  titleWritten?: boolean;
   /** Who and what this task's runs execute as (see {@link TaskRunsAs}). */
   runsAs: TaskRunsAs;
   /**

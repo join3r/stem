@@ -3,6 +3,7 @@ import { getPrivateChats } from '../workspace/chats';
 import { readMailConversation } from '../workspace/mail';
 import { TaskScheduler } from '../scheduler';
 import { rewriteTaskPrompt } from '../scheduler/rewrite';
+import { writeTaskTitle } from '../scheduler/title';
 import { reflectOnDelivery } from '../mail/reflect';
 import { degrade } from '../degrade';
 import { pushTaskAlert } from '../push';
@@ -177,6 +178,7 @@ export function initTaskScheduler(deps: {
     // Tasks from before runs had threads of their own get their prompts
     // rewritten to stand alone, once, and the user gets one mail saying which.
     rewriteForFreshThreads: (task) => rewriteTaskPrompt(deps.runtime, task),
+    writeTitle: (prompt) => writeTaskTitle(deps.runtime, prompt),
     onRewritten: async ({ rewritten, untouched }) => {
       const lines = [
         'Scheduled runs now start in a thread of their own, with no view of the chat they were scheduled from. Prompts written for the old behaviour could lean on that chat ("compare with earlier reports in this conversation"), so Stem rewrote them to stand alone.',
