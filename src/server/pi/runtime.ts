@@ -218,6 +218,8 @@ const { getTurnActivitiesByThread, getTurnTimingsByThread, getTurnSystemsByThrea
 // for ChatGPT sign-ins since Sep 2026.
 const DEFAULT_PROVIDER = 'openai-codex';
 const DEFAULT_MODEL = 'gpt-6.1-sol';
+/** In pi-home: present once Stem has moved the profile's transport off its old "sse" seed. */
+const STEM_PI_DEFAULTS_MARKER = 'stem-transport-auto.json';
 
 // No provider capability set for web search any more: it is served by the vendored
 // pi-web-access extension (see ./web-search), so every model has it.
@@ -5968,13 +5970,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // migration that did not run.
       degrade('pi.mcpConfig', 'left pre-identity OAuth tokens unstamped', e)
     );
-    // Prefer pi's SSE transport over its default WebSocket-first "auto", and give
-    // auto-compaction enough headroom for Stem's heavy turns.
+    // Pin pi's WebSocket-first "auto" transport (and move profiles off the "sse"
+    // Stem used to seed), and give auto-compaction enough headroom for Stem's
+    // heavy turns.
     await this.ensurePiSettingsDefaults().catch((e) =>
       // Same loss the parse failure inside reports, by the other route — the
-      // write. pi then spawns WebSocket-first, so a mid-stream drop hard-fails a
-      // turn whose side effects already committed, and the compaction reserve is
-      // pi's rather than the one the scheduled-run guard is sized against.
+      // write. The compaction reserve is then pi's rather than the one the
+      // scheduled-run guard is sized against, and a profile still on "sse"
+      // stays there.
       degrade('pi.settings', 'spawned the backend without the transport and compaction defaults', e)
     );
   }
@@ -5984,13 +5987,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * no-hot-reload note). Each key is only seeded when unset — an explicit value in
    * the file wins — and hand-authored settings are never clobbered.
    *
-   * `transport: "sse"`: pi's codex/ChatGPT transport is WebSocket-first, but a
-   * WebSocket that drops MID-stream cannot be retried (replaying would re-run
-   * tools it already executed — openai-codex-responses throws once websocketStarted),
-   * so a transient disconnect hard-fails the whole turn even though its side effects
-   * (e.g. a scheduled reminder) already committed. The SSE fetch path instead retries
-   * transient errors with backoff and is sturdier through network filters (Little
-   * Snitch).
+   * `transport: "auto"` (WebSocket first, SSE fallback). Measured on pi 1.4.0
+   * with gpt-5.6-sol against a ~40-turn history (2026-11-19): on a live socket pi
+   * sends only the new items with `previous_response_id` instead of the whole
+   * history, so the reply after a tool result starts ~1.5 s sooner (median) and
+   * the next prompt in an active chat ~0.5 s sooner. Changing the active tools
+   * between turns does not break that (pi appends tool changes to the
+   * transcript). The cost is the first request on a new socket (new chat, or
+   * after 5 min idle): ~1.4 s slower than SSE.
+   * Stem seeded "sse" from July 2026 because pi then hard-failed a turn on a
+   * mid-stream drop. pi 1.4.0 no longer does: a drop before the stream starts
+   * falls back to SSE, and a drop mid-stream is a retryable error, so pi's
+   * session auto-retry re-sends the request (over SSE) without re-running tools
+   * already executed — verified with a deliberately dropped socket.
+   * Profiles that still carry the old seeded "sse" are moved to "auto" once;
+   * the marker file then records that, so a later hand-set "sse" is kept.
    *
    * `compaction.reserveTokens`: pi's default reserve (16384) only leaves that much
    * room between the compaction threshold and the model's context window, and the
@@ -6061,8 +6072,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
     }
     let changed = false;
-    if (!('transport' in settings)) {
-      settings.transport = 'sse';
+    const marker = join(this.options.piHome, STEM_PI_DEFAULTS_MARKER);
+    const transportMigrated = await this.fileExists(marker);
+    if (!('transport' in settings) || (!transportMigrated && settings.transport === 'sse')) {
+      settings.transport = 'auto';
       changed = true;
     }
     if (!('compaction' in settings)) {
@@ -6070,6 +6083,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       changed = true;
     }
     if (changed) await writeFile(file, JSON.stringify(settings, null, 2) + '\n');
+    // Written after settings.json, so a failed write retries the move next spawn.
+    if (!transportMigrated) await writeFile(marker, JSON.stringify({ transport: 'auto' }) + '\n');
   }
 
   private async fileExists(path: string): Promise<boolean> {
