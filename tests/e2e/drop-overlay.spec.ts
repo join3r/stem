@@ -44,6 +44,11 @@ async function overlayWith(count: number, run: (win: Page) => Promise<void>) {
     const win = await mainWindowOf(app);
     await win.waitForLoadState('domcontentloaded');
     await win.setViewportSize({ width: 1280, height: 800 });
+    // The overlay listens from an effect in the mounted app, and the app is not
+    // mounted yet at domcontentloaded (the composer is absent there). A
+    // dragenter fired that early was lost, so the overlay never showed and the
+    // test failed now and then. A person drags onto a window that has loaded.
+    await expect(win.getByPlaceholder('Ask Stem…')).toBeVisible();
     await run(win);
   } finally {
     await app.close().catch(() => {});

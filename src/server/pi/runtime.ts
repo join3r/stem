@@ -213,11 +213,12 @@ const { getTurnActivitiesByThread, getTurnTimingsByThread, getTurnSystemsByThrea
 
 // Default provider/model. openai-codex is the user's working ChatGPT subscription
 // (verified streaming in the Phase-0 spike); Anthropic/Claude Max is selectable
-// but currently gated behind claude.ai "extra usage". gpt-6.1-sol matches pi's
-// own openai-codex default; gpt-5.3-codex-spark, the spike's model, is refused
-// for ChatGPT sign-ins since Sep 2026.
+// but currently gated behind claude.ai "extra usage". gpt-6.2-sol matches pi's
+// own openai-codex default (since pi 1.6.0; same price, context window and
+// thinking levels as gpt-6.1-sol); gpt-5.3-codex-spark, the spike's model, is
+// refused for ChatGPT sign-ins since Sep 2026.
 const DEFAULT_PROVIDER = 'openai-codex';
-const DEFAULT_MODEL = 'gpt-6.1-sol';
+const DEFAULT_MODEL = 'gpt-6.2-sol';
 /** In pi-home: present once Stem has moved the profile's transport off its old "sse" seed. */
 const STEM_PI_DEFAULTS_MARKER = 'stem-transport-auto.json';
 
@@ -6014,6 +6015,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * GLOBAL (pi cannot scale it per model). Scheduled runs need no guard of
    * their own: each starts in an empty thread, so only a single run's own
    * growth can overflow it.
+   *
+   * `cacheWarming: "streaming"`: pi 1.5.0 changed the default to "idle", which
+   * keeps sending refresh requests for up to 30 minutes after a run ends when
+   * pi guesses a refresh pays for itself. Stem keeps workers alive in a pool and
+   * runs on subscriptions whose quota is the scarce thing, so background
+   * refreshes nobody asked for would spend it. "streaming" is pi 1.4's behaviour.
    */
   /**
    * Locate the vendored pi-web-access entry point once per process, warning if the
@@ -6080,6 +6087,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
     if (!('compaction' in settings)) {
       settings.compaction = { reserveTokens: 65536 };
+      changed = true;
+    }
+    if (!('cacheWarming' in settings)) {
+      settings.cacheWarming = 'streaming';
       changed = true;
     }
     if (changed) await writeFile(file, JSON.stringify(settings, null, 2) + '\n');

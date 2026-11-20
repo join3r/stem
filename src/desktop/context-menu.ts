@@ -100,13 +100,13 @@ function showMenu(
     items.push(
       { label: 'Open', click: () => openExternalUrl(params.linkURL) },
       { label: revealLabel(), click: () => revealLink(shell, params.linkURL) },
-      { label: 'Copy Path', click: () => clipboard.writeText(filePath) },
+      { label: 'Copy Path', click: () => void clipboard.writeText(filePath) },
       { type: 'separator' }
     );
   } else if (params.linkURL) {
     items.push(
       { label: 'Open Link', click: () => openExternalUrl(params.linkURL) },
-      { label: 'Copy Link Address', click: () => clipboard.writeText(params.linkURL) },
+      { label: 'Copy Link Address', click: () => void clipboard.writeText(params.linkURL) },
       { type: 'separator' }
     );
   }

@@ -134,7 +134,7 @@ export async function relayCallback(redirectUri: string, params: Record<string, 
     // in that page cannot send this fetch anywhere else.
     await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(RELAY_TIMEOUT_MS) });
   } catch (e) {
-    throw new Error(`the sign-in listener did not answer: ${String((e as Error)?.message ?? e)}`);
+    throw new Error(`the sign-in listener did not answer: ${String((e as Error)?.message ?? e)}`, { cause: e });
   }
   log('oauth', 'replayed a couriered callback', { at: expectation.authority, path: expectation.path });
 }

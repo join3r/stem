@@ -127,7 +127,7 @@ async function upload(
   try {
     res = await answered;
   } catch (e) {
-    throw new Error(`“${name}” could not be sent to Stem's server: ${String((e as Error)?.message ?? e)}`);
+    throw new Error(`“${name}” could not be sent to Stem's server: ${String((e as Error)?.message ?? e)}`, { cause: e });
   }
   const text = await readBody(res);
   if (res.statusCode !== 200) {
@@ -196,7 +196,7 @@ export async function downloadFile(
   try {
     res = await answered;
   } catch (e) {
-    throw new Error(`“${name}” could not be fetched from Stem's server: ${String((e as Error)?.message ?? e)}`);
+    throw new Error(`“${name}” could not be fetched from Stem's server: ${String((e as Error)?.message ?? e)}`, { cause: e });
   }
   if (res.statusCode !== 200) {
     const problem = problemIn(await readBody(res), `HTTP ${res.statusCode}`);
@@ -209,7 +209,7 @@ export async function downloadFile(
     await pipeline(res, out);
   } catch (e) {
     await rm(path, { force: true }).catch(() => undefined);
-    throw new Error(`“${name}” did not finish downloading: ${String((e as Error)?.message ?? e)}`);
+    throw new Error(`“${name}” did not finish downloading: ${String((e as Error)?.message ?? e)}`, { cause: e });
   }
   return path;
 }

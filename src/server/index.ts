@@ -262,6 +262,8 @@ function pushApproval(kind: ApprovalPushKind, params: unknown): void {
 /** Pick a sensible app default from the models the signed-in providers expose. */
 function chooseDefaultModel(models: ModelSummary[]): string | null {
   const pick =
+    models.find((m) => m.provider === 'openai-codex' && m.id.endsWith('gpt-6.2-sol')) ??
+    // A pi catalog without 6.2 (an older bundled pi) still lands on the Sol line.
     models.find((m) => m.provider === 'openai-codex' && m.id.endsWith('gpt-6.1-sol')) ??
     models.find((m) => m.provider === 'anthropic' && /sonnet/i.test(m.id)) ??
     models.find((m) => m.provider === 'anthropic') ??

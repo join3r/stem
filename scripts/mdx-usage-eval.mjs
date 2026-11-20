@@ -17,7 +17,7 @@
 //              old pointer prompt with that page inlined
 //
 // Optional:
-//   STEM_MDX_EVAL_MODEL=openai-codex/gpt-6.1-sol
+//   STEM_MDX_EVAL_MODEL=openai-codex/gpt-6.2-sol
 //   STEM_MDX_EVAL_PI_DIR=~/.pi/agent      (a pi home holding a working sign-in)
 //   STEM_MDX_EVAL_CASES=chart-bills,plain-hi
 //   STEM_MDX_EVAL_CONCURRENCY=4
@@ -32,7 +32,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMdx from 'remark-mdx';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const [provider, ...modelParts] = (process.env.STEM_MDX_EVAL_MODEL ?? 'openai-codex/gpt-6.1-sol').split('/');
+const [provider, ...modelParts] = (process.env.STEM_MDX_EVAL_MODEL ?? 'openai-codex/gpt-6.2-sol').split('/');
 const modelId = modelParts.join('/');
 const piDir = process.env.STEM_MDX_EVAL_PI_DIR ?? join(homedir(), '.pi', 'agent');
 const concurrency = Math.max(1, Number(process.env.STEM_MDX_EVAL_CONCURRENCY ?? 4));

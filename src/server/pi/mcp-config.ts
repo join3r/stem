@@ -111,10 +111,10 @@ export interface PiMcpConfig {
   servers: Record<string, PiMcpServer>;
 }
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
 function mainRuntimeAssetPath(rel: string): string {
-  const built = join(__dirname, rel);
+  const built = join(moduleDir, rel);
   return existsSync(built) ? built : join(host().appRoot(), 'src', 'server', rel);
 }
 
@@ -661,7 +661,7 @@ async function withOwnedFileLock<T>(
         // immediately and take it.
         continue;
       }
-      if (Date.now() >= deadline) throw new Error(timeoutMessage);
+      if (Date.now() >= deadline) throw new Error(timeoutMessage, { cause: error });
       await new Promise<void>((resolve) => setTimeout(resolve, 10));
     }
   }

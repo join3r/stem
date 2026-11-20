@@ -22,7 +22,14 @@ const MDX = [
 ].join('\n');
 
 test('copies a reply as clean Markdown and HTML', async ({ electronApp, mainWindow }) => {
-  const saved = await electronApp.evaluate(({ clipboard }) => ({ text: clipboard.readText(), html: clipboard.readHTML() }));
+  // Electron 44+ clipboard: W3C-shaped and async (no readHTML; write takes ClipboardItems).
+  const saved = await electronApp.evaluate(async ({ clipboard }) => {
+    const items = await clipboard.read();
+    const text = await clipboard.readText();
+    const htmlItem = items.find((i) => i.types.includes('text/html'));
+    const html = htmlItem ? await ((await htmlItem.getType('text/html')) as Blob).text() : '';
+    return { text, html };
+  });
   try {
     const composer = mainWindow.getByPlaceholder('Ask Stem…');
     await composer.click();
@@ -37,7 +44,12 @@ test('copies a reply as clean Markdown and HTML', async ({ electronApp, mainWind
     await reply.getByLabel('Copy message').click();
     await expect(reply.getByLabel('Copied')).toBeVisible();
 
-    const got = await electronApp.evaluate(({ clipboard }) => ({ text: clipboard.readText(), html: clipboard.readHTML() }));
+    const got = await electronApp.evaluate(async ({ clipboard }) => {
+      const items = await clipboard.read();
+      const htmlItem = items.find((i) => i.types.includes('text/html'));
+      const html = htmlItem ? await ((await htmlItem.getType('text/html')) as Blob).text() : '';
+      return { text: await clipboard.readText(), html };
+    });
     expect(got.text).toContain('Before you start:');
     expect(got.text).toContain('> **Warning:** This **erases** the disk.');
     expect(got.text).toContain('1. Back up.\n2. Run `wipe`.');
@@ -49,6 +61,10 @@ test('copies a reply as clean Markdown and HTML', async ({ electronApp, mainWind
     expect(got.html).toMatch(/<ol><li>(<p>)?Back up\./);
     expect(got.html).not.toMatch(/<button|<input|&lt;Callout/);
   } finally {
-    await electronApp.evaluate(({ clipboard }, s) => clipboard.write(s), saved);
+    await electronApp.evaluate(({ clipboard, ClipboardItem }, s) => {
+      const data: Record<string, Blob> = { 'text/plain': new Blob([s.text], { type: 'text/plain' }) };
+      if (s.html) data['text/html'] = new Blob([s.html], { type: 'text/html' });
+      return clipboard.write([new ClipboardItem(data)]);
+    }, saved);
   }
 });

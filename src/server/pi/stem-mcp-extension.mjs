@@ -232,7 +232,7 @@ async function withOwnedFileLock(lockPath, timeoutMessage, operation) {
       } catch {
         continue;
       }
-      if (Date.now() >= deadline) throw new Error(timeoutMessage);
+      if (Date.now() >= deadline) throw new Error(timeoutMessage, { cause: error });
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
@@ -2226,7 +2226,7 @@ function readMcpJson(cfgPath) {
     } catch {
       // best-effort backup
     }
-    throw new Error(`mcp.json is corrupt (preserved at ${cfgPath}.corrupt): ${(e && e.message) || e}`);
+    throw new Error(`mcp.json is corrupt (preserved at ${cfgPath}.corrupt): ${(e && e.message) || e}`, { cause: e });
   }
 }
 

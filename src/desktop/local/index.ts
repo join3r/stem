@@ -1,4 +1,4 @@
-import { clipboard, dialog, nativeImage, shell, type BrowserWindow } from 'electron';
+import { clipboard, ClipboardItem, dialog, nativeImage, shell, type BrowserWindow } from 'electron';
 import { execFile } from 'node:child_process';
 import { mkdtemp, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -463,10 +463,13 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
   handleLocal('image:saveToDownloads', (_e, dataUrl: string, name: string) => saveImageToDownloads(dataUrl, name));
   handleLocal('audio:saveToDownloads', (_e, dataUrl: string, name: string) => saveAudioToDownloads(dataUrl, name));
 
-  handleLocal('image:copy', (_e, dataUrl: string) => {
+  handleLocal('image:copy', async (_e, dataUrl: string) => {
     const img = nativeImage.createFromDataURL(dataUrl);
     if (img.isEmpty()) throw new Error('Not an image.');
-    clipboard.writeImage(img);
+    // Electron 44 dropped clipboard.writeImage for the W3C-shaped write().
+    // Re-encoded as PNG so a JPEG/WebP data URL lands as an image every app pastes.
+    const png = new Blob([new Uint8Array(img.toPNG())], { type: 'image/png' });
+    await clipboard.write([new ClipboardItem({ 'image/png': png })]);
   });
 
   /**

@@ -38,11 +38,41 @@ function copyMainRuntimeAssets() {
   };
 }
 
+/**
+ * electron-vite 6 appends a "CommonJS Shims" block to every ES chunk that
+ * mentions require/__dirname/__filename, declaring them with `const`. Rolldown
+ * (Vite 8) does not rename bundled top-level bindings around that block the way
+ * Rollup did, so a bundled dependency's own `var require = createRequire(...)`
+ * (acpx → @openclaw/fs-safe) became "Identifier 'require' has already been
+ * declared" and stem-server would not start. Turning the shim's `const` into
+ * `var` makes both declarations legal; they bind the same thing.
+ */
+function relaxCjsShim() {
+  return {
+    name: 'stem:relax-cjs-shim',
+    apply: 'build' as const,
+    enforce: 'post' as const,
+    renderChunk(code: string): { code: string; map: null } | null {
+      const start = code.indexOf('// -- CommonJS Shims --');
+      if (start < 0) return null;
+      const end = code.indexOf('createRequire(import.meta.url);', start);
+      if (end < 0) return null;
+      const block = code.slice(start, end).replace(/\bconst (__filename|__dirname|require) =/g, 'var $1 =');
+      return { code: code.slice(0, start) + block + code.slice(end), map: null };
+    }
+  };
+}
+
 export default defineConfig({
   main: {
-    plugins: [copyMainRuntimeAssets()],
+    plugins: [copyMainRuntimeAssets(), relaxCjsShim()],
     define: { __STEM_SYS_VERSION__: systemVersion },
     build: {
+      // electron-vite 5+ externalizes every package.json dependency by default;
+      // Stem bundles them (only the `external` list below stays out), as
+      // electron-vite 4 did. The server image and server-boot run dist/main
+      // without those packages beside it.
+      externalizeDeps: false,
       outDir: 'dist/main',
       rollupOptions: {
         // index is the Electron main process: src/desktop, which starts the
@@ -118,6 +148,7 @@ export default defineConfig({
   },
   preload: {
     build: {
+      externalizeDeps: false,
       outDir: 'dist/preload',
       rollupOptions: {
         input: 'src/preload/index.ts',
@@ -136,8 +167,11 @@ export default defineConfig({
         // main / Quick Chat / HUD. There was a second (mobile.html, the phone's
         // web client, served over the transport); both it and the static route
         // that served it are gone.
+        // Absolute: Vite 8's dev dependency scan resolves a relative input
+        // against the renderer root (src/renderer), not the project, fails, and
+        // skips pre-bundling, which left the first dev window blank.
         input: {
-          index: 'src/renderer/index.html'
+          index: join(rootDir, 'src/renderer/index.html')
         }
       }
     }

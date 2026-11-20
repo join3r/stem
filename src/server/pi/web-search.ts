@@ -65,7 +65,7 @@ const PACKAGE = 'pi-web-access';
  */
 
 /** The version this integration was written against (mirrors TESTED_PI_VERSION). */
-export const TESTED_WEB_ACCESS_VERSION = '0.46.0';
+export const TESTED_WEB_ACCESS_VERSION = '0.48.0';
 
 /**
  * `<piHome>/web-search.json` — pi-web-access reads its whole configuration from

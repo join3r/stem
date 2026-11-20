@@ -133,7 +133,7 @@ export async function pairWithServer(
       signal: AbortSignal.timeout(30_000)
     });
   } catch (e) {
-    throw new Error(`could not reach ${url} to pair: ${String((e as Error)?.message ?? e)}`);
+    throw new Error(`could not reach ${url} to pair: ${String((e as Error)?.message ?? e)}`, { cause: e });
   }
   const body = (await res.json().catch(() => null)) as
     | { ok?: boolean; result?: { deviceId?: string; token?: string }; error?: string }

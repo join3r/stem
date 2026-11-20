@@ -324,7 +324,7 @@ export class InterStemService {
       cert = await verifyCode(entry.relay, this.identity(state), address, code.trim());
     } catch (err) {
       if (err instanceof RelayError && err.code === 'invalid_code')
-        throw new Error('That code is not right, or it expired.');
+        throw new Error('That code is not right, or it expired.', { cause: err });
       throw err;
     }
     await this.store.update((s) => {

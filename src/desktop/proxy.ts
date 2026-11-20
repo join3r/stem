@@ -634,7 +634,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       if (cached !== undefined) return cached;
       // Distinct from a call the server answered, and the only error shape here
       // the renderer could not have seen before the split.
-      throw new Error(`Stem's server is unreachable: ${String((e as Error)?.message ?? e)}`);
+      throw new Error(`Stem's server is unreachable: ${String((e as Error)?.message ?? e)}`, { cause: e });
     }
     type RpcReply = { ok?: boolean; result?: unknown; error?: string } | null;
     let body: RpcReply;
