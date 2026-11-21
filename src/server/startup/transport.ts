@@ -1,4 +1,6 @@
 import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mailResultTouched } from '../workspace/mail';
+import { isMailResult, sliceMailResult } from '../../shared/mail-delta';
 import { MAIL_FILE_PREFIX, mailFileDownload } from '../interstem/mail-files';
 import { basename, dirname } from 'node:path';
 import { readableFilePath } from '../files/store';
@@ -205,6 +207,12 @@ export async function startTransport(cfg: TransportConfig): Promise<TransportEnd
     // untouched: it is the one input a client cannot write for itself, which is
     // what makes `devices:registerPush` able to mean "this device".
     dispatch: (channel, args, caller) => dispatchLocal(channel, args, caller),
+    // A mutator's answer is the whole mail store; a delta-asking client gets
+    // only the conversations the write touched (unknown = the whole answer).
+    mailDelta: (result) => {
+      const touched = mailResultTouched(result);
+      return touched && isMailResult(result) ? sliceMailResult(result, touched) : undefined;
+    },
     registeredChannels: serverChannels,
     pair: async (code, kind) => {
       const minted = await redeemPairingCode(code, kind);

@@ -438,7 +438,9 @@ function registerIpc(): void {
   registerInterStemIpc({ service: () => interStem, router: () => mailRouter });
   registerShareIpc({ runtime: () => runtime!, interStem: () => interStem, onOpened: mailShareOpened });
   registerMemoryCheckIpc({ router: () => mailRouter, runtime: () => runtime!, emit });
-  onMailChanged(() => emit('mail:changed', undefined));
+  // The payload names the conversations the write touched, so a client re-reads
+  // only those (shared/mail-delta.ts); none named = re-read the list.
+  onMailChanged((conversationIds) => emit('mail:changed', conversationIds ? { conversationIds } : undefined));
   // What is learned from mail with other people, tagged with their address
   // (interstem/contact-memory.ts): a while after mail changed.
   const contactMemory = contactMemoryScheduler({
@@ -896,7 +898,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   });
   mailRouter = new MailRouter({
     runtime,
-    onChange: () => emit('mail:changed', undefined),
+    onChange: (conversationId) => emit('mail:changed', conversationId ? { conversationIds: [conversationId] } : undefined),
     // The user's mail in a conversation with another Stem goes out through the
     // relay; progress lands on the item (external.status).
     externalSend: (conversationId, itemId) => {

@@ -251,8 +251,12 @@ interface DeliverySettle {
 
 export interface MailRouterOptions {
   runtime: ChatBackend;
-  /** Pushed to every client whenever mail changes (a delivery landed, etc.). */
-  onChange: () => void;
+  /**
+   * Pushed to every client whenever mail changes (a delivery landed, etc.).
+   * Names the conversation, so a client re-reads only that one; without one,
+   * clients re-read the whole list.
+   */
+  onChange: (conversationId?: string) => void;
   /**
    * Resolve a persona pin's device reference (id or label) to a paired
    * computer and whether it can run coding agents RIGHT NOW (connected, with
@@ -551,7 +555,7 @@ export class MailRouter {
     });
     const item = result.items[result.items.length - 1];
     this.opts.externalSend(conversation.id, item.id);
-    this.opts.onChange();
+    this.opts.onChange(conversation.id);
     return result;
   }
 
@@ -662,7 +666,7 @@ export class MailRouter {
     const sent = this.turnMailSent.get(ctx.turnId) ?? { persona: false, user: false, up: false, down: false };
     sent.user = true;
     this.turnMailSent.set(ctx.turnId, sent);
-    this.opts.onChange();
+    this.opts.onChange(conversation.id);
     return { ok: true, text: `Draft saved for the user to review and send to ${address}. Finish your turn now.` };
   }
 
@@ -676,7 +680,7 @@ export class MailRouter {
     const settled = await settleSendDraft(itemId, decision === 'allow' ? 'allowed' : 'denied', text);
     if (!settled) return { ok: false, error: 'That draft was already answered.' };
     if (decision === 'deny') {
-      this.opts.onChange();
+      this.opts.onChange(settled.item.conversationId);
       return { ok: true };
     }
     const { conversations } = await readMail();
@@ -706,7 +710,7 @@ export class MailRouter {
       await settleUserSend(source.id, verdict?.route === 'status');
       if (verdict && verdict.route !== 'forward') {
         await appendMailItem({ conversationId, from: driver, to: ['user'], body: verdict.reply, statusReply: true });
-        this.opts.onChange();
+        this.opts.onChange(conversationId);
       }
     } catch (e) {
       // The answer never reached the user: deliver the mail as usual instead.
@@ -759,7 +763,7 @@ export class MailRouter {
   async deliverOwnedMail(owner: NonNullable<MailConversation['owner']>, subject: string, body: string): Promise<string> {
     const conversation = await createConversation(subject, [owner], body, { owner });
     await appendMailItem({ conversationId: conversation.id, from: owner, to: ['user'], body });
-    this.opts.onChange();
+    this.opts.onChange(conversation.id);
     return conversation.id;
   }
 
@@ -769,7 +773,7 @@ export class MailRouter {
     if (!body) throw new Error('Write the reply before sending it.');
     await appendMailItem({ conversationId: conversation.id, from: 'user', to: [owner], body });
     const result = await setConversationStatus(conversation.id, 'working');
-    this.opts.onChange();
+    this.opts.onChange(conversation.id);
     void (async () => {
       let answer: string;
       let status: MailConversation['status'] = 'idle';
@@ -786,7 +790,7 @@ export class MailRouter {
       } catch (error) {
         degrade('mail', 'lost the answer to a reply in an owned conversation', error);
       }
-      this.opts.onChange();
+      this.opts.onChange(conversation.id);
     })();
     return result;
   }
@@ -828,7 +832,7 @@ export class MailRouter {
     } else {
       this.enqueueDelivery(conversation.id, r.personaId, body, r.from, r.epoch, r.sourceItemId);
     }
-    this.opts.onChange();
+    this.opts.onChange(conversation.id);
     return { ok: true };
   }
 
@@ -887,7 +891,7 @@ export class MailRouter {
     });
     const current = this.drainStatus.get(p.conversationId) ?? 'idle';
     if (DRAIN_RANK['awaiting-user'] > DRAIN_RANK[current]) this.drainStatus.set(p.conversationId, 'awaiting-user');
-    this.opts.onChange();
+    this.opts.onChange(p.conversationId);
   }
 
   /**
@@ -992,7 +996,7 @@ export class MailRouter {
     const persona = await getPersona(personaId);
     if (!persona) throw new Error(`No persona "${personaId}" exists.`);
     const result = await addParticipant(conversationId, persona.id);
-    this.opts.onChange();
+    this.opts.onChange(conversationId);
     return result;
   }
 
@@ -1019,7 +1023,7 @@ export class MailRouter {
       next.push(persona.id);
     }
     const result = await setParticipants(conversationId, next);
-    this.opts.onChange();
+    this.opts.onChange(conversationId);
     return result;
   }
 
@@ -1085,7 +1089,7 @@ export class MailRouter {
       });
     }
     this.updateActivityDetail(conversationId);
-    this.opts.onChange();
+    this.opts.onChange(conversationId);
     return { stopped: true };
   }
 
@@ -1181,7 +1185,7 @@ export class MailRouter {
     });
     const notification = delivered.items.at(-1);
     if (input.threadId && notification) await attachScheduledWork(input.threadId, target.id, notification.id, from);
-    this.opts.onChange();
+    this.opts.onChange(target.id);
     return target.id;
   }
 
@@ -1193,8 +1197,8 @@ export class MailRouter {
   async attachTaskResult(input: { itemId: string; result: string; threadId?: string }): Promise<void> {
     const images = input.threadId ? (this.opts.generatedImages?.(input.threadId) ?? []) : [];
     if (!input.result && !images.length) return;
-    await setMailItemResult(input.itemId, input.result, images);
-    this.opts.onChange();
+    const result = await setMailItemResult(input.itemId, input.result, images);
+    this.opts.onChange(result.items.find((i) => i.id === input.itemId)?.conversationId);
   }
 
   // ---- the mail bridge (send_mail / spawn_agent from inside a delivery turn) ----
@@ -1240,7 +1244,7 @@ export class MailRouter {
           await addParticipant(conversation.id, id);
           conversation.participants = [...conversation.participants, id];
         }
-        this.opts.onChange();
+        this.opts.onChange(conversation.id);
       }
     }
     const reachable = new Set([...conversation.participants, ...agents.map((a) => a.id), 'user']);
@@ -1446,7 +1450,7 @@ export class MailRouter {
       await this.openJoin(ctx.conversationId, ctx.personaId, initiator, epoch, sourceItemId, delivered);
     }
     this.updateActivityDetail(ctx.conversationId);
-    this.opts.onChange();
+    this.opts.onChange(ctx.conversationId);
     return {
       ok: true,
       text:
@@ -1505,7 +1509,7 @@ export class MailRouter {
       if (caller.addsPersonas && !conversation.owner && ctx.personaId === conversation.participants[0]) {
         await addParticipant(conversation.id, role.id);
         conversation.participants = [...conversation.participants, role.id];
-        this.opts.onChange();
+        this.opts.onChange(conversation.id);
       }
     }
     if (isPinned(role) && !conversation.participants.includes(role.id)) {
@@ -1591,7 +1595,7 @@ export class MailRouter {
     }
     const sent = await this.bridgeSend({ to: [id], body: brief }, ctx);
     if (!sent.ok) return { ok: false, error: `${name} was created but its brief was not sent: ${sent.error}` };
-    this.opts.onChange();
+    this.opts.onChange(conversation.id);
     return {
       ok: true,
       text:
@@ -2047,7 +2051,7 @@ export class MailRouter {
         if (device) await dropQueuedMail(conversationId).catch(() => undefined);
       }
       await setConversationStatus(conversationId, 'working');
-      this.opts.onChange();
+      this.opts.onChange(conversationId);
       const { conversations, items } = await readMail();
       const conversation = conversations.find((c) => c.id === conversationId);
       if (!conversation) return; // deleted while queued
@@ -2364,7 +2368,7 @@ export class MailRouter {
       // quiet: the conversation was deleted while its deliveries ran — there
       // is no row left for a status to show on.
     });
-    this.opts.onChange();
+    this.opts.onChange(conversationId);
   }
 
   /**
@@ -2449,7 +2453,7 @@ export class MailRouter {
       // thread, start nothing (see `answered`).
       if (this.isFiled(conversation, initiator, personaId, epoch)) {
         await appendMailItem({ conversationId, from: personaId, to: [initiator], body: reply, ...agentReplies, filed: true });
-        this.opts.onChange();
+        this.opts.onChange(conversationId);
         return;
       }
       const join = this.joinFor(conversationId, initiator);
@@ -2487,11 +2491,11 @@ export class MailRouter {
           });
           if (name !== undefined) join.awaiting.delete(personaId);
           this.maybeAssemble(conversationId, join);
-          this.opts.onChange();
+          this.opts.onChange(conversationId);
           return;
         }
         this.enqueueTask(conversationId, { personaId: initiator, body: reply, from: personaId, epoch, sourceItemId, itemId });
-        this.opts.onChange();
+        this.opts.onChange(conversationId);
         return;
       }
       // Cap spent: the reply lands on the user instead of looping on.
@@ -2562,7 +2566,7 @@ export class MailRouter {
     // not be papered over by a later hop landing cleanly.
     const current = this.drainStatus.get(conversationId) ?? 'idle';
     if (DRAIN_RANK[drainStatus] > DRAIN_RANK[current]) this.drainStatus.set(conversationId, drainStatus);
-    this.opts.onChange();
+    this.opts.onChange(conversationId);
   }
 
   /**

@@ -3,6 +3,7 @@ import type { InboxState } from '../../shared/inbox';
 import { pruneReplyDrafts } from './mail-drafts';
 import { stagedForSend } from './staged-uploads';
 import { withArchived, withRead, withSnooze } from '../../shared/inbox';
+import { mergeMailResult } from '../../shared/mail-delta';
 import type {
   MailComposeInput,
   MailConversation,
@@ -75,30 +76,81 @@ export function useMail(ready: boolean): MailApi {
   const pendingPatches = useRef(new Map<number, (inbox: InboxState) => InboxState>());
   const patchSeq = useRef(0);
 
-  /** Adopt a server-fresh list, keeping optimistic patches in flight on top. */
+  /**
+   * Adopt a server answer, keeping optimistic patches in flight on top. A
+   * delta (just the conversations a write touched) merges into what we hold;
+   * a full list replaces it (shared/mail-delta.ts).
+   */
   const applyServer = useCallback((list: MailListResult) => {
-    setMail(() => {
-      let inbox = list.inbox;
+    setMail((prev) => {
+      const merged = mergeMailResult(prev, list);
+      let inbox = merged.inbox;
       for (const patch of pendingPatches.current.values()) inbox = patch(inbox);
-      return inbox === list.inbox ? list : { ...list, inbox };
+      return inbox === merged.inbox ? merged : { ...merged, inbox };
     });
   }, []);
 
+  // Re-reads after mail:changed, one request on the wire at a time. A change
+  // names the conversations it touched, and only those are fetched; the whole
+  // list is read at start, for a change that names none, and from a server too
+  // old to answer by conversation. The whole store was 1.6 MB by November 2026,
+  // and fetching it on every change stacked a dozen downloads that crowded out
+  // the user's own Send (40–80 s each on the VPS, 2026-11-21). Changes that land
+  // mid-fetch gather into the next request, so what we hold is never older
+  // than the last change.
+  const wanted = useRef<{ all: boolean; ids: Set<string> }>({ all: false, ids: new Set() });
+  const fetching = useRef(false);
+  const byConversation = useRef(true);
+  const pump = useCallback(() => {
+    if (fetching.current || !window.stem) return;
+    const { all, ids } = wanted.current;
+    const whole = all || !byConversation.current;
+    if (!whole && ids.size === 0) return;
+    wanted.current = { all: false, ids: new Set() };
+    fetching.current = true;
+    const request = whole ? window.stem.listMail() : window.stem.listMailConversations([...ids]);
+    request
+      .then((list) => {
+        applyServer(list);
+        if (!list.delta) pruneReplyDrafts(new Set(list.conversations.map((c) => c.id)));
+      })
+      .catch((err: unknown) => {
+        // A server from before mail:conversations: read whole lists from now on.
+        if (!whole && /no handler registered/.test(String((err as Error)?.message ?? err))) {
+          byConversation.current = false;
+          wanted.current.all = true;
+        }
+        // Otherwise quiet-shaped but deliberate: offline, the pane keeps whatever it has.
+      })
+      .finally(() => {
+        fetching.current = false;
+        pump();
+      });
+  }, [applyServer]);
+
   const refresh = useCallback(() => {
     if (!window.stem) return;
-    window.stem.listMail().then((list) => {
-      applyServer(list);
-      pruneReplyDrafts(new Set(list.conversations.map((c) => c.id)));
-    }).catch(() => {
-      // quiet-shaped but deliberate: offline, the pane keeps whatever it has.
-    });
     window.stem.listPersonas().then(setPersonas).catch(() => {});
-  }, [applyServer]);
+    wanted.current.all = true;
+    pump();
+  }, [pump]);
 
   useEffect(() => {
     if (ready) refresh();
   }, [ready, refresh]);
-  useEffect(() => window.stem?.onMailChanged(() => refresh()), [refresh]);
+  useEffect(
+    () =>
+      window.stem?.onMailChanged((change) => {
+        const ids = change?.conversationIds;
+        if (!ids?.length) {
+          refresh();
+          return;
+        }
+        for (const id of ids) wanted.current.ids.add(id);
+        pump();
+      }),
+    [refresh, pump]
+  );
   // A persona created or renamed in the Manage panel (any client) shows in the
   // composer's To: list without waiting for the next mail event.
   useEffect(

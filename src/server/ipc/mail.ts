@@ -9,6 +9,7 @@ import {
   deleteConversation,
   readMail,
   readMailConversation,
+  readMailConversations,
   readMailSummary,
   setMailArchived,
   setMailRead,
@@ -42,6 +43,8 @@ export function registerMailIpc(deps: { router(): MailRouter | null; runtime(): 
   // on open. mail:list stays whole for the desktop and for older phone builds.
   registerServer('mail:summary', () => readMailSummary());
   registerServer('mail:open', (_e, conversationId: string) => readMailConversation(conversationId));
+  // The desktop's pair to mail:changed's named conversations: just those, as a delta.
+  registerServer('mail:conversations', (_e, conversationIds: string[]) => readMailConversations(conversationIds));
   registerServer('mail:work', (_e, conversationId: string) => getMailWork(deps.runtime(), conversationId));
   registerServer('mail:compose', async (e, input: MailComposeInput) => {
     await refuseRawPaths(e, input.attachments);

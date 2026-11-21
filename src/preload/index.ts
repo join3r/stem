@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { startCapture, stopCapture } from './dictation-capture';
 import type {
+  MailChange,
   FolderSettings,
   ServerUpgradeStatus,
   ActivitySnapshot,
@@ -535,6 +536,7 @@ const api: StemApi = {
   },
 
   listMail: () => ipcRenderer.invoke('mail:list'),
+  listMailConversations: (conversationIds: string[]) => ipcRenderer.invoke('mail:conversations', conversationIds),
   getMailWork: (conversationId: string) => ipcRenderer.invoke('mail:work', conversationId),
   onMailWorkChanged: (listener: (event: { conversationId: string }) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, value: { conversationId: string }) => listener(value);
@@ -607,8 +609,8 @@ const api: StemApi = {
     ipcRenderer.on('personas:changed', handler);
     return () => ipcRenderer.removeListener('personas:changed', handler);
   },
-  onMailChanged: (listener: () => void) => {
-    const handler = () => listener();
+  onMailChanged: (listener: (change?: MailChange) => void) => {
+    const handler = (_e: unknown, change?: MailChange) => listener(change ?? undefined);
     ipcRenderer.on('mail:changed', handler);
     return () => ipcRenderer.removeListener('mail:changed', handler);
   },

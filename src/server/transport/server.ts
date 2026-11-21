@@ -9,6 +9,7 @@ import { gzip } from 'node:zlib';
 import { log } from '../log';
 import { presentedToken, requestOriginProblem, type DeviceRole, type OriginPolicy } from './auth';
 import type { DeviceKind } from '../../shared/types';
+import { MAIL_DELTA_HEADER, MAIL_DELTA_VALUE } from '../../shared/mail-delta';
 
 // Stem's transport: a node:http server bound to 127.0.0.1 — or to a Unix socket,
 // which is narrower still. Every client reaches the server through this file and
@@ -248,6 +249,12 @@ export interface TransportServerOptions {
    * comment in ipc/guard.ts, which is still the whole of the authorization story.
    */
   dispatch(channel: string, args: unknown[], caller: { deviceId: string }): Promise<unknown>;
+  /**
+   * A mail mutator's answer cut to the conversations it touched, for a client
+   * that asked for deltas (shared/mail-delta.ts); undefined = send it as it is.
+   * Omitted = never cut.
+   */
+  mailDelta?(result: unknown): unknown;
   /** Every channel registered on the server, for GET /channels to answer with. */
   registeredChannels(): readonly string[];
   /**
@@ -741,7 +748,10 @@ export async function startTransportServer(opts: TransportServerOptions): Promis
       // worked: the inbox mutators answer with the whole mail list, which a
       // phone re-reads in its slim form anyway.
       const discard = req.headers['x-stem-result'] === 'none';
-      await sendJsonCompressed(req, res, 200, { ok: true, result: discard ? null : (result ?? null) });
+      // `x-stem-mail: delta`: a client that merges mail by conversation gets a
+      // mutator's answer as just the conversations it touched, not the store.
+      const delta = req.headers[MAIL_DELTA_HEADER] === MAIL_DELTA_VALUE ? opts.mailDelta?.(result) : undefined;
+      await sendJsonCompressed(req, res, 200, { ok: true, result: discard ? null : (delta ?? result ?? null) });
     } catch (e) {
       const error = String((e as Error)?.message ?? e);
       // quiet: the handler's own error goes back over the wire verbatim, which

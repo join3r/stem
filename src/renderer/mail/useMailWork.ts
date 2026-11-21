@@ -42,7 +42,12 @@ export function useMailWork(conversationId: string) {
     const offWork = window.stem.onMailWorkChanged((event) => {
       if (event.conversationId === conversationId) schedule();
     });
-    const offMail = window.stem.onMailChanged(schedule);
+    // Only a change to this conversation (or one that names none) can change
+    // its work; other conversations' writes are many a minute while personas work.
+    const offMail = window.stem.onMailChanged((change) => {
+      const ids = change?.conversationIds;
+      if (!ids?.length || ids.includes(conversationId)) schedule();
+    });
     const offResync = window.stem.onResync(schedule);
     const offConnection = window.stem.onConnectionChanged((reachable) => { if (reachable) schedule(); });
     void refresh();

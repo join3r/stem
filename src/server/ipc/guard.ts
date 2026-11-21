@@ -228,6 +228,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   // mutators take conversation-id lists, the inbox-mutator shape.
   // ('mail:list' and 'mail:summary' take no arguments, so they are absent.)
   'mail:open': [a.string],
+  'mail:conversations': [a.stringArray],
   'mail:compose': [a.object],
   'mail:work': [a.string],
   'mail:reply': [a.string, a.string, a.optional(a.nullish(a.objectArray))],

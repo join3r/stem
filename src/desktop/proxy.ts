@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { createGunzip } from 'node:zlib';
 import { log } from '../server/log';
 import {
   BROWSER_END_FRAME,
@@ -40,6 +41,7 @@ import { convertHeicAttachment, convertHeicAttachments } from '../server/pi/heic
 import { isUploadHandle } from '../server/files/staging';
 import type { ServerCredentials } from './server-endpoint';
 import { uploadBytes, uploadFile } from './file-transfer';
+import { MAIL_DELTA_HEADER, MAIL_DELTA_VALUE } from '../shared/mail-delta';
 import { createOfflineCache } from './offline-cache';
 import type { OAuthCourier } from './oauth-courier';
 import { updateClientQuickChat, withClientSettings } from './settings';
@@ -419,12 +421,23 @@ function postJson(
   return new Promise((resolve, reject) => {
     const req = openStream(
       url,
-      { method: 'POST', headers: { ...headers, 'content-length': String(Buffer.byteLength(body)) }, signal },
+      {
+        method: 'POST',
+        // The server gzips big answers for a caller that asks (transport/server.ts
+        // sendJsonCompressed). mail:list is the whole mail store, 1.6 MB by
+        // November, and every mutator answers with it: uncompressed, a send
+        // waited tens of seconds on the user's uplink.
+        headers: { ...headers, 'accept-encoding': 'gzip', 'content-length': String(Buffer.byteLength(body)) },
+        signal
+      },
       (res) => {
         const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }));
-        res.on('error', reject);
+        const zipped = /\bgzip\b/i.test(String(res.headers['content-encoding'] ?? ''));
+        const stream = zipped ? res.pipe(createGunzip()) : res;
+        if (zipped) res.on('error', reject);
+        stream.on('data', (c: Buffer) => chunks.push(c));
+        stream.on('end', () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }));
+        stream.on('error', reject);
       }
     );
     req.on('error', reject);
@@ -617,7 +630,8 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     try {
       res = await postJson(
         `${base}/rpc`,
-        { 'content-type': 'application/json', authorization: auth },
+        // Mail answers as deltas: the renderer merges them (useMail.ts).
+        { 'content-type': 'application/json', authorization: auth, [MAIL_DELTA_HEADER]: MAIL_DELTA_VALUE },
         JSON.stringify({ channel, args }),
         // A caller's own signal (a cancellable prefetch) on top of the timeout
         // every call gets. Either one aborting aborts the request.

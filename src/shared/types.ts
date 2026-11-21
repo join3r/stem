@@ -3759,6 +3759,11 @@ export interface MailConversation {
 }
 
 /** The whole mail payload: conversations + items + per-conversation triage state. */
+/** mail:changed's payload: which conversations changed. Older servers send none. */
+export interface MailChange {
+  conversationIds?: string[];
+}
+
 export interface MailListResult {
   conversations: MailConversation[];
   items: MailItem[];
@@ -3770,6 +3775,12 @@ export interface MailListResult {
   inbox: InboxState;
   /** The version of the system serving this list — what items' `sys` compare against. */
   sys?: SystemVersion;
+  /**
+   * Present on a partial answer: the conversations it speaks for. Their
+   * conversation and items replace the client's; a named id with no
+   * conversation here was deleted. Absent = the full list. See shared/mail-delta.ts.
+   */
+  delta?: { conversationIds: string[] };
 }
 
 /** What the compose surface sends. */
@@ -5560,6 +5571,8 @@ export interface StemApi {
 
   // Mail. Mutations return the fresh MailListResult, like the inbox mutators.
   listMail(): Promise<MailListResult>;
+  /** Just these conversations, as a delta (shared/mail-delta.ts). Throws on a server older than it. */
+  listMailConversations(conversationIds: string[]): Promise<MailListResult>;
   getMailWork(conversationId: string): Promise<MailWorkResult>;
   onMailWorkChanged(listener: (event: { conversationId: string }) => void): () => void;
   /** Compose a new mail conversation and deliver it to its driver persona. */
@@ -5617,7 +5630,8 @@ export interface StemApi {
   /** Delete a conversation, its items, and its hidden persona threads. */
   deleteMailConversation(conversationId: string): Promise<MailListResult>;
   /** Fired whenever mail changes server-side (a delivery landed, a reply arrived). */
-  onMailChanged(listener: () => void): () => void;
+  /** `change` names the conversations a write touched; absent = re-read the whole list. */
+  onMailChanged(listener: (change?: MailChange) => void): () => void;
   /** Fired after any persona is saved or deleted, on every connected client. */
   onPersonasChanged(listener: () => void): () => void;
 
