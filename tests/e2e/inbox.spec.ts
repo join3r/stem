@@ -499,3 +499,36 @@ test('a sent mail closes and waits under Sent, not as a Working row', async ({ m
   // The answer brings it up into the Inbox.
   await expect(mailRow(mainWindow, 'Slow errand')).toBeVisible({ timeout: 15_000 });
 });
+
+test('a progress question mailed mid-work is answered on the spot and the work keeps going', async ({
+  mainWindow
+}) => {
+  await tab(mainWindow, 'Inbox').click();
+  await mainWindow.getByTitle('New mail', { exact: true }).click();
+  await mainWindow.getByPlaceholder(/Stem names it/).fill('Long import');
+  await mainWindow.getByPlaceholder(/Write the task/).fill('[e2e:hang] import everything');
+  await mainWindow.getByRole('button', { name: /^Send/ }).click();
+  await expect(mainWindow.locator('.mail-view')).toHaveCount(0);
+  // Still working: it waits under Sent. Open it there.
+  await group(mainWindow, /Sent \(1\)/).click();
+  await mailRow(mainWindow, 'Long import').click();
+  await expect(mainWindow.locator('.mail-head .mail-status.working')).toBeVisible();
+  // The reply box says a progress question is answered now, not when the run ends.
+  const box = await openReply(mainWindow);
+  await expect(box.locator('.mail-reply-note')).toContainText('Ask how it’s going and Normal answers right away');
+  await box.getByPlaceholder(/Reply to/).fill('[e2e:status] how is it going?');
+  await box.getByRole('button', { name: 'Send' }).click();
+  // Sending closes the view, like any reply; the answer is there on reopening.
+  await expect(mainWindow.locator('.mail-view')).toHaveCount(0);
+  // The answer lands in the Inbox (Sent, still open, lists the same conversation).
+  await mailRow(mainWindow, 'Long import').first().click();
+  await expect(
+    mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Status: still on the first step' })
+  ).toBeVisible({ timeout: 15_000 });
+  // The question started no work, so the answer carries no (empty) Work panel.
+  await expect(
+    mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Status: still on the first step' }).locator('.mail-work')
+  ).toHaveCount(0);
+  // The work was not stopped or answered: the conversation is still working.
+  await expect(mainWindow.locator('.mail-head .mail-status.working')).toBeVisible();
+});

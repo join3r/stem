@@ -90,7 +90,8 @@ export async function getMailWork(runtime: ChatBackend, conversationId: string):
     }
   }
   // Every source is represented, including legacy runs whose sessions no longer exist.
-  for (const item of items.filter((i) => i.from === 'user' || i.taskId)) {
+  // A progress question answered on the spot started no work, so it has none to show.
+  for (const item of items.filter((i) => (i.from === 'user' && !i.statusQuery) || i.taskId)) {
     if (groups.some((g) => g.sourceItemId === item.id || g.notificationItemId === item.id)) continue;
     groups.push({ id: `unavailable:${item.id}`, conversationId,
       ...(item.from === 'user' ? { sourceItemId: item.id } : { notificationItemId: item.id }),

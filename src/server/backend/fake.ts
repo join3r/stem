@@ -339,7 +339,11 @@ export class FakeBackend extends EventEmitter implements ChatBackend {
     return [MODEL];
   }
 
-  async complete(): Promise<string> {
+  async complete(prompt?: string): Promise<string> {
+    // [e2e:status] in a mid-work mail: the mail status check answers it on the spot.
+    if (prompt?.includes("## The user's new mail") && prompt.includes('[e2e:status]')) {
+      return JSON.stringify({ route: 'status', reply: 'Status: still on the first step, nothing has failed.' });
+    }
     return '';
   }
 

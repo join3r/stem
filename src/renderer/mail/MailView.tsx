@@ -1123,10 +1123,11 @@ function ReplyBox({
           {toField?.error && <span className="task-failed">{toField.error}</span>}
         </div>
       )}
-      {expanded && working && (
+      {expanded && working && !parked && (
         <p className="mail-reply-note">
           <Clock size={13} />
-          {recipient} reads this when its current run ends. If that run answers your earlier mail, it’s marked so.
+          Still working. Ask how it’s going and {recipient} answers right away without stopping the work; anything
+          else waits until its current run ends.
         </p>
       )}
       <textarea
