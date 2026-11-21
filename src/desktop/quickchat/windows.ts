@@ -308,17 +308,25 @@ export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expande
   const w = QUICK_CHAT_WIDTH;
   const h = expanded ? QUICK_CHAT_PANEL_HEIGHT : compactHeight(chip, tabs);
   const spot = dockBeside(target, { width: w, height: h }, workArea);
-  win.setBounds(overlayOuterBounds(mini ? miniSpot(target, spot, w) : { ...spot, width: w, height: h }));
+  win.setBounds(overlayOuterBounds(mini ? miniSpot(target, { ...spot, width: w, height: h }) : { ...spot, width: w, height: h }));
 }
 
 /**
- * The pill sits at the top of the spot the full panel takes, on the side next
- * to the window: the panel's left edge when it docks right of the window,
- * its right edge when it docks left. Pure, for the tests.
+ * Where the pill goes inside the spot the full panel takes: on the edge next
+ * to the window, so it reads as belonging to it. Docked right of the window:
+ * the panel's top-left; left of it: top-right; below: top, centred; above:
+ * bottom, centred. A panel over the window's corner (the window fills the
+ * screen) shrinks into that corner, the panel's bottom-right, rather than
+ * leaving the pill in the middle of the window's content. Pure, for the tests.
  */
-export function miniSpot(target: DockRect, panel: { x: number; y: number }, panelWidth: number): DockRect {
-  const leftOfWindow = panel.x + panelWidth <= target.x;
-  return { x: leftOfWindow ? panel.x + panelWidth - MINI_WIDTH : panel.x, y: panel.y, width: MINI_WIDTH, height: MINI_HEIGHT };
+export function miniSpot(target: DockRect, panel: DockRect): DockRect {
+  const pill = (x: number, y: number): DockRect => ({ x: Math.round(x), y: Math.round(y), width: MINI_WIDTH, height: MINI_HEIGHT });
+  const centredX = panel.x + (panel.width - MINI_WIDTH) / 2;
+  if (panel.x >= target.x + target.width) return pill(panel.x, panel.y);
+  if (panel.x + panel.width <= target.x) return pill(panel.x + panel.width - MINI_WIDTH, panel.y);
+  if (panel.y >= target.y + target.height) return pill(centredX, panel.y);
+  if (panel.y + panel.height <= target.y) return pill(centredX, panel.y + panel.height - MINI_HEIGHT);
+  return pill(panel.x + panel.width - MINI_WIDTH, panel.y + panel.height - MINI_HEIGHT);
 }
 
 /**
