@@ -49,6 +49,14 @@ struct PairView: View {
                     }
                     .disabled(busy || serverUrl.isEmpty || PairLink.normalizeCode(code).count != 8)
                 }
+                Section {
+                    Button { app.startDemo() } label: {
+                        Label("Try the demo", systemImage: "play.circle")
+                    }
+                    .disabled(busy)
+                } footer: {
+                    Text("No Stem yet? Look around with sample chats and mail. The demo doesn't connect to any server, and nothing you do in it leaves this phone.")
+                }
             }
             .navigationTitle("Pair")
             .sheet(isPresented: $scanning) {

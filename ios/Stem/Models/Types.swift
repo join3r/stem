@@ -53,7 +53,7 @@ struct InboxState: Codable, Hashable {
     var entries: [String: InboxEntry] = [:]
 }
 
-struct ChatHistory: Decodable {
+struct ChatHistory: Codable {
     var threadId: String
     var title: String
     var messages: [ChatMessage]
@@ -159,7 +159,7 @@ struct StartTurnResult: Decodable {
     var assistantMessage: String?
 }
 
-struct LiveTurnInfo: Decodable {
+struct LiveTurnInfo: Codable {
     var threadId: String
     var turnId: String?
 }
@@ -176,9 +176,9 @@ struct SkillLearnResult: Decodable {
 
 // MARK: Models + settings
 
-struct ModelServiceTier: Decodable, Hashable { var id: String; var name: String }
+struct ModelServiceTier: Codable, Hashable { var id: String; var name: String }
 
-struct ModelSummary: Decodable, Hashable, Identifiable {
+struct ModelSummary: Codable, Hashable, Identifiable {
     var id: String
     var displayName: String
     var description: String
@@ -194,15 +194,15 @@ struct ModelSummary: Decodable, Hashable, Identifiable {
 }
 
 /// The slice of server settings the phone reads.
-struct ServerSettings: Decodable {
-    struct WebSearch: Decodable { var main: Bool }
-    struct Defaults: Decodable { var model: String? }
-    struct Instructions: Decodable { var main: String; var quickChat: String }
+struct ServerSettings: Codable {
+    struct WebSearch: Codable { var main: Bool }
+    struct Defaults: Codable { var model: String? }
+    struct Instructions: Codable { var main: String; var quickChat: String }
     var webSearch: WebSearch
     var defaults: Defaults?
     var customInstructions: Instructions?
-    struct ChatFeatures: Decodable {
-        struct Allow: Decodable { var allow: Bool }
+    struct ChatFeatures: Codable {
+        struct Allow: Codable { var allow: Bool }
         var voice: Allow?
     }
     /// Absent on an older server, which has no voice chat.
@@ -211,7 +211,7 @@ struct ServerSettings: Decodable {
 
 // MARK: Personas
 
-struct Persona: Decodable, Hashable, Identifiable {
+struct Persona: Codable, Hashable, Identifiable {
     var id: String
     var name: String
     var clients: Bool?
@@ -220,13 +220,13 @@ struct Persona: Decodable, Hashable, Identifiable {
 
 // MARK: Mail
 
-struct MailListResult: Decodable {
+struct MailListResult: Codable {
     var conversations: [MailConversation]
     var items: [MailItem]
     var inbox: InboxState
 }
 
-struct MailConversation: Decodable, Hashable, Identifiable {
+struct MailConversation: Codable, Hashable, Identifiable {
     var id: String
     var subject: String
     var participants: [String]
@@ -249,7 +249,7 @@ struct MailConversation: Decodable, Hashable, Identifiable {
     var waitingOnUser: Bool { userUpdatedAt > max(userSentAt ?? 0, userAnsweredAt ?? 0) }
 }
 
-struct MailItem: Decodable, Hashable, Identifiable {
+struct MailItem: Codable, Hashable, Identifiable {
     var id: String
     var conversationId: String
     var from: String
@@ -273,7 +273,7 @@ struct MailItem: Decodable, Hashable, Identifiable {
     var external: MailItemExternal?
 }
 
-struct MailCollab: Decodable, Hashable {
+struct MailCollab: Codable, Hashable {
     var goal: String
     var agreed: [String]
     var open: [String]
@@ -281,14 +281,14 @@ struct MailCollab: Decodable, Hashable {
 }
 
 /// The other side of a conversation with another person.
-struct MailExternalThread: Decodable, Hashable {
+struct MailExternalThread: Codable, Hashable {
     var address: String
     var thread: String
     var `self`: String
 }
 
 /// Port of MailExternal (src/shared/types.ts).
-struct MailItemExternal: Decodable, Hashable {
+struct MailItemExternal: Codable, Hashable {
     var held: Bool?
     var keyChanged: Bool?
     /// queued | sent | delivered | expired | failed | unreachable | key-changed | waiting | joined
@@ -348,7 +348,7 @@ struct InterStemReach: Decodable, Equatable {
     var reason: String?
 }
 
-struct MailApproval: Decodable, Hashable {
+struct MailApproval: Codable, Hashable {
     var id: String
     /// exec | harness | send (a persona's draft to another person, waiting for the user to send it)
     var kind: String
@@ -378,7 +378,7 @@ struct MailComposeInput: Encodable {
 
 // MARK: Approvals
 
-struct ExecApprovalRequest: Decodable, Hashable {
+struct ExecApprovalRequest: Codable, Hashable {
     var id: String
     var threadId: String
     var command: String

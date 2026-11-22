@@ -38,6 +38,14 @@ final class Connection {
     func unsubscribe(_ id: UUID) { listeners[id] = nil }
 
     func start() {
+        if let demo = client.demo {
+            demo.connection = self
+            let snap = demo.snapshot()
+            status = .live
+            liveTurns = Dictionary(snap.live.map { ($0.threadId, $0.turnId ?? "") }, uniquingKeysWith: { $1 })
+            emit(.snapshot(liveTurns: snap.live, execApprovals: snap.exec))
+            return
+        }
         guard task == nil else { return }
         task = Task { [weak self] in await self?.loop() }
     }
@@ -173,6 +181,12 @@ final class Connection {
         emit(.push(channel: frame.channel, payload: payload))
         // Bookmark only after the frame was delivered.
         if let id = block.id { lastEventId = id }
+    }
+
+    /// A frame from the demo's sample server, delivered like one off the stream.
+    func receivePush(channel: String, payload: JSONValue) {
+        if channel == "backend:event" { trackLiveTurn(payload) }
+        emit(.push(channel: channel, payload: payload))
     }
 
     private func trackLiveTurn(_ env: JSONValue) {

@@ -11,6 +11,17 @@ struct StemError: LocalizedError {
 /// HTTP side of the server transport: `/rpc`, `/upload`, `/pair`.
 struct StemClient: Sendable {
     let creds: Credentials
+    /// Set for "Try the demo": every call goes to the in-app sample server and
+    /// nothing touches the network.
+    var demo: DemoServer? = nil
+
+    /// The demo's client: no address, no token.
+    init(demo: DemoServer) {
+        creds = DemoServer.credentials
+        self.demo = demo
+    }
+
+    init(creds: Credentials) { self.creds = creds }
 
     var baseURL: URL { URL(string: creds.serverUrl)! }
 
@@ -33,6 +44,13 @@ struct StemClient: Sendable {
     }
 
     private func call<T: Decodable>(_ channel: String, _ args: [JSONValue], as: T.Type, discardResult: Bool) async throws -> T {
+        if let demo {
+            let value = try await demo.handle(channel, args)
+            if T.self == Empty.self { return Empty() as! T }
+            if T.self == JSONValue.self { return value as! T }
+            do { return try value.decode(T.self) }
+            catch { throw StemError(message: "\(channel): unexpected answer (\(error))") }
+        }
         var req = URLRequest(url: baseURL.appendingPathComponent("rpc"))
         req.httpMethod = "POST"
         // The server leaves the answer out (older servers send it anyway).
@@ -67,6 +85,7 @@ struct StemClient: Sendable {
     /// Stages raw bytes on the server; the handle stands in for a file path
     /// on `startTurn` / `mail:*` attachments.
     func upload(_ data: Data, name: String, mime: String) async throws -> TurnAttachment {
+        if demo != nil { return TurnAttachment(name: name, path: "demo-upload:\(UUID().uuidString)", dataBase64: nil, mime: mime) }
         var comps = URLComponents(url: baseURL.appendingPathComponent("upload"), resolvingAgainstBaseURL: false)!
         comps.queryItems = [URLQueryItem(name: "name", value: name)]
         var req = URLRequest(url: comps.url!)
@@ -85,6 +104,7 @@ struct StemClient: Sendable {
 
     /// One file from GET /files/<rel>, saved under a temporary folder with its name.
     func download(_ rel: String, name: String) async throws -> URL {
+        if demo != nil { throw StemError(message: "Files aren't available in the demo.") }
         let encoded = rel.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? rel
         guard let url = URL(string: creds.serverUrl + "/files/" + encoded) else { throw StemError(message: "Bad file address") }
         var req = URLRequest(url: url)

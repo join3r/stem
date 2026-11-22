@@ -116,12 +116,22 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Server") {
-                    LabeledContent("Address", value: session.client.creds.serverUrl)
-                    LabeledContent("Status") {
-                        HStack(spacing: 6) {
-                            ConnectionDot()
-                            Text(statusText)
+                if session.isDemo {
+                    Section {
+                        Label("You're trying the demo", systemImage: "play.circle").font(.headline)
+                        Text("Chats, mail and requests here are sample data, forgotten when you leave the demo. Nothing connects to a server, and approving a request or sending mail doesn't do anything outside the app.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Button("Leave the demo") { app.unpair() }
+                    }
+                } else {
+                    Section("Server") {
+                        LabeledContent("Address", value: session.client.creds.serverUrl)
+                        LabeledContent("Status") {
+                            HStack(spacing: 6) {
+                                ConnectionDot()
+                                Text(statusText)
+                            }
                         }
                     }
                 }
@@ -130,8 +140,10 @@ struct SettingsView: View {
                     Toggle("Web search", isOn: Binding(get: { session.webSearch }, set: { session.setWebSearch($0) }))
                 }
                 if PhoneDictation.supported { DictationSettingsSection() }
-                Section {
-                    Button("Unpair this phone", role: .destructive) { confirmUnpair = true }
+                if !session.isDemo {
+                    Section {
+                        Button("Unpair this phone", role: .destructive) { confirmUnpair = true }
+                    }
                 }
                 Section {
                     LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")

@@ -17,7 +17,7 @@ final class ChatListStore {
         self.client = client
         // The last list this pairing saw, so a cold start shows chats at once
         // instead of a spinner while a few hundred KB come over a phone link.
-        if let data = try? Data(contentsOf: Self.cacheURL(client.creds.deviceId)),
+        if client.demo == nil, let data = try? Data(contentsOf: Self.cacheURL(client.creds.deviceId)),
            let cached = try? JSONDecoder().decode(ChatListResult.self, from: data) {
             apply(cached)
             loaded = true
@@ -37,6 +37,7 @@ final class ChatListStore {
     static func clearCache() { try? FileManager.default.removeItem(at: cacheDir) }
 
     private func save(_ r: ChatListResult) {
+        guard client.demo == nil else { return }
         let url = Self.cacheURL(client.creds.deviceId)
         Task.detached(priority: .utility) {
             guard let data = try? JSONEncoder().encode(r) else { return }
