@@ -1,4 +1,4 @@
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 import type { Shell } from 'electron';
@@ -56,6 +56,11 @@ export function classifyLink(url: string, home: () => string = homedir): LinkAct
   } catch {
     return { kind: 'ignore' };
   }
+  return classifyPath(path);
+}
+
+/** Open or only reveal a local path, by the allowlist above. */
+function classifyPath(path: string): LinkAction {
   // A trailing slash is a folder (or a bundle like Foo.app/): never opened.
   const ext = /[/\\]$/.test(path) ? '' : extname(path).toLowerCase();
   return DOCUMENT_EXTENSIONS.has(ext) ? { kind: 'open', path } : { kind: 'reveal', path };
@@ -131,7 +136,7 @@ const FILES_ITEM_REVEAL_ONLY = new Set(['.doc', '.xls', '.ppt', '.svg', '.zip'])
 export function openFilesItem(shell: LinkShell, path: string): void {
   viewOr(shell, path, () => {
     if (FILES_ITEM_REVEAL_ONLY.has(extname(path).toLowerCase())) shell.showItemInFolder(path);
-    else actOn(shell, classifyLink(pathToFileURL(path).href));
+    else actOn(shell, classifyPath(path));
   });
 }
 

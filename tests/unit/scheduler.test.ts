@@ -444,9 +444,9 @@ describe('every run gets a fresh thread', () => {
     expect(runtime.starts[0].scheduled?.prior).toEqual([{ at: 1, headline: 'Found one', body: 'A new release', reply: 'v2 is out' }]);
     fail = true;
     scheduler.runNow(res.task.id);
-    await until(() => runtime.starts.length === 2 && runtime.deleted.length === 2, 'the second run');
+    // The status is stored after the run thread is deleted, so wait for both.
+    await until(async () => runtime.starts.length === 2 && runtime.deleted.length === 2 && (await storedStatus()) === 'ok', 'the second run');
     expect(runtime.starts[1].scheduled?.prior).toBeUndefined();
-    expect(await storedStatus()).toBe('ok');
     scheduler.stop();
   });
 

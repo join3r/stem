@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { shortLivedServerMessage, shortLivedServerPath } from '../../src/server/pi/mcp-install-paths.mjs';
 
@@ -10,7 +11,8 @@ const cwd = '/state/workspace';
 describe('shortLivedServerPath', () => {
   it('flags a launcher in chat scratch (the Fio repair)', () => {
     const hit = shortLivedServerPath('/state/tools/fio/fio-node', ['/state/pi-home/exec-workspace/01a1/fio-repair/dist/index.mjs'], roots, cwd);
-    expect(hit).toEqual({ path: '/state/pi-home/exec-workspace/01a1/fio-repair/dist/index.mjs', kind: 'scratch' });
+    // resolve(): on Windows the same path reads C:\\state\\….
+    expect(hit).toEqual({ path: resolve('/state/pi-home/exec-workspace/01a1/fio-repair/dist/index.mjs'), kind: 'scratch' });
   });
 
   it('flags the Files place, absolute or relative to the bridge cwd', () => {
@@ -29,6 +31,6 @@ describe('shortLivedServerPath', () => {
   it('names the install folder in the message', () => {
     const msg = shortLivedServerMessage({ path: '/x', kind: 'scratch' }, '/state/tools', 'fio');
     expect(msg).toContain('deleted together with that chat');
-    expect(msg).toContain('/state/tools/fio');
+    expect(msg).toContain(resolve('/state/tools/fio'));
   });
 });

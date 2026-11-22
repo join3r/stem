@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Run Stem on a Windows machine over SSH, the way scripts/linux-pc.mjs does on
-// Linux: the working tree (uncommitted work included) is copied over and the
-// command runs there. The machine needs OpenSSH with PowerShell as its shell,
-// Node 24 on the user PATH, and Git for Windows.
+// Linux: the working tree (uncommitted work included) is copied over with git
+// (scripts/remote-snapshot.mjs) and the command runs there. The machine needs
+// OpenSSH with PowerShell as its shell, Node 24 on the user PATH, and Git for
+// Windows.
 //
 //   STEM_WINDOWS_HOST   user@host[:port], e.g. stem@127.0.0.1:2222
 //   STEM_WINDOWS_JUMP   optional jump host, e.g. join3r@192.168.1.164 (a VM
@@ -23,10 +24,9 @@
 // scheduled task, and prints what it wrote; the user must be logged in.
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BARE, PUBLIC_REPO, push, shQuote, snapshot } from './remote-snapshot.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const target = process.env.STEM_WINDOWS_HOST;
@@ -48,29 +48,36 @@ function run(cmd, args, o = {}) {
 }
 const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
 
-// The tracked and untracked-but-not-ignored files, as one tarball; Windows'
-// own tar.exe unpacks it.
-const tmp = mkdtempSync(join(tmpdir(), 'stem-win-'));
-const tarball = join(tmp, 'stem.tgz');
-const files = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd: repo });
-if (files.status !== 0) process.exit(1);
-run('tar', ['--null', '-T', '-', '-czf', tarball], { cwd: repo, input: files.stdout, stdio: ['pipe', 'inherit', 'inherit'], env: { ...process.env, COPYFILE_DISABLE: '1' } });
-run('scp', ['-q', ...opts, '-P', port, tarball, `${userHost}:stem.tgz`]);
-rmSync(tmp, { recursive: true, force: true });
+const ssh = ['-p', port, ...opts, userHost];
+// -EncodedCommand, not a script on stdin: `powershell -Command -` stops at the
+// first block that spans lines.
+const encoded = (script) => `powershell -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+
+// The VM fetches the public main from GitHub; only this checkout's own commits
+// and uncommitted work go over SSH (scripts/remote-snapshot.mjs).
+run('ssh', [...ssh, encoded(`if (-not (Test-Path ${BARE})) { git init -q --bare ${BARE} }
+git -C ${BARE} fetch -q ${PUBLIC_REPO} +refs/heads/main:refs/heads/main
+if ($LASTEXITCODE -ne 0) { Write-Output 'windows-vm: could not fetch main from GitHub; sending everything' }`)]);
+push(repo, snapshot(repo), { sshCommand: ['ssh', '-p', port, ...opts].map(shQuote).join(' '), remote: `${userHost}:${BARE}` });
 
 // Runs on Windows. node_modules (the Windows builds of the native modules),
-// dist and release (the last installer build) survive; everything else is
-// replaced by the copy.
+// dist and release (the last installer build) are ignored by git, so they
+// survive; everything else becomes the snapshot. autocrlf stays off so files
+// keep the LF endings they have on the Mac.
 const prelude = `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine')
 $dst = "$env:USERPROFILE\\stem"
 New-Item -ItemType Directory -Force $dst | Out-Null
-Get-ChildItem -Force $dst | Where-Object { $_.Name -notin 'node_modules','dist','release' } | Remove-Item -Recurse -Force
-tar -xzf "$env:USERPROFILE\\stem.tgz" -C $dst
-Remove-Item "$env:USERPROFILE\\stem.tgz"
 Set-Location $dst
+if (-not (Test-Path .git)) { git init -q }
+git config core.autocrlf false
+git fetch -q "$env:USERPROFILE\\${BARE}" snapshot
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+git reset -q --hard FETCH_HEAD
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+git clean -fdq
 $want = (Get-FileHash package-lock.json -Algorithm SHA256).Hash
 $have = if (Test-Path node_modules\\.stem-lock) { Get-Content node_modules\\.stem-lock } else { '' }
 if ($have -ne $want) {
@@ -108,10 +115,6 @@ if (body === undefined) {
   process.exit(2);
 }
 
-const ssh = ['-p', port, ...opts, userHost];
-// -EncodedCommand, not a script on stdin: `powershell -Command -` stops at the
-// first block that spans lines.
-const encoded = (script) => `powershell -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
 if (mode === 'shell') {
   run('ssh', [...ssh, encoded(prelude)]);
   run('ssh', ['-t', ...ssh, 'cd $env:USERPROFILE\\stem; powershell -NoProfile']);

@@ -1,3 +1,5 @@
+import { resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ BrowserWindow: class {}, dialog: {}, net: {}, protocol: {}, session: {}, shell: {} }));
@@ -57,6 +59,11 @@ describe('links try the viewer first', () => {
     };
   };
   const tick = () => new Promise((r) => setTimeout(r, 0));
+  // A real local path and its file: URL; /tmp/a on POSIX, C:\\tmp\\a on Windows,
+  // where file:///tmp/… has no drive and names no file.
+  const dir = resolve('/tmp/a');
+  const at = (name: string) => dir + sep + name;
+  const url = (name: string) => pathToFileURL(at(name)).href;
 
   it('uses the viewer when it shows the file, and the old way when it does not or fails', async () => {
     const viewed: string[] = [];
@@ -66,14 +73,14 @@ describe('links try the viewer first', () => {
       return p.endsWith('.html');
     });
     const f = fake();
-    openLink(f.shell, 'file:///tmp/a/page.html');
-    openLink(f.shell, 'file:///tmp/a/data.csv');
-    openLink(f.shell, 'file:///tmp/a/x.boom');
-    openLink(f.shell, 'file:///tmp/a/');
+    openLink(f.shell, url('page.html'));
+    openLink(f.shell, url('data.csv'));
+    openLink(f.shell, url('x.boom'));
+    openLink(f.shell, `${pathToFileURL(dir).href}/`);
     openLink(f.shell, 'https://example.com/');
     await tick();
-    expect(viewed).toEqual(['/tmp/a/page.html', '/tmp/a/data.csv']);
-    expect(f.calls.sort()).toEqual(['external https://example.com/', 'open /tmp/a/data.csv', 'reveal /tmp/a/', 'reveal /tmp/a/x.boom'].sort());
+    expect(viewed).toEqual([at('page.html'), at('data.csv')]);
+    expect(f.calls.sort()).toEqual(['external https://example.com/', `open ${at('data.csv')}`, `reveal ${dir}${sep}`, `reveal ${at('x.boom')}`].sort());
   });
 
   it('only reveals a page in Finder when the viewer fails, never opens it outside the sandbox', async () => {
@@ -81,10 +88,10 @@ describe('links try the viewer first', () => {
       throw new Error('viewer broke');
     });
     const f = fake();
-    openLink(f.shell, 'file:///tmp/a/page.html');
+    openLink(f.shell, url('page.html'));
     openFilesItem(f.shell, '/tmp/stem-files-a/report.html');
     await tick();
-    expect(f.calls.sort()).toEqual(['reveal /tmp/a/page.html', 'reveal /tmp/stem-files-a/report.html']);
+    expect(f.calls.sort()).toEqual([`reveal ${at('page.html')}`, 'reveal /tmp/stem-files-a/report.html'].sort());
   });
 
   it('a files/ item the viewer does not show keeps the reveal-only rule', async () => {
