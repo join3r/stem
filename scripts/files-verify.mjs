@@ -6,7 +6,7 @@
 // Run (from repo root):
 //   rm -rf .files-build
 //   npx tsc src/server/files/store.ts src/server/files/inject.ts src/server/workspace/paths.ts \
-//     --outDir .files-build --module commonjs --moduleResolution node --target es2022 \
+//     --outDir .files-build --module commonjs --moduleResolution node --ignoreConfig --ignoreDeprecations 6.0 --target es2022 \
 //     --skipLibCheck --esModuleInterop --rootDir src
 //   printf '{"type":"commonjs"}' > .files-build/package.json
 //   STEM_FILES_DIR="$(mktemp -d)/files" ELECTRON_RUN_AS_NODE=1 \

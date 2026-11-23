@@ -42,7 +42,7 @@ const tsc = spawnSync(
   'npx',
   [
     'tsc', 'src/server/recall/gate-canary.ts', 'src/server/recall/gte-model-artifact.ts',
-    '--outDir', BUILD_DIR, '--module', 'commonjs', '--moduleResolution', 'node', '--target', 'es2022',
+    '--outDir', BUILD_DIR, '--module', 'commonjs', '--moduleResolution', 'node', '--ignoreConfig', '--ignoreDeprecations', '6.0', '--target', 'es2022',
     '--skipLibCheck', '--esModuleInterop', '--resolveJsonModule', '--rootDir', 'src'
   ],
   { cwd: ROOT, stdio: 'inherit' }

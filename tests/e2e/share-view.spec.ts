@@ -168,16 +168,18 @@ test('a shared chat shows what the chat shows, with the same markup', async ({ m
 
     // Same renderer, same reply: the same markup, element for element.
     expect(await skeleton(shared.locator('.mdx'))).toEqual(await skeleton(app.locator('.mdx')));
-    await shared.locator('.chat-audio-play').click();
-    await expect(shared.locator('.chat-audio-play')).toHaveAttribute('aria-label', /^Pause /);
-    await shared.locator('.chat-audio-play').click();
-    await expect(shared.locator('.chat-audio-play')).toHaveAttribute('aria-label', /^Play /);
     await shared.locator('.sources-summary').click();
     await expect(shared.locator('.source-card')).toHaveCount(2);
     // The parts around the text too: the picture card, the sound, the open sources.
     for (const part of ['.gen-images', '.chat-audio-list', '.sources', '.sources-cards']) {
       expect(await skeleton(shared.locator(part))).toEqual(await skeleton(app.locator(part)));
     }
+    // Play after comparing: bars already played get a class of their own, and
+    // how many depends on how long the sound ran before the pause.
+    await shared.locator('.chat-audio-play').click();
+    await expect(shared.locator('.chat-audio-play')).toHaveAttribute('aria-label', /^Pause /);
+    await shared.locator('.chat-audio-play').click();
+    await expect(shared.locator('.chat-audio-play')).toHaveAttribute('aria-label', /^Play /);
     // The header line, less the date: a reader needs to know when, the chat
     // shows the answer's duration there instead.
     const header = async (who: Locator) => (await skeleton(who)).filter((el) => el !== 'span.message-timing');

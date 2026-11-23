@@ -55,7 +55,7 @@ if (!skipBuild) {
     [
       'tsc', ...files,
       '--outDir', '.recall-build',
-      '--module', 'commonjs', '--moduleResolution', 'node', '--target', 'es2022',
+      '--module', 'commonjs', '--moduleResolution', 'node', '--ignoreConfig', '--ignoreDeprecations', '6.0', '--target', 'es2022',
       // noCheck: the graph type-includes the worker-host files, whose
       // import.meta is a TS1343 under commonjs. They are import-type-only, so
       // the emitted JS the eval loads never touches them.
