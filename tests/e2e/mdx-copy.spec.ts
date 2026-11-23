@@ -48,7 +48,8 @@ test('copies a reply as clean Markdown and HTML', async ({ electronApp, mainWind
       const items = await clipboard.read();
       const htmlItem = items.find((i) => i.types.includes('text/html'));
       const html = htmlItem ? await ((await htmlItem.getType('text/html')) as Blob).text() : '';
-      return { text: await clipboard.readText(), html };
+      // Windows keeps clipboard text with CRLF line ends.
+      return { text: (await clipboard.readText()).replace(/\r\n/g, '\n'), html };
     });
     expect(got.text).toContain('Before you start:');
     expect(got.text).toContain('> **Warning:** This **erases** the disk.');
