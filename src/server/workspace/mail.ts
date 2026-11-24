@@ -22,6 +22,7 @@ import {
 import { coerceSystemVersion } from '../../shared/sys-version';
 import { systemVersion } from '../sys-version';
 import { degrade } from '../degrade';
+import { sliceMailResult } from '../../shared/mail-delta';
 import { mailStorePath } from './paths';
 import { replaceFile } from '../replace-file';
 
@@ -196,6 +197,7 @@ export function setConversationCollab(id: string, collab: MailCollab): Promise<M
     const conversation = store.conversations.find((c) => c.id === id);
     if (!conversation?.external) return false;
     conversation.collab = collab;
+    touch(id);
   });
 }
 
@@ -385,9 +387,14 @@ function coerce(parsed: unknown): MailFile {
 
 // Observers run only after durable writes. Triage changes need the same push
 // as router deliveries so every paired client sees the same Inbox.
-const changeListeners = new Set<() => void>();
+/**
+ * A change listener hears which conversations the write touched, or null when
+ * the write could have touched any of them (then a client reads the whole list).
+ */
+export type MailChangeListener = (conversationIds: string[] | null) => void;
+const changeListeners = new Set<MailChangeListener>();
 const receivedListeners = new Set<(item: MailItem) => void>();
-export function onMailChanged(listener: () => void): () => void {
+export function onMailChanged(listener: MailChangeListener): () => void {
   changeListeners.add(listener);
   return () => { changeListeners.delete(listener); };
 }
@@ -491,6 +498,15 @@ export function readMailSummary(): Promise<MailListResult> {
   });
 }
 
+/**
+ * The named conversations whole, as a delta (shared/mail-delta.ts): what a
+ * client re-reads after a mail:changed that named them. A named id that no
+ * longer exists comes back absent, which tells the client it was deleted.
+ */
+export function readMailConversations(conversationIds: readonly string[]): Promise<MailListResult> {
+  return enqueue(async () => sliceMailResult(asResult(await readFileStore()), conversationIds));
+}
+
 /** One conversation and all of its mails, whole: what opening it shows. */
 export function readMailConversation(
   conversationId: string
@@ -503,6 +519,29 @@ export function readMailConversation(
       sys: systemVersion()
     };
   });
+}
+
+// ---- which conversations a write touched (shared/mail-delta.ts) ----
+//
+// A mutator names every conversation it changes with touch(), and
+// conversationOf() does it for the conversation it looks up. A write that names
+// none is taken to have touched everything: forgetting a touch costs a client
+// one whole-list read, never a change it does not see. Writes are serialized
+// (enqueue below), so one module-level set is enough.
+let touching: Set<string> | null = null;
+function touch(conversationId: string): void {
+  touching?.add(conversationId);
+}
+
+/** The conversations each mutator's answer covers; absent = could be any. */
+const touchedByResult = new WeakMap<MailListResult, string[]>();
+
+/**
+ * The conversations a mutator's answer speaks for, or null when it could be
+ * any of them. The transport cuts a delta-asking client's answer to these.
+ */
+export function mailResultTouched(result: unknown): string[] | null {
+  return result && typeof result === 'object' ? (touchedByResult.get(result as MailListResult) ?? null) : null;
 }
 
 /**
@@ -524,16 +563,33 @@ function update(mutate: (store: MailFile) => void | false): Promise<MailListResu
       }
       store = coerce({});
     }
-    if (mutate(store) === false) return asResult(store);
+    touching = new Set();
+    let outcome: void | false;
+    let touched: string[];
+    try {
+      outcome = mutate(store);
+    } finally {
+      touched = [...touching];
+      touching = null;
+    }
+    const result = asResult(store);
+    if (outcome === false) {
+      // Nothing changed: an answer that covers no conversation at all.
+      touchedByResult.set(result, touched);
+      return result;
+    }
     await writeFileAtomic(store);
-    announce(changeListeners, undefined);
-    return asResult(store);
+    if (touched.length) touchedByResult.set(result, touched);
+    announce(changeListeners, touched.length ? touched : null);
+    return result;
   });
 }
 
+/** The conversation a mutator is about to change; touches it. */
 function conversationOf(store: MailFile, id: string): MailConversation {
   const conversation = store.conversations.find((c) => c.id === id);
   if (!conversation) throw new Error('That mail conversation no longer exists.');
+  touch(id);
   return conversation;
 }
 
@@ -567,6 +623,7 @@ export function createConversation(
   };
   return update((store) => {
     store.conversations.push(conversation);
+    touch(conversation.id);
   }).then(() => conversation);
 }
 
@@ -690,7 +747,8 @@ function countUserSend(conversation: MailConversation, at: number): void {
 export function settleUserSend(itemId: string, answeredAsStatus: boolean): Promise<MailListResult> {
   return update((store) => {
     const item = store.items.find((i) => i.id === itemId && i.from === 'user');
-    if (!item) return;
+    if (!item) return false;
+    touch(item.conversationId);
     if (answeredAsStatus) item.statusQuery = true;
     else countUserSend(conversationOf(store, item.conversationId), item.at);
   });
@@ -701,6 +759,20 @@ export function addParticipant(conversationId: string, personaId: string): Promi
   return update((store) => {
     const conversation = conversationOf(store, conversationId);
     if (!conversation.participants.includes(personaId)) conversation.participants.push(personaId);
+  });
+}
+
+/**
+ * Replace a conversation's participant set (the reply box's To: field): the
+ * first id drives. Sessions and send counts stay, so a persona dropped and
+ * added back resumes its own thread. Duplicates collapse; an empty set is
+ * refused (a conversation always has someone to answer the user).
+ */
+export function setParticipants(conversationId: string, personaIds: readonly string[]): Promise<MailListResult> {
+  const next = [...new Set(personaIds)];
+  if (!next.length) return Promise.reject(new Error('A conversation needs at least one persona.'));
+  return update((store) => {
+    conversationOf(store, conversationId).participants = next;
   });
 }
 
@@ -722,6 +794,7 @@ export async function repointParticipants(successors: ReadonlyMap<string, string
         if (!next.includes(id)) next.push(id);
       }
       conversation.participants = next;
+      touch(conversation.id);
       for (const old of successors.keys()) {
         delete conversation.sessions[old];
         delete conversation.sendCounts[old];
@@ -785,6 +858,7 @@ export async function replaceMailSubject(id: string, expected: string, subject: 
     const conversation = store.conversations.find((c) => c.id === id);
     if (!conversation || conversation.subject !== expected || conversation.subject === subject) return false;
     conversation.subject = subject;
+    touch(id);
     replaced = true;
   });
   return replaced;
@@ -835,7 +909,11 @@ export function setMailItemResult(itemId: string, result: string, images?: Gener
 export function markMailItemsFiled(itemIds: string[]): Promise<MailListResult> {
   const ids = new Set(itemIds);
   return update((store) => {
-    for (const item of store.items) if (ids.has(item.id)) item.filed = true;
+    for (const item of store.items) {
+      if (!ids.has(item.id)) continue;
+      item.filed = true;
+      touch(item.conversationId);
+    }
   });
 }
 
@@ -848,7 +926,7 @@ export async function settleMailApproval(itemId: string, status: Exclude<MailApp
   let settled: MailApproval | null = null;
   await update((store) => {
     const item = store.items.find((i) => i.id === itemId);
-    if (!item?.approval || item.approval.status !== 'pending') return;
+    if (!item?.approval || item.approval.status !== 'pending') return false;
     settled = { ...item.approval };
     item.approval = { ...item.approval, status };
     const conversation = conversationOf(store, item.conversationId);
@@ -885,6 +963,7 @@ export async function hasExternalEnvelope(envelopeId: string): Promise<boolean> 
 export function releaseExternalItems(conversationId: string, upToItemId: string): Promise<MailListResult> {
   return update((store) => {
     const items = store.items.filter((i) => i.conversationId === conversationId);
+    touch(conversationId);
     const idx = items.findIndex((i) => i.id === upToItemId);
     if (idx < 0) throw new Error('That mail no longer exists.');
     let changed = false;
@@ -904,6 +983,7 @@ export function setExternalStatus(itemId: string, patch: Partial<MailExternal>):
   return update((store) => {
     const item = store.items.find((i) => i.id === itemId);
     if (!item) return false;
+    touch(item.conversationId);
     const next: MailExternal = { ...item.external, ...patch };
     if (!patch.error && patch.status && patch.status !== 'failed' && patch.status !== 'unreachable') delete next.error;
     item.external = next;
@@ -962,6 +1042,21 @@ export async function mailSessionThreadIds(): Promise<Set<string>> {
 }
 
 /**
+ * Mail threads no background learning pass may read: scheduled runs (one per
+ * mail-sending firing; nobody watched them) and every thread of a private
+ * conversation. Ordinary mail conversations are not in it.
+ */
+export async function threadsClosedToLearning(): Promise<Set<string>> {
+  const { items, conversations } = await readMail();
+  const ids = new Set<string>();
+  for (const item of items) if (item.runThreadId) ids.add(item.runThreadId);
+  // A private conversation's threads count as out of bounds too: its deliveries
+  // capture nothing, so nothing should learn from them by another route.
+  for (const c of conversations) if (c.private) for (const threadId of Object.values(c.sessions)) ids.add(threadId);
+  return ids;
+}
+
+/**
  * The threads a scheduled task's runs left behind (one per mail-sending
  * firing), for deletion when the TASK goes. The mail stays, and so does its
  * Work record — only the transcript nobody can reach any more is dropped. The
@@ -974,6 +1069,7 @@ export async function taskRunThreadIds(taskId: string): Promise<string[]> {
       if (item.taskId !== taskId || !item.runThreadId) continue;
       ids.push(item.runThreadId);
       delete item.runThreadId;
+      touch(item.conversationId);
     }
   });
   return ids;
@@ -1056,6 +1152,7 @@ export async function deleteConversation(id: string): Promise<{ result: MailList
   let fileIds: string[] = [];
   liveWorking.delete(id);
   const result = await update((store) => {
+    touch(id);
     const conversation = store.conversations.find((c) => c.id === id);
     threadIds = conversation ? Object.values(conversation.sessions) : [];
     // A scheduled run's thread goes with the mail that kept it.
@@ -1090,6 +1187,7 @@ export function setMailArchived(ids: string[], archived: boolean): Promise<MailL
   const now = Date.now();
   return update((store) => {
     for (const id of ids) {
+      touch(id);
       const entry = entryOf(store, id);
       if (archived) {
         entry.archivedAt = now;
@@ -1107,6 +1205,7 @@ export function setMailSnooze(ids: string[], until: number | null): Promise<Mail
   const now = Date.now();
   return update((store) => {
     for (const id of ids) {
+      touch(id);
       const entry = entryOf(store, id);
       if (until != null && until > now) {
         entry.snoozedAt = now;
@@ -1125,6 +1224,7 @@ export function setMailRead(ids: string[], read: boolean): Promise<MailListResul
   const now = Date.now();
   return update((store) => {
     for (const id of ids) {
+      touch(id);
       const entry = entryOf(store, id);
       if (read) {
         const conversation = store.conversations.find((c) => c.id === id);

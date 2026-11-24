@@ -1,4 +1,5 @@
 import { removeThreadDrafts } from '../skills/record-drafts';
+import { dropThreadCases } from '../skills/cases';
 import { degrade } from '../degrade';
 import { registerServer } from './guard';
 import type { IpcDeps } from './deps';
@@ -233,7 +234,9 @@ export function registerChatsIpc(deps: IpcDeps): void {
       removeInboxEntry(threadId),
       // The chat's scratch folder goes with it — that is the whole point of
       // keeping scratch per chat (see server/exec/scratch.ts).
-      deleteThreadScratch(threadId)
+      deleteThreadScratch(threadId),
+      // The skill cases keep excerpts of the chat's words (skills/cases.ts).
+      Promise.resolve().then(() => dropThreadCases(threadId))
     ]);
     dropChatThread(threadId); // forget it from the search index
   });

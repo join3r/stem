@@ -44,7 +44,15 @@ export function registerMcpIpc(deps: IpcDeps): void {
               // way to say where a server runs — so a re-add of one pinned to a
               // device would quietly move it back here. Keep the pin; see
               // withStoredLocation.
-              await piMcp.addMcpServer(await piMcp.withStoredLocation(proposal.input));
+              const input = await piMcp.withStoredLocation(proposal.input);
+              piMcp.assertDurableServerPaths(input.name, input, Boolean(input.location));
+              await piMcp.addMcpServer(input);
+              return;
+            }
+            if (proposal.action === 'edit') {
+              if (!proposal.name || !proposal.patch) throw new Error('The MCP edit proposal is missing its server or its change.');
+              await piMcp.assertDurableEdit(proposal.name, proposal.patch);
+              await piMcp.editMcpServer(proposal.name, proposal.patch);
               return;
             }
             if (!proposal.name) throw new Error('The MCP remove proposal is missing its server name.');

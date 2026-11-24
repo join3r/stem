@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Plug, Globe, HardDrive } from 'lucide-react';
-import type { McpAdminProposal } from '../../shared/types';
+import { Plug, Globe, HardDrive, Pencil } from 'lucide-react';
+import type { McpAdminProposal, McpServerPatch } from '../../shared/types';
 import { enqueueApproval, removeApproval } from './approvalQueue';
 
 // A modal confirm card shown when the chat assistant proposes adding or removing
@@ -56,10 +56,16 @@ export function McpApprovalCard() {
       <div className="mcp-approval-card">
         <div className="mcp-approval-head">
           <span className="row-icon">
-            {proposal.action === 'add' ? (remote ? <Globe size={15} /> : <HardDrive size={15} />) : <Plug size={15} />}
+            {proposal.action === 'add' ? (
+              remote ? <Globe size={15} /> : <HardDrive size={15} />
+            ) : proposal.action === 'edit' ? (
+              <Pencil size={15} />
+            ) : (
+              <Plug size={15} />
+            )}
           </span>
           <strong>
-            {proposal.action === 'add' ? 'Add MCP server' : 'Remove MCP server'}
+            {proposal.action === 'add' ? 'Add MCP server' : proposal.action === 'edit' ? 'Change MCP server' : 'Remove MCP server'}
             {proposal.name ? ` “${proposal.name}”` : ''}
           </strong>
         </div>
@@ -102,12 +108,20 @@ export function McpApprovalCard() {
             {envKeys.length > 0 && (
               <>
                 <dt>Env</dt>
-                <dd>{envKeys.join(', ')}</dd>
+                <dd>
+                  <code>{envKeys.map((k) => `${k}=${input.env![k]}`).join(' ')}</code>
+                </dd>
               </>
             )}
           </dl>
+        ) : proposal.action === 'edit' && proposal.patch ? (
+          <McpEditDetail patch={proposal.patch} before={proposal.before} />
         ) : (
           <p className="muted">The assistant wants to remove this server from your configuration.</p>
+        )}
+
+        {proposal.action === 'edit' && (
+          <p className="muted">Everything not listed, including stored tokens, stays as it is.</p>
         )}
 
         {!remote && proposal.action === 'add' && (
@@ -126,5 +140,88 @@ export function McpApprovalCard() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Old → new for what an `edit_mcp_server` changes; env/header values arrive masked. */
+function McpEditDetail({ patch, before }: { patch: McpServerPatch; before?: McpAdminProposal['before'] }) {
+  const commandChanged = patch.command !== undefined || patch.args !== undefined;
+  const line = (command?: string, args?: string[]) => `${command ?? ''} ${(args ?? []).join(' ')}`.trim() || '—';
+  const setKeys = (values?: Record<string, string>) => Object.keys(values ?? {});
+  // Values named like credentials arrive masked; the rest are shown in full.
+  const pairs = (values?: Record<string, string>) =>
+    Object.entries(values ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ');
+  const destinationChanged = commandChanged || patch.url !== undefined;
+  const kept = before?.keptKeys ?? [];
+  return (
+    <dl className="mcp-approval-detail">
+      {commandChanged && (
+        <>
+          <dt>Command</dt>
+          <dd>
+            {before?.command !== undefined && (
+              <>
+                <code>{line(before.command, before.args)}</code>
+                <br />→{' '}
+              </>
+            )}
+            <code>{line(patch.command ?? before?.command, patch.args ?? before?.args)}</code>
+          </dd>
+        </>
+      )}
+      {patch.url !== undefined && (
+        <>
+          <dt>URL</dt>
+          <dd>
+            {before?.url ? (
+              <>
+                {before.url}
+                <br />→{' '}
+              </>
+            ) : null}
+            {patch.url}
+          </dd>
+        </>
+      )}
+      {setKeys(patch.env).length > 0 && (
+        <>
+          <dt>Env set</dt>
+          <dd>
+            <code>{pairs(patch.env)}</code>
+          </dd>
+        </>
+      )}
+      {(patch.removeEnv ?? []).length > 0 && (
+        <>
+          <dt>Env removed</dt>
+          <dd>{patch.removeEnv!.join(', ')}</dd>
+        </>
+      )}
+      {setKeys(patch.headers).length > 0 && (
+        <>
+          <dt>Headers set</dt>
+          <dd>
+            <code>{pairs(patch.headers)}</code>
+          </dd>
+        </>
+      )}
+      {(patch.removeHeaders ?? []).length > 0 && (
+        <>
+          <dt>Headers removed</dt>
+          <dd>{patch.removeHeaders!.join(', ')}</dd>
+        </>
+      )}
+      {destinationChanged && kept.length > 0 && (
+        <>
+          <dt>Goes along</dt>
+          <dd className="error">
+            The new {patch.url !== undefined ? 'URL' : 'command'} gets the stored {kept.join(', ')}. Approve only if
+            you trust it with them.
+          </dd>
+        </>
+      )}
+    </dl>
   );
 }

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Trash2, Wand2 } from 'lucide-react';
+import { History, RotateCcw, Trash2, Wand2 } from 'lucide-react';
 import type {
   DefaultsSettings,
   ModelSummary,
+  SkillRecurrence,
   SkillsMode,
-  SkillSummary
+  SkillSummary,
+  SkillVersionSummary
 } from '../../../shared/types';
 import { useOffline } from '../../hooks/useServerReachable';
 import { InfoTip } from '../../ui/InfoTip';
@@ -18,6 +20,16 @@ import { plainLine } from '../../../shared/plain-text';
 // outcome message still lands — instead of the pass silently vanishing.
 const tidyJob = createJobStore();
 
+// The answers to "how often is this skill needed" (server/skills/contract.ts),
+// in the words of the select.
+const RECURRENCES: ReadonlyArray<[SkillRecurrence, string]> = [
+  ['weekly', 'Every week or more'],
+  ['monthly', 'About every month'],
+  ['quarterly', 'A few times a year'],
+  ['yearly', 'About once a year'],
+  ['occasional', 'Now and then, no rhythm']
+];
+
 export function SkillsTab({ models }: { models: ModelSummary[] }) {
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   // Skills live on the server. With it unreachable this list is empty because we
@@ -27,7 +39,7 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
   const { running: tidying, msg: tidyMsg } = useJob(tidyJob);
   // null => skills work follows the model you chat with (see Settings → Models).
   const [skillsModel, setSkillsModel] = useState<string | null>(null);
-  const [mode, setMode] = useState<SkillsMode>('ask');
+  const [mode, setMode] = useState<SkillsMode>('auto');
   // Select a row, then act on it from the gutter below the list — the same
   // vocabulary as the MCP servers tab one segment to the left. The row itself
   // carries no delete button: it is already carrying a name, an origin label, a
@@ -36,6 +48,11 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
   // serve an action taken once in a skill's life.
   const [selected, setSelected] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // Earlier versions of the selected skill (server/skills/store.ts keeps the
+  // text each change replaced). Loaded only when the history is opened.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [versions, setVersions] = useState<SkillVersionSummary[]>([]);
+  const [picked, setPicked] = useState<number | null>(null);
   // What "Same as main" resolves to — the model you chat with.
   const [defaults, setDefaults] = useState<DefaultsSettings>({
     model: null,
@@ -61,6 +78,40 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
     window.stem.listSkills().then(setSkills);
   }, [tidying]);
 
+  const selectedSkill = skills.find((s) => s.slug === selected) ?? null;
+  // Reload when the selection changes, or when the skill itself changed (a new
+  // version means one more earlier version to show).
+  useEffect(() => {
+    if (!historyOpen || !selected) {
+      setVersions([]);
+      setPicked(null);
+      return;
+    }
+    let live = true;
+    window.stem.listSkillVersions(selected).then((list) => {
+      if (!live) return;
+      setVersions(list);
+      setPicked(list[0]?.version ?? null);
+    }).catch(() => {
+      // quiet: an empty list reads as "no earlier versions", and Restore stays off.
+      if (live) setVersions([]);
+    });
+    return () => {
+      live = false;
+    };
+  }, [historyOpen, selected, selectedSkill?.version]);
+
+  async function restore(slug: string, version: number) {
+    const name = skills.find((s) => s.slug === slug)?.name ?? slug;
+    if (!window.confirm(`Put version ${version} of “${name}” back?\n\nThe current text is kept as an earlier version, so you can undo this.`)) return;
+    setRemoveError(null);
+    try {
+      setSkills(await window.stem.restoreSkillVersion(slug, version));
+    } catch (error) {
+      setRemoveError(error instanceof Error ? error.message : 'Could not restore that version.');
+    }
+  }
+
   function selectSkillsModel(id: string | null) {
     setSkillsModel(id);
     window.stem.updateSkillsSettings({ model: id }).then((s) => setSkillsModel(s.skills.model));
@@ -69,6 +120,17 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
   function selectMode(next: SkillsMode) {
     setMode(next);
     window.stem.updateSkillsSettings({ mode: next }).then((s) => setMode(s.skills.mode));
+  }
+
+  // Stem's estimate of how often the task comes up is a guess; the person who
+  // sends the invoice knows it is monthly. Their answer replaces it.
+  async function setRecurs(slug: string, recurs: SkillRecurrence) {
+    setRemoveError(null);
+    try {
+      setSkills(await window.stem.setSkillRecurrence(slug, recurs));
+    } catch (error) {
+      setRemoveError(error instanceof Error ? error.message : 'Could not change that.');
+    }
   }
 
   async function toggle(slug: string, enabled: boolean) {
@@ -107,9 +169,9 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
         // A pass that merged nothing and one that merged three both end with the
         // list simply redrawn, so say which happened — otherwise the only way to
         // tell is to have memorised the library beforehand.
-        // "90 days" is ARCHIVE_AFTER_DAYS in server/skills/lifecycle.ts, spelled out
-        // here rather than plumbed through IPC: it is a sentence, not a setting.
-        const retired = r.expired ? `, retired ${r.expired} unused >90 days` : '';
+        // How long "too long" is depends on each skill's "Needed" answer below
+        // (server/skills/lifecycle.ts), so the sentence does not name a number.
+        const retired = r.expired ? `, retired ${r.expired} unused too long` : '';
         const split = r.split ?? 0;
         const splitText = split ? `Split ${split} into one skill per job, ` : '';
         return split + r.merged + r.archived + r.expired === 0
@@ -135,12 +197,21 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
     return d.toLocaleDateString(undefined, opts);
   }
 
+  // `fastmail.draft_email` → "fastmail · draft_email", `busycal.*` → "any busycal tool".
+  function toolLabel(tool: string): string {
+    if (tool.endsWith('.*')) return `any ${tool.slice(0, -2)} tool`;
+    const dot = tool.indexOf('.');
+    return dot > 0 ? `${tool.slice(0, dot)} · ${tool.slice(dot + 1)}` : tool;
+  }
+
   function usageLabel(s: SkillSummary): string {
     const used = s.useCount
       ? `used ${s.useCount}×${s.lastUsedAt ? ` · last ${formatDay(s.lastUsedAt)}` : ''}`
       : 'never used';
-    // The assistant said a step was wrong: the one line here that is a verdict
-    // on the skill rather than a count of it being around.
+    // How the uses ended, read off the next message (server/skills/cases.ts):
+    // the verdict on the skill rather than a count of it being around. Before
+    // any use has an outcome, the model's own reports are all there is.
+    if (s.outcomes) return `${used} · ${s.outcomes.accepted} accepted · ${s.outcomes.failed} needed a fix`;
     return s.failCount ? `${used} · reported wrong ${s.failCount}×` : used;
   }
 
@@ -182,7 +253,11 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
                 <strong>
                   {s.name}
                   {s.source === 'agent' && (
-                    <span className="muted" style={{ marginLeft: 6, fontWeight: 400, fontSize: '0.8em' }}>
+                    <span
+                      className="muted"
+                      style={{ marginLeft: 6, fontWeight: 400, fontSize: '0.8em' }}
+                      title={s.change ? plainLine(s.change) : undefined}
+                    >
                       auto{s.version && s.version > 1 ? ` · v${s.version}` : ''}
                     </span>
                   )}
@@ -195,6 +270,8 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
                   </span>
                 </strong>
                 <em>{plainLine(s.description)}</em>
+                {/* Why this skill can show up even when the request is worded nothing like it. */}
+                {s.tools?.length ? <em>Read before {s.tools.map(toolLabel).join(', ')}</em> : null}
               </span>
               <button
                 className={`switch${s.enabled ? ' on' : ''}`}
@@ -221,6 +298,83 @@ export function SkillsTab({ models }: { models: ModelSummary[] }) {
           >
             <Trash2 size={15} />
           </button>
+          <button
+            title={
+              !selectedSkill
+                ? 'Select a skill to see its earlier versions'
+                : selectedSkill.versions
+                  ? 'Earlier versions of the selected skill'
+                  : 'This skill has no earlier versions'
+            }
+            aria-label="Earlier versions of the selected skill"
+            aria-pressed={historyOpen}
+            onClick={() => setHistoryOpen(!historyOpen)}
+            disabled={!selectedSkill?.versions}
+          >
+            <History size={15} />
+          </button>
+        </div>
+      )}
+      {selectedSkill?.retiresAfterDays !== undefined && (
+        <div className="formgroup">
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <label htmlFor="skill-recurs" className="muted" style={{ flexShrink: 0 }}>
+              Needed
+            </label>
+            <select
+              id="skill-recurs"
+              className="vfield"
+              value={selectedSkill.recurs ?? ''}
+              onChange={(e) => e.target.value && setRecurs(selectedSkill.slug, e.target.value as SkillRecurrence)}
+              style={{ flex: 1, minWidth: 0 }}
+            >
+              {!selectedSkill.recurs && <option value="">Not estimated yet</option>}
+              {RECURRENCES.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="muted">
+            Stem switches this skill off after {selectedSkill.retiresAfterDays} days without use. It stays on
+            disk and you can switch it back on.
+          </p>
+        </div>
+      )}
+      {historyOpen && selectedSkill && versions.length > 0 && (
+        <div className="formgroup">
+          <p className="muted">
+            Now v{selectedSkill.version ?? 1}
+            {selectedSkill.change ? ` — ${plainLine(selectedSkill.change)}` : ''}
+          </p>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <select
+              className="vfield"
+              aria-label="Earlier version"
+              value={picked ?? ''}
+              onChange={(e) => setPicked(Number(e.target.value))}
+              style={{ flex: 1, minWidth: 0 }}
+            >
+              {versions.map((v) => (
+                <option key={v.version} value={v.version}>
+                  v{v.version}
+                  {v.updated ? ` · ${formatDay(v.updated)}` : ''}
+                  {v.change ? ` · ${plainLine(v.change)}` : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              className="link-btn icon-only"
+              data-label="Restore"
+              aria-label="Restore this version"
+              title="Restore this version"
+              disabled={picked === null}
+              onClick={() => picked !== null && restore(selectedSkill.slug, picked)}
+            >
+              <RotateCcw size={15} />
+            </button>
+          </div>
         </div>
       )}
       {removeError && <p className="error">{removeError}</p>}

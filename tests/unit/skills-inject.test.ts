@@ -14,8 +14,10 @@ process.env.STEM_SKILLS_DIR = skillsDir;
 
 import {
   MAX_INLINED_SKILLS,
+  SKILL_RULES,
   formatSkillsBlock,
   selectSkills,
+  skillIndexLine,
   skillQuery,
   skillUsageRate,
   type SkillRecordish
@@ -25,7 +27,8 @@ import {
   ensureSkillVectors,
   skillVectorText
 } from '../../src/server/skills/vectors';
-import { loadedSkillNames } from '../../src/server/skills/thread-history';
+import { listedSkillLines, loadedSkillNames } from '../../src/server/skills/thread-history';
+import { AmbientBlocks } from '../../src/server/pi/context-dedupe';
 
 const vectorsFile = join(skillsDir, SKILLS_VECTORS_FILE);
 const QUERY = 'how do I deploy the staging build';
@@ -434,7 +437,7 @@ describe('formatSkillsBlock', () => {
     expect(formatSkillsBlock({ inlined: [], indexed: [] })).toBe('');
   });
 
-  it('frames skills as procedures to follow, and to report when wrong', async () => {
+  it('renders the loaded skill and the index, and leaves the rules to SKILL_RULES', async () => {
     const { client } = fakeEmbeddings({ deploy: 0.95, gardening: 0.4 });
     const sel = await selectSkills(
       QUERY,
@@ -450,12 +453,40 @@ describe('formatSkillsBlock', () => {
     // Indexed: name + description only, never the body.
     expect(block).toContain('does gardening');
     expect(block).not.toContain('run gardening');
-    // The inverse of the <stem_memory_data> framing, plus the deviation report.
-    expect(block).toMatch(/instructions to follow/i);
-    expect(block).toMatch(/say so plainly in your reply/i);
-    expect(block).toMatch(/never silently skip/i);
+    // Nothing follows the block: the rules are constant text and go out once.
+    expect(block.endsWith('</stem_skills>')).toBe(true);
+    expect(block).not.toContain('Skill issue');
+  });
+
+  it('frames skills as procedures to follow, and to report when wrong, in the rules', () => {
+    // The inverse of the memory block's framing, plus the deviation report.
+    expect(SKILL_RULES).toMatch(/instructions to follow/i);
+    expect(SKILL_RULES).toMatch(/say so plainly in your reply/i);
+    expect(SKILL_RULES).toMatch(/never silently skip/i);
     // And the machine-readable form of that report, spelled the way grade.ts reads it.
-    expect(block).toContain('`Skill issue [<skill name>]:`');
+    expect(SKILL_RULES).toContain('`Skill issue [<skill name>]:`');
+    // How to get at a skill that is only listed, and that a list is given once.
+    expect(SKILL_RULES).toContain('`manage_skill` action "view"');
+    expect(SKILL_RULES).toMatch(/one time per chat/);
+  });
+
+  it('keeps the rules clear of what other code reads out of a chat', () => {
+    // An opening tag in prose reads as the start of a block (thread-history.ts,
+    // thread-evidence.ts), and a persona with recall off must read nothing
+    // about memory.
+    expect(SKILL_RULES).not.toContain('<stem_');
+    expect(SKILL_RULES).not.toMatch(/remember|recall|memory/i);
+  });
+
+  it('sends the rules once: a chat that holds them gets one line naming them', () => {
+    const first = new AmbientBlocks([]);
+    first.add(SKILL_RULES, 'the rules for saved skills');
+    expect(first.blocks()).toEqual([SKILL_RULES]);
+    const later = new AmbientBlocks([`<!--stem:context-->\n<stem_skills version="1">\nx\n</stem_skills>\n\n${SKILL_RULES}\n\n---\n<!--/stem:context-->\n\nhi`]);
+    later.add(SKILL_RULES, 'the rules for saved skills');
+    expect(later.blocks()).toEqual([
+      'Unchanged from earlier in this chat and still in force (not repeated here): the rules for saved skills.'
+    ]);
   });
 
   it('labels an auto-saved skill as unreviewed', () => {
@@ -539,6 +570,70 @@ describe('selectSkills — chat context', () => {
     // In the history already, so not listed as "names only" either.
     expect(sel.indexed.map((s) => s.slug)).toEqual(['gardening', 'release']);
     expect(sel.decision?.alreadyLoaded).toEqual(['deploy']);
+  });
+});
+
+describe('a skill is listed once per chat', () => {
+  const listedIn = (...lines: string[]) =>
+    listedSkillLines([
+      `<!--stem:context-->\n<stem_skills version="1">\nSaved procedures. None matched this message closely enough to load.\n\n` +
+        `## Other saved skills (names only, steps not loaded)\n${lines.join('\n')}\n</stem_skills>\n<!--/stem:context-->\n\nhi`
+    ]);
+
+  it('reads the index lines out of the chat, and nothing outside a skills block', () => {
+    const lines = listedSkillLines([
+      `- not a skill — outside any block\n<stem_skills version="1">\nSaved procedures relevant to this message.\n\n` +
+        `### deploy (auto-saved, never reviewed)\ndoes deploy\n\n## Steps\n- a step\n\n` +
+        `## Other saved skills (names only, steps not loaded)\n- gardening — does gardening\n</stem_skills>\nafter`,
+      'a message with no block'
+    ]);
+    expect(lines.has('- gardening — does gardening')).toBe(true);
+    expect(lines.has('- not a skill — outside any block')).toBe(false);
+    expect(listedSkillLines([]).size).toBe(0);
+  });
+
+  it('leaves out what the chat lists already and says how many', async () => {
+    const { client } = fakeEmbeddings({ deploy: 0.95, gardening: 0.9, release: 0.85 });
+    const records = [skill('deploy'), skill('gardening'), skill('release')];
+    const sel = await selectSkills(QUERY, records, {
+      embeddings: client,
+      rerank: fakeRerank({ deploy: -2 }),
+      alreadyListed: listedIn(skillIndexLine(skill('gardening')))
+    });
+    expect(sel.inlined.map((s) => s.slug)).toEqual(['deploy']);
+    expect(sel.indexed.map((s) => s.slug)).toEqual(['release']);
+    expect(sel.decision?.listedEarlier).toBe(1);
+  });
+
+  it('lists a skill again when its description changed', async () => {
+    const { client } = fakeEmbeddings({ deploy: 0.95, gardening: 0.9 });
+    const sel = await selectSkills(QUERY, [skill('deploy'), skill('gardening', { description: 'grows tomatoes' })], {
+      embeddings: client,
+      rerank: fakeRerank({ deploy: -2 }),
+      alreadyListed: listedIn('- gardening — does gardening')
+    });
+    expect(sel.indexed.map((s) => s.description)).toEqual(['grows tomatoes']);
+    expect(sel.decision?.listedEarlier).toBeUndefined();
+  });
+
+  it('applies to the paths that offer the whole library, and sends no block when nothing is new', async () => {
+    const records = [skill('deploy'), skill('gardening')];
+    // No embedder: nothing can be ranked, so the whole library is offered.
+    const all = await selectSkills(QUERY, records, { embeddings: null, rerank: null });
+    expect(all.indexed).toHaveLength(2);
+    const again = await selectSkills(QUERY, records, {
+      embeddings: null,
+      rerank: null,
+      alreadyListed: listedIn(...records.map(skillIndexLine))
+    });
+    expect(again.indexed).toEqual([]);
+    expect(again.decision?.listedEarlier).toBe(2);
+    expect(formatSkillsBlock(again)).toBe('');
+  });
+
+  it('writes the index with the lines it later looks for', () => {
+    const block = formatSkillsBlock({ inlined: [], indexed: [skill('gardening')] });
+    expect(listedSkillLines([block]).has(skillIndexLine(skill('gardening')))).toBe(true);
   });
 });
 

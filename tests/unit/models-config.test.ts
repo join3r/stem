@@ -26,6 +26,10 @@ vi.mock('../../src/server/workspace/settings', () => ({
   readSettings: async () => ({ localProviders: store.localProviders ?? emptySettings() })
 }));
 
+// The built-in catalog backfill always writes its own block; these tests are
+// about local providers, so it stays out of the file here (catalog-backfill.test.ts).
+vi.mock('../../src/server/pi/catalog-backfill', () => ({ applyCatalogBackfill: () => undefined }));
+
 function emptySettings(): LocalProvidersSettings {
   return {
     ollama: { enabled: false, baseUrl: 'http://localhost:11434' },

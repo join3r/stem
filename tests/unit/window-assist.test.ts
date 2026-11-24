@@ -4,7 +4,7 @@ vi.mock('electron', () => ({ BrowserWindow: class {}, screen: {} }));
 vi.mock('../../src/desktop/platform', () => ({}));
 vi.mock('../../src/desktop/renderer-assets', () => ({}));
 
-import { dockBeside } from '../../src/desktop/quickchat/windows';
+import { dockBeside, miniSpot } from '../../src/desktop/quickchat/windows';
 import { cleanWindowContext, formatWindowBlock } from '../../src/server/pi/window-context';
 import { mcpServersForApp } from '../../src/server/pi/app-match';
 
@@ -22,6 +22,21 @@ describe('docking the panel beside the window it was asked about', () => {
   it('goes to the left when the window is pushed against the right edge', () => {
     const target = { x: 800, y: 100, width: 900, height: 700 };
     expect(dockBeside(target, panel, screenArea)).toEqual({ x: 192, y: 100 });
+  });
+
+  it('shrinks to a pill on the side of the panel next to the window', () => {
+    const right = { x: 40, y: 100, width: 900, height: 700 };
+    expect(miniSpot(right, { x: 952, y: 100, width: 596, height: 518 })).toEqual({ x: 952, y: 100, width: 248, height: 40 });
+    const left = { x: 800, y: 100, width: 900, height: 700 };
+    expect(miniSpot(left, { x: 192, y: 100, width: 596, height: 518 })).toEqual({ x: 540, y: 100, width: 248, height: 40 });
+    const wide = { x: 100, y: 40, width: 1500, height: 300 };
+    expect(miniSpot(wide, { x: 552, y: 352, width: 596, height: 518 })).toEqual({ x: 726, y: 352, width: 248, height: 40 });
+  });
+
+  it('shrinks into the window\'s corner, not mid-window, when the panel overlaps a full-screen window', () => {
+    const spot = dockBeside(screenArea, { width: 596, height: 518 }, screenArea);
+    const pill = miniSpot(screenArea, { ...spot, width: 596, height: 518 });
+    expect(pill).toEqual({ x: 1728 - 248 - 16, y: 25 + 1092 - 40 - 16, width: 248, height: 40 });
   });
 
   it('goes below a wide window with room under it, centred on it', () => {

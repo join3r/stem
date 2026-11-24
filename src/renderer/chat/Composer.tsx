@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -20,7 +21,7 @@ import { useOffline } from '../hooks/useServerReachable';
 import { ShortcutHint, glyphsFor, useShortcut, useShortcutsBound, type ShortcutId } from '../shortcuts';
 import { EffortModelControl } from '../ui/EffortModelControl';
 import { slashMatches, type SlashCommand, type SlashCommandName } from './slashCommands';
-import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, noteBodyValid, useNoteMode } from '../noteMode';
+import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, noteBodyValid, pasteLandsInCommand, useNoteMode } from '../noteMode';
 import { clearDraft, readDraft, writeDraft } from './draft-store';
 import { dismissLearnNotice, readLearn, startLearn, subscribeLearn } from './learn-store';
 import { dismissCompactNotice, readCompact, startCompact, subscribeCompact } from './compact-store';
@@ -30,6 +31,8 @@ import { DictateButton, useDictation } from './dictation';
 import { VoiceButton, type VoiceCall } from './voice';
 
 const MAX_COMPOSER_HEIGHT = 180;
+/** Last `data-squeeze` step of the controls row; see `fitControls`. */
+const SQUEEZE_MAX = 6;
 
 // How long a `/learn` outcome stays up once its chat is on screen. Much longer
 // than the note flash: main writes these as full sentences explaining what was
@@ -203,6 +206,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     onInterrupt();
   }, [onInterrupt]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
 
   // Stem's offline mode is read-only by decision, not by accident: there is no
   // local brain to answer with and no outbox to hold what you typed, so a
@@ -264,7 +268,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [onPinNote, threadId]);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
-  const slash = noteMode || offline || slashDismissed ? null : slashMatches(draft, slashAvailable);
+  // A draft whose leading `/` came from a paste is text, never a command: no
+  // note mode, no menu, sent as typed. `pasteRef` marks the change event a text
+  // paste produces; `literal` lasts while the draft still starts with `/`.
+  const pasteRef = useRef(false);
+  const [pastedLiteral, setLiteral] = useState(false);
+  const literal = pastedLiteral && draft.startsWith('/');
+  const slash = noteMode || offline || slashDismissed || literal ? null : slashMatches(draft, slashAvailable);
   const slashActive = slash ? Math.min(slashIndex, slash.length - 1) : 0;
   const pickSlash = (cmd: SlashCommand) => {
     setSlashIndex(0);
@@ -356,6 +366,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         if (draftKey) clearDraft(draftKey);
         if (onNoteSaved) window.setTimeout(onNoteSaved, NOTE_CONFIRM_MS);
       });
+      return;
+    }
+    if (literal) {
+      if ((!text && attachments.length === 0) || running) return;
+      setArmed(false);
+      setLiteral(false);
+      onSend(text, attachments);
+      setDraft('');
+      setAttachments([]);
+      if (draftKey) clearDraft(draftKey);
       return;
     }
     const pin = onPinNote ? detectPinCommand(text) : null;
@@ -451,7 +471,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(e.clipboardData.files);
     const images = files.filter((f) => f.type.startsWith('image/'));
-    if (!images.length) return; // let plain-text paste through untouched
+    if (!images.length) {
+      // Plain text goes through untouched; onChange takes it literally if it
+      // lands where a command would be read.
+      const el = e.currentTarget;
+      pasteRef.current = pasteLandsInCommand(el.value, el.selectionStart ?? 0);
+      return;
+    }
     e.preventDefault();
     const next = await Promise.all(images.map(fileToAttachment));
     setAttachments((prev) => [...prev, ...next]);
@@ -487,6 +513,46 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     if (running) requestStop();
   });
 
+  // Keep the controls row on one line by giving things up in order rather than
+  // wrapping: the context meter goes first (its figures are a glance, not a
+  // control), then Fast/Web/Note/Record drop to bare icons, then Note and an idle
+  // Record go (both stay in the `/` menu), then the model name shortens and
+  // finally goes, leaving the chevron that still opens the picker. Only past the
+  // last step does the row wrap. Steps are tried smallest-first on every width
+  // change and whenever the row's content changes.
+  const fitControls = useCallback(() => {
+    const el = controlsRef.current;
+    if (!el) return;
+    for (let level = 0; level <= SQUEEZE_MAX; level++) {
+      el.dataset.squeeze = String(level);
+      if (el.scrollWidth <= el.clientWidth) return;
+    }
+  }, []);
+  useLayoutEffect(() => {
+    const el = controlsRef.current;
+    if (!el) return;
+    let width = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      // Squeezing changes heights too; only a new width is worth re-fitting.
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      fitControls();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fitControls]);
+  const messageCount = messages.length;
+  useLayoutEffect(fitControls, [
+    fitControls,
+    model?.id,
+    model?.displayName,
+    hasFast,
+    threadId,
+    recordingHere,
+    showContextMeter,
+    messageCount
+  ]);
+
   // Hover labels carry their keycap — but only where the keycap is real. This is
   // also Quick Chat's composer, and that window mounts no shortcuts provider, so
   // the registrations above are no-ops there and a tooltip promising ⌘U would be
@@ -505,7 +571,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 
   return (
     <div className="composer">
-      <div className="composer-controls">
+      <div className="composer-controls" ref={controlsRef}>
         {/* The ⌘E keycap sits on the slider, not the stops: it cycles the whole
             control rather than selecting any one level, and the stops carry only
             their level name. The label beside it opens the model picker. */}
@@ -536,7 +602,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 'toggle-speed'
               )}
             >
-              <Zap size={13} /> Fast
+              <Zap size={13} />
+              <span className="ctl-label">Fast</span>
             </button>
           </div>
         )}
@@ -574,23 +641,26 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 : 'Web search off — Stem answers from what it already knows'
             }
           >
-            <Globe size={13} /> Web
+            <Globe size={13} />
+            <span className="ctl-label">Web</span>
           </button>
         </div>
-        <div className="seg-ctl compact" role="group" aria-label="Memory note">
+        <div className="seg-ctl compact ctl-optional" role="group" aria-label="Memory note">
           <button
             type="button"
             className={noteMode ? 'active' : ''}
             onClick={toggleNoteMode}
             title="Save a note to memory — or type /note or //"
           >
-            <NotebookPen size={13} /> Note
+            <NotebookPen size={13} />
+            <span className="ctl-label">Note</span>
           </button>
         </div>
         {/* Recording is the person's own work, not a turn: like Note it is not
-            disabled while a turn runs. While recording for this chat it stops. */}
+            disabled while a turn runs. While recording for this chat it stops,
+            and that Stop chip is never squeezed away. */}
         {threadId && CAN_RECORD && (
-          <div className="seg-ctl compact" role="group" aria-label="Record a skill">
+          <div className={`seg-ctl compact${recordingHere ? '' : ' ctl-optional'}`} role="group" aria-label="Record a skill">
             <button
               type="button"
               className={recordingHere ? 'active record-chip' : 'record-chip'}
@@ -602,9 +672,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   : 'Show Stem a task on your Mac — it writes the skill (/record, ⌃⌥R)'
               }
             >
-              <span className="record-dot" aria-hidden="true" /> {recordingHere ? 'Stop' : 'Record'}
+              <span className="record-dot" aria-hidden="true" />
+              <span className="ctl-label">{recordingHere ? 'Stop' : 'Record'}</span>
               {!recordingHere && (
-                <span className="beta-pill alpha-pill" aria-hidden="true" title={RECORDER_ALPHA_TITLE}>
+                <span className="beta-pill alpha-pill ctl-label" aria-hidden="true" title={RECORDER_ALPHA_TITLE}>
                   Alpha
                 </span>
               )}
@@ -766,7 +837,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               // Typing `/note ` or `//` at the start flips into note mode; the
               // prefix is consumed (the chip replaces it in the UI). Strip
               // before setDraft so the fact preview never sees the prefix.
-              const trigger = noteMode ? null : detectNoteTrigger(value);
+              const pasted = pasteRef.current;
+              pasteRef.current = false;
+              const isLiteral = (pasted || literal) && value.startsWith('/');
+              if (isLiteral !== pastedLiteral) setLiteral(isLiteral);
+              const trigger = noteMode || isLiteral ? null : detectNoteTrigger(value);
               if (trigger) {
                 enterNoteMode();
                 setDraft(trigger.body);

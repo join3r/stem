@@ -21,15 +21,17 @@ test('first run: welcome → ChatGPT OAuth → main app', async ({ onboardingApp
 
   // Welcome step (first run: onboarding.completed is false in the fresh store).
   await expect(win.getByText('Welcome to Stem')).toBeVisible();
-  // The pitch is "your data stays on this machine", so it has to name the right
-  // machine — calling a Linux box a Mac undercuts the very claim being made.
+  // The welcome says where data is stored, so it has to name the right machine:
+  // calling a Linux box a Mac undercuts the very claim being made.
   await expect(
-    win.getByText(process.platform === 'darwin' ? 'lives on your Mac' : 'lives on your computer')
+    win.getByText(process.platform === 'darwin' ? 'An AI assistant on your Mac' : 'An AI assistant on your computer')
   ).toBeVisible();
   await win.getByRole('button', { name: 'Get started' }).click();
 
   // Provider choice → fake OAuth (scripted auth-url + done events).
-  await expect(win.getByRole('button', { name: 'Continue with Claude' })).toBeVisible();
+  // Claude plans don't cover third-party apps, so first run doesn't offer them.
+  await expect(win.getByRole('button', { name: 'Continue with Grok' })).toBeVisible();
+  await expect(win.getByRole('button', { name: /Claude/ })).toHaveCount(0);
   await win.getByRole('button', { name: 'Continue with ChatGPT' }).click();
 
   // The fake completes immediately; the wizard finishes and the app mounts.

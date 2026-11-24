@@ -13,15 +13,18 @@ import {
   shell
 } from 'electron';
 import { dirname, join } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import { IN_WINDOW_SHORTCUTS, installAppMenu, updateAppMenu } from './app-menu';
 import { installContextMenu } from './context-menu';
-import { openLink } from './open-link';
+import { openLink, setFileViewer } from './open-link';
+import { openInViewer, registerViewerScheme } from './viewer';
+import { imagePreviewDataUrl } from '../server/pi/attachments';
 import { electronHost } from './host';
 import { setHost } from '../server/host';
 import { startServer, type ServerHandle } from '../server';
 import { log } from '../server/log';
-import { resolveProfileOverride } from '../server/workspace/paths';
+import { logFilePath, resolveProfileOverride } from '../server/workspace/paths';
 import { bindServerChannels, handleLocal } from './ipc-bridge';
 import { registerLocalIpc } from './local';
 import { createMcpHost, type McpHost } from './mcp-host';
@@ -43,6 +46,7 @@ import { createPresenceHeartbeat, type PresenceHeartbeat } from './presence';
 import { createServerProxy, type ServerProxy } from './proxy';
 import { clientCredentials, resolveServerUrl } from './server-endpoint';
 import { readClientSettings, seedReleaseNotesMarker } from './settings';
+import { applyZoom, installZoom } from './zoom';
 import { currentThemeState, resolveWindowBackground, watchThemes } from './themes';
 import { createUpdates } from './updates';
 import { createQuickChat } from './quickchat';
@@ -149,6 +153,10 @@ if (process.env.ELECTRON_RENDERER_URL) {
 // Global shortcuts through the XDG portal on Linux — the only path that works in
 // a Wayland session. Must be set here: switches are read at Chromium startup.
 enableGlobalShortcutPortal();
+
+// Stem's file viewer serves its page on its own scheme (desktop/viewer.ts):
+// privileges can be granted only before the app is ready.
+registerViewerScheme();
 
 // Test seam: when STEM_E2E is set the server swaps in the hermetic FakeBackend.
 // On this side it only suppresses the tray, to keep the harness's window/process
@@ -264,6 +272,7 @@ function createWindow(hidden = false): void {
   if (BACKGROUND && !hidden) mainWindow.showInactive();
 
   installNavigationGuards(mainWindow);
+  installZoom(mainWindow, isMac);
 
   // The renderer's HTML <title>Stem</title> otherwise clobbers the window title on
   // load; when running an alternate profile, keep the label pinned so the demo
@@ -466,6 +475,13 @@ function reportClientVersion(): void {
 }
 
 app.whenReady().then(async () => {
+  // A file a reply links opens in Stem's own viewer when it can show it.
+  setFileViewer((path) =>
+    openInViewer(path, {
+      heicToDataUrl: imagePreviewDataUrl,
+      anyWindow: () => mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
+    })
+  );
   // Strict CSP for the renderer in production: only self, no remote/inline
   // script. Skipped in dev so the Vite dev server / HMR can run. Installed
   // before any window is created, so nothing can load without it.
@@ -474,7 +490,7 @@ app.whenReady().then(async () => {
       callback({
         responseHeaders: {
           ...details.responseHeaders,
-          'Content-Security-Policy': ["default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"]
+          'Content-Security-Policy': ["default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:"]
         }
       });
     });
@@ -491,7 +507,11 @@ app.whenReady().then(async () => {
     {
       command: runMenuCommand,
       toggleQuickChat: () => quickChat.toggle(),
-      checkForUpdates: () => void checkForUpdatesFromMenu()
+      minimize: () => {
+        if (!quickChat.minimizeFocused()) BrowserWindow.getFocusedWindow()?.minimize();
+      },
+      checkForUpdates: () => void checkForUpdatesFromMenu(),
+      zoom: applyZoom
     },
     { canCheckForUpdates: updates.status().mode !== 'none' }
   );
@@ -735,7 +755,8 @@ app.whenReady().then(async () => {
     recorder,
     mirrorHost,
     claudeExport: claudeExport!,
-    themeChanged
+    themeChanged,
+    cachedThread: (threadId) => proxy?.cachedThread(threadId)
   });
   // A theme file saved, added or removed in the themes folder is the same event
   // as picking one: every window repaints and the picker re-lists.
@@ -849,8 +870,10 @@ app.whenReady().then(async () => {
 // it a window to drain in-flight work, then we exit for real (shutdown has its
 // own SIGKILL backstop).
 let quitting = false;
+let quitWatchdog: NodeJS.Timeout | null = null;
 app.on('before-quit', (event) => {
   if (quitting) return;
+  armQuitWatchdog();
   updates.close();
   presence?.close();
   proxy?.close();
@@ -882,6 +905,77 @@ app.on('before-quit', (event) => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
+
+// A quit that never finishes leaves Stem half-alive: its hosts are closed but
+// the process stays, and the only way out is Force Quit. Seen on the Mac after
+// long uptimes, with the hosts' close lines in the log and nothing after — so
+// whatever holds the process is past our own teardown (a window that never
+// finishes closing, a native handle). Past the deadline, write down what is
+// still alive for the next diagnosis and exit anyway. The embedded server gets
+// longer: its drain is legitimate work with its own SIGKILL backstop.
+const QUIT_DEADLINE_MS = 8_000;
+const QUIT_DEADLINE_WITH_SERVER_MS = 30_000;
+
+function armQuitWatchdog(): void {
+  if (quitWatchdog) return;
+  const startedAt = Date.now();
+  log('app', 'quitting');
+  armQuitSentinel(server ? QUIT_DEADLINE_WITH_SERVER_MS : QUIT_DEADLINE_MS);
+  // Not unref'd: holding the loop open is what lets it fire when nothing else does.
+  quitWatchdog = setTimeout(
+    () => {
+      try {
+        const windows = BrowserWindow.getAllWindows().map((w) => ({
+          title: w.getTitle(),
+          visible: w.isVisible(),
+          url: w.webContents.isDestroyed() ? null : w.webContents.getURL().slice(0, 120),
+          crashed: w.webContents.isDestroyed() ? null : w.webContents.isCrashed()
+        }));
+        const line = `${new Date().toISOString()} [app] quit stalled, exiting anyway ${JSON.stringify({
+          waitedMs: Date.now() - startedAt,
+          windows,
+          resources: process.getActiveResourcesInfo()
+        })}\n`;
+        // Sync on purpose: the async logger's queue would die with the exit below.
+        appendFileSync(logFilePath(), line);
+      } catch {
+        // quiet: the report is a nicety; the exit below is the point.
+      }
+      app.exit(0);
+    },
+    server ? QUIT_DEADLINE_WITH_SERVER_MS : QUIT_DEADLINE_MS
+  );
+}
+
+// The timer above needs this process's main thread; a quit wedged in native
+// code (or a JS loop) never runs it. So a detached shell watches from outside:
+// a few seconds past the in-process deadline, if this pid is still here it
+// samples every thread's native stack into quit-stall-sample.txt beside
+// stem.log (macOS), notes it in stem.log, and kills the process — what the
+// user would otherwise do by hand with Force Quit, minus the evidence loss.
+function armQuitSentinel(deadlineMs: number): void {
+  if (process.platform === 'win32') return;
+  try {
+    const logFile = logFilePath();
+    const sampleFile = join(dirname(logFile), 'quit-stall-sample.txt');
+    const graceS = Math.ceil(deadlineMs / 1000) + 4;
+    const script = [
+      `sleep ${graceS}`,
+      'kill -0 "$P" 2>/dev/null || exit 0',
+      '[ -x /usr/bin/sample ] && /usr/bin/sample "$P" 3 -file "$SAMPLE" >/dev/null 2>&1',
+      'printf "%s [app] quit wedged, killed by the sentinel (native stacks in %s)\\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SAMPLE" >> "$LOG"',
+      'kill -9 "$P" 2>/dev/null'
+    ].join('; ');
+    const child = spawn('/bin/sh', ['-c', script], {
+      detached: true,
+      stdio: 'ignore',
+      env: { P: String(process.pid), LOG: logFile, SAMPLE: sampleFile, PATH: '/usr/bin:/bin' }
+    });
+    child.unref();
+  } catch {
+    // quiet: no sentinel just means a wedged quit needs Force Quit, as before.
+  }
+}
 
 app.on('window-all-closed', () => {
   // Dead-in-practice by design: the overlay + HUD windows are created at startup

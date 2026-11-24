@@ -28,12 +28,32 @@ export function imageFileBase(hint: string | undefined): string {
 export async function saveImageToDownloads(dataUrl: string, hint?: string): Promise<string> {
   const m = /^data:(image\/(png|jpeg|webp|gif));base64,(.+)$/s.exec(dataUrl);
   if (!m) throw new Error('Not an image.');
-  const ext = `.${m[2] === 'jpeg' ? 'jpg' : m[2]}`;
+  return writeNextTo(`.${m[2] === 'jpeg' ? 'jpg' : m[2]}`, imageFileBase(hint), Buffer.from(m[3], 'base64'));
+}
+
+const AUDIO_EXT: Record<string, string> = {
+  mpeg: '.mp3',
+  mp4: '.m4a',
+  aac: '.aac',
+  wav: '.wav',
+  ogg: '.ogg',
+  flac: '.flac',
+  webm: '.webm'
+};
+
+/** Write a sound data URL (share_audio) into Downloads, like saveImageToDownloads. */
+export async function saveAudioToDownloads(dataUrl: string, hint?: string): Promise<string> {
+  const m = /^data:audio\/([a-z0-9]+);base64,(.+)$/s.exec(dataUrl);
+  const ext = m ? AUDIO_EXT[m[1]] : undefined;
+  if (!m || !ext) throw new Error('Not a sound file.');
+  return writeNextTo(ext, imageFileBase(hint || 'Stem audio'), Buffer.from(m[2], 'base64'));
+}
+
+async function writeNextTo(ext: string, base: string, bytes: Buffer): Promise<string> {
   const dir = downloadsDir();
   await mkdir(dir, { recursive: true });
-  const name = basename(`${imageFileBase(hint)}${ext}`);
+  const name = basename(`${base}${ext}`);
   const stem = basename(name, extname(name));
-  const bytes = Buffer.from(m[3], 'base64');
   for (let i = 0; ; i++) {
     const path = join(dir, i === 0 ? name : `${stem} ${i + 1}${ext}`);
     try {

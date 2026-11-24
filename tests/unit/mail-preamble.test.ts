@@ -351,6 +351,17 @@ describe('mail preamble: writing for models', () => {
     expect(text).toContain('Never send mail that only acknowledges');
   });
 
+  it('a driver answering the user always replies, briefly when nothing is asked', () => {
+    const text = mailPreamble({ subject: 's', from: 'user', participants: ['driver', 'spoke'] }, 'driver');
+    expect(text).toContain('every mail from them gets a reply');
+    expect(text).not.toContain('end your turn without writing anything');
+  });
+
+  it('a driver hearing back from a helper keeps the no-acks rule', () => {
+    const text = mailPreamble({ subject: 's', from: 'spoke', participants: ['driver', 'spoke', 'other'] }, 'driver');
+    expect(text).toContain('end your turn without writing anything');
+  });
+
   it('an agent does too', () => {
     const text = mailPreamble(
       { subject: 's', from: 'driver', participants: ['driver'], agent: { role: 'Normal', spawnedBy: 'driver' } },

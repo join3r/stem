@@ -1,4 +1,5 @@
 import { eventTurnId, isSettledMethod } from '../shared/settledTurns';
+import { usesGteMemory } from '../shared/recall-recommended';
 import { onMailWorkChanged, recordInnerWork } from './mail/work';
 import { join } from 'node:path';
 import dns from 'node:dns';
@@ -31,12 +32,16 @@ import { log } from './log';
 import { ensureWorkspace } from './workspace/bootstrap';
 import { publishProtectedRootsNow } from './workspace/connected-folders';
 import { transportedRawPath } from './files/staging';
+import { readChatAudio } from './files/chat-audio';
 import { piHome } from './workspace/paths';
 import type { TaskScheduler } from './scheduler';
 import { MailRouter } from './mail/router';
 import { answerMemoryCheck } from './recall/deep-check';
 import { nameAfterFirstReply, runMailSubjectPass, type MailSubjectDeps } from './mail/subject';
 import { getPersona, onPersonasChanged, resolveClientPersona } from './workspace/personas';
+import { listPeople, onPeopleChanged } from './workspace/people';
+import { registerPeopleIpc } from './ipc/people';
+import { setPeopleContactsSource } from './recall/people-suggest';
 import { contactMemoryScheduler } from './interstem/contact-memory';
 import { personaTurnFields } from './workspace/persona-turn';
 import { initTaskScheduler } from './startup/scheduler';
@@ -68,6 +73,7 @@ import { setActivityEmitter } from './activity';
 import { foldTurnEvent, liveTurnCount, noteTurnStart } from './live-turns';
 import { startTurnOnce } from './start-turn-once';
 import { pushApprovalRequest, pushMailReceived, pushPersonMail, pushTurnFinished, type ApprovalPushKind } from './push';
+import { mailShareOpened } from './share/notice';
 import { mailConversationFor, onMailChanged, onMailReceived, taskMailHistory, taskRunThreadIds } from './workspace/mail';
 import { closeApns } from './push/apns';
 import { closeDeviceMcpRouter } from './mcp-device/router';
@@ -256,6 +262,8 @@ function pushApproval(kind: ApprovalPushKind, params: unknown): void {
 /** Pick a sensible app default from the models the signed-in providers expose. */
 function chooseDefaultModel(models: ModelSummary[]): string | null {
   const pick =
+    models.find((m) => m.provider === 'openai-codex' && m.id.endsWith('gpt-6.2-sol')) ??
+    // A pi catalog without 6.2 (an older bundled pi) still lands on the Sol line.
     models.find((m) => m.provider === 'openai-codex' && m.id.endsWith('gpt-6.1-sol')) ??
     models.find((m) => m.provider === 'anthropic' && /sonnet/i.test(m.id)) ??
     models.find((m) => m.provider === 'anthropic') ??
@@ -421,11 +429,18 @@ function registerIpc(): void {
   // migrations alike — so every connected client's
   // persona list (the composer's To: field included) stays current.
   onPersonasChanged(() => emit('personas:changed', undefined));
+  registerPeopleIpc({ runtime: () => runtime! });
+  onPeopleChanged(() => emit('people:changed', undefined));
+  // Fill the per-turn snapshot (recall/people-context.ts) before the first turn.
+  void listPeople();
+  setPeopleContactsSource(async () => (interStem ? (await interStem.status()).contacts : []));
   registerMailIpc({ router: () => mailRouter, runtime: () => runtime! });
   registerInterStemIpc({ service: () => interStem, router: () => mailRouter });
-  registerShareIpc({ runtime: () => runtime!, interStem: () => interStem });
+  registerShareIpc({ runtime: () => runtime!, interStem: () => interStem, onOpened: mailShareOpened });
   registerMemoryCheckIpc({ router: () => mailRouter, runtime: () => runtime!, emit });
-  onMailChanged(() => emit('mail:changed', undefined));
+  // The payload names the conversations the write touched, so a client re-reads
+  // only those (shared/mail-delta.ts); none named = re-read the list.
+  onMailChanged((conversationIds) => emit('mail:changed', conversationIds ? { conversationIds } : undefined));
   // What is learned from mail with other people, tagged with their address
   // (interstem/contact-memory.ts): a while after mail changed.
   const contactMemory = contactMemoryScheduler({
@@ -604,6 +619,13 @@ function registerIpc(): void {
     return hit ? { dataUrl: `data:${hit.mimeType};base64,${hit.data}`, mime: hit.mimeType } : null;
   });
 
+  // One sound a chat shows (share_audio), as a data URL, fetched on demand
+  // like a picture. The bytes live in the audio store, not the session file.
+  registerServer('chats:audio', async (_e, threadId: string, audioId: string) => {
+    const hit = await readChatAudio(threadId, audioId);
+    return hit ? { dataUrl: `data:${hit.mime};base64,${hit.data.toString('base64')}`, mime: hit.mime } : null;
+  });
+
 
   // ---- settings ----
   registerServer('settings:get', () => readSettings());
@@ -733,10 +755,12 @@ function registerIpc(): void {
     }
     if (
       embedManager &&
-      (before.reranker.mode !== after.reranker.mode || before.reranker.localModel !== after.reranker.localModel)
+      (before.reranker.mode !== after.reranker.mode || before.reranker.localModel !== after.reranker.localModel
+        || usesGteMemory(before) !== usesGteMemory(after))
     ) {
-      if (after.reranker.mode === 'local') embedManager.reconfigureRerank(resolveRerankSpec(after));
-      else if (before.reranker.mode === 'local') embedManager.reconfigureRerank(null);
+      // GTE runs in its own worker (gte-fact-pilot.ts); choosing it unloads the catalog reranker.
+      if (after.reranker.mode === 'local' && !usesGteMemory(after)) embedManager.reconfigureRerank(resolveRerankSpec(after));
+      else if (before.reranker.mode === 'local' && !usesGteMemory(before)) embedManager.reconfigureRerank(null);
     }
     if (patch.reranker || patch.embeddings) emit('reranker:factStatus', await getFactRerankStatus());
     return next;
@@ -874,7 +898,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
   });
   mailRouter = new MailRouter({
     runtime,
-    onChange: () => emit('mail:changed', undefined),
+    onChange: (conversationId) => emit('mail:changed', conversationId ? { conversationIds: [conversationId] } : undefined),
     // The user's mail in a conversation with another Stem goes out through the
     // relay; progress lands on the item (external.status).
     externalSend: (conversationId, itemId) => {

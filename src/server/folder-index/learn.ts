@@ -68,17 +68,26 @@ const CLAUDE_USER_MEMORY = /^memory\/(user|feedback)\//;
 /** Told to the model for the "Claude Code" folder, whose layout is fixed (desktop/claude-export). */
 export const CLAUDE_FOLDER_CONTEXT = `About these documents: they come from the user's Claude Code, their AI coding assistant. Files under memory/<type>/<project>/ are notes that assistant kept: "user" notes describe the user, "feedback" notes record corrections the user gave it, "project" and "reference" notes describe work in progress and where things live. Files under sessions/ and cowork/ are conversation transcripts, where "## You" is the user and "## Claude" is the assistant. Learn facts about the user, their work and their projects (what a project is, who it is for, decisions the user made). Skip build hashes, commit ids, deploy logs, bug histories and anything only the assistant claimed.`;
 
+/** The part of a "Claude Code" folder the learn drain reads. */
+export const CLAUDE_LEARN_SCOPE = 'memory/';
+
 /**
  * Which of a folder's docs the learn drain may distill, or null when none: the
  * whole folder in 'new'/'all' mode (as a '' prefix), and for the "Claude Code"
- * folder in 'use' mode its memory/ files alone. Those are few, short and
- * already sorted into facts, so they are worth learning as they come; the
- * transcripts are not, and wait to come up in a chat like any 'use' doc.
+ * folder its memory/ files alone, in every mode but 'off'. Those are few, short
+ * and already sorted into facts, so they are worth learning as they come.
+ *
+ * The session transcripts are never distilled in bulk. With 'all' they were:
+ * 4,171 transcripts became 1,639 facts in one store, nearly all of them undated
+ * notes about a coding project's state ("project X has a bug in Y"), which no
+ * later pass can age out and the injection floor never lets through (2026-11
+ * audit). A transcript still teaches Stem the way any 'use' doc does, when an
+ * excerpt of it comes up in a chat.
  */
 export function learnScope(folder: ConnectedFolder, mode: 'off' | 'use' | 'new' | 'all'): string | null {
-  if (mode === 'new' || mode === 'all') return '';
-  if (mode === 'use' && folder.kind === 'claude') return 'memory/';
-  return null;
+  if (mode === 'off') return null;
+  if (folder.kind === 'claude') return CLAUDE_LEARN_SCOPE;
+  return mode === 'new' || mode === 'all' ? '' : null;
 }
 
 export interface LearnBatch {

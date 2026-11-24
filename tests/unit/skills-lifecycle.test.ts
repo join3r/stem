@@ -8,7 +8,13 @@ import { join } from 'node:path';
 
 process.env.STEM_SKILLS_DIR = join(tmpdir(), `stem-skills-lifecycle-${process.pid}`);
 
-import { ARCHIVE_AFTER_DAYS, skillsToExpire, type LifecycleSkill } from '../../src/server/skills/lifecycle';
+import {
+  ARCHIVE_AFTER_DAYS,
+  archiveAfterDays,
+  skillsToExpire,
+  slowestRecurrence,
+  type LifecycleSkill
+} from '../../src/server/skills/lifecycle';
 import type { SkillsUsage } from '../../src/server/skills/usage';
 
 const NOW = new Date('2026-08-11T12:00:00.000Z');
@@ -86,5 +92,44 @@ describe('skillsToExpire', () => {
     const old = { created: daysAgo(120), updated: daysAgo(120) };
     const skills = [skill('a', old), skill('b'), skill('c', old)];
     expect(skillsToExpire(skills, usage(), NOW)).toEqual(['a', 'c']);
+  });
+});
+
+describe('the window follows how often the task is expected', () => {
+  const idle = (slug: string, days: number, recurs?: LifecycleSkill['recurs']): LifecycleSkill =>
+    skill(slug, { created: daysAgo(days), updated: daysAgo(days), ...(recurs ? { recurs } : {}) });
+
+  it('keeps a monthly skill through 100 idle days and a yearly one through 500', () => {
+    // The two cases a single short window gets wrong: an invoice sent every
+    // month or two, and a task that comes round once a year.
+    const skills = [idle('monthly-invoice', 100, 'monthly'), idle('tax-return', 500, 'yearly'), idle('no-estimate', 100)];
+    expect(skillsToExpire(skills, usage(), NOW)).toEqual(['no-estimate']);
+  });
+
+  it('retires a weekly skill sooner than one with no rhythm', () => {
+    const skills = [idle('weekly-report', 70, 'weekly'), idle('now-and-then', 70, 'occasional')];
+    expect(skillsToExpire(skills, usage(), NOW)).toEqual(['weekly-report']);
+  });
+
+  it('still retires a slow skill once several of its periods have passed', () => {
+    const skills = [idle('monthly-gone', 160, 'monthly'), idle('yearly-gone', 801, 'yearly'), idle('quarterly-kept', 399, 'quarterly')];
+    expect(skillsToExpire(skills, usage(), NOW)).toEqual(['monthly-gone', 'yearly-gone']);
+  });
+
+  it('counts a use against the same window', () => {
+    const used = idle('monthly-used', 300, 'monthly');
+    expect(skillsToExpire([used], usage({ 'monthly-used': { count: 4, lastUsedAt: daysAgo(140) } }), NOW)).toEqual([]);
+    expect(skillsToExpire([used], usage({ 'monthly-used': { count: 4, lastUsedAt: daysAgo(151) } }), NOW)).toEqual(['monthly-used']);
+  });
+
+  it('gives no estimate and "occasional" the window every skill had before', () => {
+    expect(archiveAfterDays(undefined)).toBe(ARCHIVE_AFTER_DAYS);
+    expect(archiveAfterDays('occasional')).toBe(ARCHIVE_AFTER_DAYS);
+  });
+
+  it('picks the slowest rhythm of a merged group', () => {
+    expect(slowestRecurrence(['weekly', undefined, 'yearly', 'monthly'])).toBe('yearly');
+    expect(slowestRecurrence(['weekly', 'occasional'])).toBe('occasional');
+    expect(slowestRecurrence([undefined])).toBeUndefined();
   });
 });

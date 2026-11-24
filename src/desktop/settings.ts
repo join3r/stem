@@ -39,7 +39,9 @@ const DEFAULTS: ClientSettings = {
     showOnAllDisplays: true,
     // Show the progress pill for main-window threads when the main window loses
     // focus (switch Spaces/apps), so an active thread stays visible.
-    followAcrossSpaces: true
+    followAcrossSpaces: true,
+    // Window panels float on top unless the user binds them to their window.
+    stayWithWindow: false
   },
   // "What's new" popup: on, with nothing recorded as seen yet. A null marker
   // means "show the version you are running, once" — which is right for an
@@ -86,7 +88,8 @@ function coerceClientSettings(raw: Partial<ClientSettings> | undefined): ClientS
       showOnAllDisplays:
         typeof qc.showOnAllDisplays === 'boolean' ? qc.showOnAllDisplays : d.quickChat.showOnAllDisplays,
       followAcrossSpaces:
-        typeof qc.followAcrossSpaces === 'boolean' ? qc.followAcrossSpaces : d.quickChat.followAcrossSpaces
+        typeof qc.followAcrossSpaces === 'boolean' ? qc.followAcrossSpaces : d.quickChat.followAcrossSpaces,
+      stayWithWindow: typeof qc.stayWithWindow === 'boolean' ? qc.stayWithWindow : d.quickChat.stayWithWindow
     },
     releaseNotes: {
       showOnUpdate:
@@ -156,6 +159,7 @@ export function updateClientQuickChat(patch: Partial<QuickChatSettings>): Promis
     if ('windowShortcut' in patch) mine.windowShortcut = patch.windowShortcut ?? null;
     if ('showOnAllDisplays' in patch) mine.showOnAllDisplays = patch.showOnAllDisplays;
     if ('followAcrossSpaces' in patch) mine.followAcrossSpaces = patch.followAcrossSpaces;
+    if ('stayWithWindow' in patch) mine.stayWithWindow = patch.stayWithWindow;
     doc.settings = coerceClientSettings({ ...cur, quickChat: { ...cur.quickChat, ...mine } });
     return doc.settings;
   });

@@ -18,7 +18,8 @@ import {
   parseSkillMd,
   readSkillRecord,
   removeSkill,
-  saveSkill
+  saveSkill,
+  setSkillRecurrence
 } from '../../src/server/skills/store';
 import { readUsage, recordUses } from '../../src/server/skills/usage';
 import type { SkillDraft } from '../../src/server/skills/contract';
@@ -232,5 +233,39 @@ describe('the file on disk', () => {
     saveSkill(draft(), { origin: 'assistant' });
     const text = readFileSync(join(skillsDir, 'brew-coffee', 'SKILL.md'), 'utf8');
     expect(/\n\s*source:\s*agent\b/.test(text)).toBe(true);
+  });
+});
+
+describe('how often a skill is needed', () => {
+  it('writes the estimate with the skill and keeps it through a patch that does not say', () => {
+    expect(saveSkill(draft({ recurs: 'monthly' }), { origin: 'turn' }).ok).toBe(true);
+    expect(readFileSync(join(skillsDir, 'brew-coffee', 'SKILL.md'), 'utf8')).toContain('    recurs: monthly\n');
+    expect(readSkillRecord('brew-coffee')?.recurs).toBe('monthly');
+
+    saveSkill(draft({ description: 'Use when a guest is waiting and the machine is cold.' }), { origin: 'turn', expectExisting: true });
+    expect(readSkillRecord('brew-coffee')).toMatchObject({ recurs: 'monthly', version: 2 });
+
+    saveSkill(draft({ recurs: 'weekly' }), { origin: 'turn', expectExisting: true });
+    expect(readSkillRecord('brew-coffee')?.recurs).toBe('weekly');
+  });
+
+  it('leaves it out of a skill nobody has estimated, and reads an unknown value as absent', () => {
+    saveSkill(draft(), { origin: 'turn' });
+    expect(readFileSync(join(skillsDir, 'brew-coffee', 'SKILL.md'), 'utf8')).not.toContain('recurs');
+    expect(readSkillRecord('brew-coffee')?.recurs).toBeUndefined();
+    expect(parseSkillMd('---\nname: "a"\nmetadata:\n  stem:\n    recurs: fortnightly\n---\n').recurs).toBeUndefined();
+  });
+
+  it('changes the estimate alone: same text, version, dates and origin', () => {
+    saveSkill(draft(), { origin: 'user-requested' });
+    const before = readSkillRecord('brew-coffee')!;
+    const res = setSkillRecurrence('brew-coffee', 'yearly');
+    expect(res.ok).toBe(true);
+    // `updated` above all: the lifecycle clock anchors on it, so estimating a
+    // whole library must not read as the whole library having just been worked on.
+    expect(readSkillRecord('brew-coffee')).toEqual({ ...before, recurs: 'yearly' });
+    setSkillRecurrence('brew-coffee', null);
+    expect(readSkillRecord('brew-coffee')).toEqual(before);
+    expect(setSkillRecurrence('no-such-skill', 'yearly').ok).toBe(false);
   });
 });

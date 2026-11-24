@@ -89,7 +89,7 @@ if (!skipBuild) {
     [
       'tsc', 'src/server/recall/embed-catalog.ts', 'src/server/recall/rerank-catalog.ts', 'src/server/skills/gate.ts',
       '--outDir', '.skills-build',
-      '--module', 'commonjs', '--moduleResolution', 'node', '--target', 'es2022',
+      '--module', 'commonjs', '--moduleResolution', 'node', '--ignoreConfig', '--ignoreDeprecations', '6.0', '--target', 'es2022',
       '--skipLibCheck', '--esModuleInterop', '--rootDir', 'src'
     ],
     { cwd: ROOT, stdio: 'inherit' }

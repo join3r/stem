@@ -2,6 +2,7 @@ import { workDetail } from '../../shared/work-detail';
 import type { PiEvent } from './rpc';
 import type {
   ActivityItem,
+  ChatAudioRef,
   GeneratedImageRef,
   PersonaBrowserPin,
   PersonaComputerPin,
@@ -12,8 +13,9 @@ import type {
 } from '../../shared/types';
 import { stripCiteMarkers } from '../../shared/citations';
 import { WEB_ACCESS_TOOL_NAMES } from '../../shared/activity';
-import { SECRET_ENVELOPE_KEY, toolArgsOf } from './protocol';
+import { SECRET_ENVELOPE_KEY, TOOL_SKILL_MARKER, toolArgsOf } from './protocol';
 import type { InlinedSkill } from '../skills/inject';
+import type { WorkerTimings } from '../recall/worker-timings';
 import type { BrowserGrant, CodingGrant, ComputerGrant } from '../harness/chat-grants';
 import type { SkillIssue } from '../skills/grade';
 import type { JudgeContext } from '../exec/judge-context';
@@ -73,6 +75,9 @@ export interface TurnContext {
   ensureMs?: number; // ensureStarted cost (process spawn on a cold turn)
   buildMs?: number; // buildMessage total (recall + files + attachments)
   recall?: { facts?: number; embed?: number; rerank?: number; search?: number; total?: number };
+  skillsMs?: number; // skill selection inside buildMessage
+  /** What this turn's requests to the local retrieval worker cost (recall/worker-timings.ts). */
+  workerTimings?: WorkerTimings;
   /**
    * Approximate wall-time split, accumulated by PiRuntime: each inter-event
    * interval is attributed to the phase that was active. These do NOT sum to the
@@ -121,6 +126,12 @@ export interface TurnContext {
    * what we put in front of the model, not what the model followed.
    */
   skillsInjected?: InlinedSkill[];
+  /**
+   * Slugs this turn's tool-skills gate offered (skills/inject.ts
+   * toolSkillsForTurn). Settle credits a handed-over skill only when it is one
+   * of these: the marker it reads off the trace is text any tool could return.
+   */
+  toolSkillsOffered?: string[];
   /**
    * The graded subset of `skillsInjected` — the slugs this turn showed evidence
    * of actually following. Written by PiRuntime.settleTurn from the
@@ -298,6 +309,8 @@ export interface SettledTurnTrace {
   /** The turn read inside a memorize:false folder: never author from it. */
   memoryTainted: boolean;
   isScheduled: boolean;
+  /** A persona without memory (or a private chat) ran this turn: nothing from it is kept. */
+  noRecall?: boolean;
 }
 
 export function snapshotTurnTrace(turn: TurnContext, endedAt: number): SettledTurnTrace {
@@ -312,7 +325,8 @@ export function snapshotTurnTrace(turn: TurnContext, endedAt: number): SettledTu
     skillsGradedUsed: [...(turn.skillsGradedUsed ?? [])],
     skillsReported: (turn.skillsReported ?? []).map((i) => ({ ...i })),
     memoryTainted: turn.memoryTainted === true,
-    isScheduled: turn.isScheduled === true
+    isScheduled: turn.isScheduled === true,
+    ...(turn.noRecall ? { noRecall: true } : {})
   };
 }
 
@@ -376,6 +390,9 @@ export interface TurnTimingBreakdown {
   ensureMs: number;
   buildMs: number | null;
   recall: { total: number | null; facts: number | null; embed: number | null; rerank: number | null; search: number | null };
+  skillsMs: number | null;
+  /** Null when the turn asked the local worker for nothing (remote endpoints, recall off). */
+  worker: { waitMs: number; runMs: number; sharedMs: number } | null;
   thinkingMs: number;
   toolMs: number;
   answerMs: number;
@@ -520,6 +537,32 @@ export function generatedImageRef(details: unknown, threadId: string): Generated
   if (height !== undefined) ref.height = height;
   if (prompt) ref.prompt = prompt;
   if (revisedPrompt) ref.revisedPrompt = revisedPrompt;
+  return ref;
+}
+
+/** `aud_` + 10 hex: the id share_audio gives a sound (files/chat-audio.ts). */
+export const CHAT_AUDIO_ID = /^aud_[0-9a-f]{10}$/;
+
+const CHAT_AUDIO_MIMES = new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/wav', 'audio/ogg', 'audio/flac', 'audio/webm']);
+
+/** A sound's card name: one line, at most 120 characters, or undefined. */
+export function cleanAudioTitle(title: unknown): string | undefined {
+  if (typeof title !== 'string') return undefined;
+  const t = title.replace(/\s+/g, ' ').trim().slice(0, 120);
+  return t || undefined;
+}
+
+/** The display ref of a share_audio result's `details.stemAudio`, or null. */
+export function chatAudioRef(details: unknown, threadId: string): ChatAudioRef | null {
+  const raw = details && typeof details === 'object' ? (details as { stemAudio?: unknown }).stemAudio : null;
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.id !== 'string' || !CHAT_AUDIO_ID.test(r.id)) return null;
+  const mime = typeof r.mime === 'string' && CHAT_AUDIO_MIMES.has(r.mime) ? r.mime : 'audio/mpeg';
+  const ref: ChatAudioRef = { id: r.id, threadId, mime };
+  const title = cleanAudioTitle(r.title);
+  if (title) ref.title = title;
+  if (typeof r.bytes === 'number' && Number.isFinite(r.bytes)) ref.bytes = r.bytes;
   return ref;
 }
 
@@ -718,18 +761,32 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
       if (!entry) break; // an end without a tracked start (or unkeyed) — nothing to flip
       const result = ev.result as { isError?: boolean; content?: unknown; details?: unknown } | undefined;
       entry.status = ev.isError === true || result?.isError === true ? 'error' : 'ok';
+      // Held back once so the model reads a saved skill first (the bridge's
+      // toolSkillHold): nothing failed, and the model makes the call again. The
+      // trace below still records it as an error result, which is how settle
+      // finds the handed-over skill.
+      const heldForSkill = entry.status === 'error' && resultText(result).startsWith(TOOL_SKILL_MARKER);
+      if (heldForSkill) {
+        entry.status = 'ok';
+        entry.detail = `${entry.detail ?? entry.name ?? 'tool'} · read saved skill first`;
+      }
       // A picture generate_image made: only its ref travels (and is kept on the
       // activity row); the bytes stay in the session file.
       if (entry.status === 'ok' && entry.type === 'imageGeneration') {
         const made = generatedImageRef(result?.details, threadId);
         if (made) entry.image = made;
       }
+      // A sound share_audio put in the chat: the same, with its bytes in the audio store.
+      if (entry.status === 'ok') {
+        const sound = chatAudioRef(result?.details, threadId);
+        if (sound) entry.audio = sound;
+      }
       // Retain the outcome for skill authoring. A failure is worth more than a
       // success here — it is what turns a list of steps into a warning about the
       // dead end — so errors are kept even once the budget is spent.
       const traced = ctx.trace.find((t) => t.id === id);
       if (traced) {
-        traced.isError = entry.status === 'error';
+        traced.isError = entry.status === 'error' || heldForSkill;
         const text = resultText(result).trim();
         if (text && (traced.isError || ctx.traceChars < TRACE_TURN_MAX_CHARS)) {
           traced.result = truncate(text, TRACE_RESULT_MAX_CHARS);
@@ -762,7 +819,8 @@ export function normalizePiEvent(ev: PiEvent, ctx: TurnContext): { events: Norma
             name: entry.name,
             detail: entry.detail,
             status: entry.status,
-            ...(entry.image ? { image: entry.image } : {})
+            ...(entry.image ? { image: entry.image } : {}),
+            ...(entry.audio ? { audio: entry.audio } : {})
           },
           threadId,
           turnId

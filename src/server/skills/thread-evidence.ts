@@ -91,8 +91,10 @@ function callPaths(args: unknown): string[] {
 }
 
 // The opener Recall writes, attribute included. The bare tag name is not one: the
-// skills preamble names `<stem_memory_data>` in prose on every turn it loads
-// skills, and counting that as an unread payload tainted every such turn.
+// skills preamble named `<stem_memory_data>` in prose on every turn it loaded
+// skills, and counting that as an unread payload tainted every such turn. The
+// rules no longer name it (SKILL_RULES in inject.ts), but chats from before
+// 2026-11 still hold that text.
 const MEMORY_DATA_OPEN_RE = /<stem_memory_data version=/g;
 const MEMORY_DATA_RE = /<stem_memory_data version="\d+">\n([\s\S]*?)\n<\/stem_memory_data>/g;
 

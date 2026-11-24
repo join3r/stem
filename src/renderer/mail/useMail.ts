@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InboxState } from '../../shared/inbox';
 import { pruneReplyDrafts } from './mail-drafts';
+import { stagedForSend } from './staged-uploads';
 import { withArchived, withRead, withSnooze } from '../../shared/inbox';
+import { mergeMailResult } from '../../shared/mail-delta';
 import type {
   MailComposeInput,
   MailConversation,
@@ -46,12 +48,17 @@ export interface MailApi {
   compose: (input: MailComposeInput) => Promise<MailListResult>;
   /** Inter-Stem: start a conversation with another Stem's owner. */
   composeExternal: (input: { to: string; subject?: string; body: string }) => Promise<MailListResult>;
-  /** Never rejects: a failure stays in `pending` as a failed send. */
-  reply: (conversationId: string, body: string, attachments?: TurnAttachment[]) => Promise<void>;
+  /** Never rejects: a failure stays in `pending` as a failed send. Resolves true once sent. */
+  reply: (conversationId: string, body: string, attachments?: TurnAttachment[]) => Promise<boolean>;
   pending: PendingSend[];
   retrySend: (id: string) => void;
   dropSend: (id: string) => void;
-  addParticipant: (conversationId: string, personaId: string) => Promise<void>;
+  /**
+   * Change a conversation's personas from `from` to `to` (the first leads).
+   * Pure additions go one by one through mail:addParticipant, which every
+   * server has; removing or reordering needs mail:setParticipants.
+   */
+  setParticipants: (conversationId: string, from: string[], to: string[]) => Promise<void>;
   /** Stop the conversation's in-flight work; resolves once the interrupts are sent. */
   stop: (conversationId: string) => Promise<void>;
   archive: (ids: string[], archived: boolean) => void;
@@ -69,30 +76,81 @@ export function useMail(ready: boolean): MailApi {
   const pendingPatches = useRef(new Map<number, (inbox: InboxState) => InboxState>());
   const patchSeq = useRef(0);
 
-  /** Adopt a server-fresh list, keeping optimistic patches in flight on top. */
+  /**
+   * Adopt a server answer, keeping optimistic patches in flight on top. A
+   * delta (just the conversations a write touched) merges into what we hold;
+   * a full list replaces it (shared/mail-delta.ts).
+   */
   const applyServer = useCallback((list: MailListResult) => {
-    setMail(() => {
-      let inbox = list.inbox;
+    setMail((prev) => {
+      const merged = mergeMailResult(prev, list);
+      let inbox = merged.inbox;
       for (const patch of pendingPatches.current.values()) inbox = patch(inbox);
-      return inbox === list.inbox ? list : { ...list, inbox };
+      return inbox === merged.inbox ? merged : { ...merged, inbox };
     });
   }, []);
 
+  // Re-reads after mail:changed, one request on the wire at a time. A change
+  // names the conversations it touched, and only those are fetched; the whole
+  // list is read at start, for a change that names none, and from a server too
+  // old to answer by conversation. The whole store was 1.6 MB by November 2026,
+  // and fetching it on every change stacked a dozen downloads that crowded out
+  // the user's own Send (40–80 s each on the VPS, 2026-11-21). Changes that land
+  // mid-fetch gather into the next request, so what we hold is never older
+  // than the last change.
+  const wanted = useRef<{ all: boolean; ids: Set<string> }>({ all: false, ids: new Set() });
+  const fetching = useRef(false);
+  const byConversation = useRef(true);
+  const pump = useCallback(() => {
+    if (fetching.current || !window.stem) return;
+    const { all, ids } = wanted.current;
+    const whole = all || !byConversation.current;
+    if (!whole && ids.size === 0) return;
+    wanted.current = { all: false, ids: new Set() };
+    fetching.current = true;
+    const request = whole ? window.stem.listMail() : window.stem.listMailConversations([...ids]);
+    request
+      .then((list) => {
+        applyServer(list);
+        if (!list.delta) pruneReplyDrafts(new Set(list.conversations.map((c) => c.id)));
+      })
+      .catch((err: unknown) => {
+        // A server from before mail:conversations: read whole lists from now on.
+        if (!whole && /no handler registered/.test(String((err as Error)?.message ?? err))) {
+          byConversation.current = false;
+          wanted.current.all = true;
+        }
+        // Otherwise quiet-shaped but deliberate: offline, the pane keeps whatever it has.
+      })
+      .finally(() => {
+        fetching.current = false;
+        pump();
+      });
+  }, [applyServer]);
+
   const refresh = useCallback(() => {
     if (!window.stem) return;
-    window.stem.listMail().then((list) => {
-      applyServer(list);
-      pruneReplyDrafts(new Set(list.conversations.map((c) => c.id)));
-    }).catch(() => {
-      // quiet-shaped but deliberate: offline, the pane keeps whatever it has.
-    });
     window.stem.listPersonas().then(setPersonas).catch(() => {});
-  }, [applyServer]);
+    wanted.current.all = true;
+    pump();
+  }, [pump]);
 
   useEffect(() => {
     if (ready) refresh();
   }, [ready, refresh]);
-  useEffect(() => window.stem?.onMailChanged(() => refresh()), [refresh]);
+  useEffect(
+    () =>
+      window.stem?.onMailChanged((change) => {
+        const ids = change?.conversationIds;
+        if (!ids?.length) {
+          refresh();
+          return;
+        }
+        for (const id of ids) wanted.current.ids.add(id);
+        pump();
+      }),
+    [refresh, pump]
+  );
   // A persona created or renamed in the Manage panel (any client) shows in the
   // composer's To: list without waiting for the next mail event.
   useEffect(
@@ -158,7 +216,9 @@ export function useMail(ready: boolean): MailApi {
 
   const compose = useCallback(
     async (input: MailComposeInput) => {
-      const list = await window.stem.composeMail(input);
+      const list = await window.stem.composeMail(
+        input.attachments?.length ? { ...input, attachments: await stagedForSend(input.attachments) } : input
+      );
       applyServer(list);
       return list;
     },
@@ -166,22 +226,27 @@ export function useMail(ready: boolean): MailApi {
   );
   const composeExternal = useCallback(
     async (input: { to: string; self?: string; subject?: string; body: string; attachments?: TurnAttachment[] }) => {
-      const list = await window.stem.composeExternalMail(input);
+      const list = await window.stem.composeExternalMail(
+        input.attachments?.length ? { ...input, attachments: await stagedForSend(input.attachments) } : input
+      );
       applyServer(list);
       return list;
     },
     [applyServer]
   );
   const deliver = useCallback(
-    async (send: PendingSend) => {
+    async (send: PendingSend): Promise<boolean> => {
       try {
-        const list = await window.stem.replyMail(send.conversationId, send.body, send.attachments);
+        const attachments = send.attachments?.length ? await stagedForSend(send.attachments) : undefined;
+        const list = await window.stem.replyMail(send.conversationId, send.body, attachments);
         // One batch: the real item lands as the placeholder leaves.
         applyServer(list);
         setPending((prev) => prev.filter((p) => p.id !== send.id));
+        return true;
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         setPending((prev) => prev.map((p) => (p.id === send.id ? { ...p, status: 'failed', error } : p)));
+        return false;
       }
     },
     [applyServer]
@@ -197,7 +262,7 @@ export function useMail(ready: boolean): MailApi {
         status: 'sending'
       };
       setPending((prev) => [...prev, send]);
-      await deliver(send);
+      return deliver(send);
     },
     [deliver]
   );
@@ -214,9 +279,16 @@ export function useMail(ready: boolean): MailApi {
   const dropSend = useCallback((id: string) => {
     setPending((prev) => prev.filter((p) => p.id !== id));
   }, []);
-  const addParticipant = useCallback(
-    async (conversationId: string, personaId: string) => {
-      applyServer(await window.stem.addMailParticipant(conversationId, personaId));
+  const setParticipants = useCallback(
+    async (conversationId: string, from: string[], to: string[]) => {
+      const onlyAdds = from.length <= to.length && from.every((id, i) => to[i] === id);
+      if (!onlyAdds) {
+        applyServer(await window.stem.setMailParticipants(conversationId, to));
+        return;
+      }
+      for (const id of to.slice(from.length)) {
+        applyServer(await window.stem.addMailParticipant(conversationId, id));
+      }
     },
     [applyServer]
   );
@@ -255,7 +327,7 @@ export function useMail(ready: boolean): MailApi {
     pending,
     retrySend,
     dropSend,
-    addParticipant,
+    setParticipants,
     stop,
     archive,
     snooze,

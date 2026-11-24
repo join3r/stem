@@ -53,6 +53,7 @@ export async function buildFilesContext(): Promise<string | null> {
     `Currently available:\n${shown.join('\n')}${more}\n\n` +
     `Read any of them with your file tools when relevant (e.g. read \`files/${example}\`). ` +
     `Only the names are listed here, not the contents — read on demand, and do not ` +
-    `assume a file's contents from its name.`
+    `assume a file's contents from its name. To link one in a reply, use its \`files/\` path, ` +
+    `e.g. \`[report](files/report.html)\`: a click opens it on the user's computer.`
   );
 }

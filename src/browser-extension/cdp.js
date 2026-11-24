@@ -98,6 +98,8 @@ class Session {
     this.idleTimer = null;
     this.pillRect = null;
     this.pinging = false;
+    /** IDs this tab had before the browser replaced it (see tabReplaced). */
+    this.formerIds = new Set();
   }
 
   send(method, params) {
@@ -112,7 +114,34 @@ class Session {
 }
 
 export function session(tabId) {
-  return sessions.get(tabId);
+  return sessions.get(currentTab(tabId));
+}
+
+/**
+ * Tab IDs the browser replaced, old to new. jbrow keeps a sleeping tab without
+ * its page and gives it a new ID when the debugger wakes it (tabs.onReplaced
+ * says so, often before the attach returns). Filed under the old ID, Stem's
+ * session missed the next call by the new one, which then tried to attach a
+ * second time and was refused by Stem's own debugger (2026-11-03).
+ */
+const replacedBy = new Map();
+
+function currentTab(tabId) {
+  let id = tabId;
+  for (let i = 0; i < 8 && replacedBy.has(id); i++) id = replacedBy.get(id);
+  return id;
+}
+
+/** tabs.onReplaced: the tab's session, if any, goes under its new ID. */
+export function tabReplaced(removed, added) {
+  replacedBy.set(removed, added);
+  if (replacedBy.size > 200) replacedBy.delete(replacedBy.keys().next().value);
+  const s = sessions.get(removed);
+  if (!s) return;
+  sessions.delete(removed);
+  s.formerIds.add(removed);
+  s.tabId = added;
+  if (!sessions.has(added)) sessions.set(added, s);
 }
 
 export function attachedTabs() {
@@ -145,7 +174,8 @@ function attachError(tabId, message) {
 }
 
 /** The tab's session, attaching first if needed. Concurrent callers share one attach. */
-export function attach(tabId) {
+export function attach(requested) {
+  const tabId = currentTab(requested);
   const existing = sessions.get(tabId);
   if (existing) return Promise.resolve(existing);
   if (attaching.has(tabId)) return attaching.get(tabId);
@@ -194,6 +224,20 @@ async function doAttach(tabId) {
     await chrome.debugger.attach({ tabId }, '1.3');
   } catch (err) {
     const message = cdpMessage(err);
+    // The debugger that holds the tab can be Stem's own, from before its
+    // service worker stopped: the attachment belongs to the extension and
+    // stays, but the new worker has no session for it (jbrow, 2026-11-09:
+    // after each worker crash every action in the tab was refused). The
+    // browser lets an extension detach only its own attachment, so a detach
+    // that works proves the tab was Stem's.
+    if (/another debugger/i.test(message) && (await releaseOwnStale(tabId))) {
+      try {
+        await chrome.debugger.attach({ tabId }, '1.3');
+      } catch (again) {
+        throw attachError(tabId, cdpMessage(again));
+      }
+      return startSession(tabId);
+    }
     // Another extension's frame (a password manager's fill menu) blocks the
     // debugger for the whole tab. It is that extension's overlay, not the
     // page: remove it and try once more.
@@ -204,8 +248,27 @@ async function doAttach(tabId) {
       throw attachError(tabId, cdpMessage(again));
     }
   }
-  const s = new Session(tabId);
-  sessions.set(tabId, s);
+  return startSession(tabId);
+}
+
+/** Detach a debugger this worker has no session for; true when it was Stem's own. */
+async function releaseOwnStale(tabId) {
+  if (sessions.has(tabId)) return false;
+  try {
+    await chrome.debugger.detach({ tabId });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Set up the session for a tab the debugger was just attached to. */
+async function startSession(tabId) {
+  // The attach may have woken the tab under a new ID.
+  const now = currentTab(tabId);
+  const s = new Session(now);
+  if (now !== tabId) s.formerIds.add(tabId);
+  sessions.set(now, s);
   try {
     await Promise.all([
       s.send('Page.enable'),
@@ -218,14 +281,14 @@ async function doAttach(tabId) {
     const { frameTree } = await s.send('Page.getFrameTree');
     s.mainFrameId = frameTree.frame.id;
     s.loaderId = frameTree.frame.loaderId;
-    const orphan = orphanSnapshots.get(tabId);
-    orphanSnapshots.delete(tabId);
+    const orphan = orphanSnapshots.get(s.tabId);
+    orphanSnapshots.delete(s.tabId);
     if (orphan && orphan.snapshot.loaderId === s.loaderId && Date.now() - orphan.at < ORPHAN_SNAPSHOT_MS) s.snapshot = orphan.snapshot;
     await installMarkerHooks((m, p) => s.send(m, p));
     await ping(s);
   } catch (err) {
-    sessions.delete(tabId);
-    await chrome.debugger.detach({ tabId }).catch(() => {});
+    if (sessions.get(s.tabId) === s) sessions.delete(s.tabId);
+    await chrome.debugger.detach({ tabId: s.tabId }).catch(() => {});
     throw err instanceof UserError ? err : attachError(tabId, err.message);
   }
   touchIdle(s);
@@ -233,7 +296,8 @@ async function doAttach(tabId) {
 }
 
 /** Take the marker down and let go of the tab. Safe to call for a tab Stem is not in. */
-export async function detach(tabId) {
+export async function detach(requested) {
+  const tabId = currentTab(requested);
   const s = sessions.get(tabId);
   if (!s) return;
   sessions.delete(tabId);
@@ -366,11 +430,12 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 
 chrome.debugger.onDetach.addListener((source, reason) => {
   const tabId = source.tabId;
-  const s = sessions.get(tabId);
+  // A browser may report the detach by the tab's old ID.
+  const s = sessions.get(tabId) ?? [...sessions.values()].find((x) => x.formerIds.has(tabId));
   if (s) {
-    sessions.delete(tabId);
+    sessions.delete(s.tabId);
     clearTimeout(s.idleTimer);
-    if (s.snapshot && reason !== 'canceled_by_user') orphanSnapshots.set(tabId, { snapshot: s.snapshot, at: Date.now() });
+    if (s.snapshot && reason !== 'canceled_by_user') orphanSnapshots.set(s.tabId, { snapshot: s.snapshot, at: Date.now() });
   }
-  handlers.detached(tabId, reason);
+  handlers.detached(s ? s.tabId : tabId, reason);
 });

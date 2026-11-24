@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { createGunzip } from 'node:zlib';
 import { log } from '../server/log';
 import {
   BROWSER_END_FRAME,
@@ -36,8 +37,11 @@ import {
   type LiveTurnInfo,
   type TurnAttachment
 } from '../shared/types';
-import { convertHeicAttachments } from '../server/pi/heic';
+import { convertHeicAttachment, convertHeicAttachments } from '../server/pi/heic';
+import { isUploadHandle } from '../server/files/staging';
+import type { ServerCredentials } from './server-endpoint';
 import { uploadBytes, uploadFile } from './file-transfer';
+import { MAIL_DELTA_HEADER, MAIL_DELTA_VALUE } from '../shared/mail-delta';
 import { createOfflineCache } from './offline-cache';
 import type { OAuthCourier } from './oauth-courier';
 import { updateClientQuickChat, withClientSettings } from './settings';
@@ -376,6 +380,13 @@ export interface ServerProxy {
   start(): Promise<string[]>;
   /** Call a server channel: wrapped client behavior, then POST /rpc. */
   invoke(channel: string, args: unknown[]): Promise<unknown>;
+  /**
+   * The offline cache's copy of one transcript, flagged `offline`, without a
+   * call on the wire — what lets the sidebar open a chat at once on a slow
+   * link (the renderer still asks the server and merges its answer over it).
+   * Undefined on an embedded install, which keeps no cache.
+   */
+  cachedThread(threadId: string): unknown;
   /** Drop the stream and stop reconnecting (quit; tests). */
   close(): void;
 }
@@ -410,12 +421,23 @@ function postJson(
   return new Promise((resolve, reject) => {
     const req = openStream(
       url,
-      { method: 'POST', headers: { ...headers, 'content-length': String(Buffer.byteLength(body)) }, signal },
+      {
+        method: 'POST',
+        // The server gzips big answers for a caller that asks (transport/server.ts
+        // sendJsonCompressed). mail:list is the whole mail store, 1.6 MB by
+        // November, and every mutator answers with it: uncompressed, a send
+        // waited tens of seconds on the user's uplink.
+        headers: { ...headers, 'accept-encoding': 'gzip', 'content-length': String(Buffer.byteLength(body)) },
+        signal
+      },
       (res) => {
         const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }));
-        res.on('error', reject);
+        const zipped = /\bgzip\b/i.test(String(res.headers['content-encoding'] ?? ''));
+        const stream = zipped ? res.pipe(createGunzip()) : res;
+        if (zipped) res.on('error', reject);
+        stream.on('data', (c: Buffer) => chunks.push(c));
+        stream.on('end', () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }));
+        stream.on('error', reject);
       }
     );
     req.on('error', reject);
@@ -425,6 +447,28 @@ function postJson(
 
 function openStream(url: string, options: Parameters<typeof httpRequest>[1], onRes: Parameters<typeof httpRequest>[2]) {
   return (url.startsWith('https:') ? httpsRequest : httpRequest)(url, options, onRes);
+}
+
+/**
+ * Put one attachment on a remote server NOW and answer the attachment that
+ * stands for it there (`path` = an upload handle). The mail composer calls this
+ * the moment a file is attached, so pressing Send carries only handles and the
+ * text: the upload happened while the user was still writing.
+ *
+ * Unlike attachmentsForServer, pasted bytes go up too — a screenshot paste is
+ * the common case, and the whole point is that nothing heavy rides with Send.
+ * HEIC is decoded first, as at send time. Throws with the file's name, so a
+ * failure can be shown on its chip and tried again when the mail is sent.
+ */
+export async function stageAttachment(creds: ServerCredentials, att: TurnAttachment): Promise<TurnAttachment> {
+  if (att.path && isUploadHandle(att.path)) return att;
+  const ready = await convertHeicAttachment(att);
+  if (ready.dataBase64) {
+    const handle = await uploadBytes(creds, ready !== att ? jpegName(att.name) : att.name, Buffer.from(ready.dataBase64, 'base64'));
+    return { name: att.name, ...(ready.mime ? { mime: ready.mime } : {}), path: handle };
+  }
+  if (!ready.path) return att;
+  return { ...ready, path: await uploadFile(creds, ready.path) };
 }
 
 export function createServerProxy(deps: ProxyDeps): ServerProxy {
@@ -483,6 +527,9 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     const converted = await convertHeicAttachments(atts);
     return Promise.all(
       converted.map(async (att, i) => {
+        // Already on the server: the mail composer stages a file the moment it
+        // is attached (stageAttachment below), so the send carries the handle.
+        if (att.path && isUploadHandle(att.path)) return att;
         // convertHeicAttachments returns a new object only for a decoded HEIC;
         // everything else comes back as the same reference.
         if (att !== atts[i] && att.dataBase64) {
@@ -541,6 +588,13 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
         return [threadId, { ...ex, steps, unmatched }, draftId];
       }
     },
+    'mail:composeExternal': {
+      before: async ([input]) => {
+        const mail = input as { attachments?: TurnAttachment[] };
+        if (!mail?.attachments?.length) return;
+        return [{ ...mail, attachments: await attachmentsForServer(mail.attachments) }];
+      }
+    },
     'mail:reply': {
       before: async ([conversationId, body, attachments]) => {
         const list = attachments as TurnAttachment[] | undefined;
@@ -576,7 +630,8 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
     try {
       res = await postJson(
         `${base}/rpc`,
-        { 'content-type': 'application/json', authorization: auth },
+        // Mail answers as deltas: the renderer merges them (useMail.ts).
+        { 'content-type': 'application/json', authorization: auth, [MAIL_DELTA_HEADER]: MAIL_DELTA_VALUE },
         JSON.stringify({ channel, args }),
         // A caller's own signal (a cancellable prefetch) on top of the timeout
         // every call gets. Either one aborting aborts the request.
@@ -593,7 +648,7 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       if (cached !== undefined) return cached;
       // Distinct from a call the server answered, and the only error shape here
       // the renderer could not have seen before the split.
-      throw new Error(`Stem's server is unreachable: ${String((e as Error)?.message ?? e)}`);
+      throw new Error(`Stem's server is unreachable: ${String((e as Error)?.message ?? e)}`, { cause: e });
     }
     type RpcReply = { ok?: boolean; result?: unknown; error?: string } | null;
     let body: RpcReply;
@@ -1303,6 +1358,9 @@ export function createServerProxy(deps: ProxyDeps): ServerProxy {
       return list;
     },
     invoke,
+    // replay() and not peek(): the copy goes out flagged `offline`, which is
+    // what keeps the renderer from treating it as a complete, current read.
+    cachedThread: (threadId) => cache.replay('chats:open', [threadId]),
     close() {
       closed = true;
       clearRetry();

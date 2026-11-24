@@ -1,4 +1,5 @@
 import type { EmbedKind } from './embeddings';
+import { finishRunStats, newRunStats, type RunStats, type WorkerRequestStats } from './run-clock';
 
 // The local worker's run queue. One ONNX run at a time, in steps of a few
 // texts, and between steps the queue re-decides what to run next: a query (a
@@ -20,11 +21,12 @@ export interface EmbedJobInput {
 }
 
 export interface EmbedQueueDeps {
-  /** Embed one step's worth of texts, in order. */
-  run: (texts: string[]) => Promise<Float32Array[]>;
+  /** Embed one step's worth of texts, in order, charging the model run to `stats`. */
+  run: (texts: string[], stats: RunStats) => Promise<Float32Array[]>;
   /** Texts per step for the loaded model: 1 for an `unbatched` model, RUN_BATCH otherwise. */
   stepSize: () => number;
-  done: (id: number, vectors: Float32Array[]) => void;
+  /** `stats`: what the request cost, wait included (run-clock.ts). */
+  done: (id: number, vectors: Float32Array[], stats: WorkerRequestStats) => void;
   fail: (id: number, err: unknown) => void;
 }
 
@@ -42,6 +44,8 @@ interface Job extends EmbedJobInput {
   cursor: number;
   vectors: Float32Array[];
   cancelled: boolean;
+  arrivedAt: number;
+  stats: RunStats;
 }
 
 export function createEmbedQueue(deps: EmbedQueueDeps): EmbedQueue {
@@ -69,7 +73,7 @@ export function createEmbedQueue(deps: EmbedQueueDeps): EmbedQueue {
         const slice = job.texts.slice(job.cursor, job.cursor + step);
         let out: Float32Array[];
         try {
-          out = await deps.run(slice);
+          out = await deps.run(slice, job.stats);
         } catch (err) {
           // A cancelled job was removed when the cancel arrived; its failure is
           // nobody's news.
@@ -84,7 +88,7 @@ export function createEmbedQueue(deps: EmbedQueueDeps): EmbedQueue {
         job.cursor += slice.length;
         if (job.cursor >= job.texts.length) {
           remove(job);
-          deps.done(job.id, job.vectors);
+          deps.done(job.id, job.vectors, finishRunStats(job.stats, job.arrivedAt, performance.now()));
         }
       }
     } finally {
@@ -95,10 +99,10 @@ export function createEmbedQueue(deps: EmbedQueueDeps): EmbedQueue {
   return {
     push(input) {
       if (input.texts.length === 0) {
-        deps.done(input.id, []);
+        deps.done(input.id, [], { runMs: 0, sharedMs: 0, waitMs: 0, spans: [] });
         return;
       }
-      jobs.push({ ...input, cursor: 0, vectors: [], cancelled: false });
+      jobs.push({ ...input, cursor: 0, vectors: [], cancelled: false, arrivedAt: performance.now(), stats: newRunStats() });
       void pump();
     },
     cancel(id) {

@@ -3,6 +3,7 @@
   "note": "Labelled prompts for scripts/mdx-usage-eval.mjs. expect lists the components that count as a hit (any one is enough); expect: null means the answer should be plain Markdown, and any component is a false fire. Prompts avoid anything that needs web search or tools, because the eval runs pi with --no-tools.",
   "cases": [
     { "id": "chart-bills", "expect": ["Chart"], "prompt": "Here are my monthly electricity bills this year in euros: Jan 92, Feb 88, Mar 71, Apr 60, May 48, Jun 41, Jul 45, Aug 47, Sep 52. How are they trending?" },
+    { "id": "chart-to-share", "expect": ["Chart"], "prompt": "In a test, a monitor caught these shares of deliberate wrong answers: Model A 99%, Model B 100%, Model C 100%, Model D 76%. Can you create a graph of this, so I can share it?" },
     { "id": "chart-running", "expect": ["Chart"], "prompt": "My running distance per week for the last 8 weeks: 12, 15, 9, 18, 21, 20, 24, 26 km. Am I progressing well?" },
     { "id": "chart-spend-breakdown", "expect": ["Chart", "DataTable", "Stats"], "prompt": "Household spending per quarter. Q1: rent 3000, food 1200, fun 400. Q2: rent 3000, food 1100, fun 650. Q3: rent 3100, food 1300, fun 500. Q4: rent 3100, food 1450, fun 900. Break it down for me." },
     { "id": "table-countries", "expect": ["DataTable"], "prompt": "List the 12 largest countries by area with their area in km², approximate population and capital." },

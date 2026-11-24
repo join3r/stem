@@ -87,10 +87,13 @@ const DEFAULTS: ServerSettings = {
   // Skills model (authoring + curation); null = the model you chat with, like
   // memory — deliberately NOT the shared quick-tasks model, so making the
   // background cheap can't quietly hand skill-writing to the cheapest model.
-  // `ask` is the default mode: the library this replaces was built by a pass that
-  // wrote silently, and 23 of its 25 skills were never used once. Showing the user
-  // what is about to be saved is the cheapest available check on that.
-  skills: { model: null, effort: null, mode: 'ask' },
+  // `auto` is the default mode (was `ask` until 2026-11-06). The silent writer
+  // that built a library of 23 unused skills out of 25 is gone: the end-of-turn
+  // gate fires on ~12% of turns, the author declines by default, and judging 100
+  // real turns showed a skill that does not fit is ignored, not followed. What
+  // `ask` cost instead was the learning itself — a card per convention, and the
+  // backfill of older preferences as a stream of cards about old chats.
+  skills: { model: null, effort: null, mode: 'auto' },
   // Chats: Stem writes each new thread a subject and uses it as the thread's name,
   // because the alternative default — the first 80 characters of whatever you
   // typed — is what the Inbox rows are trying to get away from. `everywhere`
@@ -167,8 +170,9 @@ const DEFAULTS: ServerSettings = {
       // degrade gracefully rather than wait.
       mode: 'local',
       localModel: DEFAULT_LOCAL_RERANK_MODEL,
-      // Stem GTE Memory picks facts and skills on top of the Qwen3 pair: best
-      // recall and fastest reranking measured (docs/gte-memory-pilot.md). A
+      // Stem GTE Memory picks facts and skills in place of the catalog reranker
+      // (whose localModel then stays unloaded): fewer wrong picks and faster than
+      // Qwen3 in the benches (docs/gte-memory-pilot.md). A
       // fresh install gets it; a stored reranker section without the field is
       // a user who set up recall before it existed and is offered the switch
       // by the release popup instead (shared/recall-recommended.ts).
@@ -456,7 +460,7 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
     // Anything unrecognized falls back to the default rather than to `off`: a
     // settings file written by an older build has no `mode` at all, and silently
     // turning the feature off for those users is the wrong failure direction.
-    mode: rawSkills.mode === 'off' || rawSkills.mode === 'auto' ? rawSkills.mode : DEFAULTS.skills.mode
+    mode: rawSkills.mode === 'off' || rawSkills.mode === 'ask' || rawSkills.mode === 'auto' ? rawSkills.mode : DEFAULTS.skills.mode
   };
   const rawChats = (parsed?.chats ?? {}) as Partial<ChatsSettings>;
   const chats: ChatsSettings = {

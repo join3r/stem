@@ -524,7 +524,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 }
 
 /* message rows with an avatar gutter */
-.message { display: flex; gap: var(--sp-6); margin-bottom: var(--sp-10); }
+.message { display: flex; gap: var(--sp-6); margin-bottom: calc(var(--sp-2) + var(--ctl-h-sm)); }
 .msg-avatar {
   width: 26px;
   height: 26px;
@@ -537,8 +537,11 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .msg-avatar.you { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--muted); }
 .msg-avatar.stem { background: var(--accent); color: var(--accent-ink); }
 .msg-avatar.sys { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
-.message-body { min-width: 0; flex: 1; padding-top: var(--sp-1); }
-.message-who { display: flex; align-items: baseline; gap: var(--sp-4); font-size: var(--fs-12); font-weight: 600; margin-bottom: 3px; }
+.message-body { position: relative; min-width: 0; flex: 1; padding-top: var(--sp-1); }
+.message-who { display: flex; align-items: center; gap: var(--sp-4); font-size: var(--fs-12); font-weight: 600; margin-bottom: var(--sp-2); }
+/* The avatar is a small chip in the header line. A column of its own left a
+   blank strip under it the full height of the message. */
+.message-who .msg-avatar { width: 20px; height: 20px; }
 /* Which model/effort/speed produced an assistant reply — muted, inline, on the
    same line as the "Stem" label. Revealed only while hovering the message. */
 .message-meta {
@@ -576,11 +579,13 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .message-stamp-tps { font-size: var(--fs-10); }
 .message:hover .message-stamp,
 .message:focus-within .message-stamp { opacity: 1; }
+/* Narrow panes have no gutter, so the stamp goes to the right end of the
+   header line, which the hover actions leave free. */
 @container messages (width < 820px) {
-  .message-stamp { right: auto; left: 0; top: 30px; width: 26px; align-items: center; font-size: var(--fs-10); }
+  .message-stamp { right: 0; top: 4px; flex-direction: row; gap: var(--sp-3); font-size: var(--fs-10); }
   .message-stamp-tps { display: none; }
 }
-.sched-run .message-stamp { right: auto; left: 0; top: 30px; width: 26px; align-items: center; font-size: var(--fs-10); }
+.sched-run .message-stamp { right: 0; top: 4px; flex-direction: row; gap: var(--sp-3); font-size: var(--fs-10); }
 .sched-run .message-stamp-tps { display: none; }
 /* Answer-time breakdown (total · thinking · tools) — same muted, hover-revealed
    treatment as .message-meta so it sits quietly next to the model label. */
@@ -598,14 +603,26 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .message-system .message-plain { color: var(--danger); }
 
 /* Per-message hover actions: retry / edit / fork. Muted icon buttons revealed on
-   hover, mirroring the .message-meta reveal so the conversation stays calm. */
+   hover, mirroring the .message-meta reveal so the conversation stays calm.
+   They float in the gap under the message and take no height of their own, so
+   small screens do not lose a blank row under each message. They stay at the
+   end of the reply, where a long answer finishes. The .message margin holds
+   them. Padding, not margin: the gap stays part of the message, so moving the
+   pointer down to the buttons never drops the hover. */
 .message-actions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1;
   display: flex;
   gap: var(--sp-1);
-  margin-top: var(--sp-3);
+  padding-top: var(--sp-2);
   opacity: 0;
+  pointer-events: none;
   transition: opacity var(--motion-fast) ease;
 }
+.message:hover .message-actions,
+.message:focus-within .message-actions { pointer-events: auto; }
 .message:hover .message-actions,
 .message:focus-within .message-actions { opacity: 1; }
 .message-action {
@@ -1036,6 +1053,8 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   font-size: var(--fs-12); color: var(--ink);
 }
 .attachment-chip > svg { flex: none; color: var(--muted); }
+.attachment-chip > svg.attachment-uploading { animation: activity-spin 0.9s linear infinite; }
+.attachment-chip.failed > svg { color: var(--danger); }
 .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-remove {
   flex: none; border: none; background: none; cursor: pointer;
@@ -1057,6 +1076,48 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 }
 .note-flash.ok { color: var(--accent); }
 .note-flash > svg { flex: none; }
+/* Sounds share_audio put in the chat, under the assistant reply: a player card
+   with a waveform that seeks on click or drag. */
+.chat-audio-list { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-3); }
+.chat-audio {
+  display: flex; align-items: center; gap: var(--sp-3);
+  width: min(560px, 100%); box-sizing: border-box;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line); border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.chat-audio-play {
+  flex: none; width: 40px; height: 40px; border-radius: 50%; border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: var(--accent-ink);
+}
+.chat-audio-play:disabled { opacity: 0.5; cursor: default; }
+.chat-audio-play:not(:disabled):hover { filter: brightness(1.08); }
+.chat-audio-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.chat-audio-title { font-weight: 600; font-size: var(--fs-13); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-audio-row { display: flex; align-items: center; gap: var(--sp-3); }
+.chat-audio-wave {
+  flex: 1; min-width: 0; height: 28px; cursor: pointer; touch-action: none;
+  display: flex; align-items: center; gap: 1px; border-radius: var(--radius);
+}
+.chat-audio-wave:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chat-audio-wave > span {
+  flex: 1; min-width: 1px; border-radius: 1px;
+  background: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+.chat-audio-wave > span.played { background: var(--accent); }
+.chat-audio-time { flex: none; font-size: var(--fs-12); color: var(--muted); font-variant-numeric: tabular-nums; }
+.chat-audio-save {
+  flex: none; width: 28px; height: 28px; border: none; background: none; cursor: pointer;
+  border-radius: var(--radius); color: var(--muted);
+  display: flex; align-items: center; justify-content: center;
+}
+.chat-audio-save:not(:disabled):hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
+.chat-audio-error { font-size: var(--fs-12); color: var(--muted); }
+.chat-audio-loading .chat-audio-wave { animation: gen-image-breathe 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .chat-audio-loading .chat-audio-wave { animation: none; } }
+.chat-audio-failed { color: var(--muted); font-size: var(--fs-13); }
+
 /* Pictures generate_image made, under the assistant reply. The button keeps the
    image's own aspect ratio so the layout does not jump when the bytes arrive. */
 .gen-images { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-3); }
@@ -1123,6 +1184,9 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   border: 1px solid var(--line); border-radius: var(--radius-md);
   object-fit: contain; display: block;
 }
+.zoomable-image { padding: 0; border: none; background: none; cursor: zoom-in; border-radius: var(--radius-md); }
+.zoomable-image:hover .message-image { border-color: var(--accent, var(--line)); }
+.zoomable-image:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .composer-field textarea {
   flex: 1;
   resize: none;
@@ -1189,7 +1253,32 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 }
 
 /* effort + speed controls above the field */
-.composer-controls { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin: 0 auto var(--sp-4); width: 100%; }
+.composer-controls { display: flex; flex-wrap: nowrap; gap: var(--sp-4); margin: 0 auto var(--sp-4); width: 100%; min-width: 0; }
+.composer-controls > * { flex: none; }
+/* Squeeze steps, set by the composer when the row would overflow (see fitControls):
+   1 drops the context meter, 2 strips Fast/Web/Note/Record to icons, 3 drops Note
+   and an idle Record (both stay in the / menu), 4 shortens the model name, 5 hides
+   it behind its chevron, 6 gives up and wraps. */
+.composer-controls[data-squeeze='1'] .context-meter,
+.composer-controls[data-squeeze='2'] .context-meter,
+.composer-controls[data-squeeze='3'] .context-meter,
+.composer-controls[data-squeeze='4'] .context-meter,
+.composer-controls[data-squeeze='5'] .context-meter,
+.composer-controls[data-squeeze='6'] .context-meter { display: none; }
+.composer-controls[data-squeeze='2'] .ctl-label,
+.composer-controls[data-squeeze='3'] .ctl-label,
+.composer-controls[data-squeeze='4'] .ctl-label,
+.composer-controls[data-squeeze='5'] .ctl-label,
+.composer-controls[data-squeeze='6'] .ctl-label { display: none; }
+.composer-controls[data-squeeze='3'] .ctl-optional,
+.composer-controls[data-squeeze='4'] .ctl-optional,
+.composer-controls[data-squeeze='5'] .ctl-optional,
+.composer-controls[data-squeeze='6'] .ctl-optional { display: none; }
+.ctl-label { margin-left: 4px; }
+.composer-controls[data-squeeze='4'] .eff-model-name { max-width: 64px; }
+.composer-controls[data-squeeze='5'] .eff-model-name,
+.composer-controls[data-squeeze='6'] .eff-model-name { display: none; }
+.composer-controls[data-squeeze='6'] { flex-wrap: wrap; }
 
 /* Context-fill meter: pushed to the right edge of the controls row. Mini bar + compact
    token text; the fill color shifts neutral → amber → red via .warn/.danger as it nears
@@ -1245,15 +1334,15 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  width: 76px;
+  width: 56px;
   height: 22px;
   margin-left: var(--sp-2);
 }
 /* Rail inset by half a stop's width so its ends sit under the first and last dot. */
 .eff-rail {
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: 5.5px;
+  right: 5.5px;
   top: 50%;
   height: 3px;
   margin-top: -1.5px;
@@ -1275,7 +1364,7 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .eff-stop {
   position: relative;
   z-index: 1;
-  width: 15px;
+  width: 11px;
   height: 22px;
   display: flex;
   align-items: center;
@@ -1297,15 +1386,14 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 3px 7px 3px var(--sp-4);
+  padding: 3px 6px 3px var(--sp-3);
   border-radius: var(--radius);
   cursor: pointer;
   white-space: nowrap;
 }
 .eff-model:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .eff-model:disabled { opacity: 0.5; cursor: default; }
-.eff-model-effort { font-weight: 500; }
-.eff-model-name { color: var(--muted); max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.eff-model-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 .eff-model-chevron { color: var(--muted); flex: none; }
 
 /* ---- Keyboard-shortcut hints (hold ⌘ to reveal) ---- */
@@ -1410,6 +1498,120 @@ button.primary:disabled { opacity: 0.55; cursor: default; }
 .code-copy:hover {
   background: color-mix(in srgb, var(--code-ink) 20%, transparent);
 }
+
+/* ```diff fences (mdx/DiffBlock.tsx): tinted rows, +/− gutter, word marks,
+   one-column or side-by-side view. Drawn on --code-bg like other code. */
+.diff-block {
+  --diff-add: color-mix(in srgb, var(--success) 20%, var(--code-bg));
+  --diff-add-mark: color-mix(in srgb, var(--success) 48%, var(--code-bg));
+  --diff-del: color-mix(in srgb, var(--danger) 20%, var(--code-bg));
+  --diff-del-mark: color-mix(in srgb, var(--danger) 48%, var(--code-bg));
+  --diff-rule: color-mix(in srgb, var(--code-ink) 14%, transparent);
+  --diff-dim: color-mix(in srgb, var(--code-ink) 55%, transparent);
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+}
+.diff-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2, 8px);
+  padding: 6px 7px 6px 13px;
+  border-bottom: 1px solid var(--diff-rule);
+  font-size: 0.92em;
+}
+.diff-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--diff-dim);
+}
+.diff-stats { display: flex; gap: 6px; font-variant-numeric: tabular-nums; }
+.diff-stat-add { color: color-mix(in srgb, var(--success) 70%, var(--code-ink)); }
+.diff-stat-del { color: color-mix(in srgb, var(--danger) 65%, var(--code-ink)); }
+.diff-views {
+  display: inline-flex;
+  border: 0.5px solid var(--diff-rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.diff-views button,
+.diff-copy {
+  display: grid;
+  place-items: center;
+  padding: 4px 6px;
+  color: var(--diff-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.diff-views button + button { border-left: 0.5px solid var(--diff-rule); }
+.diff-views button:hover,
+.diff-copy:hover { color: var(--code-ink); background: color-mix(in srgb, var(--code-ink) 10%, transparent); }
+.diff-views button.active { color: var(--code-ink); background: color-mix(in srgb, var(--code-ink) 16%, transparent); }
+.diff-copy { border-radius: var(--radius); }
+.diff-scroll { overflow-x: auto; padding: 4px 0; }
+.diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  line-height: 1.5;
+}
+.diff-split .diff-table { table-layout: fixed; }
+.diff-col-no { width: 3.6em; }
+.diff-col-mark { width: 1.6em; }
+.diff-table td { padding: 0; vertical-align: top; }
+.diff-text { padding-right: 13px !important; }
+.diff-text-row { display: flex; }
+.diff-indent { white-space: pre; flex: none; }
+.diff-body { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.diff-no {
+  min-width: 2.6em;
+  padding: 0 6px 0 10px !important;
+  text-align: right;
+  color: var(--diff-dim);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.diff-mark {
+  width: 1.6em;
+  padding-left: 8px !important;
+  text-align: center;
+  user-select: none;
+  color: var(--diff-dim);
+}
+.diff-add { background: var(--diff-add); }
+.diff-del { background: var(--diff-del); }
+.diff-add .diff-mark, .diff-mark.diff-add { color: var(--success); }
+.diff-del .diff-mark, .diff-mark.diff-del { color: var(--danger); }
+.diff-empty {
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in srgb, var(--code-ink) 5%, transparent) 5px 6px
+  );
+}
+.diff-split.diff-numbered td.diff-side-new.diff-no,
+.diff-split:not(.diff-numbered) td.diff-side-new.diff-mark { border-left: 1px solid var(--diff-rule); }
+.diff-text mark { color: inherit; border-radius: 2px; }
+.diff-add .diff-text mark, .diff-text.diff-add mark { background: var(--diff-add-mark); }
+.diff-del .diff-text mark, .diff-text.diff-del mark { background: var(--diff-del-mark); }
+.diff-hunk td,
+.diff-note td,
+.diff-file td {
+  padding: 3px 13px !important;
+  color: var(--diff-dim);
+  white-space: pre-wrap;
+}
+.diff-hunk td { background: color-mix(in srgb, var(--code-ink) 6%, transparent); }
+.diff-hunk:not(:first-child) td { border-top: 1px solid var(--diff-rule); }
+.diff-note td { font-style: italic; }
+.diff-file td { color: var(--code-ink); font-weight: 600; border-top: 1px solid var(--diff-rule); }
+.diff-file:first-child td { border-top: 0; }
 
 .callout {
   border-left: 3px solid var(--info);
@@ -2357,6 +2559,9 @@ button.inbox-return-main:focus-visible { outline: none; box-shadow: var(--shadow
 .inbox-return-main strong { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-return-dismiss { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; color: var(--muted); cursor: pointer; border-radius: var(--radius-sm); }
 .inbox-return-dismiss:hover { color: var(--ink); }
+.sending-draft .spin { animation: link-btn-spin 0.9s linear infinite; }
+.sending-draft.failed .inbox-return-icon, .sending-draft.failed .inbox-return-label { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) { .sending-draft .spin { animation: none; } }
 .inbox-return-dismiss:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 /* An Inbox row reads like mail: subject over an excerpt of the newest message,
    clamped to the chosen number of lines. The tree keeps one line per thread. */
@@ -3264,8 +3469,87 @@ body.platform-win32 .qc-card {
 .qc-act:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
 .qc-act:disabled { opacity: 0.4; cursor: default; }
 .qc-head .qc-esc { cursor: pointer; }
+/* A window's conversations as tabs: in the panel's header, or as a row above
+   the compact bar (fixed height: main sizes the bar by it, TAB_STRIP_HEIGHT). */
+.qc-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  -webkit-app-region: no-drag;
+}
+.qc-tabrow { box-sizing: border-box; height: 37px; padding-top: 0; padding-bottom: 0; }
+.qc-tab {
+  flex: 0 1 140px;
+  min-width: 52px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-1) 0 var(--sp-4);
+  border-radius: var(--radius);
+  font-size: var(--fs-12);
+  color: var(--muted);
+  cursor: pointer;
+}
+.qc-tab:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+.qc-tab.active { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink); cursor: default; }
+.qc-tab-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.qc-tab-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.qc-tab-dot.running { animation: stem-dot-pulse 1.2s ease-in-out infinite; }
+.qc-tab-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  visibility: hidden;
+}
+.qc-tab:hover .qc-tab-close,
+.qc-tab.active .qc-tab-close { visibility: visible; }
+.qc-tab-close:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink); }
+
 /* ChatView fills the panel below the header. */
 .qc-panel .chat { flex: 1; min-height: 0; }
+
+/* A window panel shrunk to a pill beside its window. The window itself is
+   pill-sized (main sets it); the panel stays mounted under it, hidden. */
+.qc-mini-on > :not(.qc-mini) { display: none !important; }
+.qc-mini { height: 100%; }
+.qc-mini-pill {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  height: 100%;
+  padding: 0 var(--sp-6);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 42%, transparent);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-13);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.qc-mini-pill:hover { background: color-mix(in srgb, var(--surface) 60%, transparent); }
+body.platform-linux .qc-mini-pill,
+body.platform-win32 .qc-mini-pill {
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, calc(0.35 * var(--shadow-scale)));
+}
+.qc-mini-pill .activity-dots { flex: none; }
+.qc-mini-pill .qc-mark { flex: none; color: var(--accent); }
+.qc-mini-pill .hud-label { flex: 1; min-width: 0; text-align: left; }
+.qc-mini-pill.finished { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.qc-mini-pill.waiting { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
 
 /* ---- status HUD (bottom-left pill, own frameless window) ---- */
 body.hud-body { background: transparent; }
@@ -3409,11 +3693,11 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   box-shadow: 0 18px 50px -12px color-mix(in srgb, var(--drop-chat) 40%, transparent);
 }
 
-/* right region: Files bands stacked horizontally (one per subfolder + root) */
-.drop-files { flex: 1; display: flex; flex-direction: column; align-items: stretch; }
+/* right region: a fixed "Top level" zone on top, subfolder tiles below */
+.drop-files { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: stretch; }
 .drop-band {
   position: relative;
-  flex: 1;
+  flex: 0 0 34%;
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -3423,12 +3707,101 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
   padding: var(--sp-7) 26px;
   transition: background var(--motion-med) ease;
 }
-.drop-band + .drop-band { border-top: 1px dashed var(--line); }
+
+/* Subfolder tiles: sized by drop-layout.ts so every tile fits without scrolling
+   (keep its TILE_MIN_H / GAP / PAD / FOOT in step with these values). */
+.drop-tiles {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-auto-rows: minmax(44px, 1fr);
+  align-content: start;
+  gap: 8px;
+  padding: 24px 24px 80px;
+  border-top: 1px dashed var(--line);
+}
+.drop-tiles.roomy { grid-auto-rows: minmax(44px, 96px); }
+.drop-tile {
+  min-width: 0;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  align-content: center;
+  row-gap: 2px;
+  column-gap: var(--sp-5);
+  padding: 0 var(--sp-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--drop-files);
+  transition: background var(--motion-med) ease, border-color var(--motion-med), transform 0.14s ease;
+}
+.drop-tile-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--ink);
+}
+.drop-tile-sub { grid-column: 2; font-size: var(--fs-12); color: var(--muted); }
+.drop-tile.other { border-style: dashed; }
+.drop-tile.other .drop-tile-name { color: var(--muted); font-weight: 500; }
+.drop-tile.active {
+  border-color: var(--drop-files);
+  background: color-mix(in srgb, var(--drop-files) 16%, var(--surface));
+  box-shadow: 0 10px 28px -12px color-mix(in srgb, var(--drop-files) 45%, transparent);
+  transform: translateY(-1px);
+}
+
+/* "Other folder…" picker after the drop */
+.drop-picker-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--content, var(--surface));
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-13);
+  outline: none;
+}
+.drop-picker-search:focus { border-color: var(--drop-files); }
+.drop-picker-list {
+  max-height: min(48vh, 360px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--sp-6);
+}
+.drop-picker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-13);
+  cursor: pointer;
+}
+.drop-picker-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drop-picker-row svg { flex: none; color: var(--drop-files); }
+.drop-picker-row.sel { background: color-mix(in srgb, var(--drop-files) 14%, transparent); }
 .drop-band .dz-text { display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start; }
 .drop-band h4 { margin: 0; font-size: var(--fs-16); font-weight: 660; letter-spacing: -0.01em; color: var(--ink); }
 .drop-band p { max-width: 300px; }
 
 /* single Files zone (no subfolders) — match the chat side's big centered look */
+.drop-files.single .drop-band { flex: 1; }
 .drop-files.single .drop-band { flex-direction: column; gap: var(--sp-6); text-align: center; padding: var(--sp-10) var(--sp-8); }
 .drop-files.single .drop-band .dz-text { align-items: center; }
 .drop-files.single .drop-band .dz-glyph.sm { width: 84px; height: 84px; border-radius: 22px; }
@@ -3462,7 +3835,7 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .drop-overlay, .dz-glyph, .drop-zone, .drop-band { animation: none; transition: none; }
+  .drop-overlay, .dz-glyph, .drop-zone, .drop-band, .drop-tile { animation: none; transition: none; }
 }
 
 /* ---- Compact icon button (e.g. Sources → reveal a folder in Finder) ---- */
@@ -3568,6 +3941,8 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .wizard-suggest { font-size: var(--fs-12); }
 .wizard-advice { margin: 0; color: var(--ink); }
 .ld-advice { display: flex; align-items: flex-start; gap: var(--sp-3); margin: 0 0 var(--sp-4); font-size: var(--fs-12); color: var(--muted); }
+.people-facts ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--sp-3); }
+.people-facts li { font-size: var(--fs-12); line-height: 1.45; padding: var(--sp-3) var(--sp-4); border: 0.5px solid var(--line); border-radius: var(--radius-sm); }
 .ld-advice svg { flex: none; margin-top: 2px; color: var(--accent); }
 /* The editor's Suggest button while the model looks at the folder. */
 .icon-action .suggesting { animation: activity-pulse 1.4s ease-in-out infinite; }
@@ -3738,7 +4113,6 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-status.failed { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
 .mail-stop { width: 18px; height: 18px; color: var(--muted); }
 .mail-stop:hover { color: var(--danger); }
-.mail-add-row { padding: var(--sp-4) var(--sp-10); border-bottom: 0.5px solid var(--hair); }
 .mail-compose .mail-head { align-items: center; }
 .mail-compose .mail-head h1 { display: flex; align-items: center; gap: var(--sp-3); }
 .mail-items { flex: 1; overflow-y: auto; padding: var(--sp-6) var(--sp-10) var(--sp-7); display: flex; flex-direction: column; gap: var(--sp-4); }
@@ -3787,9 +4161,12 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 /* The reply box sits on top, above the mail it answers: one line until used. */
 .mail-reply { display: flex; flex-direction: column; gap: var(--sp-3); border: 0.5px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: var(--radius-md); padding: var(--sp-3) var(--sp-5); background: transparent; }
 .mail-reply.expanded { border-color: var(--accent); background: var(--content); padding: var(--sp-4) var(--sp-5); }
+.mail-reply:focus { outline: none; }
 .mail-reply textarea { resize: none; border: none; padding: var(--sp-2) 0; font: inherit; background: transparent; color: inherit; outline: none; }
-.mail-reply-to { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); font-size: var(--fs-12); color: var(--muted); }
+.mail-reply-to { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-3); font-size: var(--fs-12); color: var(--muted); }
 .mail-reply-recipient { padding: 1px var(--sp-4); border: 0.5px solid var(--accent); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--ink); }
+.mail-reply-to-field .mail-to-box, .mail-reply-to-field .mail-to-box:focus-within { border: none; padding: 0; }
+.mail-reply-to-field .mail-to-token { color: var(--ink); }
 .mail-reply-note { margin: 0; display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--ink) 5%, transparent); font-size: var(--fs-12); color: var(--muted); }
 .mail-reply-note svg { flex: none; margin-top: 2px; }
 .mail-reply-actions { display: flex; align-items: center; gap: var(--sp-4); }
@@ -3820,13 +4197,13 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-earlier-work > summary { cursor: pointer; padding: var(--sp-2) 0; }
 .mail-earlier-work[open] { display: flex; flex-direction: column; gap: var(--sp-3); }
 /* New mail: the type-to-add To field and the Private switch. */
-.mail-field-to { align-items: flex-start; }
-.mail-field-to > span { padding-top: var(--sp-3); }
 .mail-to-field { flex: 1; min-width: 0; position: relative; }
 .mail-to-box { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); border: 0.5px solid var(--hair); border-radius: var(--radius-sm); padding: var(--sp-2) var(--sp-3); cursor: text; }
 .mail-to-box:focus-within { border-color: var(--accent); }
 .mail-to-token { display: inline-flex; align-items: center; gap: var(--sp-2); border: 0.5px solid color-mix(in srgb, var(--ink) 20%, transparent); border-radius: var(--radius-pill); padding: 1px var(--sp-1) 1px var(--sp-5); font-size: var(--fs-12); }
 .mail-to-token.lead { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+/* No buttons inside (the reply's only persona): pad the right like the left. */
+.mail-to-token.bare { padding-right: var(--sp-5); }
 .mail-to-lead { font-style: normal; font-size: var(--fs-11); font-weight: 600; color: var(--accent); }
 .mail-to-token-btn { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border: none; border-radius: 999px; background: transparent; color: var(--muted); padding: 0; cursor: pointer; }
 .mail-to-token-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
@@ -3840,22 +4217,55 @@ body.platform-win32 .hud-pill { background: color-mix(in srgb, var(--surface) 94
 .mail-private-switch { display: inline-flex; align-items: center; gap: var(--sp-3); border: 0.5px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: var(--radius-pill); padding: var(--sp-2) var(--sp-5); background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-12); cursor: pointer; }
 .mail-private-switch.on { border-color: var(--accent); color: var(--accent); background: var(--sel); }
 .mail-private-note { margin: 0; display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-10); border-bottom: 0.5px solid var(--hair); background: var(--sel); font-size: var(--fs-12); color: var(--ink); }
-.mail-send { display: inline-flex; align-items: center; gap: var(--sp-3); border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: 7px var(--sp-7); background: var(--accent); color: var(--accent-ink); cursor: pointer; }
-.mail-send:disabled { opacity: 0.5; cursor: default; }
+.mail-send { display: inline-flex; align-items: center; gap: var(--sp-3); border: none; border-radius: var(--radius-md); padding: 7px var(--sp-7); background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 600; cursor: pointer; }
+.mail-send:hover:not(:disabled) { filter: brightness(1.06); }
+.mail-send:disabled { opacity: 0.45; cursor: default; }
 
-/* Compose form. */
-.mail-compose-form { flex: 1; overflow-y: auto; padding: var(--sp-7) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-5); max-width: 640px; }
-.mail-field { display: flex; align-items: center; gap: var(--sp-5); }
-.mail-field > span { width: 56px; color: var(--muted); font-size: var(--fs-12); }
-.mail-private { display: inline-flex; align-items: center; margin-right: 5px; vertical-align: -1px; color: var(--muted); }
-.mail-field input, .mail-field select { flex: 1; border: 0.5px solid var(--hair); border-radius: var(--radius-sm); padding: var(--sp-3) var(--sp-4); font: inherit; background: transparent; color: inherit; }
-.mail-compose-body { resize: vertical; border: 0.5px solid var(--hair); border-radius: var(--radius-md); padding: var(--sp-4) var(--sp-5); font: inherit; background: transparent; color: inherit; }
-.mail-compose-body:focus, .mail-field input:focus { outline: none; border-color: var(--accent); }
+/* Compose: one letter card on the reading column — To and Subject as
+   hairline-separated lines, a borderless body that grows, the actions in a
+   foot strip. Same card language as the chat composer. */
+.mail-compose-scroll { flex: 1; overflow-y: auto; padding: var(--sp-9) var(--sp-12) var(--sp-12); }
+.mail-letter {
+  max-width: var(--measure);
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, calc(0.04 * var(--shadow-scale))), 0 8px 24px rgba(0, 0, 0, calc(0.05 * var(--shadow-scale)));
+}
+.mail-letter:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.mail-line { display: flex; align-items: center; gap: var(--sp-5); min-height: 44px; padding: var(--sp-3) var(--sp-8); border-bottom: 0.5px solid var(--hair); }
+.mail-line-label { flex: none; width: 58px; color: var(--muted); font-size: var(--fs-12); }
+.mail-line-to { align-items: flex-start; }
+.mail-line-to > .mail-line-label { padding-top: 7px; }
+.mail-line input, .mail-line select { flex: 1; min-width: 0; border: none; padding: var(--sp-2) 0; font: inherit; background: transparent; color: inherit; outline: none; }
+.mail-line-subject input { font-size: var(--fs-14); font-weight: 600; }
+.mail-line-subject input::placeholder { font-weight: 400; font-size: var(--fs-13); }
+.mail-letter .mail-to-box, .mail-letter .mail-to-box:focus-within { border: none; padding: var(--sp-1) 0; }
+.mail-letter .mail-to-hint { margin: var(--sp-1) 0 var(--sp-1); font-size: var(--fs-11); }
+.mail-compose-body {
+  field-sizing: content;
+  min-height: 240px;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: var(--sp-7) var(--sp-8);
+  font: inherit;
+  font-size: var(--fs-14);
+  line-height: 1.55;
+  background: transparent;
+  color: inherit;
+}
+.mail-letter > .mail-forward-quote { margin: 0 var(--sp-8) var(--sp-5); }
+.mail-letter > .composer-attachments { padding: 0 var(--sp-8) var(--sp-4); }
+.mail-letter-error { margin: 0 var(--sp-8) var(--sp-4); }
+.mail-letter-foot { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4) var(--sp-3) var(--sp-5); border-top: 0.5px solid var(--hair); }
+.mail-letter-foot .mail-send { margin-left: var(--sp-3); }
+.mail-send-kbd { font: inherit; font-size: var(--fs-11); opacity: 0.7; margin-left: var(--sp-1); }
 .mail-forward-quote { margin: 0; max-height: 320px; overflow-y: auto; padding: var(--sp-4) var(--sp-5); border-left: 2px solid var(--hair); background: var(--inline-bg); border-radius: var(--radius-sm); font: inherit; font-size: var(--fs-12); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .mail-compose-actions { display: flex; align-items: center; gap: var(--sp-4); }
-.mail-to-chips { flex: 1; display: flex; flex-wrap: wrap; gap: var(--sp-3); }
-.mail-to-chip { display: inline-flex; align-items: center; gap: 5px; border: 0.5px solid var(--hair); border-radius: var(--radius-pill); padding: var(--sp-2) var(--sp-5); background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-12); cursor: pointer; }
-.mail-to-chip.on { border-color: var(--accent); color: inherit; background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .mail-exchange { display: flex; flex-direction: column; gap: var(--sp-4); }
 .mail-item.exchange { opacity: 0.75; margin-left: var(--sp-12); }
 .mail-item-to { font-size: var(--fs-11); color: var(--muted); }
@@ -4581,6 +4991,15 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .prov-dot.unknown { background: var(--muted); }
 /* A provider's page (Settings → Models → a tile): the Manage editor's header over settings rows. */
 .prov-detail { display: flex; flex-direction: column; gap: var(--sp-5); margin-bottom: var(--sp-5); }
+/* ChatGPT plan usage on its provider page: a bar of what is left in each window. */
+.plan-usage { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-12); color: var(--muted); flex: none; }
+.plan-usage-bar { width: 72px; height: 5px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--ink) 10%, var(--surface)); overflow: hidden; }
+.plan-usage-fill { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--success); }
+.plan-usage.warn .plan-usage-fill { background: var(--warn); }
+.plan-usage.danger .plan-usage-fill { background: var(--danger); }
+.plan-usage.warn .plan-usage-text { color: var(--warn); }
+.plan-usage.danger .plan-usage-text { color: var(--danger); }
+.plan-usage-text { white-space: nowrap; font-variant-numeric: tabular-nums; min-width: 5.5em; text-align: right; }
 .set-vrow .vval .prov-dot { display: inline-block; width: 6px; height: 6px; vertical-align: 1px; margin-right: 2px; }
 .set-vrow .vval.mono, .set-vbody .mono { font-family: var(--font-mono); font-size: var(--fs-11); }
 .set-vbody .mono { color: var(--muted); overflow-wrap: anywhere; }
@@ -4628,25 +5047,25 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 :root[data-chat-width='wide'] body:not(.qc-body):not(.hud-body) { --measure: 1000px; }
 :root[data-chat-width='wider'] body:not(.qc-body):not(.hud-body) { --measure: 1280px; }
 :root[data-chat-width='full'] body:not(.qc-body):not(.hud-body) { --measure: 100%; }
-/* The hover stamp's gutter shrinks with the measure: tuck it under the avatar
-   once the pane leaves under ~50px beside the column (measure + 40px, the same
+/* The hover stamp's gutter shrinks with the measure: move it to the right end
+   of the header line once the pane leaves under ~50px beside the column (measure + 40px, the same
    rule as the 820px query for the default 780px), and always under Full. :where
    keeps these below the bubbles layout's own user-message stamp. */
 @container messages (width < 1040px) {
-  :root[data-chat-width='wide'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp { right: auto; left: 0; top: 30px; width: 26px; align-items: center; font-size: var(--fs-10); }
+  :root[data-chat-width='wide'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp { right: 0; top: 4px; flex-direction: row; gap: var(--sp-3); font-size: var(--fs-10); }
   :root[data-chat-width='wide'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp-tps { display: none; }
 }
 @container messages (width < 1320px) {
-  :root[data-chat-width='wider'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp { right: auto; left: 0; top: 30px; width: 26px; align-items: center; font-size: var(--fs-10); }
+  :root[data-chat-width='wider'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp { right: 0; top: 4px; flex-direction: row; gap: var(--sp-3); font-size: var(--fs-10); }
   :root[data-chat-width='wider'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp-tps { display: none; }
 }
-:root[data-chat-width='full'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp { right: auto; left: 0; top: 30px; width: 26px; align-items: center; font-size: var(--fs-10); }
+:root[data-chat-width='full'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp { right: 0; top: 4px; flex-direction: row; gap: var(--sp-3); font-size: var(--fs-10); }
 :root[data-chat-width='full'] :where(body:not(.qc-body):not(.hud-body)) .message-stamp-tps { display: none; }
 
 /* Bubbles: the user's messages sit on the right in a tinted bubble, without the
    avatar or the "You" label; Stem's replies stay full-width rows. */
 :root[data-chat-layout='bubbles'] .message-user { justify-content: flex-end; }
-:root[data-chat-layout='bubbles'] .message-user > .msg-avatar,
+:root[data-chat-layout='bubbles'] .message-user .msg-avatar,
 :root[data-chat-layout='bubbles'] .message-user .message-who-name { display: none; }
 :root[data-chat-layout='bubbles'] .message-user > .message-body {
   flex: 0 1 auto;
@@ -4657,19 +5076,8 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 }
 :root[data-chat-layout='bubbles'] .message-user .message-who { justify-content: flex-end; margin-bottom: 0; }
 :root[data-chat-layout='bubbles'] .message-user .message-who:not(:has(.message-pinned, .message-meta)) { display: none; }
-/* The hover actions hang under the bubble instead of padding it out; the row
-   keeps the same total height as the rows layout. */
-:root[data-chat-layout='bubbles'] .message-user { margin-bottom: calc(var(--sp-10) + var(--sp-3) + var(--ctl-h-sm)); }
-:root[data-chat-layout='bubbles'] .message-user > .message-body { position: relative; }
-:root[data-chat-layout='bubbles'] .message-user .message-actions {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  /* Padding, not margin: the gap stays part of the message, so moving the
-     pointer from the bubble down to the buttons never drops the hover. */
-  margin-top: 0;
-  padding-top: var(--sp-2);
-}
+/* The hover actions hang under the bubble, aligned to its right edge. */
+:root[data-chat-layout='bubbles'] .message-user .message-actions { left: auto; right: 0; }
 /* The sent-at stamp sits just left of the bubble instead of in the far gutter
    the avatar column uses (and under the avatar in narrow panes). */
 :root[data-chat-layout='bubbles'] .message-user > .message-stamp {
@@ -4953,6 +5361,23 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .share-scope {
   margin-bottom: var(--sp-5);
 }
+.share-who {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+}
+.share-who .vfield {
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-3) var(--sp-4);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius-md, 8px);
+  background: var(--content);
+}
+.share-who p {
+  margin: 0;
+}
 .share-preview {
   flex: 1 1 auto;
   min-height: 120px;
@@ -5023,45 +5448,11 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .share-view .share-head p {
   margin: 0;
 }
+/* No gap of its own: each .message keeps the chat's margin below it. */
 .share-messages {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-8);
 }
-.share-sources {
-  margin-top: var(--sp-4);
-  font-size: var(--fs-12, 12px);
-}
-.share-sources summary {
-  cursor: pointer;
-  color: var(--muted);
-}
-.share-sources ul {
-  list-style: none;
-  padding: 0;
-  margin: var(--sp-3) 0 0;
-  display: grid;
-  gap: var(--sp-2);
-}
-.share-sources a {
-  display: flex;
-  gap: var(--sp-4);
-  color: inherit;
-  text-decoration: none;
-}
-.share-sources a:hover .share-source-title {
-  text-decoration: underline;
-}
-.share-source-site {
-  color: var(--muted);
-  flex: 0 0 auto;
-}
-.share-source-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .share-card-edit {
   margin-bottom: var(--sp-4);
 }
@@ -5140,3 +5531,55 @@ select.vfield:focus { outline: none; border-radius: var(--radius-sm); box-shadow
 .mail-collab-body li { margin: 2px 0; }
 .mail-collab-body p { margin: 0; }
 .mail-collab-label { font-size: var(--fs-11); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* A file path in a reply that opens on click (shared/file-paths.ts). */
+a.file-link { cursor: pointer; }
+a.file-link .inline-code { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 2px; }
+
+.preview-parents { padding-left: var(--sp-12); }
+.preview-parents li + li { margin-top: var(--sp-2); }
+
+/* Settings search: the field above the sub-tabs, the results in place of the
+   sub-tab, and the flash on the row a result opens. */
+.set-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--field);
+}
+.set-search:focus-within { border-color: var(--accent); }
+.set-search-icon { color: var(--muted); flex: none; }
+.set-search-input { flex: 1; min-width: 0; font: inherit; font-size: var(--fs-13); border: 0; background: none; color: var(--ink); outline: none; }
+.set-search-clear { flex: none; border: none; background: none; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; padding: 0; }
+.set-search-clear:hover { color: var(--ink); }
+.set-search-results { margin-top: var(--sp-4); }
+.set-search-results > .grp-head { margin-top: var(--sp-9); }
+.set-search-empty { margin: var(--sp-6) var(--sp-2); font-size: var(--fs-12); }
+.set-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: var(--sp-4) var(--sp-6);
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.set-search-hit + .set-search-hit { border-top: 0.5px solid var(--hair); }
+.set-search-hit.active { background: var(--sel); }
+.set-search-hit .hit-label { font-size: var(--fs-13); }
+.set-search-hit .hit-place { font-size: var(--fs-10); color: var(--muted); letter-spacing: 0.02em; }
+.set-search-hit .hit-second { font-size: var(--fs-11); color: var(--muted); overflow-wrap: anywhere; }
+.set-search-hit mark { background: none; color: var(--accent); font-weight: 600; }
+@keyframes set-search-flash {
+  0%, 30% { background: var(--sel); }
+  100% { background: transparent; }
+}
+.set-search-flash { animation: set-search-flash 1.6s ease-out; }

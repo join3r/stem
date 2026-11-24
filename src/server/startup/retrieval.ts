@@ -6,7 +6,7 @@ import { embedModelsDir, embedSocketPath, recallDbPath } from '../workspace/path
 import { embedNewMessages } from '../recall/embed-episodic';
 import { embedMissingFactVectors } from '../recall/embed-facts';
 import { scanAllIndexedFolders } from '../folder-index';
-import { getEmbeddingsClient, setRetrievalClients } from '../recall/retrieval';
+import { getEmbeddingsClient, getFactRerankClient, setRetrievalClients } from '../recall/retrieval';
 import { startEmbedEndpoint } from '../recall/embed-endpoint';
 import type { EmbeddingsClient } from '../recall/embeddings';
 import { isCustomModelId, localModelCacheKey, resolveEmbedSpec } from '../recall/embed-catalog';
@@ -15,6 +15,7 @@ import { createEmbeddingsRouter, createLocalEmbeddingsClient } from '../recall/e
 import { resolveRerankSpec } from '../recall/rerank-catalog';
 import { createLocalRerankClient, createRerankRouter } from '../recall/rerank-local';
 import { createGteFactPilot } from '../recall/gte-fact-pilot';
+import { GATE_CANARY, describeGateDrift, gateDrift, scoreGateCanary } from '../recall/gate-canary';
 import { GTE_MODEL_VERSION } from '../recall/gte-model-artifact';
 import { ensureGteModel } from '../recall/gte-model-download';
 import { pruneRetiredModels } from '../recall/retired-models';
@@ -26,7 +27,44 @@ import * as activity from '../activity';
 import { log } from '../log';
 import { degrade } from '../degrade';
 import { recallStore } from '../recall/store';
+import { usesGteMemory } from '../../shared/recall-recommended';
 const { getEpisodicGeneration, pruneMessageVectorsExceptModel, pruneSummaryVectorsExceptModel, pruneVectorsExceptModel, getSummariesMissingVector, upsertSummaryVector } = recallStore;
+
+const GATE_CHECK_DELAY_MS = 30_000;
+
+/**
+ * Score the canary pairs with the loaded gate model and log how they compare
+ * with the scores its floors were measured on (recall/gate-canary.ts). Says
+ * so in the degrade ledger when they moved: nothing fails, but the gates then
+ * cut somewhere other than where they were measured to cut.
+ */
+export async function checkGateScores(
+  manager: Pick<EmbedWorkerManager, 'rerank' | 'rerankStatus'>,
+  platform = `${process.platform}-${process.arch}`
+): Promise<void> {
+  if (GATE_CANARY.model !== GTE_MODEL_VERSION || manager.rerankStatus().state !== 'ready') return;
+  try {
+    const scores = await scoreGateCanary(async (query, doc) => {
+      const [hit] = await manager.rerank(query, [doc], 1);
+      if (!hit) throw new Error('the gate model returned no score');
+      return hit.score;
+    });
+    const drift = gateDrift(scores, platform);
+    if (!drift) return;
+    log('retrieval', 'gate score check', describeGateDrift(drift, platform));
+    if (drift.drifted) {
+      degrade(
+        'retrieval.gate',
+        'kept the fact and skill gate floors, which were measured on other scores',
+        new Error(`${Math.round(drift.moved * 100)}% of the check pairs moved by half a logit or more against ${drift.against}`)
+      );
+    }
+  } catch (error) {
+    // quiet: the check is a diagnostic. A worker that restarted or was switched
+    // away mid-run has its own log line, and the next start checks again.
+    log('retrieval', 'gate score check skipped', { error: error instanceof Error ? error.message : String(error) });
+  }
+}
 
 export interface RetrievalRuntime {
   embedManager: EmbedWorkerManager;
@@ -184,7 +222,7 @@ export function initRetrieval(deps: {
       });
     },
     onFailure(error) {
-      log('retrieval', 'GTE fact pilot unavailable; using configured reranker', {
+      log('retrieval', 'GTE fact pilot unavailable; recall runs without a reranker', {
         error: error instanceof Error ? error.message : String(error)
       });
       activity.fail('models.factRerank', error, 'Experimental memory model unavailable');
@@ -193,6 +231,7 @@ export function initRetrieval(deps: {
   }) : null;
   if (factManager) {
     let previous = '';
+    let gateChecked = false;
     factManager.onRerankStatus((status) => {
       void factPilot?.status().then((value) => deps.emit('reranker:factStatus', value));
       trackModelStatus('models.factRerank', 'Preparing experimental memory model', status);
@@ -203,6 +242,13 @@ export function initRetrieval(deps: {
         model: status.model, scope: 'facts and skills',
         ...(status.error ? { error: status.error } : {})
       });
+      if (status.state === 'ready' && !gateChecked) {
+        gateChecked = true;
+        // Once per start, and a little after the model is up: the check is 44
+        // model runs, and the first turns of a fresh start should not queue behind it.
+        const timer = setTimeout(() => void checkGateScores(factManager), GATE_CHECK_DELAY_MS);
+        timer.unref?.();
+      }
     });
     host().onShutdown(() => factPilot?.dispose());
   }
@@ -228,7 +274,9 @@ export function initRetrieval(deps: {
   // auto-inject. Listen failures are logged and non-fatal (tool stays FTS-only).
   const embedEndpoint = startEmbedEndpoint({
     socketPath: embedSocketPath(),
-    getClient: getEmbeddingsClient
+    getClient: getEmbeddingsClient,
+    // search_facts orders its hits by the per-turn fact gate (embed-endpoint.ts).
+    getFactGate: getFactRerankClient
   });
   host().onShutdown(() => {
     void embedEndpoint.close();
@@ -291,7 +339,7 @@ export function initRetrieval(deps: {
     setTimeout(() => {
       void getRetrieval().then((r) => {
         if (r.embeddings.mode === 'local') embedManager.ensure(resolveEmbedSpec(r));
-        if (r.reranker.mode === 'local') embedManager.ensureRerank(resolveRerankSpec(r));
+        if (r.reranker.mode === 'local' && !usesGteMemory(r)) embedManager.ensureRerank(resolveRerankSpec(r));
         void factPilot?.resolve();
       });
     }, 1_500);

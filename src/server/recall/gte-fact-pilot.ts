@@ -7,7 +7,7 @@ import type { FactRerankClient } from './retrieval';
 import type { LocalRerankModelSpec } from './rerank-catalog';
 import { RerankUnavailableError } from './rerank';
 import { formatFactQuery } from './fact-query';
-import { GTE_EMBED_MODELS } from '../../shared/recall-recommended';
+import { GTE_EMBED_MODELS, usesGteMemory } from '../../shared/recall-recommended';
 
 import { GTE_FACT_PILOT_ID, GTE_FACT_PILOT_FILES } from './gte-model-artifact';
 export { GTE_FACT_PILOT_ID, GTE_FACT_PILOT_FILES } from './gte-model-artifact';
@@ -21,13 +21,20 @@ export const GTE_FACT_PILOT_FLOOR = -1.6370911598205566;
 // shortlist), scored both on macOS and in the Linux server image: the q8 graph's
 // logits differ between the two by up to several points on some pairs (epoch2
 // as much), so each floor sits where both platforms agree.
+//
+// Lowered 2026-11-06 because a wrong load turned out to be cheap. Judging 100 real
+// VPS turns that inlined a skill: the model followed 13 of 14 fitting skills and
+// acted on none of the 71 that did not fit. So a wrong load costs ~700 tokens,
+// not a wrong action, and the floors now buy recall at about one wrong-load turn
+// in nine instead of one in fifty. Linux only; macOS was not re-scored.
 // A skill without example requests is scored on its description alone:
-// Linux 36/81 needed skills served with 21 wrong-load turns, macOS 33 with 35.
-export const GTE_SKILL_FLOOR = -3.25;
+// Linux 42/81 needed skills served with 76 wrong-load turns (was −3.25: 36 with 21).
+export const GTE_SKILL_FLOOR = -4.5;
 // A skill with example requests is scored as the best of its description and
-// each example (skills/examples.ts). Linux 44/81 served with 17 wrong-load
-// turns, macOS 45 with 22; epoch2 at its +3.0 served 42 with 35 on Linux.
-export const GTE_SKILL_EXAMPLE_FLOOR = -0.5;
+// each example (skills/examples.ts). Linux 51/81 served with 89 wrong-load
+// turns (was −0.5: 44 with 17; −4.5 would serve 55 with 178). Raising the inline
+// cap from 2 to 3 or 4 served one more turn at most, so it stays at 2.
+export const GTE_SKILL_EXAMPLE_FLOOR = -3.5;
 
 export async function verifyGteFactModel(directory: string): Promise<void> {
   if (!isAbsolute(directory)) throw new Error('The GTE fact model directory must be absolute');
@@ -40,9 +47,8 @@ export async function verifyGteFactModel(directory: string): Promise<void> {
 
 /** The installed files never override an explicit dropdown choice. */
 export function gteFactPilotEligible(r: RetrievalSettings): boolean {
-  return r.reranker.factModel === GTE_FACT_PILOT_ID
-    && r.embeddings.mode === 'local' && GTE_EMBED_MODELS.includes(r.embeddings.localModel)
-    && r.reranker.mode === 'local' && r.reranker.localModel === 'qwen3-reranker-0.6b';
+  return usesGteMemory(r)
+    && r.embeddings.mode === 'local' && GTE_EMBED_MODELS.includes(r.embeddings.localModel);
 }
 
 export function createGteFactPilot(deps: {
@@ -176,7 +182,7 @@ export function createGteFactPilot(deps: {
         : { installed: !disposed };
       if (disposed || !selected) return { ...availability, status: { model: spec.id, state: 'idle' } };
       const error = !gteFactPilotEligible(settings)
-        ? 'Stem GTE Memory requires built-in EmbeddingGemma 2 or Qwen3 Embedding and a compatible reranker configuration.' : verificationError;
+        ? 'Stem GTE Memory requires built-in EmbeddingGemma 2 or Qwen3 Embedding 0.6B.' : verificationError;
       return {
         ...availability,
         status: error ? { model: spec.id, state: 'error', error }

@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { readFile, utimes } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import {
   isUploadHandle,
   resolveUploadHandle,
@@ -112,6 +112,22 @@ describe('staged uploads', () => {
     expect(await sweepStagedUploads()).toBe(1);
     expect(await resolveUploadHandle(stale.handle)).toBeNull();
     expect(await resolveUploadHandle(fresh.handle)).toBeTruthy();
+  });
+
+  it('never sweeps an upload still being written, and counts the TTL from its end', async () => {
+    const body = new PassThrough();
+    const pending = stageUpload('slow.bin', body);
+    body.write(Buffer.from('first half '));
+    await new Promise((r) => setTimeout(r, 20));
+    // Two hours later, mid-transfer: the directory is old, the upload is not done.
+    expect(await sweepStagedUploads(Date.now() + 2 * STAGED_TTL_MS)).toBe(0);
+    body.end(Buffer.from('second half'));
+    const { handle } = await pending;
+    const path = await resolveUploadHandle(handle);
+    expect(await readFile(path!, 'utf8')).toBe('first half second half');
+    const finished = Date.now();
+    expect(await sweepStagedUploads(finished + STAGED_TTL_MS - 60_000)).toBe(0);
+    expect(await sweepStagedUploads(finished + STAGED_TTL_MS + 60_000)).toBe(1);
   });
 
   it('leaves nothing behind when an upload dies part way through', async () => {

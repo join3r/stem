@@ -179,9 +179,11 @@ relay. `K` = signed request by any key, registered or not. Errors are
 | `GET /v1/unsubscribe?t=` | — | email link; → confirmation page only |
 | `POST /v1/unsubscribe` | — | form `t=` → adds the address to the suppression list |
 | `POST /v1/push` | K | `{token, env, wake}` → `{result:"sent"\|"gone"}`; `409 token_bound`, `502 apns_failed` |
-| `POST /v1/shares?ttl=<days>&card=<b64url JSON>` | SC | blob bytes → `{id, url, expires}`; `400 bad_ttl`, `413`, `429`, `507 too_many_links`, `507 quota_full` |
-| `GET /v1/shares` | SC | → `{shares:[{id, url, size, created, expires}]}` |
-| `GET /v1/shares/{id}` | — | → blob bytes; `404 not_found`, `410 {error:"gone", why:"revoked"\|"taken_down"}` |
+| `POST /v1/shares?ttl=<days>&card=<b64url JSON>&to=<b64url JSON>` | SC | blob bytes → `{id, url, expires, recipients?}`; `400 bad_ttl`, `400 bad_recipients`, `413`, `429`, `507 too_many_links`, `507 quota_full` |
+| `GET /v1/shares` | SC | → `{shares:[{id, url, size, created, expires, recipients?, opens?:[{address, first, last, count}]}]}` |
+| `GET /v1/shares/{id}` | — (locked: the view cookie) | → blob bytes; `401 {error:"locked", recipients:[masked]}`, `404 not_found`, `410 {error:"gone", why:"revoked"\|"taken_down"}` |
+| `POST /v1/shares/{id}/code` | — | `{r: index}` → `202 {}`; mails a code to that recipient; `400 bad_recipient`, `400 not_locked`, `429` |
+| `POST /v1/shares/{id}/unlock` | — | `{r: index, code}` → `200 {}` + `Set-Cookie: stem_view`; `403 bad_code`, `429` |
 | `DELETE /v1/shares/{id}` | SC, the owner address | → `{}` |
 | `POST /v1/shares/{id}/report` | — | `{reason, detail?, contact?, key?}` → `202 {}` |
 
@@ -283,6 +285,27 @@ card's `og:` tags (a removed link gets a "removed" card, a cardless one the
 page as built). Every share response carries `X-Robots-Tag: noindex`.
 
 `report` reasons: `illegal`, `privacy`, `harassment`, `spam`, `other`.
+
+#### Locked to recipients (feature `share-to`)
+
+`to` (optional) is base64url (no padding) of a JSON array of addresses,
+in the signed path: 1 to `[share] max_recipients` (default 20), normalised
+and deduplicated. The upload answer then carries `recipients`. A Stem must
+check it: a relay without the feature ignores `to` and makes the link
+public, so the Stem deletes the share when `recipients` is missing.
+
+A locked `GET /v1/shares/{id}` answers `401` with the recipients masked
+(`m•••@gmail.com`), in upload order. The visitor picks one by index:
+`code` mails a 6-digit code to that address (valid 15 minutes, 5 tries,
+one request a minute per share and recipient; `codes_per_recipient_day` per
+share and recipient, five times that over all shares; `codes_per_ip_day`
+per client IP; a suppressed address answers the same `202` with no mail).
+`unlock` with the right code sets `stem_view`: HttpOnly, SameSite=Strict,
+Path `/v1/shares/{id}`, Max-Age `view_days` (default 7). With that cookie
+the blob comes back (`Cache-Control: no-store`) and the opening is counted
+for that recipient. The key still rides only in the fragment, so a visitor
+needs both the link and the recipient's inbox. Revoking deletes the
+recipients, codes, cookies and openings with the blob.
 `key` is optional: a reporter who includes it lets the operator see the
 content.
 

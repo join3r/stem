@@ -95,8 +95,12 @@ export function sectionText(body: string, heading: string): string {
  * what was inlined this turn — a skill listed by name only was never given its
  * steps, so it can neither be followed nor fairly graded.
  */
-export function gradeSkillUse(skills: { slug: string; body: string }[], trace: TraceEntry[]): string[] {
-  if (skills.length === 0 || trace.length === 0) return [];
+export function gradeSkillUse(
+  skills: { slug: string; body: string }[],
+  trace: TraceEntry[],
+  assistantText = ''
+): string[] {
+  if (skills.length === 0) return [];
   const called = new Set(trace.map((t) => (t.name ?? '').toLowerCase()).filter(Boolean));
   // `args` is already the serialized, redacted, truncated JSON the trace keeps
   // (see normalize.ts): the same text skill authoring reads, so a token found in
@@ -107,9 +111,14 @@ export function gradeSkillUse(skills: { slug: string; body: string }[], trace: T
     .filter(Boolean)
     .join('\n')
     .toLowerCase();
-  if (called.size === 0 && !argsText) return [];
+  // Where a quoted phrase can show up: the arguments (a draft saved through a
+  // tool) and the reply (a draft written into the chat). JSON escapes newlines
+  // and quotes in the arguments, so both sides are compared squeezed.
+  const written = squeeze(`${argsText}\n${assistantText}`);
+  if (called.size === 0 && !written.trim()) return [];
   const used: string[] = [];
   for (const skill of skills) {
+    let hit = false;
     for (const token of toolsNamedIn(skill.body)) {
       // Either signal is enough. Substring rather than word match on the args:
       // the token sits inside a JSON string next to quotes, flags and paths
@@ -117,12 +126,49 @@ export function gradeSkillUse(skills: { slug: string; body: string }[], trace: T
       // by construction — generic tool names are already out of the set — that
       // an incidental substring hit is not the failure mode worth guarding.
       if (called.has(token) || argsText.includes(token)) {
-        used.push(skill.slug);
+        hit = true;
         break;
       }
     }
+    if (!hit) hit = phrasesQuotedIn(skill.body).some((phrase) => written.includes(squeeze(phrase)));
+    if (hit) used.push(skill.slug);
   }
   return used;
+}
+
+/**
+ * Smallest quoted phrase that counts as evidence. Shorter ones match by accident:
+ * every polite reply contains "Best regards," whatever skill it followed.
+ */
+const MIN_QUOTED_CHARS = 12;
+const MIN_QUOTED_WORDS = 3;
+
+/**
+ * The exact wording a skill's Steps quote: text in backticks or quotation marks,
+ * at least three words.
+ *
+ * Tool overlap cannot see a writing skill. "Sign as `On behalf of Vladimír
+ * Schmotzer`" names no tool, so a turn that followed it to the letter graded as
+ * unused, and the lifecycle clock would archive a skill in daily use. Its quoted
+ * wording turning up in the draft is the same claim tool overlap makes: this turn
+ * did what the skill says.
+ */
+export function phrasesQuotedIn(body: string): string[] {
+  const steps = sectionText(body, 'Steps');
+  const phrases: string[] = [];
+  for (const match of steps.matchAll(/`([^`\n]+)`|"([^"\n]+)"|“([^”\n]+)”|„([^“”\n]+)[“”]/g)) {
+    const phrase = (match[1] ?? match[2] ?? match[3] ?? match[4] ?? '').trim();
+    if (phrase.length >= MIN_QUOTED_CHARS && phrase.split(/\s+/).length >= MIN_QUOTED_WORDS) phrases.push(phrase);
+  }
+  return phrases;
+}
+
+/** Lowercase, JSON escapes and markdown emphasis out, whitespace runs to one space. */
+function squeeze(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/\\[nrt"]/g, ' ')
+    .replace(/[\s*_]+/g, ' ');
 }
 
 /** One reported failure of a loaded skill: which one, and what the model said was wrong. */

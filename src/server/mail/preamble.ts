@@ -153,6 +153,16 @@ const NO_ACKS =
   'Never send mail that only acknowledges, thanks or confirms. When a mail asks nothing of you, end your ' +
   'turn without writing anything: an empty turn sends nothing.';
 
+// A driver answering the user's own mail: the no-acks rule above is about mail
+// between models. Seen 2026-11-16: the user's "OK, I kept the bandage on, I'll
+// call the surgeon tomorrow" asked nothing, the driver followed NO_ACKS to the
+// letter, and the user got the "(finished without writing a reply)" placeholder.
+// A mail with nothing in it and silence both read wrong to a person.
+const USER_ACK =
+  'Never send personas or agents mail that only acknowledges, thanks or confirms. The user is different: ' +
+  'every mail from them gets a reply. When it asks nothing of you, reply with one short line in their ' +
+  'language that shows you read it (for example "Dobre, drž sa toho plánu.").';
+
 /**
  * The first real driver answers built on a coding agent's report (Cloudfarms
  * scraping + WAL-G threads, 2026-10-12) turned its evidence into generic
@@ -391,7 +401,9 @@ export function mailPreamble(
   const writing = writesToModels
     ? [
         isDriver && !mail.agent
-          ? `${modelMail(blind)} ${blind ? 'Your final message is read by a person: write that one normally.' : `Your answer to the user is read by a person: write that one normally. ${FOLD_IN}`} ${NO_ACKS}`
+          ? `${modelMail(blind)} ${blind ? 'Your final message is read by a person: write that one normally.' : `Your answer to the user is read by a person: write that one normally. ${FOLD_IN}`} ${
+              !blind && mail.from === 'user' ? USER_ACK : NO_ACKS
+            }`
           : `${modelMail(blind)} That includes your final message. ${NO_ACKS}`
       ]
     : [];

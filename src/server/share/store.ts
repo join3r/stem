@@ -7,13 +7,19 @@ import { degrade } from '../degrade';
 import { decryptSecretValue, encryptSecretValue } from '../pi/secrets';
 import { replaceFile } from '../replace-file';
 import { sharesStorePath } from '../workspace/paths';
-import type { SharedLink } from '../../shared/share';
+import type { ShareOpen, SharedLink } from '../../shared/share';
 
 interface StoredShare extends Omit<SharedLink, 'url'> {
   /** Viewer URL without the fragment. */
   base: string;
   /** Encrypted base64url key. */
   key: string;
+  /**
+   * A locked link: the recipients whose first opening the user was told
+   * about. Kept apart from `opens` so a notice that failed is sent again.
+   * Absent on links stored before this: their stored opens count as told.
+   */
+  notified?: string[];
 }
 
 interface FileShape {
@@ -21,19 +27,37 @@ interface FileShape {
   shares: StoredShare[];
 }
 
+function unreadable(err: unknown): Error {
+  degrade('share', 'shares.json is unreadable; leaving it as it is', err);
+  return new Error('Stem could not read your list of shared links, so it changed nothing. Your links still work.');
+}
+
 export class ShareStore {
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly path: () => string = sharesStorePath) {}
 
+  /**
+   * Only a missing file is an empty list. Anything else (unreadable, broken
+   * JSON) throws, so no write replaces the file: those links still work on the
+   * relay, and this list is the only place they can be revoked from.
+   */
   private async readFile(): Promise<FileShape> {
+    let raw: string;
     try {
-      const f = JSON.parse(await readFile(this.path(), 'utf8')) as FileShape;
-      return { version: 1, shares: Array.isArray(f.shares) ? f.shares : [] };
+      raw = await readFile(this.path(), 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') degrade('share', 'shares.json is unreadable; starting empty', err);
-      return { version: 1, shares: [] };
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, shares: [] };
+      throw unreadable(err);
     }
+    let f: Partial<FileShape>;
+    try {
+      f = JSON.parse(raw) as Partial<FileShape>;
+    } catch (err) {
+      throw unreadable(err);
+    }
+    if (!f || !Array.isArray(f.shares)) throw unreadable(new Error('no shares list'));
+    return { version: 1, shares: f.shares };
   }
 
   private async writeFile(f: FileShape): Promise<void> {
@@ -69,7 +93,8 @@ export class ShareStore {
         title: s.title,
         createdAt: s.createdAt,
         expiresAt: s.expiresAt,
-        size: s.size
+        size: s.size,
+        ...(s.recipients?.length ? { recipients: s.recipients, opens: s.opens ?? [] } : {})
       });
     }
     return out.sort((a, b) => b.createdAt - a.createdAt);
@@ -81,6 +106,36 @@ export class ShareStore {
       const hash = link.url.indexOf('#');
       const { url, ...rest } = link;
       f.shares.push({ ...rest, base: url.slice(0, hash), key: encryptSecretValue(url.slice(hash + 1)) });
+      await this.writeFile(f);
+    });
+  }
+
+  /** Store the openings the relay reported for a locked link. */
+  setOpens(id: string, opens: ShareOpen[]): Promise<void> {
+    return this.serial(async () => {
+      const f = await this.readFile();
+      const s = f.shares.find((x) => x.id === id);
+      if (!s) return;
+      s.notified ??= (s.opens ?? []).map((o) => o.address);
+      s.opens = opens;
+      await this.writeFile(f);
+    });
+  }
+
+  /** The recipients whose first opening was announced (see StoredShare.notified). */
+  async notified(id: string): Promise<string[]> {
+    const s = (await this.readFile()).shares.find((x) => x.id === id);
+    return s ? (s.notified ?? (s.opens ?? []).map((o) => o.address)) : [];
+  }
+
+  /** Record that these recipients' first openings were announced. */
+  markNotified(id: string, addresses: string[]): Promise<void> {
+    return this.serial(async () => {
+      const f = await this.readFile();
+      const s = f.shares.find((x) => x.id === id);
+      if (!s) return;
+      const told = s.notified ?? (s.opens ?? []).map((o) => o.address);
+      s.notified = [...told, ...addresses.filter((a) => !told.includes(a))];
       await this.writeFile(f);
     });
   }

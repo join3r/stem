@@ -71,7 +71,7 @@ export async function spawnReadyCompleteChild(opts: CompleteChildOptions): Promi
     void child.dispose().catch(() => {});
     const err = e instanceof Error ? e : new Error(String(e));
     if (reason && !err.message.includes(reason)) {
-      throw new Error(`${err.message} pi said: ${reason}`);
+      throw new Error(`${err.message} pi said: ${reason}`, { cause: e });
     }
     throw err;
   }

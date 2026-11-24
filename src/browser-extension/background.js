@@ -33,6 +33,8 @@ let attempt = 0;
 let reconnectTimer = null;
 let hostConnected = null;
 let lastError = '';
+/** Stem said a newer native host of this profile has the link: no quick reconnects (the alarm still tries). */
+let replaced = false;
 /** What Stem calls this browser profile ("Work"), once it has said. */
 let profileName = '';
 
@@ -124,6 +126,10 @@ async function connect() {
     hostConnected = null;
     void endAllRuns();
     refreshBadge();
+    if (replaced) {
+      replaced = false;
+      return;
+    }
     scheduleReconnect();
   });
   post({
@@ -214,7 +220,9 @@ async function onNativeMessage(msg) {
       if (typeof msg.threadId === 'string') await endRun(msg.threadId);
       return;
     case 'reload':
-      await endAllRuns();
+      // Stem also sends this when the extension stopped answering: a debugger
+      // detach that never settles must not keep the restart from happening.
+      await Promise.race([endAllRuns(), new Promise((resolve) => setTimeout(resolve, 2_000))]);
       chrome.runtime.reload();
       return;
     case 'uninstall':
@@ -223,6 +231,10 @@ async function onNativeMessage(msg) {
       chrome.management.uninstallSelf().catch((e) => {
         lastError = String((e && e.message) || e);
       });
+      return;
+    case 'replaced':
+      replaced = true;
+      lastError = 'Another connection from this profile took over';
       return;
     case 'host':
       hostConnected = !!msg.connected;
@@ -303,6 +315,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onReplaced.addListener((added, removed) => {
   runs.replaceTab(removed, added);
+  cdp.tabReplaced(removed, added);
 });
 
 // ---- popup, badge ----

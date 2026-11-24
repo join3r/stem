@@ -101,6 +101,42 @@ jobs:
       - name: Unit tests (Vitest, Windows-relevant subset)
         run: npm run test:win
 
+  # The fact and skill gates compare a quantized model's score against a fixed
+  # floor, and that score has moved before without the weights changing: with a
+  # runtime upgrade, and between platforms (src/server/recall/gate-canary.ts).
+  # This scores a small set of synthetic pairs with the released model and
+  # compares them with the scores recorded where the floors were measured.
+  #
+  # Not required to pass. A hosted Linux runner may have a CPU whose kernels
+  # differ from the server the reference was taken on, and that reads as drift
+  # with nothing changed in the repo. What it is for: the job going from green
+  # to red in the pull request that upgrades transformers.js or onnxruntime.
+  gate-canary:
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # 342 MB, pinned by revision and checksum in gte-model-artifact.ts.
+      - uses: actions/cache@v4
+        with:
+          path: .embed-smoke-cache
+          key: gate-model-${{ hashFiles('src/server/recall/gte-model-artifact.ts') }}
+
+      - name: Gate model scores as when its floors were measured
+        run: npm run eval:gate-canary
+
   relay:
     runs-on: ubuntu-latest
     defaults:

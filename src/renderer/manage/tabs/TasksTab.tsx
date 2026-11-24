@@ -327,7 +327,9 @@ export function TasksTab({
               {t.rewritten && d.prompt === t.prompt && (
                 <details className="task-rewritten">
                   <summary className="muted">
-                    Rewritten by Stem on {formatWhen(t.rewritten.at)} to stand alone — runs no longer see the chat.{' '}
+                    {t.rewritten.kind === 'edit'
+                      ? `Edited by Stem in a chat on ${formatWhen(t.rewritten.at)}.`
+                      : `Rewritten by Stem on ${formatWhen(t.rewritten.at)} to stand alone — runs no longer see the chat.`}{' '}
                     <button
                       className="link-btn"
                       onClick={(e) => {

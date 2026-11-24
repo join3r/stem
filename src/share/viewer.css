@@ -100,8 +100,27 @@ body {
   justify-content: flex-end;
   gap: 8px;
 }
-@media (max-width: 560px) {
-  .viewer-main .msg-avatar {
-    display: none;
-  }
+.viewer-lock h1 svg {
+  vertical-align: -2px;
+}
+.viewer-lock p {
+  max-width: 440px;
+  margin: 0 auto 16px;
+}
+.viewer-lock-choices {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.viewer-code {
+  width: 10ch;
+  font-size: 1.4em;
+  letter-spacing: 0.15em;
+  text-align: center;
+  padding: 6px 8px;
+  border: 0.5px solid var(--line);
+  border-radius: 8px;
+  background: var(--content);
 }

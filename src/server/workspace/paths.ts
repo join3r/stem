@@ -193,6 +193,16 @@ export function isScratchId(id: string): boolean {
   return /^[A-Za-z0-9._-]+$/.test(id);
 }
 
+/**
+ * Where MCP servers the assistant installs itself live, one folder per server
+ * (`tools/<name>/`). Beside the state files rather than in the chat's scratch
+ * (deleted with the chat) or the user's Files place (the user's to tidy): a
+ * server must outlive both. See pi/mcp-install-paths.mjs.
+ */
+export function mcpInstallRoot(): string {
+  return process.env.STEM_MCP_INSTALL_ROOT ?? join(userDataRoot(), 'tools');
+}
+
 /** One chat's own scratch folder. Created on demand by the exec service. */
 export function threadWorkspaceDir(threadId: string): string {
   return join(execWorkspaceDir(), threadId);
@@ -326,6 +336,11 @@ export function personasStorePath(): string {
   // STEM_PERSONAS_STORE lets unit tests point at a throwaway file, like the
   // other store path helpers.
   return process.env.STEM_PERSONAS_STORE ?? join(userDataRoot(), 'personas.json');
+}
+
+/** Stem-owned people registry (Manage → People) — see workspace/people.ts. */
+export function peopleStorePath(): string {
+  return process.env.STEM_PEOPLE_STORE ?? join(userDataRoot(), 'people.json');
 }
 
 /**

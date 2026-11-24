@@ -46,8 +46,12 @@ function coerce(raw: unknown): ConnectedFolder | null {
     memorize: r.memorize !== false, // default true
     ...(typeof r.note === 'string' && r.note ? { note: r.note } : {}),
     ...(r.index === true ? { index: true } : {}), // default off
-    // Only non-default modes are persisted; absent = 'use' (learn on use).
-    ...(r.learnMode === 'off' || r.learnMode === 'new' || r.learnMode === 'all' ? { learnMode: r.learnMode } : {}),
+    // Only non-default modes are persisted; absent = 'use' (learn on use). The
+    // "Claude Code" folder has no 'new'/'all': it learns its memory notes and
+    // nothing else (folder-index/learn.ts learnScope), which is what 'use' says.
+    ...(r.learnMode === 'off' || ((r.learnMode === 'new' || r.learnMode === 'all') && r.kind !== 'claude')
+      ? { learnMode: r.learnMode }
+      : {}),
     ...(typeof r.learnModel === 'string' && r.learnModel ? { learnModel: r.learnModel } : {}),
     ...(isFolderKind(r.kind) ? { kind: r.kind } : {}),
     ...(origin ? { origin } : {}),
@@ -300,7 +304,8 @@ export function updateConnectedFolder(id: string, patch: ConnectedFolderPatch): 
         else delete f.note;
       }
       if (patch.learnMode === 'off' || patch.learnMode === 'use' || patch.learnMode === 'new' || patch.learnMode === 'all') {
-        if (patch.learnMode === 'use') delete f.learnMode; // 'use' is the absent default
+        // 'use' is the absent default, and the only mode but 'off' a "Claude Code" folder has.
+        if (patch.learnMode === 'use' || (f.kind === 'claude' && patch.learnMode !== 'off')) delete f.learnMode;
         else f.learnMode = patch.learnMode;
       }
       if (typeof patch.learnModel === 'string') {

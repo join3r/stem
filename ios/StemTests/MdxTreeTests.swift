@@ -40,6 +40,25 @@ final class MdxTreeTests: XCTestCase {
         XCTAssertEqual(c.data?.value, "[{\"a\":")
     }
 
+    func testDataComponentLeftOpenClosesAfterItsFence() {
+        let src = "<DataTable caption=\"U\">\n```json\n[{\"a\":\"1\"}]\n```\nProse after.\n\n<Callout type=\"warn\">\nCareful.\n</Callout>\n\n</DataTable>"
+        let tree = MdxTreeParser.parse(src)
+        guard tree.blocks.count == 3, case .component(let table) = tree.blocks[0],
+              case .md(let prose) = tree.blocks[1], case .component(let callout) = tree.blocks[2]
+        else { return XCTFail("unexpected tree: \(tree.blocks)") }
+        XCTAssertEqual(table.name, "DataTable")
+        XCTAssertTrue(table.closed)
+        XCTAssertEqual(table.data?.value, "[{\"a\":\"1\"}]")
+        XCTAssertEqual(prose, "Prose after.")
+        XCTAssertEqual(callout.name, "Callout")
+    }
+
+    func testDataComponentWaitsForAClosingTagStillStreaming() {
+        let tree = MdxTreeParser.parse("<DataTable>\n```json\n[]\n```\n</Data")
+        guard case .component(let c) = tree.blocks.first else { return XCTFail("no component") }
+        XCTAssertFalse(c.closed)
+    }
+
     func testCodeInsideProseComponentStaysContent() {
         let tree = MdxTreeParser.parse("<Callout>\n```bash\nls\n```\n</Callout>")
         guard case .component(let c) = tree.blocks.first else { return XCTFail("no component") }

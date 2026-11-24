@@ -97,7 +97,7 @@ describe('GTE fact pilot eligibility', () => {
     expect(await getFactRerankStatus()).toEqual({ installed: false, status: { model: GTE_FACT_PILOT_ID, state: 'idle' } });
   });
 
-  it('requires a built-in GTE embedder and the Qwen3 reranker in local mode', () => {
+  it('requires a built-in GTE embedder and the reranker in local mode, not any catalog reranker', () => {
     expect(gteFactPilotEligible(settings())).toBe(true);
     const gemma = settings();
     gemma.embeddings.localModel = 'embeddinggemma-2';
@@ -106,10 +106,14 @@ describe('GTE fact pilot eligibility', () => {
       const off = settings();
       off[stage].mode = 'off';
       expect(gteFactPilotEligible(off)).toBe(false);
-      const config = settings();
-      config[stage].localModel = 'custom:unmeasured-model';
-      expect(gteFactPilotEligible(config)).toBe(false);
     }
+    const embed = settings();
+    embed.embeddings.localModel = 'custom:unmeasured-model';
+    expect(gteFactPilotEligible(embed)).toBe(false);
+    // GTE replaces the catalog reranker; whatever is stored beside it is irrelevant.
+    const bge = settings();
+    bge.reranker.localModel = 'bge-reranker-v2-m3';
+    expect(gteFactPilotEligible(bge)).toBe(true);
   });
 
   it('can verify while disabled, but loads only when the measured setup is selected', async () => {
@@ -325,22 +329,26 @@ describe('selected reranker registry', () => {
     expect(h.fake.ensureRerank).not.toHaveBeenCalled();
   });
 
-  it('falls back for absent, warming, errored, or wrong-model backends and disabled settings', async () => {
+  it('never stands Qwen3 in for a GTE that is warming, errored, or on the wrong model', async () => {
     const h = harness();
-    const qwen = createLocalRerankClient(async () => h.current, manager('qwen3-reranker-0.6b').manager);
+    const qwenManager = manager('qwen3-reranker-0.6b');
+    const qwen = createLocalRerankClient(async () => h.current, qwenManager.manager);
     setRetrievalClients({ rerank: qwen, factRerank: h.pilot.resolve });
     h.pilot.start();
     await flush();
-    for (const state of ['idle', 'loading', 'downloading', 'error'] as const) {
-      h.setStatus({ model: GTE_FACT_PILOT_ID, state });
-      expect(await getFactRerankClient()).toBe(qwen);
-    expect(await getSkillRerankClient()).toBe(qwen);
+    for (const status of [
+      ...(['idle', 'loading', 'downloading', 'error'] as const).map((state) => ({ model: GTE_FACT_PILOT_ID, state })),
+      { model: 'different-model', state: 'ready' as const }
+    ]) {
+      h.setStatus(status);
+      for (const client of [await getFactRerankClient(), await getSkillRerankClient()]) {
+        // Whatever comes back must not rank: recall runs without a reranker.
+        expect(await client?.available() ?? false).toBe(false);
+      }
     }
-    h.setStatus({ model: 'different-model', state: 'ready' });
-    expect(await getFactRerankClient()).toBe(qwen);
-    expect(await getSkillRerankClient()).toBe(qwen);
-    h.setStatus({ model: GTE_FACT_PILOT_ID, state: 'ready' });
-    h.current.reranker.localModel = 'bge-reranker-v2-m3';
+    expect(qwenManager.fake.ensureRerank).not.toHaveBeenCalled();
+    // Choosing a catalog reranker is what brings Qwen3 back.
+    h.current.reranker.factModel = 'configured';
     expect(await getFactRerankClient()).toBe(qwen);
     expect(await getSkillRerankClient()).toBe(qwen);
     setRetrievalClients({});

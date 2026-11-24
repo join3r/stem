@@ -297,6 +297,53 @@ describe('generate_image bridge tool', () => {
     expect(body!.input[0].content[1].image_url).toBe('data:image/png;base64,PREV');
   });
 
+  it('asks Stem for references the session cannot resolve, and keeps their order', async () => {
+    gate({ imageGen: true });
+    const { tool } = await bridge();
+    const branch = [
+      {
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolName: 'generate_image',
+          content: [{ type: 'image', data: 'PREV', mimeType: 'image/png' }],
+          details: { stemImage: { id: 'img_0123456789' } }
+        }
+      }
+    ];
+    const asked: Array<{ title: string; payload: string }> = [];
+    const base = codexCtx(undefined, branch).ctx;
+    const ctx = {
+      ...base,
+      ui: {
+        input: async (title: string, payload: string) => {
+          asked.push({ title, payload });
+          return JSON.stringify({ ok: true, images: [{ ref: 'public/art/sword.png', mimeType: 'image/png', data: 'FILE' }] });
+        }
+      }
+    };
+    let body: { input: Array<{ content: Array<{ image_url?: string }> }> } | null = null;
+    vi.stubGlobal('fetch', async (_u: string, init: RequestInit) => {
+      body = JSON.parse(String(init.body));
+      return new Response(`data: ${JSON.stringify(imageDone())}\n\n`, { status: 200 });
+    });
+    const res = await tool.execute('t6', { prompt: 'fix the hand', references: ['public/art/sword.png', 'img_0123456789'] }, undefined, undefined, ctx);
+    expect(res.isError).toBeFalsy();
+    expect(asked).toEqual([{ title: 'stem-image-ref-bridge', payload: JSON.stringify({ refs: ['public/art/sword.png'] }) }]);
+    expect(body!.input[0].content[1].image_url).toBe('data:image/png;base64,FILE');
+    expect(body!.input[0].content[2].image_url).toBe('data:image/png;base64,PREV');
+
+    const refused = await tool.execute(
+      't7',
+      { prompt: 'x', references: ['/etc/secret.png'] },
+      undefined,
+      undefined,
+      { ...base, ui: { input: async () => JSON.stringify({ ok: false, error: '“/etc/secret.png” is outside the files Stem may reference.' }) } }
+    );
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toContain('outside the files Stem may reference');
+  });
+
   it('retries once with the next model when the account rejects one', async () => {
     gate({ imageGen: true });
     const { tool } = await bridge();

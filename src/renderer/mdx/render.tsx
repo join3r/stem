@@ -5,6 +5,9 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkMdx from 'remark-mdx';
 import { stripCiteMarkers } from '../../shared/citations';
+import { filePathHref, findFilePaths } from '../../shared/file-paths';
+import { filesPlaceRel, scratchRel } from '../../shared/files-links';
+import { useMdxStatic, useMdxThread } from './ActionContext';
 import { findPhoneNumbers } from '../../shared/phone-links';
 import { openStemLink, parseStemLink } from '../stemLinks';
 import { CodeBlock, TaskItem, componentMap } from './components';
@@ -16,6 +19,7 @@ interface MdNode {
   value?: string;
   depth?: number;
   ordered?: boolean;
+  start?: number | null;
   checked?: boolean | null;
   url?: string;
   alt?: string;
@@ -86,16 +90,78 @@ function linkChildren(node: MdNode, key: string): ReactNode[] {
   }
 }
 
-/** Plain text with any phone numbers in it as tel: links (shared/phone-links.ts). */
+/** A file:// link: the main process opens or reveals it on this computer. On a share page, its text. */
+function FileLink({ href, children }: { href: string; children: ReactNode }) {
+  if (useMdxStatic()) return <>{children}</>;
+  const open = (e: { preventDefault(): void }) => {
+    e.preventDefault();
+    void window.stem.openLink(href);
+  };
+  return <a href={href} title={decodeFileHref(href)} className="file-link" onClick={open}>{children}</a>;
+}
+
+/** A file in the user's Files place (shared/files-links.ts): fetched to this computer and opened. On a share page, its text. */
+function FilesPlaceLink({ rel, children }: { rel: string; children: ReactNode }) {
+  if (useMdxStatic()) return <>{children}</>;
+  const open = (e: { preventDefault(): void }) => {
+    e.preventDefault();
+    // quiet: a file that is gone or will not fetch leaves the click without effect, like a dead file: link.
+    void window.stem.openFilesItem?.(rel).catch(() => undefined);
+  };
+  return <a href={`files/${rel}`} title={`Files › ${rel}`} className="file-link" onClick={open}>{children}</a>;
+}
+
+/**
+ * A file in this chat's scratch folder (shared/files-links.ts), where the
+ * assistant keeps its own work. Outside a chat (mail, facts, a share page)
+ * there is no scratch folder to name, so the link is plain text.
+ */
+function ScratchLink({ rel, children }: { rel: string; children: ReactNode }) {
+  const threadId = useMdxThread();
+  const shared = useMdxStatic();
+  if (shared || !threadId || !window.stem?.openScratchItem) return <>{children}</>;
+  const open = (e: { preventDefault(): void }) => {
+    e.preventDefault();
+    // quiet: a file swept with old scratch, or one that will not fetch, leaves the click without effect.
+    void window.stem.openScratchItem!(threadId, rel).catch(() => undefined);
+  };
+  // data-thread: the right-click menu (desktop/context-menu.ts) reads the chat from it.
+  return (
+    <a href={`scratch/${rel}`} data-thread={threadId} title={`This chat's scratch › ${rel}`} className="file-link" onClick={open}>
+      {children}
+    </a>
+  );
+}
+
+function decodeFileHref(href: string): string {
+  try {
+    return decodeURI(href.replace(/^file:\/\/\/~\//i, '~/'));
+  } catch {
+    return href;
+  }
+}
+
+/**
+ * Plain text with phone numbers as tel: links (shared/phone-links.ts) and
+ * file paths as file:// links (shared/file-paths.ts).
+ */
 function renderText(value: string, key: string): ReactNode {
-  const phones = linkDepth ? [] : findPhoneNumbers(value);
-  if (!phones.length) return value;
+  if (linkDepth) return value;
+  const matches = [
+    ...findPhoneNumbers(value).map((m) => ({ ...m, file: false })),
+    ...findFilePaths(value).map((m) => ({ ...m, file: true })),
+  ].sort((a, b) => a.start - b.start);
+  if (!matches.length) return value;
   const out: ReactNode[] = [];
   let at = 0;
-  phones.forEach((p, i) => {
-    if (p.start > at) out.push(value.slice(at, p.start));
-    out.push(<a key={`${key}-tel${i}`} href={p.href}>{value.slice(p.start, p.end)}</a>);
-    at = p.end;
+  matches.forEach((m, i) => {
+    if (m.start < at) return; // overlapping (a digit run inside a path)
+    if (m.start > at) out.push(value.slice(at, m.start));
+    const text = value.slice(m.start, m.end);
+    out.push(m.file
+      ? <FileLink key={`${key}-file${i}`} href={m.href}>{text}</FileLink>
+      : <a key={`${key}-tel${i}`} href={m.href}>{text}</a>);
+    at = m.end;
   });
   if (at < value.length) out.push(value.slice(at));
   return <Fragment key={key}>{out}</Fragment>;
@@ -137,8 +203,11 @@ function renderNode(node: MdNode, key: string): ReactNode {
       return <em key={key}>{renderChildren(node, key)}</em>;
     case 'delete':
       return <del key={key}>{renderChildren(node, key)}</del>;
-    case 'inlineCode':
-      return <code key={key} className="inline-code">{node.value}</code>;
+    case 'inlineCode': {
+      const code = <code key={key} className="inline-code">{node.value}</code>;
+      const fileHref = linkDepth ? undefined : filePathHref(node.value ?? '');
+      return fileHref ? <FileLink key={key} href={fileHref}>{code}</FileLink> : code;
+    }
     case 'code':
       return <CodeBlock key={key} lang={node.lang ?? undefined} value={node.value ?? ''} />;
     case 'list': {
@@ -147,7 +216,9 @@ function renderNode(node: MdNode, key: string): ReactNode {
       const task = (node.children ?? []).some((c) => typeof c.checked === 'boolean');
       const className = task ? 'task-list' : undefined;
       return node.ordered
-        ? <ol key={key} className={className}>{renderChildren(node, key)}</ol>
+        // Keep the source's first number: "4. – 9. septembra" parses as a
+        // list starting at 4, and dropping `start` showed it as "1.".
+        ? <ol key={key} className={className} start={node.start != null && node.start !== 1 ? node.start : undefined}>{renderChildren(node, key)}</ol>
         : <ul key={key} className={className}>{renderChildren(node, key)}</ul>;
     }
     case 'listItem':
@@ -163,14 +234,12 @@ function renderNode(node: MdNode, key: string): ReactNode {
         };
         return <a key={key} href={node.url} className="stem-link" onClick={open}>{linkChildren(node, key)}</a>;
       }
+      const filesRel = filesPlaceRel(node.url);
+      if (filesRel) return <FilesPlaceLink key={key} rel={filesRel}>{linkChildren(node, key)}</FilesPlaceLink>;
+      const scratch = scratchRel(node.url);
+      if (scratch) return <ScratchLink key={key} rel={scratch}>{linkChildren(node, key)}</ScratchLink>;
       const href = safeUrl(node.url, true);
-      if (href && /^file:/i.test(href)) {
-        const open = (e: { preventDefault(): void }) => {
-          e.preventDefault();
-          void window.stem.openLink(href);
-        };
-        return <a key={key} href={href} title={href} onClick={open}>{linkChildren(node, key)}</a>;
-      }
+      if (href && /^file:/i.test(href)) return <FileLink key={key} href={href}>{linkChildren(node, key)}</FileLink>;
       return href
         ? <a key={key} href={href} target="_blank" rel="noreferrer">{linkChildren(node, key)}</a>
         : <Fragment key={key}>{renderChildren(node, key)}</Fragment>;
@@ -231,6 +300,81 @@ function renderNode(node: MdNode, key: string): ReactNode {
 /** Every tag the renderer instantiates; the stream splitter tracks only these. */
 export const COMPONENT_NAMES: ReadonlySet<string> = new Set(Object.keys(componentMap));
 
+const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})/;
+const FENCE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+
+// Data components: their content is one fenced block and nothing else (any
+// children are ignored). A streaming reply draws these while their data is
+// still arriving.
+const LIVE_DATA: ReadonlySet<string> = new Set(['Diagram', 'Chart', 'DataTable', 'Stats', 'Compare']);
+const DATA_OPEN = /^\s{0,3}<(Diagram|Chart|DataTable|Stats|Compare)\b(?:[^>"']|"[^"]*"|'[^']*')*>\s*$/;
+
+/**
+ * Close data components the model forgot to close. Models sometimes write
+ * `<DataTable>` + its fence and carry straight on with prose, never writing
+ * `</DataTable>`: the MDX parse of the whole reply then fails and every
+ * component in it falls back to plain text. A data component holds nothing
+ * after its fence, so a non-blank line other than its closing tag there means
+ * the closer is missing: it is inserted right after the fence, and a later
+ * orphaned closer of the same name is dropped. A line that may still grow into
+ * the closer (`</Data` mid-stream) is left alone.
+ */
+export function closeDataComponents(text: string): string {
+  if (!text.includes('<')) return text;
+  const out: string[] = [];
+  let fence: string | null = null;
+  let open: string | null = null; // data component whose fence hasn't started yet
+  let inData: string | null = null; // data component whose fence is being read
+  let awaiting: { name: string; at: number } | null = null; // fence done, closer due
+  const orphans = new Map<string, number>();
+  let changed = false;
+  for (const line of text.split('\n')) {
+    if (fence) {
+      out.push(line);
+      const close = FENCE_CLOSE.exec(line);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) {
+        fence = null;
+        if (inData) awaiting = { name: inData, at: out.length };
+        inData = null;
+      }
+      continue;
+    }
+    const trimmed = line.trim();
+    if (awaiting) {
+      const closer = `</${awaiting.name}>`;
+      if (!trimmed || closer.startsWith(trimmed.replace(/\s+(?=>)/, ''))) {
+        if (trimmed && new RegExp(`^</${awaiting.name}\\s*>$`).test(trimmed)) awaiting = null;
+        out.push(line);
+        continue;
+      }
+      out.splice(awaiting.at, 0, closer);
+      orphans.set(awaiting.name, (orphans.get(awaiting.name) ?? 0) + 1);
+      awaiting = null;
+      changed = true;
+    }
+    const orphan = /^<\/([A-Z][A-Za-z0-9]*)\s*>$/.exec(trimmed);
+    if (orphan && (orphans.get(orphan[1]) ?? 0) > 0) {
+      orphans.set(orphan[1], orphans.get(orphan[1])! - 1);
+      changed = true;
+      continue;
+    }
+    const fenceOpen = FENCE_OPEN.exec(line);
+    if (fenceOpen) {
+      fence = fenceOpen[1];
+      inData = open;
+      open = null;
+      out.push(line);
+      continue;
+    }
+    const dataOpen = DATA_OPEN.exec(line);
+    // A new component of the same name owns the next closer.
+    if (dataOpen) orphans.delete((open = dataOpen[1]));
+    else if (trimmed) open = null;
+    out.push(line);
+  }
+  return changed ? out.join('\n') : text;
+}
+
 /** One top-level block of a reply, and the component still being written in it, if any. */
 export interface StreamBlock {
   text: string;
@@ -244,8 +388,6 @@ export interface StreamBlock {
   stack: string[];
 }
 
-const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})/;
-const FENCE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
 // A complete opening, closing or self-closing tag. Attribute values are plain
 // strings, so a `>` inside quotes is the one case worth skipping over.
 const TAG = /<(\/?)([A-Z][A-Za-z0-9]*)\b(?:[^>"']|"[^"]*"|'[^']*')*?(\/?)>/g;
@@ -267,6 +409,7 @@ const PARTIAL_TAG = /<\/?([A-Z][A-Za-z0-9]*)?(?:\s(?:[^>"']|"[^"]*"|'[^']*')*(?:
  * re-renders via the exact full parse.
  */
 export function splitStreamBlocks(text: string): StreamBlock[] {
+  text = closeDataComponents(text);
   const blocks: StreamBlock[] = [];
   let current: string[] = [];
   let fence: string | null = null; // the opening fence marker (``` or ~~~, possibly longer)
@@ -368,8 +511,6 @@ export function provisionalTail(block: StreamBlock): { live: string; pending: st
   return { live, pending: null };
 }
 
-// Data components a streaming reply draws while their data is still arriving.
-const LIVE_DATA: ReadonlySet<string> = new Set(['Diagram', 'Chart', 'DataTable', 'Stats', 'Compare']);
 const ATTR = /\b([A-Za-z][A-Za-z0-9]*)=(?:"([^"]*)"|'([^']*)')/g;
 
 /**
@@ -425,23 +566,33 @@ export function splitMdBlocks(text: string): string[] {
  */
 export function tryRenderMdx(text: string): ReactNode | null {
   try {
-    return renderNode(mdxProcessor.parse(stripCiteMarkers(text)) as unknown as MdNode, 'mdx');
+    return renderNode(mdxProcessor.parse(closeDataComponents(stripCiteMarkers(text))) as unknown as MdNode, 'mdx');
   } catch {
     return null;
   }
 }
 
 export function renderMdx(text: string): ReactNode {
-  text = stripCiteMarkers(text);
-  let tree: MdNode;
+  text = closeDataComponents(stripCiteMarkers(text));
   try {
-    tree = mdxProcessor.parse(text) as unknown as MdNode;
+    return renderNode(mdxProcessor.parse(text) as unknown as MdNode, 'mdx');
   } catch {
-    try {
-      tree = plainProcessor.parse(text) as unknown as MdNode;
-    } catch {
-      return <p>{text}</p>;
+    // One malformed component shouldn't strip every other one: fall back block
+    // by block, so only the blocks that don't parse render as plain Markdown.
+    const blocks = splitMdBlocks(text);
+    if (blocks.length > 1) {
+      return blocks.map((block, i) => (
+        <Fragment key={`fb-${i}`}>{tryRenderMdx(block) ?? renderPlain(block, `fb-${i}`)}</Fragment>
+      ));
     }
+    return renderPlain(text, 'mdx');
   }
-  return renderNode(tree, 'mdx');
+}
+
+function renderPlain(text: string, key: string): ReactNode {
+  try {
+    return renderNode(plainProcessor.parse(text) as unknown as MdNode, key);
+  } catch {
+    return <p>{text}</p>;
+  }
 }

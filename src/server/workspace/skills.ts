@@ -5,6 +5,10 @@ import type { SkillSummary } from '../../shared/types';
 import { degrade } from '../degrade';
 import { DISABLED_MARKER, syncSkillsIgnore } from '../skills/ignore';
 import { readUsage } from '../skills/usage';
+import { allCaseCounts, FAILED_OUTCOMES } from '../skills/cases';
+import { countSkillVersions } from '../skills/store';
+import { parseRecurrence, type SkillRecurrence } from '../skills/contract';
+import { archiveAfterDays } from '../skills/lifecycle';
 import { skillsRoot } from './paths';
 
 interface FrontMatter {
@@ -13,6 +17,9 @@ interface FrontMatter {
   source?: 'agent' | 'user';
   version?: number;
   updated?: string;
+  tools?: string[];
+  change?: string;
+  recurs?: SkillRecurrence;
 }
 
 /** Parse the leading `---` YAML front-matter block of a SKILL.md. */
@@ -28,7 +35,10 @@ function parseFrontMatter(text: string): FrontMatter {
       description: typeof data?.description === 'string' ? data.description : undefined,
       source: stem.source === 'agent' ? 'agent' : 'user',
       version: typeof stem.version === 'number' ? stem.version : undefined,
-      updated: typeof stem.updated === 'string' ? stem.updated : undefined
+      updated: typeof stem.updated === 'string' ? stem.updated : undefined,
+      tools: Array.isArray(stem.tools) ? stem.tools.filter((t): t is string => typeof t === 'string') : undefined,
+      change: typeof stem.change === 'string' ? stem.change : undefined,
+      recurs: parseRecurrence(stem.recurs)
     };
   } catch (error) {
     // Front matter that will not parse leaves the skill in the panel under its
@@ -55,6 +65,7 @@ export async function listSkills(): Promise<SkillSummary[]> {
   }
 
   const usage = readUsage();
+  const outcomes = allCaseCounts();
   const skills: SkillSummary[] = [];
   for (const slug of entries) {
     const dir = join(skillsRoot(), slug);
@@ -75,7 +86,14 @@ export async function listSkills(): Promise<SkillSummary[]> {
         useCount: usage.skills[slug]?.count ?? 0,
         lastUsedAt: usage.skills[slug]?.lastUsedAt,
         failCount: usage.skills[slug]?.failed ?? 0,
-        lastFailure: usage.skills[slug]?.lastFailure
+        lastFailure: usage.skills[slug]?.lastFailure,
+        ...(fm.tools?.length ? { tools: fm.tools } : {}),
+        ...outcomeSummary(outcomes.get(slug)),
+        ...(fm.change ? { change: fm.change } : {}),
+        ...(fm.recurs ? { recurs: fm.recurs } : {}),
+        // The lifecycle clock only ever switches off what Stem wrote (lifecycle.ts).
+        ...(fm.source === 'agent' ? { retiresAfterDays: archiveAfterDays(fm.recurs) } : {}),
+        ...versionSummary(slug)
       });
     } catch (error) {
       // No SKILL.md — not a skill directory; skip. A SKILL.md that is there and
@@ -99,6 +117,19 @@ export async function setSkillEnabled(slug: string, enabled: boolean): Promise<S
   // The marker is what the UI reads; the ignore file is what the backend reads.
   syncSkillsIgnore();
   return listSkills();
+}
+
+/** Accepted and failed uses, when any use has an outcome (skills/cases.ts). */
+function outcomeSummary(counts: Partial<Record<string, number>> | undefined): Pick<SkillSummary, 'outcomes'> {
+  if (!counts) return {};
+  const accepted = counts.accepted ?? 0;
+  const failed = [...FAILED_OUTCOMES].reduce((sum, o) => sum + (counts[o] ?? 0), 0);
+  return accepted + failed > 0 ? { outcomes: { accepted, failed } } : {};
+}
+
+function versionSummary(slug: string): Pick<SkillSummary, 'versions'> {
+  const versions = countSkillVersions(slug);
+  return versions > 0 ? { versions } : {};
 }
 
 async function exists(path: string): Promise<boolean> {

@@ -41,6 +41,12 @@ phone that is already paired it asks before switching servers, naming the host.
 Links inside replies and mail only open if they are web, mail or phone links; phone numbers in replies are linked automatically. The code is spent once and
 expires in ten minutes.
 
+**Try the demo** on the pair screen opens the same tabs over sample chats and mail
+(`Stem/Transport/DemoServer.swift`), for App Review and anyone without a Stem yet. Every
+call goes to that in-memory stand-in instead of the network: approving a request or
+sending mail plays back a prepared reply, nothing is stored, and Settings → Leave the
+demo returns to pairing.
+
 Release builds refuse plain `http://` to anything but loopback; use the `https://`
 address of the proxy in front of the server ([Tailscale Serve](../docs/running-on-tailscale.md)
 or your own).

@@ -20,8 +20,9 @@
 // documents. fs.rm unlinks a symlink rather than following it, and fs.cp with
 // verbatimSymlinks copies the link itself, so both stay cheap and safe.
 
-import { cp, lstat, mkdir, readdir, rm, symlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { cp, lstat, mkdir, readdir, realpath, rm, stat, symlink } from 'node:fs/promises';
+import { basename, join, sep } from 'node:path';
+import { isSafeRel } from '../../shared/files-links';
 import type { ChatSummary } from '../../shared/types';
 import { degrade } from '../degrade';
 import { log } from '../log';
@@ -374,4 +375,26 @@ export function stopScratchSweeper(): void {
   if (!sweeper) return;
   clearInterval(sweeper);
   sweeper = null;
+}
+
+/**
+ * A file in one chat's scratch folder, for GET /files/stem-scratch:<threadId>/<rel>:
+ * what a `scratch/…` link in a reply opens (shared/files-links.ts). Only a regular
+ * file whose real path stays inside that chat's folder: the `files` link into the
+ * Files place, and any link the assistant made, resolve outside it and are refused.
+ */
+export async function scratchDownload(spec: string): Promise<{ path: string; name: string; size: number } | null> {
+  const slash = spec.indexOf('/');
+  if (slash <= 0) return null;
+  const threadId = spec.slice(0, slash);
+  const rel = spec.slice(slash + 1);
+  if (!isScratchId(threadId) || !isSafeRel(rel)) return null;
+  // quiet: a chat with no scratch folder answers "no such file", like any missing file.
+  const root = await realpath(threadWorkspaceDir(threadId)).catch(() => null);
+  // quiet: no such file in it is the same answer.
+  const real = root ? await realpath(join(root, rel)).catch(() => null) : null;
+  if (!root || !real || !real.startsWith(root + sep)) return null;
+  // quiet: a file gone since the realpath is the same answer too.
+  const info = await stat(real).catch(() => null);
+  return info?.isFile() ? { path: real, name: basename(real), size: info.size } : null;
 }

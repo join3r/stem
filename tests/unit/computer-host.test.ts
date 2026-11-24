@@ -226,8 +226,23 @@ describe.skipIf(!mac)('createComputerHost', () => {
     await writeComputerHostEnabled(true);
     host.onRequest({ requestId: 'r1', threadId: 't1', action: { kind: 'list_windows' } });
     const [list] = await results();
-    expect(list!.result).toEqual({ ok: true, text: '12  Discord  "#test"' });
+    // Every helper leaves Stem's own windows out; the list says so, or a model
+    // reads the gap as "Stem is not open" (the Fio chat, 2026-11-02).
+    expect(list!.result).toEqual({ ok: true, text: expect.stringMatching(/^12 {2}Discord {2}"#test"\nStem's own windows are never listed/) });
     expect(banner.targets).toEqual([null]); // the run began on the whole screen
+    helper.call = (function (original) {
+      return function (this: FakeHelper, cmd: string, fields: Record<string, unknown> = {}) {
+        if (cmd === 'select-window' && fields.app === 'Stem') {
+          this.calls.push({ cmd, fields });
+          return Promise.resolve({ ok: false, error: 'No running app called "Stem" has a window.' });
+        }
+        return original.call(this, cmd, fields);
+      };
+    })(helper.call);
+    calls.length = 0;
+    host.onRequest({ requestId: 'r1b', threadId: 't1', action: { kind: 'select_window', app: 'Stem' } });
+    const [self] = await results();
+    expect(self!.result).toEqual({ ok: false, error: expect.stringContaining('it is: you are talking through it') });
     calls.length = 0;
     host.onRequest({ requestId: 'r2', threadId: 't1', action: { kind: 'select_window', windowId: 12 } });
     const [selected] = await results();
@@ -333,7 +348,7 @@ describe('createComputerHost on Windows', () => {
     expect(first.ok && first.text).toContain('This computer runs Windows');
     host.onRequest({ requestId: 'r2', threadId: 't1', action: { kind: 'list_windows' } });
     const second = await resultOf('r2');
-    expect(second.ok && second.text).toBe('12  Discord  "#test"');
+    expect(second.ok && second.text).toMatch(/^12 {2}Discord {2}"#test"\n/);
   });
 });
 

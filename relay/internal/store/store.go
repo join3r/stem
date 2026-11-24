@@ -50,6 +50,14 @@ var migrations = []string{
 	   handled INTEGER NOT NULL DEFAULT 0);`,
 	`ALTER TABLE shares ADD COLUMN card_title TEXT NOT NULL DEFAULT '';
 	 ALTER TABLE shares ADD COLUMN card_desc TEXT NOT NULL DEFAULT '';`,
+	// Recipient-locked share links: who may open, the codes mailed to them,
+	// the browsers that proved an address, and who opened when.
+	`ALTER TABLE shares ADD COLUMN recipients TEXT NOT NULL DEFAULT '';
+	 CREATE TABLE share_codes (share TEXT NOT NULL, address TEXT NOT NULL, code_hash TEXT NOT NULL,
+	   expires INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (share, address));
+	 CREATE TABLE share_views (token TEXT PRIMARY KEY, share TEXT NOT NULL, address TEXT NOT NULL, expires INTEGER NOT NULL);
+	 CREATE TABLE share_opens (share TEXT NOT NULL, address TEXT NOT NULL, first INTEGER NOT NULL, last INTEGER NOT NULL,
+	   count INTEGER NOT NULL, PRIMARY KEY (share, address));`,
 }
 
 func Open(path string) (*Store, error) {
@@ -224,6 +232,9 @@ func (s *Store) Sweep(holdDays int) error {
 		// tombstone (so the link says "removed") for a year.
 		{`DELETE FROM shares WHERE expires > 0 AND expires <= ?`, []any{t}},
 		{`DELETE FROM shares WHERE removed > 0 AND removed <= ?`, []any{t - 365*86400000}},
+		{`DELETE FROM share_codes WHERE expires <= ?`, []any{t}},
+		{`DELETE FROM share_views WHERE expires <= ? OR share NOT IN (SELECT id FROM shares WHERE removed = 0)`, []any{t}},
+		{`DELETE FROM share_opens WHERE share NOT IN (SELECT id FROM shares)`, nil},
 	}
 	for _, st := range stmts {
 		if _, err := s.db.Exec(st.q, st.args...); err != nil {

@@ -13,7 +13,7 @@
 // connect — and the client's periodic check during a call — refuses once the
 // plan window is spent, or when it cannot be read at all.
 
-import type { VoiceAllowance } from '../../shared/types';
+import type { PlanUsage, PlanUsageWindow, VoiceAllowance } from '../../shared/types';
 import { ASK_STEM_TOOL } from '../../shared/voice';
 
 export const REALTIME_CALLS_URL = 'https://api.openai.com/v1/realtime/calls';
@@ -111,6 +111,51 @@ export async function planAllowance(token: string, fetchImpl: Fetch = fetch): Pr
     return { ok: false, reason: "Your ChatGPT plan's usage limit is reached. Voice chat comes back when it resets." };
   }
   return { ok: true };
+}
+
+function readWindow(raw: unknown, now: number): PlanUsageWindow | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const w = raw as Record<string, unknown>;
+  const used = w.used_percent;
+  if (typeof used !== 'number' || !Number.isFinite(used)) return null;
+  const seconds = typeof w.limit_window_seconds === 'number' && w.limit_window_seconds > 0 ? w.limit_window_seconds : null;
+  // reset_at is epoch seconds; reset_after_seconds is the fallback some answers carry.
+  const resetsAt =
+    typeof w.reset_at === 'number' && w.reset_at > 0
+      ? w.reset_at * 1000
+      : typeof w.reset_after_seconds === 'number' && w.reset_after_seconds >= 0
+        ? now + w.reset_after_seconds * 1000
+        : null;
+  return { windowSeconds: seconds, usedPercent: Math.min(100, Math.max(0, used)), resetsAt };
+}
+
+/**
+ * The plan's usage windows as ChatGPT reports them: the primary (5-hour) and
+ * secondary (weekly) window, each with the share spent and when it resets.
+ * The same unofficial endpoint the Codex CLI's /status reads.
+ */
+export async function planUsage(token: string, fetchImpl: Fetch = fetch, now = Date.now()): Promise<PlanUsage> {
+  let body: { plan_type?: unknown; rate_limit?: Record<string, unknown> | null };
+  try {
+    const res = await fetchImpl(PLAN_USAGE_URL, { headers: authHeaders(token), signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return { ok: false, reason: `ChatGPT did not return plan usage (HTTP ${res.status}).` };
+    body = (await res.json()) as typeof body;
+  } catch (e) {
+    // quiet: the reason is shown in Settings where the usage would be.
+    return { ok: false, reason: `Couldn't read plan usage (${e instanceof Error ? e.message : String(e)}).` };
+  }
+  const limit = body.rate_limit;
+  if (!limit || typeof limit !== 'object') return { ok: false, reason: 'ChatGPT returned no usage windows.' };
+  const windows = [readWindow(limit.primary_window, now), readWindow(limit.secondary_window, now)].filter(
+    (w): w is PlanUsageWindow => w !== null
+  );
+  if (!windows.length) return { ok: false, reason: 'ChatGPT returned no usage windows.' };
+  return {
+    ok: true,
+    plan: typeof body.plan_type === 'string' && body.plan_type ? body.plan_type : null,
+    limitReached: limit.limit_reached === true || limit.allowed === false,
+    windows
+  };
 }
 
 /** Answer the client's WebRTC offer: start the call and return OpenAI's SDP answer. */

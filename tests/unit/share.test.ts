@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatMessage, MailConversation, MailItem } from '../../src/shared/types';
-import { plainExcerpt, suggestCard, type ShareSnapshot } from '../../src/shared/share';
+import { plainExcerpt, suggestCard, type ShareOptions, type ShareSnapshot, type ShareSource } from '../../src/shared/share';
 import {
   buildSnapshot,
   chatMessages,
@@ -13,8 +13,10 @@ import {
   ShareInputError
 } from '../../src/server/share/snapshot';
 import { keyFragment, openShare, sealShare } from '../../src/server/share/seal';
+import { webImageUrls } from '../../src/server/share/web-images';
 import { openShare as browserOpenShare } from '../../src/share/decrypt';
-import { ShareService } from '../../src/server/share/service';
+import { cleanRecipients, DRAFT_TTL_MS, ShareService } from '../../src/server/share/service';
+import { shareOpenedText } from '../../src/server/share/notice';
 import { ShareStore } from '../../src/server/share/store';
 import { RelayError } from '../../src/server/interstem/relay-client';
 import type { ChatBackend } from '../../src/server/backend';
@@ -149,6 +151,110 @@ describe('share snapshot', () => {
   });
 });
 
+describe('what the app fetches as it draws a reply', () => {
+  const pic = (url: string) => `https://upload.example.org/${url}`;
+  const answer = [
+    'Two actors.',
+    '',
+    `![Callum Turner](${pic('callum.jpg')})`,
+    '',
+    `<Callout>![Jack Lowden](${pic('jack.jpg')})</Callout>`,
+    '',
+    `Again: ![Callum Turner](${pic('callum.jpg')}) and one the app refuses: ![x](${pic('model-made.png')})`,
+    '',
+    '```md',
+    `![in code](${pic('code.png')})`,
+    '```'
+  ].join('\n');
+  const messages: ChatMessage[] = [
+    { id: 'u', role: 'user', content: `Show ![me](${pic('user.png')})`, turnId: 't' },
+    {
+      id: 'a',
+      role: 'assistant',
+      content: answer,
+      turnId: 't',
+      meta: { model: 'openai-codex/gpt-6.1-sol' },
+      images: [{ id: 'img_0123456789', threadId: 'th', mime: 'image/png', prompt: 'a cat', revisedPrompt: 'a grey cat', width: 300, height: 200 }],
+      audio: [{ id: 'aud_0123456789', threadId: 'th', mime: 'audio/mpeg', title: 'Theme · 0:00–0:30' }],
+      sources: [{ url: 'https://variety.com/bond', title: 'Bond casting' }, { url: 'https://example.net/x' }]
+    }
+  ];
+  const asked: string[] = [];
+  const full = () => ({
+    title: 'Bond',
+    messages: chatMessages(messages),
+    image: async () => ({ mimeType: 'image/png', data: PNG }),
+    webImage: async (url: string) => {
+      asked.push(url);
+      return url.endsWith('model-made.png') ? null : `data:image/jpeg;base64,${PNG}`;
+    },
+    audio: async (id: string, threadId: string) => (id === 'aud_0123456789' && threadId === 'th' ? { mime: 'audio/mpeg', data: 'SUQz' } : null),
+    favicon: async (host: string) =>
+      host === 'variety.com' ? `data:image/vnd.microsoft.icon;base64,${PNG}` : 'data:image/svg+xml;base64,PHN2Zy8+',
+    modelLabel: (id: string) => (id === 'openai-codex/gpt-6.1-sol' ? 'GPT-6.1 Sol · ChatGPT' : undefined)
+  });
+
+  it('carries the web pictures the app shows, and only those (the James Bond chat)', async () => {
+    asked.length = 0;
+    const { snapshot } = await buildSnapshot(full(), { includeAttachments: true });
+    const [q, a] = snapshot.messages;
+    expect(a!.webImages?.map((w) => w.url)).toEqual([pic('callum.jpg'), pic('jack.jpg')]);
+    expect(a!.webImages?.[0]?.dataUrl).toMatch(/^data:image\/jpeg;base64,/);
+    // Each picture asked once; a URL inside code is text, not a picture.
+    expect(asked).toEqual([pic('callum.jpg'), pic('jack.jpg'), pic('model-made.png')]);
+    // The user's message renders as plain text in the app: no pictures there.
+    expect(q!.webImages).toBeUndefined();
+  });
+
+  it('carries the generated picture as a card, the sounds, the site icons and the model’s name', async () => {
+    const { snapshot } = await buildSnapshot(full(), {});
+    const a = snapshot.messages[1]!;
+    expect(a.images).toEqual([
+      { mime: 'image/png', dataUrl: `data:image/png;base64,${PNG}`, alt: 'a grey cat', generated: true, width: 300, height: 200 }
+    ]);
+    expect(a.audio).toEqual([{ mime: 'audio/mpeg', dataUrl: 'data:audio/mpeg;base64,SUQz', title: 'Theme · 0:00–0:30' }]);
+    expect(a.sources).toEqual([
+      { url: 'https://variety.com/bond', title: 'Bond casting', icon: `data:image/vnd.microsoft.icon;base64,${PNG}` },
+      { url: 'https://example.net/x' }
+    ]);
+    expect(a.model).toBe('GPT-6.1 Sol · ChatGPT');
+  });
+
+  it('marks the user’s own pictures as attached', async () => {
+    const { snapshot } = await buildSnapshot(source(), { includeAttachments: true });
+    expect(snapshot.messages[2]!.images?.[0]?.generated).toBe(false);
+  });
+
+  it('leaves web pictures as links where the app does (mail)', async () => {
+    const items: MailItem[] = [
+      { id: 'm1', conversationId: 'c', from: 'user', to: ['p1'], body: 'Who?', at: 1 },
+      { id: 'm2', conversationId: 'c', from: 'p1', to: ['user'], body: `![Callum](${pic('callum.jpg')})`, at: 2 }
+    ];
+    const { snapshot } = await buildSnapshot(
+      { title: 'Mail', messages: mailMessages(items, () => 'Secretary'), image: async () => null },
+      {}
+    );
+    expect(snapshot.messages[1]!.webImages).toBeUndefined();
+    expect(snapshot.messages[1]!.text).toContain(pic('callum.jpg'));
+  });
+});
+
+describe('webImageUrls', () => {
+  it('reads pictures the way the app’s renderer does', () => {
+    expect(webImageUrls('![a](https://a.test/1.png) ![b](http://a.test/2.png) ![c](data:image/png;base64,xx) ![d](/rel.png)')).toEqual([
+      'https://a.test/1.png',
+      'http://a.test/2.png'
+    ]);
+    // Inside a link, a list, a table and a component.
+    const nested = '[![a](https://a.test/1.png)](https://wiki.test)\n\n- ![b](https://a.test/2.png)\n\n| x |\n| - |\n| ![c](https://a.test/3.png) |\n\n<Tabs>\n<Tab label="A">\n![d](https://a.test/4.png)\n</Tab>\n</Tabs>';
+    expect(webImageUrls(nested)).toEqual(['https://a.test/1.png', 'https://a.test/2.png', 'https://a.test/3.png', 'https://a.test/4.png']);
+  });
+
+  it('falls back to plain Markdown when the MDX does not parse, as the renderer does', () => {
+    expect(webImageUrls('a < b and {broken\n\n![a](https://a.test/1.png)')).toEqual(['https://a.test/1.png']);
+  });
+});
+
 describe('link preview card', () => {
   it('suggests the title and a plain start of the first answer', () => {
     const snap: ShareSnapshot = {
@@ -217,6 +323,84 @@ describe('ShareService', () => {
     return new ShareStore(() => path);
   };
 
+  /** What the dialog does: preview, then publish that preview. */
+  const publish = async (svc: ShareService, src: ShareSource, opts: ShareOptions = {}) => {
+    const { draftId } = await svc.preview(src, opts);
+    return svc.create(src, { ...opts, draftId });
+  };
+
+  it('publishes the snapshot the preview showed, not a message that came after', async () => {
+    let messages = chat;
+    let uploaded: Uint8Array | null = null;
+    const svc = new ShareService({
+      runtime: () => ({ ...runtime, readThread: async () => ({ title: 'My chat', messages }) }) as unknown as ChatBackend,
+      interStem: () => interStem('a@b.test'),
+      store: store(),
+      upload: async (_relay, _id, blob) => {
+        uploaded = blob;
+        return { id: 'FFFFFFFFFFFFFFFFFFFFFF', url: 'https://share.test/s/FFFFFFFFFFFFFFFFFFFFFF', expires: 99 };
+      }
+    });
+    const src = { kind: 'chat', threadId: 'th' } as const;
+    const shown = await svc.preview(src);
+    messages = [
+      ...chat,
+      { id: 'u9', role: 'user', content: 'PRIVATE late question', turnId: 't9' },
+      { id: 'a9', role: 'assistant', content: 'PRIVATE late answer', turnId: 't9' }
+    ];
+    const link = await svc.create(src, { draftId: shown.draftId });
+    const snap = await browserOpenShare(uploaded!, link.url.split('#')[1]!);
+    expect(snap).toEqual(shown.snapshot);
+    expect(JSON.stringify(snap)).not.toContain('PRIVATE');
+    // Used up, and no other source's draft will do.
+    await expect(svc.create(src, { draftId: shown.draftId })).rejects.toThrow(/preview is out of date/);
+    const other = await svc.preview(src);
+    await expect(svc.create({ kind: 'chat', threadId: 'other' }, { draftId: other.draftId })).rejects.toThrow(/out of date/);
+    // An older client names no preview: refused, never guessed.
+    await expect(svc.create(src)).rejects.toThrow(/Update Stem/);
+  });
+
+  it('leaves a broken shares.json alone and publishes nothing', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'stem-shares-')), 'shares.json');
+    writeFileSync(path, '{"version":1,"shares":[{"id":"OLD"');
+    let uploads = 0;
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: new ShareStore(() => path),
+      upload: async () => (uploads++, { id: 'HHHHHHHHHHHHHHHHHHHHHH', url: 'https://share.test/s/HHHHHHHHHHHHHHHHHHHHHH', expires: 99 })
+    });
+    await expect(svc.list()).rejects.toThrow(/could not read your list of shared links/);
+    await expect(publish(svc, { kind: 'chat', threadId: 'th' })).rejects.toThrow(/could not read/);
+    expect(uploads).toBe(0);
+    expect(readFileSync(path, 'utf8')).toBe('{"version":1,"shares":[{"id":"OLD"');
+  });
+
+  it('takes the link down when it could not be recorded', async () => {
+    const removed: string[] = [];
+    const st = store();
+    st.add = async () => {
+      throw new Error('disk full');
+    };
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: st,
+      upload: async () => ({ id: 'IIIIIIIIIIIIIIIIIIIIII', url: 'https://share.test/s/IIIIIIIIIIIIIIIIIIIIII', expires: 99 }),
+      remove: async (_r, _i, id) => void removed.push(id)
+    });
+    await expect(publish(svc, { kind: 'chat', threadId: 'th' })).rejects.toThrow(/disk full/);
+    expect(removed).toEqual(['IIIIIIIIIIIIIIIIIIIIII']);
+  });
+
+  it('refuses a preview that has gone stale', async () => {
+    let now = 0;
+    const svc = new ShareService({ runtime: () => runtime, interStem: () => interStem('a@b.test'), store: store(), now: () => now });
+    const { draftId } = await svc.preview({ kind: 'chat', threadId: 'th' });
+    now = DRAFT_TTL_MS + 1;
+    await expect(svc.create({ kind: 'chat', threadId: 'th' }, { draftId })).rejects.toThrow(/out of date/);
+  });
+
   it('uploads a blob only the link’s key opens, and remembers the link', async () => {
     let uploaded: Uint8Array | null = null;
     const svc = new ShareService({
@@ -230,12 +414,40 @@ describe('ShareService', () => {
       },
       now: () => 5
     });
-    const link = await svc.create({ kind: 'chat', threadId: 'th' }, { scope: 'pair', anchorId: 't1', ttlDays: 30 });
+    const link = await publish(svc, { kind: 'chat', threadId: 'th' }, { scope: 'pair', anchorId: 't1', ttlDays: 30 });
     expect(link.url).toMatch(/^https:\/\/share\.test\/s\/A{22}#[A-Za-z0-9_-]{43}$/);
     const snap = await browserOpenShare(uploaded!, link.url.split('#')[1]!);
     expect(snap.kind).toBe('answer');
     expect(snap.messages[0]!.text).toBe('First question');
     expect(await svc.list()).toEqual([link]);
+  });
+
+  it('takes a chat’s web pictures through the app’s own check, with the chat’s id', async () => {
+    const asked: [string, string][] = [];
+    const rt = {
+      readThread: async () => ({
+        title: 'Bond',
+        messages: [
+          { id: 'u', role: 'user', content: 'Who?', turnId: 't' },
+          { id: 'a', role: 'assistant', content: '![Callum](https://upload.example.org/c.jpg)', turnId: 't', meta: { model: 'm/x' } }
+        ]
+      }),
+      findThreadImage: async () => null,
+      listModels: async () => [{ id: 'm/x', displayName: 'Model X', providerName: 'Prov' }]
+    } as unknown as ChatBackend;
+    const svc = new ShareService({
+      runtime: () => rt,
+      interStem: () => interStem('a@b.test'),
+      store: store(),
+      webImage: async (threadId, url) => {
+        asked.push([threadId, url]);
+        return `data:image/jpeg;base64,${PNG}`;
+      }
+    });
+    const { snapshot } = await svc.preview({ kind: 'chat', threadId: 'th-bond' }, {});
+    expect(asked).toEqual([['th-bond', 'https://upload.example.org/c.jpg']]);
+    expect(snapshot.messages[1]!.webImages?.[0]?.url).toBe('https://upload.example.org/c.jpg');
+    expect(snapshot.messages[1]!.model).toBe('Model X · Prov');
   });
 
   it('revokes on the relay, then forgets the link (an already-gone link too)', async () => {
@@ -250,7 +462,7 @@ describe('ShareService', () => {
         throw new RelayError(404, 'not_found');
       }
     });
-    const link = await svc.create({ kind: 'chat', threadId: 'th' });
+    const link = await publish(svc, { kind: 'chat', threadId: 'th' });
     expect(await svc.revoke(link.id)).toEqual([]);
     expect(removed).toEqual([link.id]);
   });
@@ -268,7 +480,7 @@ describe('ShareService', () => {
         throw new RelayError(429, 'rate_limited');
       }
     });
-    await expect(limited.create({ kind: 'chat', threadId: 'th' })).rejects.toThrow(/shared a lot today/);
+    await expect(publish(limited, { kind: 'chat', threadId: 'th' })).rejects.toThrow(/shared a lot today/);
   });
 
   it('sends the edited card, one line each, or none', async () => {
@@ -283,9 +495,9 @@ describe('ShareService', () => {
       }
     });
     const src = { kind: 'chat' as const, threadId: 'th' };
-    await svc.create(src, { card: { title: ' Môj\nnadpis ', description: 'x'.repeat(400) } });
-    await svc.create(src, { card: { title: ' ', description: '' } });
-    await svc.create(src, { card: null });
+    await publish(svc, src, { card: { title: ' Môj\nnadpis ', description: 'x'.repeat(400) } });
+    await publish(svc, src, { card: { title: ' ', description: '' } });
+    await publish(svc, src, { card: null });
     expect(cards[0]).toEqual({ title: 'Môj nadpis', description: 'x'.repeat(300) });
     expect(cards.slice(1)).toEqual([null, null]);
   });
@@ -301,8 +513,8 @@ describe('ShareService', () => {
         return { id: 'CCCCCCCCCCCCCCCCCCCCCC', url: 'https://share.test/s/CCCCCCCCCCCCCCCCCCCCCC', expires: 1 };
       }
     });
-    await svc.create({ kind: 'chat', threadId: 'th' });
-    await svc.create({ kind: 'chat', threadId: 'th' }, { ttlDays: 365 });
+    await publish(svc, { kind: 'chat', threadId: 'th' });
+    await publish(svc, { kind: 'chat', threadId: 'th' }, { ttlDays: 365 });
     expect(asked).toEqual([30, 30]);
   });
 
@@ -315,7 +527,7 @@ describe('ShareService', () => {
         throw new RelayError(507, 'too_many_links');
       }
     });
-    await expect(svc.create({ kind: 'chat', threadId: 'th' })).rejects.toThrow(/100 working links/);
+    await expect(publish(svc, { kind: 'chat', threadId: 'th' })).rejects.toThrow(/100 working links/);
   });
 
   it('refuses another person’s mail and the memory check', async () => {
@@ -331,5 +543,94 @@ describe('ShareService', () => {
       });
       await expect(svc.preview({ kind: 'mail', conversationId: 'c' })).rejects.toThrow(ShareInputError);
     }
+  });
+  it('locks a link to people: cleans the list and sends it to the relay', async () => {
+    let sent: string[] | undefined;
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: store(),
+      upload: async (_r, _i, _b, _t, _c, to) => {
+        sent = to;
+        return { id: 'CCCCCCCCCCCCCCCCCCCCCC', url: 'https://share.test/s/CCCCCCCCCCCCCCCCCCCCCC', expires: 0, recipients: to };
+      }
+    });
+    const link = await publish(svc, { kind: 'chat', threadId: 'th' }, { recipients: [' Martin@Gmail.com ', 'martin@gmail.com', '', 'eva@x.sk'] });
+    expect(sent).toEqual(['martin@gmail.com', 'eva@x.sk']);
+    expect(link.recipients).toEqual(['martin@gmail.com', 'eva@x.sk']);
+    expect((await svc.list())[0]!.recipients).toEqual(['martin@gmail.com', 'eva@x.sk']);
+    expect(() => cleanRecipients(['not-an-address'])).toThrow(/not an email address/);
+    expect(() => cleanRecipients(Array.from({ length: 21 }, (_, i) => `p${i}@x.sk`))).toThrow(/at most 20/);
+  });
+
+  it('takes the link down when the relay did not lock it', async () => {
+    const removed: string[] = [];
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: store(),
+      // An old relay: ignores ?to= and answers without recipients.
+      upload: async () => ({ id: 'DDDDDDDDDDDDDDDDDDDDDD', url: 'https://share.test/s/DDDDDDDDDDDDDDDDDDDDDD', expires: 0 }),
+      remove: async (_r, _i, id) => {
+        removed.push(id);
+      }
+    });
+    await expect(publish(svc, { kind: 'chat', threadId: 'th' }, { recipients: ['m@x.sk'] })).rejects.toThrow(/Nothing was shared/);
+    expect(removed).toEqual(['DDDDDDDDDDDDDDDDDDDDDD']);
+    expect(await svc.list()).toEqual([]);
+  });
+
+  it('stores who opened a locked link and announces each first opening once', async () => {
+    let opens: { address: string; first: number; last: number; count: number }[] = [];
+    const notices: string[][] = [];
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: store(),
+      upload: async (_r, _i, _b, _t, _c, to) => ({ id: 'EEEEEEEEEEEEEEEEEEEEEE', url: 'https://share.test/s/EEEEEEEEEEEEEEEEEEEEEE', expires: 0, recipients: to }),
+      relayList: async () => [{ id: 'EEEEEEEEEEEEEEEEEEEEEE', url: '', expires: 0, recipients: ['m@x.sk', 'e@x.sk'], opens }],
+      onOpened: async (_link, fresh) => {
+        notices.push(fresh.map((o) => o.address));
+      }
+    });
+    await publish(svc, { kind: 'chat', threadId: 'th' }, { recipients: ['m@x.sk', 'e@x.sk'] });
+    await svc.syncOpens();
+    expect(notices).toEqual([]);
+    opens = [{ address: 'm@x.sk', first: 10, last: 10, count: 1 }];
+    await svc.syncOpens();
+    opens = [{ address: 'm@x.sk', first: 10, last: 20, count: 2 }];
+    await svc.syncOpens();
+    expect(notices).toEqual([['m@x.sk']]);
+    expect((await svc.list())[0]!.opens).toEqual([{ address: 'm@x.sk', firstAt: 10, lastAt: 20, count: 2 }]);
+    const text = shareOpenedText((await svc.list())[0]!, [
+      { address: 'm@x.sk', firstAt: 1, lastAt: 1, count: 1 },
+      { address: 'e@x.sk', firstAt: 1, lastAt: 1, count: 1 }
+    ]);
+    expect(text.body).toContain('m@x.sk and e@x.sk opened the link you shared');
+  });
+
+  it('sends a first-opening notice again when it failed, even with no new openings', async () => {
+    const opens = [{ address: 'm@x.sk', first: 10, last: 10, count: 1 }];
+    const notices: string[][] = [];
+    let fail = true;
+    const svc = new ShareService({
+      runtime: () => runtime,
+      interStem: () => interStem('a@b.test'),
+      store: store(),
+      upload: async (_r, _i, _b, _t, _c, to) => ({ id: 'GGGGGGGGGGGGGGGGGGGGGG', url: 'https://share.test/s/GGGGGGGGGGGGGGGGGGGGGG', expires: 0, recipients: to }),
+      relayList: async () => [{ id: 'GGGGGGGGGGGGGGGGGGGGGG', url: '', expires: 0, recipients: ['m@x.sk'], opens }],
+      onOpened: async (_link, fresh) => {
+        if (fail) throw new Error('mail is down');
+        notices.push(fresh.map((o) => o.address));
+      }
+    });
+    await publish(svc, { kind: 'chat', threadId: 'th' }, { recipients: ['m@x.sk'] });
+    await svc.syncOpens();
+    expect(notices).toEqual([]);
+    expect((await svc.list())[0]!.opens).toHaveLength(1);
+    fail = false;
+    await svc.syncOpens();
+    await svc.syncOpens();
+    expect(notices).toEqual([['m@x.sk']]);
   });
 });

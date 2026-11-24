@@ -13,18 +13,25 @@ enum WindowPeek {
   /// The window the person was looking at: the front window of the frontmost
   /// app, else (Stem itself was in front) the topmost ordinary window that is
   /// not Stem's. Nil when no other app has a window on screen.
+  ///
+  /// The frontmost app's window can float, and its app can have no Dock icon:
+  /// jbrow's hotkey window is both. Only the fallback keeps to ordinary
+  /// windows, so a floating window of an app in the back never wins.
   static func frontWindow() -> WindowInfo? {
     guard let raw = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
     // On-screen listing comes front to back; `Windows.list` has already dropped
-    // Stem's own windows, helpers and other non-Dock apps.
-    let known = Dictionary(Windows.list(minimized: false).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    // Stem's own windows and helpers.
+    let all = Windows.list(minimized: false, floating: true)
+    let known = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     let ordered = raw.compactMap { ($0[kCGWindowNumber as String] as? Int).flatMap { known[CGWindowID($0)] } }
-    return ordered.first(where: { $0.frontmost }) ?? ordered.first
+    if let front = ordered.first(where: { $0.frontmost }) { return front }
+    let ordinary = Set(Windows.list(minimized: false).map(\.id))
+    return ordered.first(where: { ordinary.contains($0.id) })
   }
 
   /// A window asked about before, again (the panel's New re-captures it); nil once it is gone.
   static func window(id: CGWindowID) -> WindowInfo? {
-    Windows.list(minimized: false).first(where: { $0.id == id })
+    Windows.list(minimized: false, floating: true).first(where: { $0.id == id })
   }
 
   static func describe(_ w: WindowInfo) -> [String: Any] {
@@ -46,7 +53,7 @@ enum WindowPeek {
 
   /// The window's readable text, top to bottom, or nil when its app exposes none.
   static func text(windowId: CGWindowID, maxChars: Int) -> String? {
-    guard let w = Windows.list(minimized: false).first(where: { $0.id == windowId }) else { return nil }
+    guard let w = Windows.list(minimized: false, floating: true).first(where: { $0.id == windowId }) else { return nil }
     let ax = AX(pid: w.pid, windowID: w.id)
     defer { ax.release() }
     return ax.readableText(windowBounds: w.bounds, maxChars: maxChars)

@@ -36,9 +36,11 @@ import type {
   TurnAttachment,
   TurnTiming
 } from '../../shared/types';
+import { copyReply } from '../mdx/copyReply';
 import { formatSystemVersion } from '../../shared/sys-version';
 import { ActivityRows, SourcesList } from './ActivityRows';
-import { GeneratedImages } from './GeneratedImage';
+import { GeneratedImages, ZoomableImage } from './GeneratedImage';
+import { ChatAudioList } from './ChatAudio';
 import type { VoiceCall } from './voice';
 import { Composer, type ComposerHandle } from './Composer';
 import { RecordingDraftCard } from './RecordingDraftCard';
@@ -61,9 +63,9 @@ import { locatePassage, messageAnchor, pinSource } from './pins';
 import { useChatPins } from '../hooks/useChatPins';
 
 const AVATAR: Record<ChatMessage['role'], { cls: string; icon: ReactNode; label: string }> = {
-  user: { cls: 'you', icon: <User size={15} />, label: 'You' },
-  assistant: { cls: 'stem', icon: <Sparkles size={15} />, label: 'Stem' },
-  system: { cls: 'sys', icon: <AlertTriangle size={15} />, label: 'Error' }
+  user: { cls: 'you', icon: <User size={12} />, label: 'You' },
+  assistant: { cls: 'stem', icon: <Sparkles size={12} />, label: 'Stem' },
+  system: { cls: 'sys', icon: <AlertTriangle size={12} />, label: 'Error' }
 };
 
 // Starter prompts for the welcome screen — one per marquee capability (rich MDX
@@ -466,7 +468,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
   }, []);
 
   const copyMessage = useCallback((m: ChatMessage) => {
-    void navigator.clipboard.writeText(m.content).then(() => {
+    // A reply copies as clean Markdown (+ HTML), without its component tags; the user's own text as typed.
+    const write = m.role === 'user' ? navigator.clipboard.writeText(m.content) : copyReply(m.content);
+    void write.then(() => {
       setCopiedId(m.id);
       window.setTimeout(() => setCopiedId((c) => (c === m.id ? null : c)), 1500);
     });
@@ -674,9 +678,11 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             {tps !== undefined && <span className="message-stamp-tps">{tps.toFixed(0)} tok/s</span>}
           </div>
         )}
-        <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
         <div className="message-body">
           <div className="message-who">
+            {/* The avatar sits in the header line, not in a column of its own, so
+                the reply text uses the full width of the pane. */}
+            <div className={`msg-avatar ${a.cls}`}>{a.icon}</div>
             <span className="message-who-name">{a.label}</span>
             {pinsOn && m.role !== 'system' && messagePinOf(m) && (
               <span className="message-pinned" title="Pinned to this chat" aria-label="Pinned to this chat">
@@ -735,6 +741,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
               live={liveTurn}
             />
           )}
+          {m.role === 'assistant' && !isEditing && <ChatAudioList audio={m.audio} />}
           {m.role === 'assistant' && !isEditing && (m.sources?.length ?? 0) > 0 && (
             <SourcesList sources={m.sources!} />
           )}
@@ -749,7 +756,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             <div className="message-attachments">
               {m.attachments.map((att, i) =>
                 att.kind === 'image' && att.dataUrl ? (
-                  <img
+                  <ZoomableImage
                     key={i}
                     className="message-image"
                     src={att.dataUrl}
@@ -984,10 +991,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         ))}
         {running && !liveBubbleId && (
           <div className="message message-assistant activity-row">
-            <div className="msg-avatar stem">{AVATAR.assistant.icon}</div>
             <div className="message-body">
               {/* Named like the bubble that replaces it, so nothing jumps. */}
               <div className="message-who">
+                <div className="msg-avatar stem">{AVATAR.assistant.icon}</div>
                 <span className="message-who-name">{AVATAR.assistant.label}</span>
               </div>
               {activities.length > 0 && <ActivityRows items={activities} running />}

@@ -51,3 +51,20 @@ export const MdxThreadContext = createContext<string | null>(null);
 export function useMdxThread(): string | null {
   return useContext(MdxThreadContext);
 }
+
+/**
+ * A reply drawn from a share snapshot (renderer/share/ShareView), where the
+ * page has no server: web pictures come from the snapshot, and links into
+ * this computer or Stem render as their text, because they open nothing there.
+ * Null in the app.
+ */
+export interface MdxStatic {
+  /** A web picture's bytes as a data URL, when the snapshot carries it. */
+  webImage(url: string): string | undefined;
+}
+
+export const MdxStaticContext = createContext<MdxStatic | null>(null);
+
+export function useMdxStatic(): MdxStatic | null {
+  return useContext(MdxStaticContext);
+}

@@ -23,7 +23,10 @@
 //
 // It never exits on its own while the browser keeps the port open: with Stem
 // not running it retries the socket every two seconds, and that open port is
-// what keeps the extension's service worker alive to see Stem come back.
+// what keeps the extension's service worker alive to see Stem come back. The
+// one exception is Stem saying `replaced`: a newer host of the same profile
+// holds the link (the browser left this one running when the extension's
+// worker restarted), so this one stops retrying and exits.
 //
 // No Electron imports: this runs as plain Node.
 
@@ -146,6 +149,16 @@ async function spoolDownloads(downloads: ExtensionDownload[], spoolDir: string):
   return out;
 }
 
+/** Is this frame the desktop's `replaced`: another host of this profile has the link? */
+export function isReplaced(body: Buffer): boolean {
+  if (body.length > 64) return false;
+  try {
+    return (JSON.parse(body.toString('utf8')) as { type?: unknown })?.type === 'replaced';
+  } catch {
+    return false;
+  }
+}
+
 /** Is this frame the desktop's server-hello, with a proof under the token for our nonce? */
 export function serverProved(token: string, nonce: string, body: Buffer): boolean {
   let m: { type?: unknown; nonce?: unknown; proof?: unknown };
@@ -160,7 +173,10 @@ export function serverProved(token: string, nonce: string, body: Buffer): boolea
 function main(): void {
   const config = JSON.parse(readFileSync(process.argv[2] ?? '', 'utf8')) as HostConfig;
   const browser = browserOf(parentCommand());
+  const startedAt = Date.now();
   let socket: Socket | null = null;
+  /** Stem handed this profile to a newer host: no more retries. */
+  let replaced = false;
   let connected = false;
   /** The extension's latest hello, replayed to every new socket connection. */
   let hello: Buffer | null = null;
@@ -188,7 +204,7 @@ function main(): void {
     /** Set once the desktop proved it holds the token; until then nothing is relayed either way. */
     let verified = false;
     s.on('connect', () => {
-      const first: HostHello = { type: 'host-hello', nonce, ...browser };
+      const first: HostHello = { type: 'host-hello', nonce, ...browser, startedAt };
       s.write(encodeFrame(first));
     });
     s.on('data', (chunk: Buffer) => {
@@ -209,6 +225,14 @@ function main(): void {
           }
           const head = Buffer.alloc(4);
           head.writeUInt32LE(body.length, 0);
+          if (isReplaced(body)) {
+            log('a newer host of this profile has the link to Stem; exiting');
+            replaced = true;
+            s.destroy();
+            // Passed on so a still-running extension skips its quick reconnects.
+            process.stdout.write(Buffer.concat([head, body]), () => process.exit(0));
+            return;
+          }
           toExtension(Buffer.concat([head, body]));
         }
       } catch (e) {
@@ -219,6 +243,7 @@ function main(): void {
     s.on('error', () => undefined);
     s.on('close', () => {
       if (socket === s) socket = null;
+      if (replaced) return;
       status(false);
       setTimeout(connect, RETRY_MS).unref?.();
     });

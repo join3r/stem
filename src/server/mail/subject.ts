@@ -1,6 +1,6 @@
 import type { MailConversation, MailItem } from '../../shared/types';
 import { cleanMailSubject, deriveMailSubject, NO_SUBJECT } from '../../shared/mail-subject';
-import { sanitizeSubject, subjectPrompt } from '../chats/subject';
+import { subjectPrompt, writeSubject } from '../chats/subject';
 import { backgroundRunOf, readSettings } from '../workspace/settings';
 import { mailSubjectPassDone, markMailSubjectPassDone, readMail, replaceMailSubject } from '../workspace/mail';
 import { log } from '../log';
@@ -121,11 +121,17 @@ export async function nameMailConversation(deps: MailSubjectDeps, conversationId
     if (!mailSubjectEligible(conversation, mails)) return null;
     const excerpt = mailOpeningExcerpt(mails);
     if (!excerpt) return null;
-    const reply = await deps.complete(subjectPrompt(excerpt), {
-      ...(await backgroundRunOf('subject', () => ({ model: chats.subjectModel, effort: chats.subjectEffort }))),
-      timeoutMs: SUBJECT_TIMEOUT_MS
-    });
-    const subject = cleanMailSubject(sanitizeSubject(reply));
+    const subject = cleanMailSubject(
+      await writeSubject(
+        deps.complete,
+        subjectPrompt(excerpt),
+        {
+          ...(await backgroundRunOf('subject', () => ({ model: chats.subjectModel, effort: chats.subjectEffort }))),
+          timeoutMs: SUBJECT_TIMEOUT_MS
+        },
+        excerpt
+      )
+    );
     if (!subject) return null;
     // Compare-and-set against the subject the model was asked about: the call
     // took seconds, and anything that retitled the conversation meanwhile wins.

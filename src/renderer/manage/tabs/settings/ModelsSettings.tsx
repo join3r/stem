@@ -14,6 +14,7 @@ import type {
   LocalProviderTestResult,
   ModelOverride,
   ModelSummary,
+  PlanUsage,
   QuickChatSettings
 } from '../../../../shared/types';
 import {
@@ -44,6 +45,7 @@ import { ConfirmDelete, DetailHeader, DetailIdent } from '../../ListDetail';
 import { useRemoteServer } from '../../../hooks/useRemoteServer';
 import { MemoryRecallSection } from './RecallSettings';
 import { ProviderChip } from './ProviderChip';
+import { PlanUsageRows, planUsageSummary, usePlanUsage } from './PlanUsage';
 import {
   backendOptionLabel,
   backendSections,
@@ -745,9 +747,10 @@ function WebSearchSection({ providers }: { providers: string[] }) {
 }
 
 
+// No Claude: its plans don't cover third-party apps (billed from extra usage);
+// Claude goes through an Anthropic API key. Existing Claude sign-ins still reconnect.
 const OAUTH_CHOICES: { id: AuthProviderId; hint: string }[] = [
   { id: 'openai-codex', hint: 'Sign in with a ChatGPT Plus or Pro subscription.' },
-  { id: 'anthropic', hint: 'Sign in with a Claude Pro or Max subscription.' },
   { id: 'xai', hint: 'Sign in with a SuperGrok or X Premium subscription.' }
 ];
 
@@ -781,6 +784,8 @@ function ProvidersSection({
   onSelect: (id: string | null) => void;
 }) {
   const [providers, setProviders] = useState<string[]>([]);
+  const chatgptUsage = usePlanUsage(providers.includes('openai-codex') && deadProvider !== 'openai-codex');
+  const chatgptSummary = planUsageSummary(chatgptUsage);
   const [local, setLocal] = useState<LocalProvidersSettings | null>(null);
   const [health, setHealth] = useState<Record<string, LocalProviderHealth>>({});
   const [busy, setBusy] = useState(false);
@@ -1004,6 +1009,7 @@ function ProvidersSection({
             (AUTH_PROVIDER_IDS as string[]).includes(open.id) ? () => void startOAuth(open.id as AuthProviderId) : undefined
           }
           onCheck={lp ? () => void checkAgain() : undefined}
+          planUsage={open.id === 'openai-codex' && open.id !== deadProvider ? chatgptUsage : undefined}
           onDisconnect={() => void disconnect(open.id)}
           onChanged={changed}
           onError={setError}
@@ -1059,7 +1065,9 @@ function ProvidersSection({
                   ? 'Session expired'
                   : health[row.id]?.state === 'down'
                     ? 'Not answering'
-                    : row.detail}
+                    : row.id === 'openai-codex' && chatgptSummary
+                      ? chatgptSummary
+                      : row.detail}
               </i>
             </span>
           </button>
@@ -1175,7 +1183,8 @@ function ProviderDetail({
   onCheck,
   onDisconnect,
   onChanged,
-  onError
+  onError,
+  planUsage
 }: {
   id: string;
   name: string;
@@ -1192,6 +1201,8 @@ function ProviderDetail({
   onDisconnect: () => void;
   onChanged: () => Promise<void>;
   onError: (message: string | null) => void;
+  /** The ChatGPT plan's usage windows; undefined for every other provider. */
+  planUsage?: PlanUsage | null;
 }) {
   const [moving, setMoving] = useState(false);
   const where = local?.location?.deviceId ?? '';
@@ -1264,6 +1275,7 @@ function ProviderDetail({
             <span className={`prov-dot ${status.tone}`} /> {status.text}
           </span>
         </ValueRow>
+        {planUsage !== undefined && <PlanUsageRows usage={planUsage} />}
         {/* The URL as the second line: the panel is too narrow to share a row with it. */}
         {local && <ValueRow label="Address" hint={<span className="mono">{local.baseUrl}</span>} />}
         {local && (remote || where) && (
@@ -1304,7 +1316,7 @@ function ProviderDetail({
   );
 }
 
-/** Subscription sign-in (ChatGPT / Claude): pick the account, then Connect. */
+/** Subscription sign-in (ChatGPT / Grok; Claude plans don't cover third-party apps): pick the account, then Connect. */
 function ProviderAccountForm({
   onConnect,
   onCancel

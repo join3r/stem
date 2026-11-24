@@ -4,10 +4,12 @@ import {
   CheckCheck,
   ChevronRight,
   Clock,
+  CircleAlert,
   CornerUpLeft,
   Folder as FolderIcon,
   FolderOpen,
   FolderPlus,
+  LoaderCircle,
   Lock,
   MessageSquare,
   Search,
@@ -47,6 +49,14 @@ export interface ChatListProps {
   /** The pinned Return-to-chat utility row above the Inbox mail list (null = hidden). */
   inboxReturn: ReturnChatRow | null;
   onDismissInboxReturn: () => void;
+  /**
+   * New chats the user sent and then left before the server took the first
+   * message — the attachment upload is what usually holds it up. The chat has
+   * no thread id yet, so it has no row of its own; this is how it stays
+   * reachable instead of vanishing until the start returns (or, failed, for good).
+   */
+  sendingDrafts?: readonly SendingDraftRow[];
+  onOpenSendingDraft?: (id: string) => void;
   /** Per-thread run state → drives the status dot on each row. */
   statuses: Record<string, ThreadStatus>;
   /** Thread ids that own at least one scheduled task → show a clock badge. */
@@ -71,6 +81,8 @@ export interface ChatListProps {
   onSetRead: (threadIds: string[], read: boolean) => void;
   /** Archive (or bring back) chats: out of the tree, into the folded Archived section. */
   onSetArchived: (threadIds: string[], archived: boolean) => void;
+  /** Filled with the chat rows in on-screen order, so archiving the open chat can open its neighbour. */
+  chatOrderRef?: { current: readonly string[] };
   /** Have a model write this thread's subject from its conversation, now. */
   onWriteSubject: (threadId: string) => void;
 
@@ -105,6 +117,13 @@ const FOLDER_MIME = 'application/x-stem-folder';
  * work lives on hidden threads the server filters out of chats:list).
  */
 export type ChatsTab = 'inbox' | 'chats';
+
+/** A new chat still on its way to the server (or that never got there). */
+export interface SendingDraftRow {
+  id: string;
+  title: string;
+  failed: boolean;
+}
 
 /** Mail to people (other Stems, by email address) is still in beta; mail to personas is not. */
 export const PERSON_MAIL_BETA_TITLE = 'Beta: mail to people on other Stems works, but how it is set up and delivered is still changing.';
@@ -370,6 +389,7 @@ export function ChatList(props: ChatListProps) {
     [treeChatIds, archivedChats, archivedOpen]
   );
   const numberedChatIds = useMemo(() => treeChatIds.slice(0, 9), [treeChatIds]);
+  if (props.chatOrderRef) props.chatOrderRef.current = visibleChatIds;
 
   // ---- multi-selection ----
   const clearPicked = useCallback(() => {
@@ -912,6 +932,24 @@ export function ChatList(props: ChatListProps) {
           </button>
         </div>
       )}
+      {!showingSearch &&
+        props.sendingDrafts?.map((d) => (
+          <div key={d.id} className={`inbox-return sending-draft${d.failed ? ' failed' : ''}`}>
+            <button
+              className="inbox-return-main"
+              onClick={() => props.onOpenSendingDraft?.(d.id)}
+              title={d.failed ? 'This message never reached Stem — open it to send it again' : 'Still sending this new chat — open it'}
+            >
+              {d.failed ? (
+                <CircleAlert size={13} className="inbox-return-icon" />
+              ) : (
+                <LoaderCircle size={13} className="inbox-return-icon spin" />
+              )}
+              <span className="inbox-return-label">{d.failed ? 'Not sent' : 'Sending…'}</span>
+              <strong title={d.title}>{d.title}</strong>
+            </button>
+          </div>
+        ))}
       {tab === 'chats' && !showingSearch && picked.size > 0 && (
         <SelectionBar
           count={picked.size}

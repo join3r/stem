@@ -211,10 +211,17 @@ function siteName(url: string): string {
   }
 }
 
-function SourceIcon({ url }: { url: string }) {
+/** A site's icon: `icon` when the caller has it (a share page's snapshot), else fetched from Stem. */
+function SourceIcon({ url, icon }: { url: string; icon?: string }) {
   const host = siteName(url);
-  const [src, setSrc] = useState<string | null>(null);
+  const [src, setSrc] = useState<string | null>(icon ?? null);
   useEffect(() => {
+    if (icon) {
+      setSrc(icon);
+      return;
+    }
+    // A share page has no Stem to ask: the letter tile stands in.
+    if (!window.stem?.sourceFavicon) return;
     let live = true;
     let hostname = '';
     try {
@@ -222,13 +229,13 @@ function SourceIcon({ url }: { url: string }) {
     } catch {
       return;
     }
-    void favicon(hostname).then((icon) => {
-      if (live) setSrc(icon);
+    void favicon(hostname).then((got) => {
+      if (live) setSrc(got);
     });
     return () => {
       live = false;
     };
-  }, [url]);
+  }, [url, icon]);
   return src ? (
     <img className="source-icon" src={src} alt="" />
   ) : (
@@ -238,7 +245,7 @@ function SourceIcon({ url }: { url: string }) {
   );
 }
 
-export function SourcesList({ sources }: { sources: SourceRef[] }) {
+export function SourcesList({ sources }: { sources: (SourceRef & { icon?: string })[] }) {
   const [open, setOpen] = useState(false);
   const safe = sources.filter((s) => safeSourceUrl(s.url));
   if (!safe.length) return null;
@@ -254,7 +261,7 @@ export function SourcesList({ sources }: { sources: SourceRef[] }) {
         {/* The first few sites at a glance, before the list is opened. */}
         <span className="sources-stack" aria-hidden="true">
           {safe.slice(0, 4).map((s) => (
-            <SourceIcon key={s.url} url={s.url} />
+            <SourceIcon key={s.url} url={s.url} icon={s.icon} />
           ))}
         </span>
         Sources ({safe.length})
@@ -265,7 +272,7 @@ export function SourcesList({ sources }: { sources: SourceRef[] }) {
             <li key={s.url}>
               <a href={s.url} target="_blank" rel="noreferrer" title={s.url} className="source-card">
                 <span className="source-site">
-                  <SourceIcon url={s.url} />
+                  <SourceIcon url={s.url} icon={s.icon} />
                   {siteName(s.url)}
                 </span>
                 <span className="source-title">{s.title?.trim() || s.url}</span>

@@ -35,6 +35,11 @@ struct Composer: View {
     var focusRequest = 0
     /// The chat's voice call and how to start or end it. Nil where voice chat isn't offered.
     var voice: (call: PhoneVoice, toggle: () -> Void)?
+    /// Page layout (New mail): this header and a full-width editor scroll as
+    /// one sheet of paper; attach, dictate and Send sit in a bar under it.
+    var page: AnyView?
+    /// Send's label in the page layout ("Send to Normal").
+    var sendTitle: String?
 
     @Environment(Session.self) private var session
     @State private var noteMode = false
@@ -57,50 +62,9 @@ struct Composer: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let flash {
-                Text(flash)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
-                    .transition(.opacity)
-            }
-            if kind == .chat, draft.text.hasPrefix("/"), !noteMode { slashSuggestions }
-            if !draft.attachments.isEmpty { attachmentChips }
-            HStack(alignment: .bottom, spacing: 8) {
-                attachMenu
-                VStack(alignment: .leading, spacing: 4) {
-                    if noteMode {
-                        Button { noteMode = false } label: {
-                            Label("Note to memory", systemImage: "xmark.circle.fill")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .buttonStyle(.borderless)
-                        .tint(.orange)
-                    }
-                    HStack(alignment: .bottom, spacing: 6) {
-                        TextField(noteMode ? "Note to memory" : placeholder, text: $draft.text, axis: .vertical)
-                            .lineLimit(1...8)
-                            .focused($focused)
-                            .onChange(of: draft.text) { _, new in
-                                // A hand edit ends dictation; the next update would undo it.
-                                if dictation.active, new != dictation.lastWritten { dictation.freeze() }
-                                applyNotePrefix(new)
-                            }
-                        if PhoneDictation.supported { micButton }
-                        if let voice { voiceButton(voice.call, toggle: voice.toggle) }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
-                sendButton
-            }
-            if kind == .chat { controlsRow }
+        Group {
+            if let page { pageBody(page) } else { barBody }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
         .onChange(of: draft) { _, d in DraftStore.save(draftKey, d) }
         .task(id: focusRequest) {
             guard focusRequest > 0 else { return }
@@ -128,6 +92,105 @@ struct Composer: View {
                 dictation.toggle(current: draft.text) { draft.text = $0 }
             }
         }
+    }
+
+    /// A hand edit ends dictation (the next update would undo it), and `/note `
+    /// switches to note mode.
+    private func textEdited(_ new: String) {
+        if dictation.active, new != dictation.lastWritten { dictation.freeze() }
+        applyNotePrefix(new)
+    }
+
+    private func pageBody(_ header: AnyView) -> some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    header
+                    TextField(placeholder, text: $draft.text, axis: .vertical)
+                        .lineLimit(10...)
+                        .focused($focused)
+                        .onChange(of: draft.text) { _, new in textEdited(new) }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                    if !draft.attachments.isEmpty {
+                        attachmentChips.padding(.horizontal, 16).padding(.bottom, 12)
+                    }
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .interactiveDismissDisabled(sending)
+            VStack(alignment: .leading, spacing: 6) {
+                if let flash {
+                    Text(flash).font(.footnote).foregroundStyle(.secondary).transition(.opacity)
+                }
+                HStack(spacing: 20) {
+                    attachMenu
+                    if PhoneDictation.supported { micButton }
+                    Spacer()
+                    Button { Task { await submit() } } label: {
+                        HStack(spacing: 6) {
+                            if sending { ProgressView().controlSize(.small).tint(.white) }
+                            else { Image(systemName: "paperplane.fill") }
+                            Text(sendTitle ?? "Send").lineLimit(1)
+                        }
+                        .font(.body.weight(.semibold))
+                        .padding(.horizontal, 4)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .disabled(!canSend)
+                    .accessibilityLabel(sendTitle ?? "Send")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
+            .overlay(alignment: .top) { Divider() }
+        }
+    }
+
+    private var barBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let flash {
+                Text(flash)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .transition(.opacity)
+            }
+            if kind == .chat, draft.text.hasPrefix("/"), !noteMode { slashSuggestions }
+            if !draft.attachments.isEmpty { attachmentChips }
+            HStack(alignment: .bottom, spacing: 8) {
+                attachMenu
+                VStack(alignment: .leading, spacing: 4) {
+                    if noteMode {
+                        Button { noteMode = false } label: {
+                            Label("Note to memory", systemImage: "xmark.circle.fill")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.borderless)
+                        .tint(.orange)
+                    }
+                    HStack(alignment: .bottom, spacing: 6) {
+                        TextField(noteMode ? "Note to memory" : placeholder, text: $draft.text, axis: .vertical)
+                            .lineLimit(1...8)
+                            .focused($focused)
+                            .onChange(of: draft.text) { _, new in textEdited(new) }
+                        if PhoneDictation.supported { micButton }
+                        if let voice { voiceButton(voice.call, toggle: voice.toggle) }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
+                sendButton
+            }
+            if kind == .chat { controlsRow }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
     }
 
     // MARK: Slash commands
@@ -197,11 +260,20 @@ struct Composer: View {
                 }
             }
         } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 17, weight: .semibold))
-                .frame(width: 36, height: 36)
-                .background(Color(.secondarySystemBackground), in: Circle())
+            if page != nil {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            } else {
+                Image(systemName: "plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 36, height: 36)
+                    .background(Color(.secondarySystemBackground), in: Circle())
+            }
         }
+        .tint(page != nil ? .secondary : nil)
         .accessibilityLabel("Attach")
     }
 
@@ -393,23 +465,33 @@ struct Composer: View {
             return
         }
 
-        // The field empties at once; the message waits in the transcript while
-        // its attachments upload, and comes back here if the send fails.
+        // In a chat the field empties at once; the message waits in the transcript
+        // while its attachments upload, and comes back here if the send fails.
+        // A page (new mail) has no transcript: the text stays put — and saved —
+        // until the send lands, so closing the sheet or losing the app mid-upload
+        // never loses it.
         let sent = draft
-        draft.text = ""
-        draft.attachments = []
+        if page == nil {
+            draft.text = ""
+            draft.attachments = []
+        }
         if await onSend(text, files) {
             files.forEach { $0.delete() }
             var fresh = Draft()
             fresh.personaId = draft.personaId
             fresh.isPrivate = draft.isPrivate
             fresh.to = draft.to
-            fresh.text = draft.text
-            fresh.attachments = draft.attachments
+            if page == nil {
+                // Whatever was typed while it sent stays for the next message.
+                fresh.text = draft.text
+                fresh.attachments = draft.attachments
+            }
             draft = fresh
-        } else {
+        } else if page == nil {
             draft.text = draft.text.isEmpty ? sent.text : sent.text + "\n" + draft.text
             draft.attachments = sent.attachments + draft.attachments
+        } else {
+            show("Not sent — your mail is still here.", seconds: 6)
         }
     }
 

@@ -18,6 +18,7 @@ import type {
   BackendEventEnvelope,
   ChatMessage,
   GeneratedImageRef,
+  ChatAudioRef,
   ItemEventParams,
   MessageMeta,
   QuickChatHandoff,
@@ -239,7 +240,12 @@ export function mergeQuickChatHandoff(
     // adopted slice needs no disk read behind it.
     hydrated: true
   };
-  if (!existing) return transferred;
+  // A slice painted from this Mac's cached copy (see openChat in App.tsx) is
+  // an older read of the very conversation the overlay hands over: its idle run
+  // state would mark a running turn as finished, and its disk-keyed message ids
+  // would show every overlay message a second time. The snapshot replaces it;
+  // the server read that follows the hand-off merges the disk's view back in.
+  if (!existing || (existing.hydrated === false && !existing.running)) return transferred;
 
   const newer = new Map(existing.messages.map((m) => [m.id, m]));
   const messages = payload.messages.map((m) => newer.get(m.id) ?? m);
@@ -269,6 +275,24 @@ function withTurnImage(
   const current = messages[idx].images ?? [];
   if (current.some((img) => img.id === image.id)) return messages;
   return messages.map((m, i) => (i === idx ? { ...m, images: [...current, image] } : m));
+}
+
+/** Put a sound share_audio just put in the chat onto its turn's assistant bubble (see withTurnImage). */
+function withTurnAudio(
+  messages: ChatMessage[],
+  turnId: string,
+  audio: ChatAudioRef,
+  options: ApplyBackendEventOptions
+): ChatMessage[] {
+  const id = `assistant-${turnId}`;
+  const idx = messages.findIndex((m) => m.id === id);
+  if (idx === -1) {
+    const meta = options.turnMeta?.get(turnId);
+    return [...messages, { id, role: 'assistant', content: '', audio: [audio], meta, turnId, runtimeTurnId: turnId } as ChatMessage];
+  }
+  const current = messages[idx].audio ?? [];
+  if (current.some((a) => a.id === audio.id)) return messages;
+  return messages.map((m, i) => (i === idx ? { ...m, audio: [...current, audio] } : m));
 }
 
 function stampActivity(messages: ChatMessage[], turnId: string, activities: ActivityItem[]): ChatMessage[] {
@@ -384,13 +408,20 @@ export function applyBackendEventToThread(
         }
         const activities = state.activities.map((a, i) =>
           i === idx
-            ? { ...a, status: p.item.status ?? 'ok', detail: p.item.detail ?? a.detail, ...(p.item.image ? { image: p.item.image } : {}) }
+            ? {
+                ...a,
+                status: p.item.status ?? 'ok',
+                detail: p.item.detail ?? a.detail,
+                ...(p.item.image ? { image: p.item.image } : {}),
+                ...(p.item.audio ? { audio: p.item.audio } : {})
+              }
             : a
         );
         // Refresh the working label from whatever is still running; keep the last
         // label when nothing is (reasoning/answer events overwrite it as before).
         const activity = runningLabel(activities) ?? state.activity;
-        const messages = p.item.image ? withTurnImage(state.messages, p.turnId, p.item.image, options) : state.messages;
+        const withImage = p.item.image ? withTurnImage(state.messages, p.turnId, p.item.image, options) : state.messages;
+        const messages = p.item.audio ? withTurnAudio(withImage, p.turnId, p.item.audio, options) : withImage;
         return { ...state, activity, activities, messages: stampActivity(messages, p.turnId, activities) };
       }
       const id = `assistant-${p.turnId}`;

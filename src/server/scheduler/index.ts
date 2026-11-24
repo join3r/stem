@@ -121,6 +121,11 @@ export interface SchedulerOptions {
   rewriteForFreshThreads?: (task: ScheduledTask) => Promise<string | null>;
   /** The pass is over: what it rewrote and what it could not. Mail the user. */
   onRewritten?: (result: { rewritten: ScheduledTask[]; untouched: ScheduledTask[] }) => Promise<void>;
+  /**
+   * Write a short name for a task prompt (scheduler/title.ts), or '' to keep
+   * the first-line title. Must not reject. Absent = titles stay first lines (tests).
+   */
+  writeTitle?: (prompt: string) => Promise<string>;
 }
 
 // Timer cap: setTimeout is unreliable over very long delays and across system
@@ -155,6 +160,16 @@ interface ActiveRun {
   notified: boolean;
 }
 
+/**
+ * Give a task a new prompt. Its title goes back to the prompt's first line,
+ * a placeholder until nameUntitled writes a name for the new words.
+ */
+function setPrompt(task: ScheduledTask, prompt: string): void {
+  task.prompt = prompt;
+  task.title = titleFromPrompt(prompt);
+  delete task.titleWritten;
+}
+
 export class TaskScheduler {
   private tasks: ScheduledTask[] = [];
   private timer: NodeJS.Timeout | null = null;
@@ -165,6 +180,16 @@ export class TaskScheduler {
   private activeRun: ActiveRun | null = null;
   /** Preempt-retry counts per firing, cleared on a completed (non-preempted) run. */
   private requeueCounts = new Map<string, number>();
+  /** The naming loop in flight, if any; see nameUntitled. */
+  private naming: Promise<void> | null = null;
+  /** A prompt changed while the loop ran: go round once more. */
+  private namingAgain = false;
+  /**
+   * Task id + prompt pairs the model already failed to name (subjects off,
+   * junk, timeout). Tried again only when the prompt changes or the server
+   * restarts, so pausing a task does not buy another model call.
+   */
+  private namingTried = new Set<string>();
 
   constructor(private readonly opts: SchedulerOptions) {}
 
@@ -260,6 +285,8 @@ export class TaskScheduler {
     for (const task of overdue) this.enqueueRun(task.id, 'catchup');
     for (const task of retries) if (!overdue.includes(task)) this.enqueueRun(task.id, 'catchup');
     this.arm();
+    // Tasks from before written names, and any a restart cut off mid-naming.
+    void this.nameUntitled();
   }
 
   /**
@@ -325,8 +352,7 @@ export class TaskScheduler {
         continue;
       }
       task.rewritten = { at: new Date().toISOString(), original: task.prompt };
-      task.prompt = next;
-      task.title = titleFromPrompt(next);
+      setPrompt(task, next);
       log('tasks', 'rewrote a prompt for fresh-thread runs', { task: task.title });
       rewritten.push({ ...task });
     }
@@ -344,8 +370,7 @@ export class TaskScheduler {
   async revertRewrite(id: string): Promise<ScheduledTask[]> {
     const task = this.tasks.find((t) => t.id === id);
     if (task?.rewritten) {
-      task.prompt = task.rewritten.original;
-      task.title = titleFromPrompt(task.prompt);
+      setPrompt(task, task.rewritten.original);
       delete task.rewritten;
       await this.persistAndArm();
     }
@@ -456,11 +481,27 @@ export class TaskScheduler {
     if (!next) throw new Error('A task needs a prompt to run.');
     const task = this.tasks.find((t) => t.id === id);
     if (task) {
-      task.prompt = next;
-      task.title = titleFromPrompt(next);
+      setPrompt(task, next);
       // The user's own words now: the rewrite mark (and its Revert) would only
       // offer to throw them away.
       delete task.rewritten;
+      await this.persistAndArm();
+    }
+    return this.snapshot();
+  }
+
+  /**
+   * Replace the prompt from the assistant's update_task. Unlike the Tasks tab
+   * edit, the words are not the user's, so the old prompt is kept behind the
+   * rewrite mark: the Tasks tab shows the edit and offers Revert.
+   */
+  async editPromptFromChat(id: string, prompt: string): Promise<ScheduledTask[]> {
+    const next = prompt.trim();
+    if (!next) throw new Error('A task needs a prompt to run.');
+    const task = this.tasks.find((t) => t.id === id);
+    if (task && task.prompt !== next) {
+      task.rewritten = { at: new Date().toISOString(), original: task.prompt, kind: 'edit' };
+      setPrompt(task, next);
       await this.persistAndArm();
     }
     return this.snapshot();
@@ -609,6 +650,47 @@ export class TaskScheduler {
     await saveTasks(this.tasks);
     this.opts.onChange(this.snapshot());
     this.arm();
+    void this.nameUntitled();
+  }
+
+  /**
+   * Write a name for every task still titled by its prompt's first line, one
+   * model call at a time, off the run queue (a naming must not wait out a
+   * 15-minute run, nor a run wait on a naming). Fire and forget: the list
+   * updates through onChange as each name lands. Compare-and-set on the prompt,
+   * since an edit during the call makes the name describe words that are gone.
+   * Resolves when the loop is idle (tests await it).
+   */
+  nameUntitled(): Promise<void> {
+    const write = this.opts.writeTitle;
+    if (!write) return Promise.resolve();
+    if (this.naming) {
+      this.namingAgain = true;
+      return this.naming;
+    }
+    const loop = async () => {
+      do {
+        this.namingAgain = false;
+        const tried = this.namingTried;
+        for (;;) {
+          const task = this.tasks.find((t) => !t.titleWritten && !tried.has(`${t.id}\n${t.prompt}`));
+          if (!task) break;
+          const prompt = task.prompt;
+          tried.add(`${task.id}\n${prompt}`);
+          // quiet: the host's writer reports its own failures; '' keeps the first line.
+          const title = await write(prompt).catch(() => '');
+          if (!title || task.prompt !== prompt || !this.tasks.includes(task)) continue;
+          task.title = title;
+          task.titleWritten = true;
+          await saveTasks(this.tasks).catch((err) => degrade('tasks', 'did not save a written task name', err));
+          this.opts.onChange(this.snapshot());
+        }
+      } while (this.namingAgain);
+    };
+    this.naming = loop().finally(() => {
+      this.naming = null;
+    });
+    return this.naming;
   }
 
   // Serialize all runs through one promise chain so firings never overlap (the
@@ -713,7 +795,7 @@ export class TaskScheduler {
     this.activeRun = run;
     // Instrumented here rather than at a start callback: this is the only scope
     // that sees the run both start and settle.
-    const handle = activity.begin('tasks.run', 'Running scheduled task', { detail: titleFromPrompt(task.prompt) });
+    const handle = activity.begin('tasks.run', 'Running scheduled task', { detail: task.title });
     let work: WorkHandle | undefined;
     /** The reflection pass, when one runs: the run's thread must outlive it. */
     let reflection: Promise<void> | undefined;

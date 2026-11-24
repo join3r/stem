@@ -38,10 +38,86 @@ export interface SkillDraft {
   name: string;
   description: string;
   body: string;
+  /**
+   * Tools whose calls this skill governs, as `server.tool` for an MCP tool (what
+   * `invoke_tool` takes), `server.*` for every tool on a server, or a built-in
+   * tool's own name. Stem hands the skill over the first time a turn calls one
+   * (stem-mcp-extension.mjs `toolSkillHold`), whatever the request's wording
+   * made the ranking pick. Absent on a patch means "keep what the skill had".
+   */
+  tools?: string[];
+  /**
+   * How often the task is expected to come up again (see SkillRecurrence).
+   * Absent on a patch means "keep what the skill had".
+   */
+  recurs?: SkillRecurrence;
+}
+
+/**
+ * How often a skill's task is expected to come up again: the writer's estimate,
+ * which the user can change in Manage. The lifecycle clock (lifecycle.ts) reads
+ * it to decide how long a skill may sit unused before it is switched off.
+ *
+ * It exists because one fixed window cannot be right. On 2026-11-17 the live
+ * library held 86 skills and 40 had never been used, so a short window was the
+ * obvious fix, and it would have retired the monthly invoice skill between two
+ * invoices and every yearly task long before its second run. `occasional` is the
+ * answer for work with no rhythm (it comes up when something breaks), and is
+ * what a skill with no estimate counts as.
+ */
+export const SKILL_RECURRENCES = ['weekly', 'monthly', 'quarterly', 'yearly', 'occasional'] as const;
+export type SkillRecurrence = (typeof SKILL_RECURRENCES)[number];
+
+/** A recurrence read from model output, a tool call or a file; anything else is "not said". */
+export function parseRecurrence(value: unknown): SkillRecurrence | undefined {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return (SKILL_RECURRENCES as readonly string[]).includes(text) ? (text as SkillRecurrence) : undefined;
+}
+
+/** One `tools` entry: `server.tool`, `server.*`, or a bare tool name. */
+export const SKILL_TOOL_RE = /^[A-Za-z0-9_-]+(?:\.(?:[A-Za-z0-9_.-]+|\*))?$/;
+export const MAX_SKILL_TOOLS = 6;
+/**
+ * Built-in tools that a turn calls for any reason. A skill bound to one of them
+ * held the first such call of every turn: on 2026-11-09 a Docker-cleanup skill
+ * bound to `run_command` held a plain `gh repo list` in an unrelated chat. Such
+ * an entry is refused when a skill is written, and ignored at hold time for the
+ * skills that already have one. The same happened on 2026-11-09 with `browser`:
+ * a Slack-outage recipe bound to it held an Apple form fill in a CarPlay chat.
+ * The browser, the computer and the delegation tools serve any job, so a skill
+ * cannot decide how all their calls are made.
+ */
+export const GENERAL_SKILL_TOOLS: ReadonlySet<string> = new Set([
+  'run_command',
+  'read',
+  'write',
+  'edit',
+  'ls',
+  'grep',
+  'find',
+  'bash',
+  'fetch_content',
+  'web_search',
+  'get_search_content',
+  'source_check',
+  'invoke_tool',
+  'find_tools',
+  'describe_tool',
+  'browser',
+  'computer',
+  'spawn_agent',
+  'coding_agent',
+  'read_past_chat',
+  'read_notes'
+]);
+
+/** A skill's `tools` without the general ones, which never hold a call. */
+export function holdableSkillTools(tools: readonly string[] | undefined): string[] {
+  return (tools ?? []).map((t) => String(t ?? '').trim()).filter((t) => t && !GENERAL_SKILL_TOOLS.has(t));
 }
 
 export interface SkillViolation {
-  field: 'name' | 'description' | 'body';
+  field: 'name' | 'description' | 'body' | 'tools';
   message: string;
   /** Set on the size violation, which a shortening pass can repair on its own. */
   tooLong?: true;
@@ -191,6 +267,20 @@ export function validateSkill(draft: SkillDraft, opts: { authored?: boolean } = 
     }
   }
 
+  if (draft.tools !== undefined) {
+    const bad = draft.tools.filter((t) => !SKILL_TOOL_RE.test(String(t ?? '').trim()));
+    if (bad.length > 0) {
+      violations.push({ field: 'tools', message: `each entry must be "server.tool", "server.*" or a tool's own name; not ${bad.map((t) => JSON.stringify(t)).join(', ')}.` });
+    } else if (draft.tools.some((t) => GENERAL_SKILL_TOOLS.has(String(t ?? '').trim()))) {
+      const general = draft.tools.filter((t) => GENERAL_SKILL_TOOLS.has(String(t ?? '').trim()));
+      violations.push({
+        field: 'tools',
+        message: `${general.map((t) => JSON.stringify(t)).join(', ')} ${general.length > 1 ? 'are general tools' : 'is a general tool'} that almost every turn calls; list only tools whose calls this skill decides, or leave "tools" out.`
+      });
+    } else if (draft.tools.length > MAX_SKILL_TOOLS) {
+      violations.push({ field: 'tools', message: `at most ${MAX_SKILL_TOOLS} tools; list only the ones whose calls this skill decides how to make.` });
+    }
+  }
   return violations;
 }
 
@@ -232,7 +322,7 @@ One or two lines naming the situation, and the situations that look similar but 
 ## Steps
 Numbered, imperative, concrete. Name the exact tool and the exact arguments that worked — real URLs, real flags, real file paths. Include the dead ends worth avoiding and say why they failed. Do not narrate what happened in a conversation; write what to do next time.
 
-If the procedure only works on one machine, say which and why, in its own line before the steps. A skill outlives the machine it was written on: the user may move Stem to a server, and steps that quietly assumed their own computer — a program only it has, an address on their home network, a site that treats a home connection differently from a datacenter — then fail with nothing to explain them. Name the way in that worked (\`run_command\` with its \`device\` parameter, an MCP server pinned to that computer), not just the machine's nickname. A procedure that runs anywhere needs no such line: this is for the ones that do not.
+If the procedure only works on one machine, say which and why, in its own line before the steps. A skill outlives the machine it was written on: the user may move Stem to a server, and steps that quietly assumed their own computer — a program only it has, an address on their home network, a site that treats a home connection differently from a datacenter — then fail with nothing to explain them. Name the way in that worked (\`run_command\` with its \`device\` parameter, an MCP server pinned to that computer), not just the machine's nickname. Say which computer by what it is ("the user's Mac"), not by its current name: the user renames computers, and a step that passes yesterday's name as \`device\` fails; the assistant always has the current names of the paired computers to pick from. A procedure that runs anywhere needs no such line: this is for the ones that do not.
 
 ## Verification
 How to tell it worked — the specific output, file, or state to check for. Not "confirm success".

@@ -578,3 +578,53 @@ arXiv 2408.01875); admission by verified re-run (ASI).
   that drifted from the user's last save gets one model call that moves other
   jobs out as `approved` skills; an import is restored to what was installed.
   Backups in `.curator-history/<run>-relabel`; marker `.skills-provenance.json`.
+
+## Addendum 2026-11-11 — skills learn from how their uses ended
+
+Until this change Stem knew that a skill was used (the tool-overlap proxy in
+`grade.ts`) and, rarely, that the model called a step wrong (17 reports in 527
+loads on the server). It did not know whether the user accepted the result. Each
+patch was judged on one turn, written without a check, and overwrote the file.
+Hermes has the same gap in its loop; its GEPA tool, which does check, is a separate
+manual run. Published results say the check matters more than the patch: 55 of 388
+automatic rewrites set a new best, a check against stored cases picked a better
+skill in 9 of 14 settings, and every useful rewrite was built from failures
+(arXiv 2608.02636). The methods that improve skills reliably also read many uses at
+once and keep the diagnosis apart from the rewrite (survey, arXiv 2606.11435).
+
+What was built:
+
+1. **Case file** (`skills/cases.ts`, `.skills-cases.json`). One case per skill the
+   turn followed or reported: request, tool calls, start of the reply, skill version.
+   Written in the turn-settled hook, before the next message can be captured. Only
+   where memory would keep the turn (memory on, not private, not tainted, not
+   scheduled, not a persona without memory). Twelve cases per skill. Deleting a chat
+   drops its cases.
+2. **Outcome on the distill call** (`recall/distill.ts`). A pending case whose next
+   user message is in the segment is listed in an extra block, and the reply gains
+   `skillOutcomes`: accepted, corrected (with feedback), redone, unclear. No extra
+   model call. `DISTILL_INSTRUCTIONS` is unchanged, and a segment with no case sends
+   the old prompt byte for byte. Each case closes exactly once, also when the segment
+   is abandoned, so it can never pair with a later message.
+3. **Correction pass** (`startup/skills.ts`). A corrected or redone use patches its
+   skill, with the conversation from the use to the end as evidence and
+   `SKILL_CORRECTION_INSTRUCTIONS`. Imports are never patched. Same privacy refusals
+   as the convention pass.
+4. **Check before every automatic change** (`skills/review.ts`, in `bridge.ts`). Old
+   text, new text, the reason, and the graded cases; the model answers keep or reject.
+   A rejected change is not written in Auto and gets no card in Ask. A change the check
+   cannot judge is not written in Auto; in Ask the card still shows. The user's own
+   requests and new skills are not checked.
+5. **Rewrite from all cases** (`skills/rewrite.ts`). Three failed uses since the last
+   rewrite start a diagnosis call (what failed and what the accepted uses relied on,
+   no skill text) and then a rewrite call; the result goes through the check. Only
+   for Stem's own ideas (`CURATED_ORIGINS`). The failures are spent whatever the
+   outcome.
+6. **Kept versions** (`skills/store.ts`). Every update copies the old SKILL.md to
+   `.skill-versions/<slug>/v<N>.md` (ten kept) and the new one carries a `change`
+   line. Manage → Skills lists them and restores one as a new version. Writes are
+   atomic now.
+
+Open: no real-model run yet. Measure on the server after deploy: how often a case
+gets a verdict other than unclear, how often the check rejects, and whether skills
+with corrections then collect more accepted uses.

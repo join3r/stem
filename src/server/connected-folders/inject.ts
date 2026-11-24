@@ -10,8 +10,26 @@ import { enrichConnectedFolders } from './enrich';
 // to the assistant and it diagnoses the wrong computer without it (the lesson
 // docs/mcp-device-pinning.md learned): which device owns the folder, the path
 // there, whether that device is reachable THIS turn, and how fresh the mirror is.
+//
+// The block is ambient: it goes out again only when its text changes
+// (pi/context-dedupe.ts). So nothing in it may change without a reason the
+// assistant needs to know. The exact time of the last sync did: a connected
+// computer syncs again and again, and the block came back on 650 of 886 later
+// turns on the 2026-11-11 measurement, 3,780 characters each, with the times as
+// the only difference in 762 of 779 copies. A mirror that synced a short time
+// ago is now reported as that, with no time. The exact time is given when it is
+// news: the last sync is older, so the mirror can be behind the folder.
 
-export async function buildConnectedFoldersContext(): Promise<string | null> {
+/** A sync this recent is reported without its time. */
+export const RECENT_SYNC_MS = 60 * 60_000;
+
+/** How fresh a client folder's mirror is, in words that hold still while it stays fresh. */
+function mirrorFreshness(lastSyncedAt: string, now: number): string {
+  const at = Date.parse(lastSyncedAt);
+  return Number.isFinite(at) && now - at < RECENT_SYNC_MS ? 'synced within the last hour' : `last synced ${lastSyncedAt}`;
+}
+
+export async function buildConnectedFoldersContext(now: number = Date.now()): Promise<string | null> {
   const folders = (await enrichConnectedFolders(await listConnectedFolders())).filter((f) => !f.missing);
   if (folders.length === 0) return null;
 
@@ -36,7 +54,7 @@ export async function buildConnectedFoldersContext(): Promise<string | null> {
       f.syncState === 'root-missing'
         ? 'sync frozen: the folder is unreachable on its computer'
         : f.lastSyncedAt
-          ? `last synced ${f.lastSyncedAt}`
+          ? mirrorFreshness(f.lastSyncedAt, now)
           : 'first sync not finished — the mirror may be empty or still filling, so absence proves nothing yet';
     return (
       `- ${f.label}: \`${f.path}\` (${access}${privacy})${note}` +

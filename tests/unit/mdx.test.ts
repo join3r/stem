@@ -317,3 +317,71 @@ describe('completeRows', () => {
     expect(rows).toBe(3);
   });
 });
+
+import { closeDataComponents, renderMdx } from '../../src/renderer/mdx/render';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { Fragment, createElement, type ReactNode } from 'react';
+const markup = (node: ReactNode) => renderToStaticMarkup(createElement(Fragment, null, node));
+
+describe('closeDataComponents', () => {
+  const unclosed = [
+    'Intro **bold**.',
+    '',
+    '<DataTable caption="Usage">',
+    '```json',
+    '[{"A":"1","B":"2"}]',
+    '```',
+    'Prose right after the fence.',
+    '',
+    '<Callout type="warn">',
+    'Careful.',
+    '</Callout>',
+    '',
+    '<Replies>',
+    '<Reply>Yes</Reply>',
+    '</Replies>'
+  ].join('\n');
+
+  it('closes a data component left open after its fence', () => {
+    const fixed = closeDataComponents(unclosed);
+    expect(fixed).toContain('```\n</DataTable>\nProse right after the fence.');
+    expect(() => unified().use(remarkParse).use(remarkGfm).use(remarkMdx).parse(fixed)).not.toThrow();
+  });
+
+  it('leaves well-formed and still-streaming replies untouched', () => {
+    const ok = '<Chart type="bar">\n```json\n[]\n```\n\n</Chart>\n\nAfter.';
+    expect(closeDataComponents(ok)).toBe(ok);
+    expect(closeDataComponents('<DataTable>\n```json\n[]\n```\n</Data')).toBe('<DataTable>\n```json\n[]\n```\n</Data');
+    expect(closeDataComponents('<DataTable>\n```json\n[]\n```\n')).toBe('<DataTable>\n```json\n[]\n```\n');
+  });
+
+  it('drops a late closer that would otherwise be orphaned', () => {
+    const late = '<DataTable>\n```json\n[]\n```\nText.\n\n</DataTable>\n\nEnd.';
+    const fixed = closeDataComponents(late);
+    expect(fixed.match(/<\/DataTable>/g)).toHaveLength(1);
+    expect(() => unified().use(remarkParse).use(remarkGfm).use(remarkMdx).parse(fixed)).not.toThrow();
+  });
+
+  it('renders every component of a reply with an unclosed DataTable', () => {
+    const html = markup(renderMdx(unclosed));
+    expect(html).not.toContain('&lt;DataTable');
+    expect(html).not.toContain('&lt;Callout');
+    expect(html).toContain('Prose right after the fence.');
+    expect(html).toContain('Careful.');
+  });
+
+  it('keeps other components when one block is malformed beyond repair', () => {
+    const html = markup(renderMdx('<Callout type="warn">\nCareful.\n</Callout>\n\nBroken <Foo a={1 tag.'));
+    expect(html).not.toContain('&lt;Callout');
+    expect(html).toContain('Careful.');
+  });
+});
+
+describe('closeDataComponents with several tables', () => {
+  it("doesn't eat the closer of a later, well-formed table", () => {
+    const text = '<DataTable>\n```json\n[]\n```\nText.\n\n<DataTable>\n```json\n[]\n```\n</DataTable>\n\nEnd.';
+    const fixed = closeDataComponents(text);
+    expect(fixed.match(/<\/DataTable>/g)).toHaveLength(2);
+    expect(() => unified().use(remarkParse).use(remarkGfm).use(remarkMdx).parse(fixed)).not.toThrow();
+  });
+});

@@ -39,7 +39,7 @@ STEM_GTE_FACT_MODEL_DIR=/var/lib/stem/gte-fact-model
 
 Build the prepared server version and recreate only the Stem service using the deployment's existing Compose files. Keep the previous image for rollback. Wait for active turns and pending approvals to finish before replacing the container.
 
-The dropdown status and activity feed report the experimental memory model preparing or failing. Server logs report `GTE fact pilot ready` and, on applicable recall builds, `experimental fact selection` with model, selection tier, count and whether context was used. These diagnostics omit message and fact text. While selected GTE is preparing or unavailable, Qwen remains the fact fallback; the Test model action reports GTE readiness and never times that fallback as GTE.
+The dropdown status and activity feed report the experimental memory model preparing or failing. Server logs report `GTE fact pilot ready` and, on applicable recall builds, `experimental fact selection` with model, selection tier, count and whether context was used. These diagnostics omit message and fact text. GTE is a reranker of its own: selecting it unloads the catalog reranker (Qwen3 or BGE), and no other model stands in for it. While GTE is preparing or has failed, the dropdown shows that state and recall runs without a reranker, the same as while any reranker downloads; the Test model action reports GTE readiness or its error.
 
 ## Behavior and limits
 
@@ -48,8 +48,8 @@ The dropdown status and activity feed report the experimental memory model prepa
 - Fact candidates and reranking use at most two prior eligible user messages from the active conversation branch, clipped to 400 Unicode characters each. Assistant, tool, scheduled/mail, and attachment-bearing history entries are omitted. Missing or unreadable history uses the current message alone.
 - Skill selection uses GTE with its own raw-logit floors: −0.5 for the best of a skill's description and its example requests, −3.25 for a skill with no examples yet, chosen where macOS and the Linux server image agree (`gte-fact-pilot.ts`). The fact floor −1.6370911598205566 is unchanged. Skill queries, episodic search and folder-document search continue using the current message. The trial adds a separate fact query embedding when context is present.
 - Private chats and personas with recall disabled do not read history for this trial or retrieve facts. Scheduled/mail deliveries use current-message-only fact selection.
-- While verification/loading fails or is incomplete, fact retrieval uses the normally configured reranker. A failure during an already-started GTE selection uses the existing conservative retrieval fallbacks.
-- Model quality was measured on local benchmarks and frozen synthetic Linux checks; these do not establish improved live answer quality. The configured Qwen worker remains available as a warm fallback, so these changes do not claim a single-reranker RAM reduction.
+- While GTE is downloading, loading or failed, fact and skill selection run without a reranker (the existing conservative cosine/lexical tiers); no other reranker is loaded in its place.
+- Model quality was measured on local benchmarks and frozen synthetic Linux checks; these do not establish improved live answer quality. With GTE selected only GTE is loaded, so the RAM reduction measured against Qwen applies.
 
 ## Roll back
 

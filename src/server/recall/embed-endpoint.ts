@@ -5,6 +5,8 @@ import { chmodSync, unlinkSync } from 'node:fs';
 import { degrade } from '../degrade';
 import { log } from '../log';
 import type { EmbeddingsClient, EmbedKind } from './embeddings';
+import type { FactRerankClient } from './retrieval';
+import { recallStore } from './store';
 
 // Local embed endpoint: a unix-domain socket in main that lets the stem-recall
 // MCP server (a pi-spawned sibling process with no IPC channel to main) embed
@@ -20,9 +22,22 @@ import type { EmbeddingsClient, EmbedKind } from './embeddings';
 //   ← {"id":1,"ok":false,"error":"embeddings unavailable"}
 // Failure semantics are the client's fallback contract: ANY error (endpoint down,
 // bad token, embeddings off/not-ready) means the caller degrades to FTS-only.
+//
+// Second op, the fact gate for search_facts: the hits are scored against the
+// search query by the same cross-encoder and floor as per-turn injection
+// (sensitive facts need the margin too), and only the ids that clear it return.
+// The caller lists those first and the rest after them; it drops none
+// (mcp-server-main.ts searchFacts has the reason).
+//   → {"id":1,"op":"factGate","query":"…","ids":[12,40],"token":"<hex>"}
+//   ← {"id":1,"ok":true,"pass":[40]}
+// Any failure means the caller keeps its hits as they were.
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_TEXTS = 8;
+/** search_facts returns at most 30 facts. */
+const MAX_GATE_IDS = 30;
+/** Same margin as per-turn injection (recall/inject.ts SENSITIVE_RERANK_MARGIN); a literal here to keep inject out of this module. */
+const SENSITIVE_GATE_MARGIN = 2;
 
 let token: string | null = null;
 
@@ -40,10 +55,35 @@ export interface EmbedEndpoint {
   close(): Promise<void>;
 }
 
+/**
+ * The ids of `ids` that clear the fact gate for `query`, or null when there is
+ * no calibrated gate to apply (no fact reranker, not ready, no floor).
+ */
+export async function gateFactIds(
+  query: string,
+  ids: readonly number[],
+  rr: FactRerankClient | null
+): Promise<number[] | null> {
+  if (!rr || !(await rr.available())) return null;
+  const floor = (await rr.factGateScore?.()) ?? null;
+  if (floor === null) return null;
+  const facts = recallStore.getFactsByIds([...ids]);
+  if (facts.length === 0) return [];
+  const ranked = await rr.rerank(query, facts.map((f) => f.text), facts.length);
+  const pass = new Set<number>();
+  for (const r of ranked) {
+    const fact = facts[r.index];
+    if (fact && r.score >= floor + (fact.sensitivity === 'sensitive' ? SENSITIVE_GATE_MARGIN : 0)) pass.add(fact.id);
+  }
+  // In the order the search ranked them.
+  return ids.filter((id) => pass.has(id));
+}
+
 async function handleRequest(
   line: string,
   socket: Socket,
-  getClient: () => EmbeddingsClient | null
+  getClient: () => EmbeddingsClient | null,
+  getFactGate: () => Promise<FactRerankClient | null>
 ): Promise<void> {
   let req: {
     id?: unknown;
@@ -51,6 +91,8 @@ async function handleRequest(
     kind?: unknown;
     texts?: unknown;
     token?: unknown;
+    query?: unknown;
+    ids?: unknown;
   };
   try {
     req = JSON.parse(line) as typeof req;
@@ -72,6 +114,24 @@ async function handleRequest(
 
   if (req?.token !== getEmbedEndpointToken()) {
     respond({ ok: false, error: 'bad token' });
+    return;
+  }
+  if (req?.op === 'factGate') {
+    const ids = req.ids;
+    if (
+      typeof req.query !== 'string' || !req.query.trim() ||
+      !Array.isArray(ids) || ids.length > MAX_GATE_IDS ||
+      !ids.every((v): v is number => Number.isInteger(v))
+    ) {
+      respond({ ok: false, error: 'bad request' });
+      return;
+    }
+    try {
+      const pass = await gateFactIds(req.query, ids, await getFactGate());
+      respond(pass === null ? { ok: false, error: 'fact gate unavailable' } : { ok: true, pass });
+    } catch (e) {
+      respond({ ok: false, error: String((e as Error)?.message ?? e) });
+    }
     return;
   }
   const texts = req?.texts;
@@ -115,7 +175,10 @@ async function handleRequest(
 export function startEmbedEndpoint(opts: {
   socketPath: string;
   getClient: () => EmbeddingsClient | null;
+  /** The per-turn fact gate's client, for search_facts (op factGate). */
+  getFactGate?: () => Promise<FactRerankClient | null>;
 }): EmbedEndpoint {
+  const getFactGate = opts.getFactGate ?? (async () => null);
   // Windows named pipes are not filesystem entries: nothing stale to unlink,
   // nothing to chmod (access is gated by the request token either way).
   const isPipe = process.platform === 'win32';
@@ -140,7 +203,7 @@ export function startEmbedEndpoint(opts: {
       if (nl === -1) return;
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
-      void handleRequest(line, socket, opts.getClient);
+      void handleRequest(line, socket, opts.getClient, getFactGate);
     });
     socket.on('error', () => {
       // Client-side aborts are routine; never let them bubble to the process.

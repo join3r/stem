@@ -19,12 +19,26 @@ async function compose(win: Page, subject: string, body: string): Promise<void> 
   await win.getByPlaceholder(/Stem names it/).fill(subject);
   await win.getByPlaceholder(/Write the task/).fill(body);
   await win.getByRole('button', { name: /^Send/ }).click();
-  // Sending opens the new conversation; the persona's reply (the fake's echo)
-  // lands in it, and the row sits in the Inbox.
+  // Sending closes the form, like email: nothing working shows in its place.
+  await expect(win.getByPlaceholder(/Write the task/)).toHaveCount(0);
+  await expect(win.locator('.mail-view')).toHaveCount(0);
+  // The persona's reply (the fake's echo) brings the row into the Inbox;
+  // opening it shows the reply.
+  await expect(mailRow(win, subject)).toBeVisible({ timeout: 15_000 });
+  await mailRow(win, subject).click();
+  await expect(win.locator('.mail-view .mail-item').filter({ hasText: `Echo: ${body}` })).toBeVisible();
+}
+
+/** Reply in the open conversation: the view closes on send; reopen it once the answer lands. */
+async function reply(win: Page, subject: string, body: string): Promise<void> {
+  await win.getByPlaceholder(/Reply to/).fill(body);
+  await win.getByRole('button', { name: 'Send' }).click();
+  await expect(win.locator('.mail-view')).toHaveCount(0);
+  await expect(mailRow(win, subject)).toBeVisible({ timeout: 15_000 });
+  await mailRow(win, subject).click();
   await expect(win.locator('.mail-view .mail-item').filter({ hasText: `Echo: ${body}` })).toBeVisible({
     timeout: 15_000
   });
-  await expect(mailRow(win, subject)).toBeVisible();
 }
 
 async function sendChat(win: Page, text: string): Promise<void> {
@@ -65,11 +79,17 @@ test('the To: field builds a multi-persona conversation with the first name lead
   await expect(mainWindow.locator('.mail-to-token', { hasText: 'Verifier' })).toBeVisible();
   await expect(mainWindow.locator('.mail-to-token.lead')).toContainText('Normal');
   await expect(mainWindow.locator('.mail-to-token.lead .mail-to-lead')).toBeVisible();
+  // A click on the still-focused input after a pick shows the list again.
+  await to.click();
+  await expect(mainWindow.getByRole('listbox', { name: 'Personas' })).toBeVisible();
+  await to.press('Escape');
   await mainWindow.getByPlaceholder(/Stem names it/).fill('Team errand');
   await mainWindow.getByPlaceholder(/Write the task/).fill('check it twice');
   await mainWindow.getByRole('button', { name: 'Send to Normal' }).click();
-  // Sending opens the conversation. It lists BOTH participants; only the lead
-  // replied (the fake echo).
+  // The answer brings it into the Inbox. It lists BOTH participants; only the
+  // lead replied (the fake echo).
+  await expect(mailRow(mainWindow, 'Team errand')).toBeVisible({ timeout: 15_000 });
+  await mailRow(mainWindow, 'Team errand').click();
   await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Verifier');
   await expect(
     mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: check it twice' })
@@ -78,17 +98,155 @@ test('the To: field builds a multi-persona conversation with the first name lead
 
 test('replying resumes the same conversation and the exchange stays threaded', async ({ mainWindow }) => {
   await compose(mainWindow, 'Errand', 'first ask');
-
-  const reply = mainWindow.getByPlaceholder(/Reply to/);
-  await reply.fill('follow-up ask');
-  await mainWindow.getByRole('button', { name: 'Send' }).click();
-  await expect(
-    mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: follow-up ask' })
-  ).toBeVisible({ timeout: 15_000 });
+  await reply(mainWindow, 'Errand', 'follow-up ask');
   // Four mails: the newest open, the rest folded to one line each.
   await expect(mainWindow.locator('.mail-view .mail-item, .mail-view .mail-fold')).toHaveCount(4);
   // Still ONE conversation in the list.
   await expect(mainWindow.locator('.mail-row')).toHaveCount(1);
+});
+
+// The reply box's To row is New mail's To: field editing the open
+// conversation's personas. Driven by mouse as well as keys: a To row that
+// worked only through fill()/press() once collapsed under every real click.
+
+/** Click into the reply box (as a user does) and return it, unfolded. */
+async function openReply(win: Page) {
+  await win.getByPlaceholder(/Reply to/).click();
+  const box = win.locator('.mail-reply');
+  await expect(box).toHaveClass(/expanded/);
+  return box;
+}
+
+/** Add a persona to the open conversation by clicking it in the reply's To list. */
+async function clickToAdd(win: Page, persona: string) {
+  const box = win.locator('.mail-reply');
+  await box.getByRole('combobox', { name: 'Add a persona' }).click();
+  await box.getByRole('option', { name: new RegExp(persona) }).click();
+  await expect(box.locator('.mail-to-token', { hasText: persona })).toBeVisible();
+}
+
+/**
+ * Each To pill's name, with the room left of it and the room right of it up
+ * to the pill's edge (past its buttons, if it has any).
+ */
+async function pillInsets(win: Page) {
+  return win.locator('.mail-reply .mail-to-token').evaluateAll((pills) =>
+    pills.map((pill) => {
+      const box = pill.getBoundingClientRect();
+      const text = [...pill.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
+      const range = document.createRange();
+      range.selectNodeContents(text!);
+      const name = range.getBoundingClientRect();
+      return {
+        name: text!.textContent!.trim(),
+        left: name.left - box.left,
+        right: box.right - name.right,
+        clipped: pill.scrollWidth > pill.clientWidth + 1
+      };
+    })
+  );
+}
+
+test('the reply box\'s To row adds a persona from the keyboard', async ({ mainWindow }) => {
+  await compose(mainWindow, 'Add later', 'start alone');
+  const box = await openReply(mainWindow);
+  const to = box.getByRole('combobox', { name: 'Add a persona' });
+  await to.fill('Crit');
+  await to.press('Enter');
+  // It joins at once: a token in the To row, a name in the header.
+  await expect(box.locator('.mail-to-token', { hasText: 'Critic' })).toBeVisible();
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Critic');
+  await expect(box.locator('.mail-to-token.lead')).toContainText('Normal');
+});
+
+test('the reply box\'s To row works by mouse: clicking names opens the list and a click adds', async ({
+  mainWindow
+}) => {
+  await compose(mainWindow, 'Add by mouse', 'start alone');
+  const box = await openReply(mainWindow);
+  // Clicking the names (plain text) used to blur the empty reply and fold it
+  // away under the click.
+  await box.locator('.mail-to-token.lead').click();
+  await expect(box).toHaveClass(/expanded/);
+  await expect(box.getByRole('combobox', { name: 'Add a persona' })).toBeFocused();
+  await expect(box.getByRole('listbox', { name: 'Personas' })).toBeVisible();
+  await box.getByRole('option', { name: /Critic/ }).click();
+  await expect(box.locator('.mail-to-token', { hasText: 'Critic' })).toBeVisible();
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Critic');
+  // Every part of the row keeps the reply open: the label, the line under it.
+  await box.locator('.mail-reply-to > span').first().click();
+  await expect(box).toHaveClass(/expanded/);
+  await box.locator('.mail-to-hint').click();
+  await expect(box).toHaveClass(/expanded/);
+  // And the list still adds after all that clicking around.
+  await clickToAdd(mainWindow, 'Verifier');
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Critic · Verifier');
+});
+
+test('the crown in the reply\'s To row makes another persona lead, and the reply goes to it', async ({
+  mainWindow
+}) => {
+  await compose(mainWindow, 'Hand over', 'start with Normal');
+  const box = await openReply(mainWindow);
+  await clickToAdd(mainWindow, 'Critic');
+  await box.getByRole('button', { name: 'Make Critic lead' }).click();
+  await expect(box).toHaveClass(/expanded/);
+  await expect(box.locator('.mail-to-token.lead')).toContainText('Critic');
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Critic leads · Normal');
+  await expect(mainWindow.getByPlaceholder('Reply to Critic')).toBeVisible();
+
+  await mainWindow.getByPlaceholder('Reply to Critic').fill('your turn');
+  await mainWindow.getByRole('button', { name: 'Send' }).click();
+  await expect(mailRow(mainWindow, 'Hand over')).toBeVisible({ timeout: 15_000 });
+  await mailRow(mainWindow, 'Hand over').click();
+  const answer = mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: your turn' });
+  await expect(answer).toBeVisible({ timeout: 15_000 });
+  await expect(answer).toContainText('Critic');
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Critic leads · Normal');
+});
+
+test('the reply\'s To row removes personas but always keeps one, and the change survives a reload', async ({
+  mainWindow
+}) => {
+  await compose(mainWindow, 'Trim down', 'start alone');
+  const box = await openReply(mainWindow);
+  // One persona: nothing to remove.
+  await expect(box.getByRole('button', { name: /^Remove / })).toHaveCount(0);
+  await clickToAdd(mainWindow, 'Critic');
+  await clickToAdd(mainWindow, 'Verifier');
+  await box.getByRole('button', { name: 'Remove Critic' }).click();
+  await expect(box).toHaveClass(/expanded/);
+  await expect(box.locator('.mail-to-token', { hasText: 'Critic' })).toHaveCount(0);
+  await expect(mainWindow.locator('.mail-head-to')).toContainText('Normal leads · Verifier');
+  // Removing the lead hands the lead to the next name.
+  await box.getByRole('button', { name: 'Remove Normal' }).click();
+  await expect(box.locator('.mail-to-token.lead')).toContainText('Verifier');
+  await expect(box.getByRole('button', { name: /^Remove / })).toHaveCount(0);
+
+  await mainWindow.reload();
+  await mainWindow.waitForLoadState('domcontentloaded');
+  await tab(mainWindow, 'Inbox').click();
+  await mailRow(mainWindow, 'Trim down').click();
+  await expect(mainWindow.locator('.mail-head-to')).toHaveText(/^Verifier$/);
+});
+
+test('the reply\'s To pills give their names room on both sides', async ({ mainWindow }) => {
+  await compose(mainWindow, 'Pill room', 'start alone');
+  await openReply(mainWindow);
+  const check = async () => {
+    const pills = await pillInsets(mainWindow);
+    expect(pills.length).toBeGreaterThan(0);
+    for (const pill of pills) {
+      expect(pill.clipped, `${pill.name} is cut off`).toBe(false);
+      expect(pill.left, `${pill.name} touches its left edge`).toBeGreaterThanOrEqual(6);
+      // At least the left's room on the right (its buttons add more).
+      expect(pill.right, `${pill.name} sits against its right edge`).toBeGreaterThanOrEqual(pill.left - 1);
+    }
+  };
+  // The lone lead pill has no buttons: this is where the name hit the edge.
+  await check();
+  await clickToAdd(mainWindow, 'Critic');
+  await check();
 });
 
 test('chats never appear in the Inbox, and mail never appears under Chats', async ({ mainWindow }) => {
@@ -118,12 +276,7 @@ test('archiving moves a conversation out and a new reply resurrects it', async (
   // A reply into the archived conversation pulls it back into the Inbox — the
   // email rule, derived from the reply's own timestamp.
   await mailRow(mainWindow, 'Watch this').click();
-  const reply = mainWindow.getByPlaceholder(/Reply to/);
-  await reply.fill('one more thing');
-  await mainWindow.getByRole('button', { name: 'Send' }).click();
-  await expect(
-    mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Echo: one more thing' })
-  ).toBeVisible({ timeout: 15_000 });
+  await reply(mainWindow, 'Watch this', 'one more thing');
   await expect(mainWindow.getByRole('button', { name: /Archived/ })).toHaveCount(0);
   await expect(mailRow(mainWindow, 'Watch this')).toBeVisible();
 });
@@ -329,4 +482,53 @@ test('a reply read on another device drops the unread dot here too', async ({ ma
   await mainWindow.evaluate((id) => window.stem.setInboxRead([id!], true).then(() => undefined), threadA);
   await expect(row).not.toHaveClass(/unread/);
   await expect(row.locator('.chat-status.done')).toHaveCount(0);
+});
+
+test('a sent mail closes and waits under Sent, not as a Working row', async ({ mainWindow }) => {
+  await tab(mainWindow, 'Inbox').click();
+  await mainWindow.getByTitle('New mail', { exact: true }).click();
+  await mainWindow.getByPlaceholder(/Stem names it/).fill('Slow errand');
+  await mainWindow.getByPlaceholder(/Write the task/).fill('[e2e:slow] take your time');
+  await mainWindow.getByRole('button', { name: /^Send/ }).click();
+  await expect(mainWindow.getByPlaceholder(/Write the task/)).toHaveCount(0);
+  await expect(mainWindow.locator('.mail-view')).toHaveCount(0);
+  // While the persona works, nothing in the list says Working.
+  await expect(mainWindow.locator('.mail-list-group', { hasText: 'Working' })).toHaveCount(0);
+  await expect(mainWindow.locator('.mail-row')).toHaveCount(0);
+  await expect(group(mainWindow, /Sent \(1\)/)).toBeVisible();
+  // The answer brings it up into the Inbox.
+  await expect(mailRow(mainWindow, 'Slow errand')).toBeVisible({ timeout: 15_000 });
+});
+
+test('a progress question mailed mid-work is answered on the spot and the work keeps going', async ({
+  mainWindow
+}) => {
+  await tab(mainWindow, 'Inbox').click();
+  await mainWindow.getByTitle('New mail', { exact: true }).click();
+  await mainWindow.getByPlaceholder(/Stem names it/).fill('Long import');
+  await mainWindow.getByPlaceholder(/Write the task/).fill('[e2e:hang] import everything');
+  await mainWindow.getByRole('button', { name: /^Send/ }).click();
+  await expect(mainWindow.locator('.mail-view')).toHaveCount(0);
+  // Still working: it waits under Sent. Open it there.
+  await group(mainWindow, /Sent \(1\)/).click();
+  await mailRow(mainWindow, 'Long import').click();
+  await expect(mainWindow.locator('.mail-head .mail-status.working')).toBeVisible();
+  // The reply box says a progress question is answered now, not when the run ends.
+  const box = await openReply(mainWindow);
+  await expect(box.locator('.mail-reply-note')).toContainText('Ask how it’s going and Normal answers right away');
+  await box.getByPlaceholder(/Reply to/).fill('[e2e:status] how is it going?');
+  await box.getByRole('button', { name: 'Send' }).click();
+  // Sending closes the view, like any reply; the answer is there on reopening.
+  await expect(mainWindow.locator('.mail-view')).toHaveCount(0);
+  // The answer lands in the Inbox (Sent, still open, lists the same conversation).
+  await mailRow(mainWindow, 'Long import').first().click();
+  await expect(
+    mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Status: still on the first step' })
+  ).toBeVisible({ timeout: 15_000 });
+  // The question started no work, so the answer carries no (empty) Work panel.
+  await expect(
+    mainWindow.locator('.mail-view .mail-item').filter({ hasText: 'Status: still on the first step' }).locator('.mail-work')
+  ).toHaveCount(0);
+  // The work was not stopped or answered: the conversation is still working.
+  await expect(mainWindow.locator('.mail-head .mail-status.working')).toBeVisible();
 });

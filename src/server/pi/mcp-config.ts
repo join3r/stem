@@ -26,6 +26,7 @@ import {
   NATIVE_SEARCH_GATE_FILE,
   SECRET_ENVELOPE_KEY,
   SERVICE_TIER_GATE_FILE,
+  TOOL_SKILLS_GATE_FILE,
   TURN_CONTEXT_GATE_FILE
 } from './protocol';
 import { decryptSecretValue, encryptSecretValue, secretKeyAvailable } from './secrets';
@@ -110,10 +111,10 @@ export interface PiMcpConfig {
   servers: Record<string, PiMcpServer>;
 }
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
 function mainRuntimeAssetPath(rel: string): string {
-  const built = join(__dirname, rel);
+  const built = join(moduleDir, rel);
   return existsSync(built) ? built : join(host().appRoot(), 'src', 'server', rel);
 }
 
@@ -366,6 +367,32 @@ export async function writeServiceTierGate(tier: string | null, gateDir?: string
 }
 
 /**
+ * The worker's appended system prompt, handed to pi as a PATH rather than as
+ * the text itself: argv is world-readable on Linux (/proc/<pid>/cmdline, and
+ * the host sees a container's processes) and a single argument is capped at
+ * 128 KB, while a persona's role prompt is the user's own writing. pi reads
+ * `--append-system-prompt` from a file when the value names an existing one
+ * (resolvePromptInput), and re-reads it when resources reload, so the file
+ * lives in the worker's gate dir for the worker's whole life. Owner-only.
+ */
+const SYSTEM_PROMPT_FILE = 'system-prompt.md';
+
+export function piSystemPromptPath(gateDir: string): string {
+  return join(gateDir, SYSTEM_PROMPT_FILE);
+}
+
+/** Write the spawn prompt (0600) and return the path to pass pi. Rewritten on
+ * every spawn, so a respawn after a persona edit picks up the new text. */
+export async function writeSystemPromptFile(text: string, gateDir: string): Promise<string> {
+  await mkdir(gateDir, { recursive: true });
+  const path = piSystemPromptPath(gateDir);
+  await writeFile(path, text, { encoding: 'utf8', mode: 0o600 });
+  // `mode` applies only when the file is created; tighten one left by an older build.
+  await chmod(path, 0o600);
+  return path;
+}
+
+/**
  * Per-turn gate carrying what kind of turn this is: a mail delivery, an
  * autonomous scheduled run, or a live chat (both false). The bridge's
  * card-raising tools (set_custom_instructions) read it so that in a turn nobody
@@ -375,6 +402,19 @@ export async function writeServiceTierGate(tier: string | null, gateDir?: string
  */
 export function piTurnContextPath(gateDir?: string): string {
   return join(gateDir ?? piHome(), TURN_CONTEXT_GATE_FILE);
+}
+
+/**
+ * The skills this turn hands over at a tool call (protocol.ts
+ * TOOL_SKILLS_GATE_FILE). Written on every turn, empty included, so a worker
+ * never holds a call back for the previous turn's skill.
+ */
+export async function writeToolSkillsGate(
+  gate: { turnId: string; skills: ReadonlyArray<{ slug: string; tools: readonly string[]; text: string }> },
+  gateDir?: string
+): Promise<void> {
+  await mkdir(gateDir ?? piHome(), { recursive: true });
+  await writeFile(join(gateDir ?? piHome(), TOOL_SKILLS_GATE_FILE), JSON.stringify(gate), 'utf8');
 }
 
 export async function writeTurnContextGate(
@@ -621,7 +661,7 @@ async function withOwnedFileLock<T>(
         // immediately and take it.
         continue;
       }
-      if (Date.now() >= deadline) throw new Error(timeoutMessage);
+      if (Date.now() >= deadline) throw new Error(timeoutMessage, { cause: error });
       await new Promise<void>((resolve) => setTimeout(resolve, 10));
     }
   }

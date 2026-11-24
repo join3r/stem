@@ -444,9 +444,9 @@ describe('every run gets a fresh thread', () => {
     expect(runtime.starts[0].scheduled?.prior).toEqual([{ at: 1, headline: 'Found one', body: 'A new release', reply: 'v2 is out' }]);
     fail = true;
     scheduler.runNow(res.task.id);
-    await until(() => runtime.starts.length === 2 && runtime.deleted.length === 2, 'the second run');
+    // The status is stored after the run thread is deleted, so wait for both.
+    await until(async () => runtime.starts.length === 2 && runtime.deleted.length === 2 && (await storedStatus()) === 'ok', 'the second run');
     expect(runtime.starts[1].scheduled?.prior).toBeUndefined();
-    expect(await storedStatus()).toBe('ok');
     scheduler.stop();
   });
 
@@ -1005,6 +1005,61 @@ describe('TaskScheduler defer + preempt', () => {
     active = false;
     await vi.advanceTimersByTimeAsync(16_000);
     expect(runtime.starts).toHaveLength(1);
+    scheduler.stop();
+  });
+});
+
+describe('written task names', () => {
+  it('names a new task from its prompt, renames on a prompt edit, and keeps the first line when the writer gives nothing', async () => {
+    const runtime = new FakeRuntime();
+    const seen: string[] = [];
+    const { scheduler, changes } = makeScheduler(runtime, {
+      writeTitle: async (prompt) => {
+        seen.push(prompt);
+        return prompt.includes('bitcoin') ? 'Bitcoin price watch' : prompt.includes('weather') ? 'Bratislava weather' : '';
+      }
+    });
+    await scheduler.start();
+    const res = await scheduler.create({ prompt: 'Every morning at 06:00, check the bitcoin price', cron: '0 6 * * *' }, 't1');
+    if (!res.ok) throw new Error(res.error);
+    expect(res.task.title).toBe('Every morning at 06:00, check the bitcoin price');
+    await scheduler.nameUntitled();
+    expect(scheduler.snapshot()[0]).toMatchObject({ title: 'Bitcoin price watch', titleWritten: true });
+    expect(changes.at(-1)?.[0]?.title).toBe('Bitcoin price watch');
+    expect((await readTasks())[0]).toMatchObject({ title: 'Bitcoin price watch', titleWritten: true });
+
+    await scheduler.updatePrompt(res.task.id, 'Every morning, look up the weather in Bratislava');
+    await scheduler.nameUntitled();
+    expect(scheduler.snapshot()[0]).toMatchObject({ title: 'Bratislava weather', titleWritten: true });
+
+    // Nothing usable: the first line stays, and pausing does not ask again.
+    await scheduler.updatePrompt(res.task.id, 'Something else entirely');
+    await scheduler.nameUntitled();
+    expect(scheduler.snapshot()[0]!.title).toBe('Something else entirely');
+    expect(scheduler.snapshot()[0]!.titleWritten).toBeUndefined();
+    const calls = seen.length;
+    await scheduler.setEnabled(res.task.id, false);
+    await scheduler.nameUntitled();
+    expect(seen.length).toBe(calls);
+    scheduler.stop();
+  });
+
+  it('names stored tasks at start, and drops a name written for a prompt that changed meanwhile', async () => {
+    await saveTasks([seed({ id: 'a', prompt: 'On the first day of each month, sum up the bitcoin buys' })]);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const runtime = new FakeRuntime();
+    const { scheduler } = makeScheduler(runtime, {
+      writeTitle: async (prompt) => {
+        if (prompt.includes('first day')) await gate;
+        return prompt.includes('weather') ? 'Weather' : 'Bitcoin buys summary';
+      }
+    });
+    await scheduler.start();
+    await scheduler.updatePrompt('a', 'Check the weather');
+    release();
+    await scheduler.nameUntitled();
+    expect(scheduler.snapshot()[0]).toMatchObject({ prompt: 'Check the weather', title: 'Weather', titleWritten: true });
     scheduler.stop();
   });
 });

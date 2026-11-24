@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, Copy, Download, ImageIcon, TriangleAlert, X } from 'lucide-react';
 import type { ActivityItem, GeneratedImageRef } from '../../shared/types';
 
@@ -99,12 +100,13 @@ export function PendingImageCard({ item, live }: { item: ActivityItem; live: boo
   );
 }
 
-function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+/** A full-window view of one picture. It renders into document.body, so no ancestor transform or overflow clips it. */
+export function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     closeRef.current?.focus();
   }, []);
-  return (
+  return createPortal(
     <div
       className="gen-image-lightbox"
       role="dialog"
@@ -124,7 +126,30 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
       <button ref={closeRef} type="button" className="gen-image-close" aria-label="Close" onClick={onClose}>
         <X size={18} />
       </button>
-    </div>
+    </div>,
+    document.body
+  );
+}
+
+/** A picture thumbnail that opens the full-window view on click (for example, an image the user attached). */
+export function ZoomableImage({ src, alt, className }: { src: string; alt: string; className?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        className="zoomable-image"
+        title="Show larger"
+        aria-label={`Show ${alt} larger`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
+      >
+        <img className={className} src={src} alt={alt} />
+      </button>
+      {open && <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 
@@ -188,6 +213,72 @@ export function GeneratedImageCard({ image }: { image: GeneratedImageRef }) {
       </button>
       {url && <ImageActions image={image} url={url} />}
       {open && url && <ImageLightbox src={url} alt={alt} onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+/** A file name for a picture saved from a share page. */
+function downloadName(alt: string, mime: string): string {
+  const base = alt.replace(/[^\p{L}\p{N} _-]+/gu, ' ').trim().replace(/\s+/g, ' ').slice(0, 60) || 'Stem image';
+  const ext = { 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' }[mime] ?? 'png';
+  return `${base}.${ext}`;
+}
+
+/**
+ * A generated picture on a share page: the app's card, with the bytes from
+ * the snapshot. The page has no Stem to save or copy through, so Download is
+ * a plain download and Copy is there only where the browser can copy a PNG.
+ */
+export function SharedImageCard({ src, alt, mime, width, height }: { src: string; alt?: string; mime: string; width?: number; height?: number }) {
+  const [open, setOpen] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
+  const label = alt || 'Generated image';
+  const ratio = width && height ? `${width} / ${height}` : '1 / 1';
+  const canCopy = mime === 'image/png' && typeof ClipboardItem !== 'undefined' && !!navigator.clipboard?.write;
+  const copy = () => {
+    // Decoded here, not fetched: the share page's CSP allows no fetch of a data: URL.
+    const bin = atob(src.slice(src.indexOf(',') + 1));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    void navigator.clipboard
+      .write([new ClipboardItem({ 'image/png': new Blob([bytes], { type: 'image/png' }) })])
+      .then(
+        () => setFlash('Copied'),
+        () => setFlash('Could not copy')
+      );
+    setTimeout(() => setFlash(null), 1800);
+  };
+  return (
+    <div className="gen-image-wrap">
+      <button type="button" className="gen-image" style={{ aspectRatio: ratio }} title={label} onClick={() => setOpen(true)}>
+        <img src={src} alt={label} />
+      </button>
+      <div className="gen-image-actions">
+        <button
+          type="button"
+          title="Download"
+          aria-label="Download image"
+          onClick={() => {
+            const a = document.createElement('a');
+            a.href = src;
+            a.download = downloadName(label, mime);
+            a.click();
+          }}
+        >
+          <Download size={13} />
+        </button>
+        {canCopy && (
+          <button type="button" title="Copy" aria-label="Copy image" onClick={copy}>
+            <Copy size={13} />
+          </button>
+        )}
+        {flash && (
+          <span className="gen-image-flash">
+            <Check size={12} /> {flash}
+          </span>
+        )}
+      </div>
+      {open && <ImageLightbox src={src} alt={label} onClose={() => setOpen(false)} />}
     </div>
   );
 }

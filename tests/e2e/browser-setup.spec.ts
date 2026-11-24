@@ -6,7 +6,15 @@
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setupBrowsers } from '../../src/desktop/browser-host/install';
 import { closeApp, expect, launchApp, mainWindowOf, openSettings, test } from './electron';
+
+// The folder the steps name: a Snap or Flatpak browser on this computer loads
+// its own copy, which is the one shown when such a browser comes first (as on
+// a Linux box whose only Chrome is the Flatpak).
+function expectedFolder(extensionDir: string): string {
+  return setupBrowsers()[0]?.extensionPath ?? realpathSync(extensionDir);
+}
 
 test('waiting for Load unpacked shows the steps and the folder to paste', async () => {
   test.skip(process.platform !== 'darwin' && process.platform !== 'linux', 'browser control runs on macOS and Linux');
@@ -28,7 +36,7 @@ test('waiting for Load unpacked shows the steps and the folder to paste', async 
     const steps = win.locator('.ext-steps');
     await expect(steps.getByText('Developer mode')).toBeVisible();
     await expect(steps.getByText('Load unpacked')).toBeVisible();
-    await expect(steps.locator('.ext-path')).toHaveText(realpathSync(extensionDir));
+    await expect(steps.locator('.ext-path')).toHaveText(expectedFolder(extensionDir));
     await steps.scrollIntoViewIfNeeded();
     if (process.env.STEM_E2E_SHOT) {
       await steps.screenshot({ path: process.env.STEM_E2E_SHOT });
@@ -82,7 +90,7 @@ test('Set up again shows the steps until Done', async () => {
     await win.getByRole('button', { name: 'Set up again' }).click();
     await expect(steps.getByText('Load unpacked')).toBeVisible();
     await expect(steps.getByText('Adding a profile?', { exact: false })).toBeVisible();
-    await expect(steps.locator('.ext-path')).toHaveText(realpathSync(extensionDir));
+    await expect(steps.locator('.ext-path')).toHaveText(expectedFolder(extensionDir));
     if (process.env.STEM_E2E_SHOT) await steps.screenshot({ path: process.env.STEM_E2E_SHOT });
     await steps.getByRole('button', { name: 'Done' }).click();
     await expect(steps).toHaveCount(0);

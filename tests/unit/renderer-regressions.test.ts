@@ -524,6 +524,37 @@ describe('conversation preservation regressions', () => {
     ]);
   });
 
+  it('lets a Quick Chat hand-off replace a chat painted from the cached copy', () => {
+    // Opening a window-assistant chat in the main window paints this Mac's
+    // cached copy first, then hands the panel's conversation over. The cached
+    // copy is older and keyed by disk ids: it must neither stop the running
+    // turn nor show the question twice.
+    const cachedPaint: ThreadState = {
+      ...EMPTY_STATE,
+      messages: [{ id: 'user-0b85', role: 'user', content: 'Question', turnId: '0b85', runtimeTurnId: 'turn-1' }],
+      hydrated: false
+    };
+    const payload: QuickChatHandoff = {
+      threadId: 'thread-1',
+      messages: [
+        { id: 'user-17', role: 'user', content: 'Question', runtimeTurnId: 'turn-1' },
+        { id: 'assistant-turn-1', role: 'assistant', content: 'Par', turnId: 'turn-1', runtimeTurnId: 'turn-1' }
+      ],
+      running: true,
+      streamingId: 'assistant-turn-1',
+      activity: null,
+      activities: [],
+      activeTurnId: 'turn-1',
+      status: 'running',
+      model: null,
+      effort: null,
+      serviceTier: null
+    };
+    const adopted = mergeQuickChatHandoff(cachedPaint, payload);
+    expect(adopted).toMatchObject({ running: true, activeTurnId: 'turn-1', status: 'running', hydrated: true });
+    expect(adopted.messages.map((m) => m.id)).toEqual(['user-17', 'assistant-turn-1']);
+  });
+
   it('retains original live attachments and reconstructs replayed inline images', () => {
     const original: TurnAttachment[] = [
       { path: '/tmp/report.pdf', name: 'report.pdf' },

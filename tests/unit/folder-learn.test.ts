@@ -140,12 +140,16 @@ describe('buildLearnBatch', () => {
 });
 
 describe('the Claude Code folder', () => {
-  it('learns only memory/ in use mode, everything in new/all, nothing for other folders in use', () => {
+  it('learns only memory/ in every mode but off; other folders learn whole in new/all', () => {
     const claude = fakeFolder('cc', { kind: 'claude' });
     expect(learnScope(claude, 'use')).toBe('memory/');
-    expect(learnScope(claude, 'all')).toBe('');
+    // A stored "Full history" from before the sessions were taken out of reach.
+    expect(learnScope(claude, 'all')).toBe('memory/');
+    expect(learnScope(claude, 'new')).toBe('memory/');
     expect(learnScope(claude, 'off')).toBeNull();
     expect(learnScope(fakeFolder('plain'), 'use')).toBeNull();
+    expect(learnScope(fakeFolder('plain'), 'all')).toBe('');
+    expect(learnScope(fakeFolder('plain'), 'off')).toBeNull();
   });
 
   it('batches only the scoped docs, tells the model the layout, and trusts user memory more', async () => {

@@ -587,7 +587,7 @@ async function readManifest(archive: string): Promise<ExportManifest> {
   try {
     bytes = await readTarMember(archive, MANIFEST_NAME);
   } catch (e) {
-    throw new Error(`${archive} is not readable as a tar archive: ${String((e as Error)?.message ?? e)}`);
+    throw new Error(`${archive} is not readable as a tar archive: ${String((e as Error)?.message ?? e)}`, { cause: e });
   }
   if (!bytes) {
     throw new Error(

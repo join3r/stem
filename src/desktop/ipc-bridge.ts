@@ -35,11 +35,16 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   'files:preview': [a.string],
   'files:previewData': [a.string, a.optional(a.nullish(a.string)), a.optional(a.nullish(a.string))],
   'files:download': [a.string],
+  'attachments:stage': [a.object],
+  'files:open': [a.string],
+  'scratch:open': [a.string, a.string],
   'link:open': [a.string],
   'image:saveToDownloads': [a.string, a.string],
+  'audio:saveToDownloads': [a.string, a.string],
   'image:copy': [a.string],
   'cfolders:reveal': [a.string],
   'client:pair': [a.string, a.string],
+  'chats:cached': [a.string],
   'stem:exportState': [a.object],
   'settings:updateReleaseNotes': [a.object],
   'settings:updateUpdates': [a.object],
@@ -86,6 +91,9 @@ const LOCAL_IPC_ARGS: Record<string, ArgSpec[]> = {
   'quickchat:handoff': [a.object],
   // Whether the compact bar keeps room for the window chip ("Ask about this window").
   'quickchat:compact': [a.optional(a.boolean)],
+  // A window panel's tab, by the id main gave it.
+  'quickchat:switchTab': [a.string],
+  'quickchat:closeTab': [a.string],
   // The System Settings pane the chip's missing-permission link opens.
   'quickchat:openPrivacy': [a.oneOf(['screen', 'accessibility'])],
   // The chip's Connect / Set up: the panel tab to open, and where in it (checked again in the handler).

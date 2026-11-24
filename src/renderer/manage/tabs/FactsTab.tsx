@@ -659,9 +659,33 @@ export function FactsTab({
         {previewActive && (
           <p className="muted active-facts-summary">
             {preview
-              ? `Your draft would use ${preview.facts.length} ${preview.facts.length === 1 ? 'fact' : 'facts'} via ${tierLabel(preview.tier)}.`
+              ? `Your draft would use ${preview.facts.length} ${preview.facts.length === 1 ? 'fact' : 'facts'} via ${tierLabel(preview.tier)}` +
+                (preview.parents?.length
+                  ? `, plus ${preview.parents.length} broader ${preview.parents.length === 1 ? 'memory' : 'memories'}:`
+                  : '.')
               : 'Draft preview: computing…'}
           </p>
+        )}
+        {previewActive && preview?.parents && preview.parents.length > 0 && (
+          <ul className="muted active-facts-summary preview-parents">
+            {preview.parents.map((p, i) => (
+              <li key={i}>
+                {p.text}
+                {p.sensitive && (
+                  <>
+                    {' '}
+                    <HoverTip
+                      className="chip sensitive"
+                      ariaLabel="Sensitive"
+                      tip="Built from a sensitive fact — needs a much stronger match to be recalled."
+                    >
+                      <Lock size={10} />
+                    </HoverTip>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
         )}
       </div>
       {!contents && (

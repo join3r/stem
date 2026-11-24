@@ -1,8 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { Info } from 'lucide-react';
+import { useSearchHarvest } from './searchHarvest';
 
 // Fixed positioning (so the manage panel's scroll pane can't clip the popup),
+// portalled to <body> (so a later sibling with its own stacking context, such as
+// the composer's effort dots, can't paint over it),
 // centered under the anchor, edge-clamped, flipped above when the window runs
 // out — the ModelPicker popup pattern.
 function useClampedPop(
@@ -43,6 +47,7 @@ export function InfoTip({ label, children }: { label: string; children: ReactNod
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLSpanElement>(null);
   const pos = useClampedPop(open, btnRef, popRef);
+  const harvest = useSearchHarvest();
 
   useEffect(() => {
     if (!open) return;
@@ -79,20 +84,29 @@ export function InfoTip({ label, children }: { label: string; children: ReactNod
       >
         <Info size={13} />
       </button>
-      {open && (
-        <span
-          ref={popRef}
-          className="info-pop"
-          role="note"
-          style={popStyle(pos)}
-          // The tip may sit inside a <label> (the persona capability rows):
-          // without this, clicking its text forwards to the labelled checkbox
-          // and toggles a setting the user was only reading about.
-          onClick={(e) => e.preventDefault()}
-        >
+      {/* The settings search matches this text too: its hidden copy of Settings
+          keeps the text in the DOM, where the popover is not. */}
+      {harvest && (
+        <span data-stip="" hidden>
           {children}
         </span>
       )}
+      {open &&
+        createPortal(
+          <span
+            ref={popRef}
+            className="info-pop"
+            role="note"
+            style={popStyle(pos)}
+            // The tip may sit inside a <label> (the persona capability rows):
+            // without this, clicking its text forwards to the labelled checkbox
+            // and toggles a setting the user was only reading about.
+            onClick={(e) => e.preventDefault()}
+          >
+            {children}
+          </span>,
+          document.body
+        )}
     </>
   );
 }
@@ -148,11 +162,13 @@ export function HoverTip({ tip, className, ariaLabel, delayMs = 0, children }: H
       }}
     >
       {children}
-      {open && (
-        <span ref={popRef} className="info-pop" role="tooltip" style={popStyle(pos)}>
-          {tip}
-        </span>
-      )}
+      {open &&
+        createPortal(
+          <span ref={popRef} className="info-pop" role="tooltip" style={popStyle(pos)}>
+            {tip}
+          </span>,
+          document.body
+        )}
     </span>
   );
 }

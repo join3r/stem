@@ -40,6 +40,7 @@ First run opens the onboarding wizard — pick a provider and sign in, and you'r
 | `npm run dist` | Package installers for the current OS (electron-builder) |
 | `npm run eval:retrieval` | Run the real local-embedding Recall retrieval gate |
 | `npm run eval:memory` | Run the real extraction gate against a configured OpenAI-compatible model |
+| `npm run eval:gate-canary` | Check that the gate model scores as it did when its floors were measured (downloads the model once) |
 
 ## Tech stack
 

@@ -99,6 +99,85 @@ export function setOverlayWorkspaceVisibility(win: BrowserWindow, onAllWorkspace
 }
 
 /**
+ * Whether a window panel can live in the asked-about window's stacking order
+ * instead of floating over everything: macOS orders a window relative to any
+ * other app's window by its window-server id. Elsewhere the panel stays
+ * always-on-top and only follows the window's position.
+ */
+export const overlayStacksWithWindow = process.platform === 'darwin';
+
+/**
+ * A window panel's level. Stacked (the "Keep with its window" setting): an
+ * ordinary level, so the window it was asked about (and anything stacked over
+ * that) can cover it. Otherwise above everything, like the plain panel.
+ */
+export function stackOverlayWithWindows(win: BrowserWindow, stacked: boolean): void {
+  if (!overlayStacksWithWindow) return;
+  sunk.delete(win);
+  if (stacked) win.setAlwaysOnTop(false);
+  else win.setAlwaysOnTop(true, 'screen-saver');
+}
+
+/** A panel whose window closed: back to the ordinary level, where it can be seen. */
+export function surfaceOverlay(win: BrowserWindow): void {
+  if (sunk.delete(win)) win.setAlwaysOnTop(false);
+}
+
+/** Panels put one level below ordinary windows while another app is in front. */
+const sunk = new WeakSet<BrowserWindow>();
+
+/**
+ * Keep the panel in the stacking order of the window `windowId`. While that
+ * window's app is in front, the panel goes directly above the window. While
+ * another app is in front (`frontmost` false), the panel goes one level below
+ * ordinary windows, so that app's windows cover it, as they cover the window.
+ *
+ * Why a level and not an order: macOS keeps a window that joins all Spaces in
+ * front of the other windows of its level when a different app comes forward,
+ * and it does not accept an order relative to another app's window for it.
+ * Electron's panel type always joins all Spaces. A panel the user types in
+ * stays where it is. Never makes the panel key or activates Stem.
+ */
+export function orderOverlayWithWindow(win: BrowserWindow, windowId: number, frontmost: boolean | null): void {
+  if (!overlayStacksWithWindow) return;
+  if (frontmost === false && !win.isFocused()) {
+    if (!sunk.has(win)) {
+      sunk.add(win);
+      win.setAlwaysOnTop(true, 'normal', -1);
+    }
+    return;
+  }
+  if (sunk.delete(win)) win.setAlwaysOnTop(false);
+  try {
+    win.moveAbove(`window:${windowId}:0`);
+  } catch {
+    // The window closed between the check and the call.
+  }
+}
+
+/**
+ * Hide a window panel whose window just went away (minimised, app hidden, other
+ * Space) at once. macOS fades a panel out on hide, which next to the window's
+ * own minimise animation looks like a second, lagging one; a panel already at
+ * zero opacity has nothing to fade. unparkOverlay puts the opacity back.
+ */
+export function parkOverlay(win: BrowserWindow): void {
+  win.setOpacity(0);
+  win.hide();
+}
+
+/** Bring a parked panel back without taking focus, at once rather than fading in. */
+export function unparkOverlay(win: BrowserWindow): void {
+  win.showInactive();
+  restoreOverlayOpacity(win);
+}
+
+/** Undo parkOverlay's zero opacity; any show of a panel goes through this. */
+export function restoreOverlayOpacity(win: BrowserWindow): void {
+  if (win.getOpacity() !== 1) win.setOpacity(1);
+}
+
+/**
  * The status HUD: a tiny, non-focusable, always-on-top pill in the bottom-left.
  * `focusable: false` is critical — showing it must never steal focus from the app
  * the user is working in.
@@ -166,6 +245,19 @@ export function placeOverlay(win: BrowserWindow, reset: boolean): void {
 
 /** Height the window chip adds to the compact bar ("Ask about this window"). */
 const WINDOW_CHIP_HEIGHT = 58;
+/**
+ * Height the tab strip adds to the compact bar when a window has more than one
+ * conversation open. The expanded panel carries the tabs in its own header.
+ */
+const TAB_STRIP_HEIGHT = 37;
+
+/** The compact bar's height: the chip and the tab strip each add a row. */
+function compactHeight(chip: boolean, tabs: boolean): number {
+  return QUICK_CHAT_HEIGHT + (chip ? WINDOW_CHIP_HEIGHT : 0) + (tabs ? TAB_STRIP_HEIGHT : 0);
+}
+/** The pill a window panel shrinks to (⌘M, or a click back into its window while it works). */
+const MINI_WIDTH = 248;
+const MINI_HEIGHT = 40;
 /** Space between the panel and the window it docks against. */
 const DOCK_GAP = 12;
 
@@ -203,9 +295,10 @@ export function dockBeside(target: DockRect, panel: { width: number; height: num
 
 /**
  * Place the overlay beside the window it was summoned for (see dockBeside),
- * on that window's display. `chip`: the compact bar carries the window chip.
+ * on that window's display. `chip`: the compact bar carries the window chip;
+ * `tabs`: it carries the tab strip.
  */
-export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expanded: boolean, chip: boolean): void {
+export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expanded: boolean, chip: boolean, tabs = false, mini = false): void {
   const { workArea } = screen.getDisplayMatching({
     x: Math.round(target.x),
     y: Math.round(target.y),
@@ -213,19 +306,38 @@ export function placeOverlayBeside(win: BrowserWindow, target: DockRect, expande
     height: Math.max(1, Math.round(target.height))
   });
   const w = QUICK_CHAT_WIDTH;
-  const h = expanded ? QUICK_CHAT_PANEL_HEIGHT : QUICK_CHAT_HEIGHT + (chip ? WINDOW_CHIP_HEIGHT : 0);
-  const { x, y } = dockBeside(target, { width: w, height: h }, workArea);
-  win.setBounds(overlayOuterBounds({ x, y, width: w, height: h }));
+  const h = expanded ? QUICK_CHAT_PANEL_HEIGHT : compactHeight(chip, tabs);
+  const spot = dockBeside(target, { width: w, height: h }, workArea);
+  win.setBounds(overlayOuterBounds(mini ? miniSpot(target, { ...spot, width: w, height: h }) : { ...spot, width: w, height: h }));
+}
+
+/**
+ * Where the pill goes inside the spot the full panel takes: on the edge next
+ * to the window, so it reads as belonging to it. Docked right of the window:
+ * the panel's top-left; left of it: top-right; below: top, centred; above:
+ * bottom, centred. A panel over the window's corner (the window fills the
+ * screen) shrinks into that corner, the panel's bottom-right, rather than
+ * leaving the pill in the middle of the window's content. Pure, for the tests.
+ */
+export function miniSpot(target: DockRect, panel: DockRect): DockRect {
+  const pill = (x: number, y: number): DockRect => ({ x: Math.round(x), y: Math.round(y), width: MINI_WIDTH, height: MINI_HEIGHT });
+  const centredX = panel.x + (panel.width - MINI_WIDTH) / 2;
+  if (panel.x >= target.x + target.width) return pill(panel.x, panel.y);
+  if (panel.x + panel.width <= target.x) return pill(panel.x + panel.width - MINI_WIDTH, panel.y);
+  if (panel.y >= target.y + target.height) return pill(centredX, panel.y);
+  if (panel.y + panel.height <= target.y) return pill(centredX, panel.y + panel.height - MINI_HEIGHT);
+  return pill(panel.x + panel.width - MINI_WIDTH, panel.y + panel.height - MINI_HEIGHT);
 }
 
 /**
  * Shrink a visible overlay back to the compact bar where it stands (New thread,
  * or a deleted thread, empties the panel). Keeps the top edge, so the bar stays
  * where the panel's head was rather than jumping to the cursor's display.
- * `chip`: the bar carries a window chip ("Ask about this window").
+ * `chip`: the bar carries a window chip ("Ask about this window"); `tabs`: the
+ * tab strip of a window with several conversations.
  */
-export function compactOverlay(win: BrowserWindow, chip = false): void {
-  const outer = overlayOuterBounds({ x: 0, y: 0, width: QUICK_CHAT_WIDTH, height: QUICK_CHAT_HEIGHT + (chip ? WINDOW_CHIP_HEIGHT : 0) });
+export function compactOverlay(win: BrowserWindow, chip = false, tabs = false): void {
+  const outer = overlayOuterBounds({ x: 0, y: 0, width: QUICK_CHAT_WIDTH, height: compactHeight(chip, tabs) });
   const { x, y, width } = win.getBounds();
   win.setBounds({ x, y, width, height: outer.height });
 }

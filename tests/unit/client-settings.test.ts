@@ -61,7 +61,7 @@ describe('carrying an existing install across the split', () => {
     writeFileSync(settingsPath, JSON.stringify(PRE_SPLIT));
 
     expect(await readClientSettings()).toEqual({
-      quickChat: { shortcut: 'Alt+Space', windowShortcut: null, showOnAllDisplays: false, followAcrossSpaces: false },
+      quickChat: { shortcut: 'Alt+Space', windowShortcut: null, showOnAllDisplays: false, followAcrossSpaces: false, stayWithWindow: false },
       releaseNotes: { showOnUpdate: false, lastSeenVersion: '0.2.0' },
       // Not in PRE_SPLIT: the updates and theme blocks postdate the split, so
       // they always start from their defaults rather than migrating from anywhere.
@@ -91,7 +91,7 @@ describe('carrying an existing install across the split', () => {
     // is owed of the release notes is a startup decision, not a defaulting rule
     // (see seedReleaseNotesMarker).
     expect(await readClientSettings()).toEqual({
-      quickChat: { shortcut: null, windowShortcut: null, showOnAllDisplays: true, followAcrossSpaces: true },
+      quickChat: { shortcut: null, windowShortcut: null, showOnAllDisplays: true, followAcrossSpaces: true, stayWithWindow: false },
       releaseNotes: { showOnUpdate: true, lastSeenVersion: null },
       updates: { checkAutomatically: true },
       theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false }
@@ -109,7 +109,7 @@ describe('carrying an existing install across the split', () => {
       })
     );
     expect(await readClientSettings()).toEqual({
-      quickChat: { shortcut: null, windowShortcut: null, showOnAllDisplays: true, followAcrossSpaces: true },
+      quickChat: { shortcut: null, windowShortcut: null, showOnAllDisplays: true, followAcrossSpaces: true, stayWithWindow: false },
       releaseNotes: { showOnUpdate: true, lastSeenVersion: null },
       updates: { checkAutomatically: true },
       theme: { selected: 'system', appearance: 'system', chatLayout: 'rows', chatWidth: 'comfortable', translucent: false }
@@ -126,7 +126,8 @@ describe('splitting a Quick Chat patch', () => {
       shortcut: 'Ctrl+Space',
       windowShortcut: null,
       showOnAllDisplays: true,
-      followAcrossSpaces: true
+      followAcrossSpaces: true,
+      stayWithWindow: false
     });
     // The rest of the patch is the server's business and was never touched here.
     expect(settings.quickChat).not.toHaveProperty('finishSound');
@@ -139,7 +140,8 @@ describe('splitting a Quick Chat patch', () => {
       shortcut: 'Ctrl+Space',
       windowShortcut: null,
       showOnAllDisplays: false,
-      followAcrossSpaces: false
+      followAcrossSpaces: false,
+      stayWithWindow: false
     });
   });
 

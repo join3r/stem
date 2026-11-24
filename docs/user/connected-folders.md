@@ -93,6 +93,16 @@ cloud model receives the excerpts it processes and may add provider usage cost.
 **Full history** shows an estimate before it starts, and the button reads **Save and
 start**. A document's "I" or a name in a file is not taken to be you.
 
+A fact learned from a file starts **unconfirmed**. Stem finds it when it searches its
+memory for an answer, but does not bring it up on its own. To change that for one fact,
+confirm or pin it in [Memory → Facts](memory/facts.md) (the **Unconfirmed** filter lists
+them).
+
+The **Claude Code** folder has two choices, **Off** and **On use**. With **On use** Stem
+reads Claude Code's memory notes as they are added or changed. A session transcript
+teaches Stem only when an excerpt of it comes up in a chat; the transcripts are never
+sent through the learning model in bulk.
+
 Learned facts remain if their source file is deleted. On disconnect, Stem asks whether
 to forget facts learned from that folder; pinned facts are kept.
 

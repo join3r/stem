@@ -51,8 +51,27 @@ final class AppModel {
         registerPush()
     }
 
+    /// "Try the demo" on the pair screen: the same app over sample data, held
+    /// in memory by a stand-in server. Nothing is stored, nothing is paired.
+    func startDemo() {
+        session?.close()
+        chatPath = []
+        mailPath = []
+        tab = .chats
+        session = Session(client: StemClient(demo: DemoServer()))
+    }
+
     func unpair() {
         guard let s = session else { return }
+        if s.isDemo {
+            // Leaving the demo: forget it, but there's no pairing to revoke or clear.
+            s.close()
+            session = nil
+            DraftStore.clearAll()
+            chatPath = []
+            mailPath = []
+            return
+        }
         let client = s.client
         let id = s.client.creds.deviceId
         Task { try? await client.run("devices:revoke", [.string(id)]) }
@@ -66,7 +85,7 @@ final class AppModel {
     }
 
     func registerPush() {
-        guard let token = pushToken, let client = session?.client else { return }
+        guard let token = pushToken, let client = session?.client, client.demo == nil else { return }
         Task { try? await client.run("devices:registerPush", [.string(token), "ios"]) }
     }
 
@@ -97,7 +116,7 @@ final class AppModel {
         do {
             let creds = try await StemClient.pair(serverUrl: link.serverUrl, code: link.code)
             let oldClient = old.client
-            Task { try? await oldClient.run("devices:revoke", [.string(oldClient.creds.deviceId)]) }
+            if !old.isDemo { Task { try? await oldClient.run("devices:revoke", [.string(oldClient.creds.deviceId)]) } }
             DraftStore.clearAll()
             chatPath = []
             mailPath = []
@@ -131,8 +150,10 @@ final class Session {
     @ObservationIgnored var visibleThreadId: String?
     @ObservationIgnored private var sub: UUID?
 
-    init(creds: Credentials) {
-        client = StemClient(creds: creds)
+    convenience init(creds: Credentials) { self.init(client: StemClient(creds: creds)) }
+
+    init(client: StemClient) {
+        self.client = client
         connection = Connection(client: client)
         chats = ChatListStore(client: client)
         mail = MailStore(client: client)
@@ -149,6 +170,9 @@ final class Session {
     func close() {
         connection.stop()
     }
+
+    /// Running "Try the demo": sample data, no server behind it.
+    var isDemo: Bool { client.demo != nil }
 
     /// Personas a phone may start a chat as (the server refuses the others).
     var chatPersonas: [Persona] { personas.filter { $0.clients == true } }

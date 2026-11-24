@@ -132,6 +132,12 @@ export interface Fact {
   lastGradedAt: number | null;
   selectionReason?: FactSelectionReason;
   /**
+   * Set on a fact the cross-encoder admitted: its logit minus the gate floor
+   * (before the sensitive margin). Logged with the turn so the usage grades can
+   * be read against the score that let the fact in.
+   */
+  gateMargin?: number;
+  /**
    * Set only on the representative of an OPEN conflict that getInjectableFacts
    * lets through: the fact is status='conflicted' but injected anyway, flagged
    * so the model treats it as uncertain.
@@ -232,7 +238,37 @@ export interface TurnTimingRecord {
   /** Output tokens + stream time of the turn's timed model calls (pi/generation-speed.ts). */
   outputTokens?: number | null;
   generationMs?: number | null;
+  /** Where the time before the request went. Absent on a turn that measured none of it. */
+  stages?: TurnStageTimings;
 }
+
+/**
+ * The parts of a turn's preparation, in milliseconds; null = not measured.
+ * `recallMs` alone could not tell a slow embed from a slow rerank, nor either
+ * from a request that waited behind other work in the local worker — and a
+ * slow turn is one of those three (recall/run-clock.ts). Never shown; these are
+ * for reading back out of the table when turns are slow.
+ */
+export interface TurnStageTimings {
+  /** Fact selection in all: embed, cosine, rerank. */
+  recallFactsMs: number | null;
+  recallEmbedMs: number | null;
+  recallRerankMs: number | null;
+  /** Episodic search: summaries, past messages, folder documents. */
+  recallSearchMs: number | null;
+  /** Skill selection: its own embed and rerank. */
+  skillsMs: number | null;
+  /** The turn's requests to the local worker: not being computed / computed / computed beside another run. */
+  workerWaitMs: number | null;
+  workerRunMs: number | null;
+  workerSharedMs: number | null;
+}
+
+/** turn_timings columns behind TurnStageTimings, in its field order. */
+const TURN_STAGE_COLUMNS = [
+  'recall_facts_ms', 'recall_embed_ms', 'recall_rerank_ms', 'recall_search_ms',
+  'skills_ms', 'worker_wait_ms', 'worker_run_ms', 'worker_shared_ms'
+] as const;
 
 
 /** A turn's persisted tool activity + web sources (see turn_activities). */
@@ -250,6 +286,48 @@ export interface TurnInjectedFacts {
   threadId: string;
   turnId: string;
   factIds: number[];
+  /** How each fact got in, when the turn logged it (rows from before 0.8.0 did not). */
+  meta?: Map<number, InjectedFactMeta>;
+  /** The selection path (FactTier) and the fact gate's model, when logged. */
+  tier?: string | null;
+  gateModel?: string | null;
+  /** When the turn injected them (unix seconds). */
+  injectedAt?: number;
+}
+
+/** How one injected fact got into its turn (turn_injected_facts.fact_meta). */
+export interface InjectedFactMeta {
+  reason?: FactSelectionReason;
+  /** Cross-encoder logit minus the gate floor; absent outside the reranked tier. */
+  margin?: number;
+}
+
+/** What one turn's injection log carries besides the ids. */
+export interface InjectedFactsLog {
+  tier?: string | null;
+  gateModel?: string | null;
+  facts?: Array<{ id: number } & InjectedFactMeta>;
+}
+
+/** Who decided a fact was used: the distill model, or the lexical overlap fallback. */
+export type UsageGrader = 'model' | 'lexical';
+
+/** Precision of injected facts, read from fact_usage_grades (see getFactUsageReport). */
+export interface FactUsageBucket {
+  key: string;
+  graded: number;
+  used: number;
+}
+export interface FactUsageReport {
+  sinceSeconds: number;
+  turns: number;
+  graded: number;
+  used: number;
+  byGrader: FactUsageBucket[];
+  byReason: FactUsageBucket[];
+  /** Reranked facts by gate margin band (logits above the floor). */
+  byMargin: FactUsageBucket[];
+  byCategory: FactUsageBucket[];
 }
 
 
@@ -441,6 +519,8 @@ export const V1_FACTS_MIGRATED_KEY = 'recall_v1_facts_migrated';
 
 /** Set once retireDocOnlyChatFacts() has run (see there). */
 const DOC_ONLY_RETIRED_KEY = 'doc_only_chat_facts_retired';
+/** Set once retireClaudeSessionFacts() has run (see there). */
+export const CLAUDE_SESSION_RETIRED_KEY = 'claude_session_facts_retired';
 
 
 // ---- fact-ranking tunables (inject-time relevance selection) ----
@@ -663,6 +743,41 @@ export class RecallStore {
         PRIMARY KEY (fact_id, model)
       );
 
+      -- Parent memories (fact-groups.ts): a broader memory over a few related
+      -- facts, injected next to them when it matches a turn. A fact may sit in up
+      -- to three groups. text_key names the member set the text was written
+      -- from; once the live members differ the text is stale and never injected
+      -- until the background pass rewrites it. NULL text = not written yet, or
+      -- wiped because a member was deleted.
+      CREATE TABLE IF NOT EXISTS fact_groups (
+        id         INTEGER PRIMARY KEY,
+        label      TEXT NOT NULL,
+        text       TEXT,
+        text_key   TEXT,
+        status     TEXT NOT NULL DEFAULT 'active',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS fact_group_members (
+        group_id INTEGER NOT NULL,
+        fact_id  INTEGER NOT NULL,
+        PRIMARY KEY (group_id, fact_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_fact_group_members_fact ON fact_group_members(fact_id);
+      -- One vector per (group, model), tagged with the text it embeds.
+      CREATE TABLE IF NOT EXISTS fact_group_vectors (
+        group_id INTEGER NOT NULL,
+        model    TEXT NOT NULL,
+        text_key TEXT NOT NULL,
+        vec      BLOB NOT NULL,
+        PRIMARY KEY (group_id, model)
+      );
+      -- Facts the grouping pass has shown the model; ones left ungrouped aren't asked again.
+      CREATE TABLE IF NOT EXISTS fact_group_reviewed (
+        fact_id     INTEGER PRIMARY KEY,
+        reviewed_at INTEGER NOT NULL
+      );
+
       -- Cached embedding per (message, model) for semantic episodic this.search. Same
       -- contract as fact_vectors: model-keyed, pruned on model switch. Messages are
       -- append-only so vectors never go stale from edits, but deletions (episodic
@@ -696,7 +811,16 @@ export class RecallStore {
         recall_ms     INTEGER,
         created_at    INTEGER NOT NULL,
         output_tokens INTEGER,
-        generation_ms INTEGER
+        generation_ms INTEGER,
+        -- Where the time before the request went (TurnTimingRecord.stages).
+        recall_facts_ms  INTEGER,
+        recall_embed_ms  INTEGER,
+        recall_rerank_ms INTEGER,
+        recall_search_ms INTEGER,
+        skills_ms        INTEGER,
+        worker_wait_ms   INTEGER,
+        worker_run_ms    INTEGER,
+        worker_shared_ms INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_turn_timings_thread ON turn_timings(thread_id);
 
@@ -834,8 +958,34 @@ export class RecallStore {
         fact_ids   TEXT NOT NULL,
         graded     INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
+        fact_meta  TEXT,
+        tier       TEXT,
+        gate_model TEXT,
         PRIMARY KEY (thread_id, turn_id)
       );
+
+      -- One row per (turn, injected fact) once the distill pass graded the
+      -- reply: was the fact used? The counters on facts keep only the sum; these
+      -- rows keep the turn, how the fact got in and the score it got in with, so
+      -- precision can be read by tier, gate margin and category, and the pairs
+      -- can label a gate calibration. Kept a year (pruned on write).
+      CREATE TABLE IF NOT EXISTS fact_usage_grades (
+        thread_id  TEXT NOT NULL,
+        turn_id    TEXT NOT NULL,
+        fact_id    INTEGER NOT NULL,
+        used       INTEGER NOT NULL,
+        grader     TEXT NOT NULL,
+        reason     TEXT,
+        margin     REAL,
+        tier       TEXT,
+        gate_model TEXT,
+        category   TEXT,
+        sensitive  INTEGER NOT NULL DEFAULT 0,
+        injected_at INTEGER NOT NULL,
+        graded_at  INTEGER NOT NULL,
+        PRIMARY KEY (thread_id, turn_id, fact_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_fact_usage_grades_at ON fact_usage_grades(graded_at);
 
       -- Folder-doc excerpts injected on EACH turn (learn-eligible folders only —
       -- memorize on, learnMode not 'off'). The distill pass folds unconsumed rows
@@ -977,8 +1127,16 @@ export class RecallStore {
     const timingColumns = new Set(
       (handle.prepare(`PRAGMA table_info(turn_timings)`).all() as Array<{ name: string }>).map((r) => r.name)
     );
-    for (const name of ['output_tokens', 'generation_ms']) {
+    for (const name of ['output_tokens', 'generation_ms', ...TURN_STAGE_COLUMNS]) {
       if (!timingColumns.has(name)) handle.exec(`ALTER TABLE turn_timings ADD COLUMN ${name} INTEGER`);
+    }
+    // How each injected fact got in, added after turn_injected_facts shipped.
+    // Nullable: older rows grade as before, without reason or margin.
+    const injectedColumns = new Set(
+      (handle.prepare(`PRAGMA table_info(turn_injected_facts)`).all() as Array<{ name: string }>).map((r) => r.name)
+    );
+    for (const name of ['fact_meta', 'tier', 'gate_model']) {
+      if (!injectedColumns.has(name)) handle.exec(`ALTER TABLE turn_injected_facts ADD COLUMN ${name} TEXT`);
     }
     // Existing v1 rows predate the external-content FTS table. Populate it before
     // the metadata backfill below fires the UPDATE trigger; deleting an absent FTS
@@ -1187,9 +1345,10 @@ export class RecallStore {
       .prepare(
         `INSERT INTO turn_timings
            (turn_entry_id, thread_id, total_ms, thinking_ms, tool_ms, answer_ms, ttft_ms, build_ms, recall_ms,
-            output_tokens, generation_ms, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            output_tokens, generation_ms, created_at, ${TURN_STAGE_COLUMNS.join(', ')})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${TURN_STAGE_COLUMNS.map(() => '?').join(', ')})
          ON CONFLICT(turn_entry_id) DO UPDATE SET
+           ${TURN_STAGE_COLUMNS.map((c) => `${c} = excluded.${c}`).join(', ')},
            thread_id = excluded.thread_id,
            total_ms = excluded.total_ms,
            thinking_ms = excluded.thinking_ms,
@@ -1213,7 +1372,15 @@ export class RecallStore {
         rec.recallMs,
         rec.outputTokens ?? null,
         rec.generationMs ?? null,
-        this.nowSeconds()
+        this.nowSeconds(),
+        rec.stages?.recallFactsMs ?? null,
+        rec.stages?.recallEmbedMs ?? null,
+        rec.stages?.recallRerankMs ?? null,
+        rec.stages?.recallSearchMs ?? null,
+        rec.stages?.skillsMs ?? null,
+        rec.stages?.workerWaitMs ?? null,
+        rec.stages?.workerRunMs ?? null,
+        rec.stages?.workerSharedMs ?? null
       );
   };
 
@@ -1427,17 +1594,30 @@ export class RecallStore {
    * Best-effort: prunes rows older than 30 days so an abandoned thread's ungraded
    * rows don't accumulate forever.
    */
-  recordTurnInjectedFacts = (threadId: string, turnId: string, factIds: number[]): void => {
+  recordTurnInjectedFacts = (threadId: string, turnId: string, factIds: number[], log: InjectedFactsLog = {}): void => {
     if (!turnId || factIds.length === 0) return;
     const handle = this.open();
     const now = this.nowSeconds();
+    const meta: Record<string, InjectedFactMeta> = {};
+    for (const f of log.facts ?? []) {
+      const entry: InjectedFactMeta = {};
+      if (f.reason) entry.reason = f.reason;
+      if (typeof f.margin === 'number' && Number.isFinite(f.margin)) entry.margin = Math.round(f.margin * 1000) / 1000;
+      if (Object.keys(entry).length > 0) meta[String(f.id)] = entry;
+    }
     handle
       .prepare(
-        `INSERT INTO turn_injected_facts (thread_id, turn_id, fact_ids, graded, created_at)
-         VALUES (?, ?, ?, 0, ?)
-         ON CONFLICT(thread_id, turn_id) DO UPDATE SET fact_ids = excluded.fact_ids`
+        `INSERT INTO turn_injected_facts (thread_id, turn_id, fact_ids, graded, created_at, fact_meta, tier, gate_model)
+         VALUES (?, ?, ?, 0, ?, ?, ?, ?)
+         ON CONFLICT(thread_id, turn_id) DO UPDATE SET
+           fact_ids = excluded.fact_ids, fact_meta = excluded.fact_meta, tier = excluded.tier, gate_model = excluded.gate_model`
       )
-      .run(threadId, turnId, JSON.stringify(factIds), now);
+      .run(
+        threadId, turnId, JSON.stringify(factIds), now,
+        Object.keys(meta).length > 0 ? JSON.stringify(meta) : null,
+        log.tier ?? null,
+        log.gateModel ?? null
+      );
     handle.prepare(`DELETE FROM turn_injected_facts WHERE created_at < ?`).run(now - 30 * 24 * 3600);
   };
 
@@ -1448,16 +1628,32 @@ export class RecallStore {
     const placeholders = turnIds.map(() => '?').join(',');
     const rows = this.open()
       .prepare(
-        `SELECT thread_id AS threadId, turn_id AS turnId, fact_ids AS factIds
+        `SELECT thread_id AS threadId, turn_id AS turnId, fact_ids AS factIds, fact_meta AS factMeta,
+                tier, gate_model AS gateModel, created_at AS createdAt
          FROM turn_injected_facts WHERE graded = 0 AND turn_id IN (${placeholders})`
       )
-      .all(...turnIds) as Array<{ threadId: string; turnId: string; factIds: string }>;
+      .all(...turnIds) as Array<{
+        threadId: string; turnId: string; factIds: string; factMeta: string | null;
+        tier: string | null; gateModel: string | null; createdAt: number;
+      }>;
     return rows.flatMap((r) => {
       try {
         const ids = JSON.parse(r.factIds);
-        return Array.isArray(ids)
-          ? [{ threadId: r.threadId, turnId: r.turnId, factIds: ids.filter((v): v is number => typeof v === 'number') }]
-          : [];
+        if (!Array.isArray(ids)) return [];
+        const meta = new Map<number, InjectedFactMeta>();
+        if (r.factMeta) {
+          const parsed = JSON.parse(r.factMeta) as Record<string, InjectedFactMeta>;
+          for (const [id, m] of Object.entries(parsed ?? {})) if (m && typeof m === 'object') meta.set(Number(id), m);
+        }
+        return [{
+          threadId: r.threadId,
+          turnId: r.turnId,
+          factIds: ids.filter((v): v is number => typeof v === 'number'),
+          meta,
+          tier: r.tier,
+          gateModel: r.gateModel,
+          injectedAt: r.createdAt
+        }];
       } catch (e) {
         // The turn drops out of the batch and its row stays ungraded forever —
         // every later distill re-reads it and drops it again.
@@ -1471,6 +1667,81 @@ export class RecallStore {
   markTurnFactsGraded = (threadId: string, turnId: string): void => {
     this.open().prepare(`UPDATE turn_injected_facts SET graded = 1 WHERE thread_id = ? AND turn_id = ?`)
       .run(threadId, turnId);
+  };
+
+
+  /**
+   * Keep one turn's grades row by row (fact_usage_grades): which injected fact
+   * the reply used, who judged it, and how the fact got in. Category and
+   * sensitivity are read now, at grading time. Prunes rows over a year old.
+   */
+  recordFactUsageGrades = (row: TurnInjectedFacts, usedIds: number[], grader: UsageGrader, ts = this.nowSeconds()): void => {
+    if (row.factIds.length === 0) return;
+    const handle = this.open();
+    const used = new Set(usedIds);
+    const facts = new Map(this.getFactsByIds(row.factIds).map((f) => [f.id, f]));
+    const insert = handle.prepare(
+      `INSERT OR REPLACE INTO fact_usage_grades
+         (thread_id, turn_id, fact_id, used, grader, reason, margin, tier, gate_model, category, sensitive, injected_at, graded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    handle.exec('BEGIN');
+    try {
+      for (const id of new Set(row.factIds)) {
+        const fact = facts.get(id);
+        const meta = row.meta?.get(id);
+        insert.run(
+          row.threadId, row.turnId, id, used.has(id) ? 1 : 0, grader,
+          meta?.reason ?? null, typeof meta?.margin === 'number' ? meta.margin : null,
+          row.tier ?? null, row.gateModel ?? null,
+          fact?.category ?? null, fact?.sensitivity === 'sensitive' ? 1 : 0,
+          row.injectedAt ?? ts, ts
+        );
+      }
+      handle.prepare(`DELETE FROM fact_usage_grades WHERE graded_at < ?`).run(ts - 365 * 24 * 3600);
+      handle.exec('COMMIT');
+    } catch (err) {
+      handle.exec('ROLLBACK');
+      throw err;
+    }
+  };
+
+
+  /**
+   * Precision of injected facts since `sinceSeconds`: the share the reply used,
+   * overall and by grader, selection reason, gate-margin band and category.
+   * Counts only — no fact text.
+   */
+  getFactUsageReport = (sinceSeconds: number): FactUsageReport => {
+    const handle = this.open();
+    const bucket = (keyExpr: string, where = '1 = 1'): FactUsageBucket[] =>
+      (handle
+        .prepare(
+          `SELECT ${keyExpr} AS key, COUNT(*) AS graded, SUM(used) AS used
+           FROM fact_usage_grades WHERE graded_at >= ? AND ${where}
+           GROUP BY 1 ORDER BY graded DESC`
+        )
+        .all(sinceSeconds) as Array<{ key: string | null; graded: number; used: number | null }>)
+        .map((r) => ({ key: r.key ?? 'unknown', graded: r.graded, used: r.used ?? 0 }));
+    const total = handle
+      .prepare(
+        `SELECT COUNT(*) AS graded, SUM(used) AS used, COUNT(DISTINCT thread_id || char(0) || turn_id) AS turns
+         FROM fact_usage_grades WHERE graded_at >= ?`
+      )
+      .get(sinceSeconds) as { graded: number; used: number | null; turns: number };
+    return {
+      sinceSeconds,
+      turns: total.turns,
+      graded: total.graded,
+      used: total.used ?? 0,
+      byGrader: bucket('grader'),
+      byReason: bucket('reason'),
+      byMargin: bucket(
+        `CASE WHEN margin < 1 THEN '0-1' WHEN margin < 2 THEN '1-2' WHEN margin < 4 THEN '2-4' ELSE '4+' END`,
+        'margin IS NOT NULL'
+      ),
+      byCategory: bucket('category')
+    };
   };
 
 
@@ -2213,6 +2484,46 @@ export class RecallStore {
   };
 
 
+  /**
+   * One-shot repair: retire the facts a "Claude Code" folder's session
+   * transcripts produced while "Full history" still read them. The folder now
+   * learns its memory notes alone (folder-index/learn.ts learnScope); what the
+   * transcripts left behind is a log of project states with no date to expire
+   * on. Kept: a fact that rests on a memory note, and one the user confirmed
+   * or pinned (confidence at the injection floor). Retired rows are
+   * superseded, so they remain restorable.
+   *
+   * `sources` are the `folder:<id>` sources of the Claude Code folders
+   * connected now. A folder connected later cannot make such facts, so one run
+   * settles it. Returns the ids retired (empty after the first run).
+   */
+  retireClaudeSessionFacts = (sources: readonly string[]): number[] => {
+    if (this.getMeta(CLAUDE_SESSION_RETIRED_KEY) === '1') return [];
+    const handle = this.open();
+    const ids = sources.length === 0
+      ? []
+      : (handle.prepare(
+          `SELECT f.id FROM facts f
+           WHERE f.status = 'active' AND f.pinned = 0 AND f.confidence < 0.7
+             AND f.source IN (${sources.map(() => '?').join(', ')})
+             AND NOT EXISTS (
+               SELECT 1 FROM fact_evidence e
+               WHERE e.fact_id = f.id AND e.origin = 'folder_doc' AND substr(e.rel_path, 1, 7) = 'memory/'
+             )`
+        ).all(...sources) as Array<{ id: number }>).map((r) => r.id);
+    handle.exec('BEGIN');
+    try {
+      for (const id of ids) this.supersedeFact(id);
+      this.setMeta(CLAUDE_SESSION_RETIRED_KEY, '1');
+      handle.exec('COMMIT');
+    } catch (err) {
+      handle.exec('ROLLBACK');
+      throw err;
+    }
+    return ids;
+  };
+
+
   restoreSupersededFact = (id: number): boolean => {
     const handle = this.open();
     const row = handle.prepare(`SELECT text FROM facts WHERE id = ? AND status = 'superseded'`).get(id) as
@@ -2626,9 +2937,21 @@ export class RecallStore {
     handle.prepare(`DELETE FROM fact_vectors WHERE fact_id = ?`).run(id);
     handle.prepare(`DELETE FROM fact_evidence WHERE fact_id = ?`).run(id);
     handle.prepare(`DELETE FROM fact_images WHERE fact_id = ?`).run(id);
+    handle.prepare(`DELETE FROM fact_usage_grades WHERE fact_id = ?`).run(id);
     handle.prepare(`DELETE FROM fact_conflicts WHERE fact_a = ? OR fact_b = ?`).run(id, id);
     handle.prepare(`DELETE FROM fact_relation_checks WHERE fact_a = ? OR fact_b = ?`).run(id, id);
     handle.prepare(`UPDATE facts SET superseded_by = NULL WHERE superseded_by = ?`).run(id);
+    // A deleted fact must leave no trace in a parent memory: wipe the text of
+    // every group it sat in (the grouping pass rewrites it from what is left).
+    handle.prepare(
+      `UPDATE fact_groups SET text = NULL, text_key = NULL, updated_at = ?
+       WHERE id IN (SELECT group_id FROM fact_group_members WHERE fact_id = ?)`
+    ).run(this.nowSeconds(), id);
+    handle.prepare(
+      `DELETE FROM fact_group_vectors WHERE group_id IN (SELECT group_id FROM fact_group_members WHERE fact_id = ?)`
+    ).run(id);
+    handle.prepare(`DELETE FROM fact_group_members WHERE fact_id = ?`).run(id);
+    handle.prepare(`DELETE FROM fact_group_reviewed WHERE fact_id = ?`).run(id);
     handle.prepare(`DELETE FROM facts WHERE id = ?`).run(id);
   };
 
@@ -2767,7 +3090,9 @@ export class RecallStore {
   ): boolean => {
     if (this.getFactsGeneration() !== expectedGeneration) return false;
     const current = this.open()
-      .prepare(`SELECT text FROM facts WHERE id = ? AND status = 'active'`)
+      // The same statuses getFactsMissingVector reports. A conflicted fact left
+      // out here stayed "missing" forever and was embedded again on every turn.
+      .prepare(`SELECT text FROM facts WHERE id = ? AND status IN ('active', 'conflicted')`)
       .get(factId) as { text: string } | undefined;
     if (!current || current.text !== expectedText) return false;
     this.upsertFactVector(factId, model, vec);
@@ -3217,6 +3542,7 @@ export class RecallStore {
       handle.exec('DELETE FROM summary_segments');
       handle.exec('DELETE FROM summary_vectors');
       handle.exec('DELETE FROM turn_injected_facts');
+      handle.exec('DELETE FROM fact_usage_grades');
       handle.exec(`DELETE FROM meta WHERE key = 'distill_watermark'`);
       handle.exec(`DELETE FROM meta WHERE key = 'distill_cursor_v2'`);
       handle.exec(`DELETE FROM meta WHERE key = 'skill_distill_watermark'`);
@@ -3273,9 +3599,14 @@ export class RecallStore {
       handle.exec('DELETE FROM fact_images');
       handle.exec('DELETE FROM fact_conflicts');
       handle.exec('DELETE FROM fact_relation_checks');
+      handle.exec('DELETE FROM fact_group_vectors');
+      handle.exec('DELETE FROM fact_group_members');
+      handle.exec('DELETE FROM fact_group_reviewed');
+      handle.exec('DELETE FROM fact_groups');
       handle.exec('DELETE FROM facts');
       // Fact ids in the per-turn injected log are now dangling — drop it too.
       handle.exec('DELETE FROM turn_injected_facts');
+      handle.exec('DELETE FROM fact_usage_grades');
       handle.exec(`DELETE FROM meta WHERE key = 'consolidate_pending'`);
       // The relation-sweep backfill's coverage claim is about the rows that no
       // longer exist — a rebuilt store must be re-enumerated from the start.

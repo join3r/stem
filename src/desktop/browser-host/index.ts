@@ -105,6 +105,10 @@ export interface BrowserHostDeps {
   readArcSidebar?(): Promise<{ tabs: ArcSidebarTab[] } | { error: string }>;
   /** Tests shorten the launch wait. */
   launchWaitMs?: number;
+  /** Tests shorten every action's deadline, the liveness check after one runs out, and the wait for a restarted extension. */
+  actionTimeoutMs?: number;
+  aliveProbeMs?: number;
+  restartWaitMs?: number;
 }
 
 export interface BrowserHost {
@@ -132,12 +136,23 @@ export interface BrowserHost {
 
 /** How long a peek may hold "Ask about this window" up. */
 const PEEK_TIMEOUT_MS = 1_500;
+/** After an action ran out of time: how long the extension has to answer a cheap check that it still listens at all. */
+const ALIVE_PROBE_MS = 5_000;
+/** How long an extension Stem restarted has to connect again. */
+const RESTART_WAIT_MS = 15_000;
 
 /** A tab's title and its window's, one cut short or added to by the browser. */
 export function sameTitle(page: string, window: string): boolean {
   const a = page.trim().toLowerCase();
   const b = window.trim().toLowerCase();
   return a.length >= 3 && b.length >= 3 && (a.includes(b) || b.includes(a));
+}
+
+/** A connection's profile for the log: the extension's profile id, cut short ("none" for a pre-0.7.0 extension, which sends none). */
+export function profileTag(key: string | null): string | null {
+  if (!key) return null;
+  const at = key.lastIndexOf('#');
+  return at >= 0 ? key.slice(at + 1, at + 9) : 'none';
 }
 
 /** "Google Chrome" ~ "Chrome", "Brave Browser" ~ "Brave": the window's app and the host's name for it. */
@@ -155,6 +170,13 @@ interface Conn {
   appPath: string;
   appName: string;
   version?: string;
+  /** HostHello.startedAt: which of two hosts claiming one profile is the newer. 0 when the host did not say. */
+  startedAt: number;
+  /** Another connection of the same profile took this one's place. */
+  replaced?: boolean;
+  /** When the extension said hello, and when it last sent anything: for the log when the link goes quiet or drops. */
+  helloAt?: number;
+  heardAt?: number;
   pending: Map<string, (result: ExtensionResult) => void>;
   /**
    * A sandboxed browser's relay (relay.ts), by its id: an upload's files go to
@@ -367,6 +389,10 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
   const paths = deps.paths ?? browserInstallPaths();
   const launch = deps.launch ?? ((app: string) => defaultLaunch(app, platform));
   const launchWaitMs = deps.launchWaitMs ?? LAUNCH_WAIT_MS;
+  const aliveProbeMs = deps.aliveProbeMs ?? ALIVE_PROBE_MS;
+  const restartWaitMs = deps.restartWaitMs ?? RESTART_WAIT_MS;
+  /** One restart per stuck connection, however many of its actions ran out of time. */
+  const restarting = new WeakMap<Conn, Promise<string>>();
   const openWith = deps.openWith ?? ((app: string | null, target: string) => defaultOpenWith(app, target, platform));
   /** A browser Stem knows, or on Linux an AppImage that vouches for itself. */
   const mayLaunch = (app: string): boolean => launchableBrowser(app, platform) || (platform === 'linux' && launchableAppImage(app));
@@ -394,6 +420,8 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
    * remembered again, so its hellos are refused until Set up runs again.
    */
   const removed = new Set<string>();
+  /** Profiles a stale native host was already refused for, logged once each: an old one retries every two seconds. */
+  const staleLogged = new Set<string>();
 
   const send = (conn: Conn, message: ToExtension): boolean => {
     const frame = encodeFrame(message);
@@ -485,13 +513,35 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
       typeof message.profileId === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(message.profileId) ? message.profileId : null;
     // An extension from before 0.7.0 sends no profile id: one entry per app, as then.
     const key = profile ? `${conn.appPath}#${profile}` : conn.appPath;
-    log('browser-host', 'the extension said hello', { browser: conn.appName, version: conn.version, profile: !!profile });
+    const old = conns.get(key);
+    if (old && old !== conn && conn.startedAt < old.startedAt) {
+      // A native host older than the one connected for this profile: the
+      // browser left it running when the extension's worker restarted, and it
+      // replays the old worker's hello on every retry. Letting it in would
+      // throw the live connection off, whose host would then retry and throw
+      // this one off, every two seconds (2026-11-02). Told to quit instead.
+      if (!staleLogged.has(key)) {
+        staleLogged.add(key);
+        log('browser-host', 'refused a stale native host; a newer one has this profile', { browser: conn.appName });
+      }
+      conn.replaced = true;
+      send(conn, { type: 'replaced' });
+      conn.socket.end();
+      return;
+    }
+    conn.helloAt = Date.now();
+    log('browser-host', 'the extension said hello', { browser: conn.appName, version: conn.version, profile: profileTag(key) });
     if (conn.key !== key) {
       if (conn.key && conns.get(conn.key) === conn) conns.delete(conn.key);
-      // A browser that restarted connects again before the old socket is
-      // noticed gone: the new connection wins.
-      const old = conns.get(key);
-      if (old && old !== conn) old.socket.destroy();
+      // A browser that restarted, or an extension whose worker restarted,
+      // connects again before the old socket is noticed gone: the newer
+      // connection wins, and the old host is told to stop retrying.
+      if (old && old !== conn) {
+        old.replaced = true;
+        send(old, { type: 'replaced' });
+        old.socket.end();
+        setTimeout(() => old.socket.destroy(), 1_000).unref?.();
+      }
       conn.key = key;
       conns.set(key, conn);
     }
@@ -513,6 +563,7 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
   }
 
   function onFrame(conn: Conn, message: FromExtension): void {
+    conn.heardAt = Date.now();
     if (message.type === 'hello') {
       void onHello(conn, message);
       return;
@@ -590,12 +641,27 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
   }
 
   function dropConn(conn: Conn): void {
+    // Unnoticed until 2026-11-03: a profile that went quiet left no trace of
+    // whether its link had dropped or stayed up with nobody answering.
+    if (conn.key) {
+      log('browser-host', 'a browser link closed', {
+        browser: conn.appName,
+        profile: profileTag(conn.key),
+        replaced: !!conn.replaced,
+        connectedS: conn.helloAt ? Math.round((Date.now() - conn.helloAt) / 1000) : null,
+        unfinishedActions: conn.pending.size
+      });
+    }
     for (const settle of conn.pending.values()) {
       settle({
         ok: false,
-        error:
-          `${conn.appName} disconnected from Stem during the action (it quit, or the extension reloaded). ` +
-          'The action may or may not have happened: check the page before repeating it.'
+        error: conn.replaced
+          ? `Stem's link to ${conn.appName} was handed to a newer one from the same profile during the action ` +
+            '(the extension restarted; nothing the user did, and the browser is still connected). ' +
+            'The action may or may not have happened: check the page, then carry on.'
+          : `Stem lost its link to ${conn.appName} during the action (the browser quit, or its Stem extension restarted). ` +
+            'The action may or may not have happened: check the page before repeating it, and try once more ' +
+            'before asking the user to do anything.'
       });
     }
     conn.pending.clear();
@@ -644,7 +710,15 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
         }
         clearTimeout(timer);
         socket.off('data', onText);
-        const conn: Conn = { socket, key: null, appPath: claimed.appPath, appName: claimed.appName, pending: new Map(), sandbox: claimed.appPath };
+        const conn: Conn = {
+          socket,
+          key: null,
+          appPath: claimed.appPath,
+          appName: claimed.appName,
+          startedAt: 0,
+          pending: new Map(),
+          sandbox: claimed.appPath
+        };
         socket.on('close', () => dropConn(conn));
         // What the Node host tells the extension once it reaches Stem.
         send(conn, { type: 'host', connected: true });
@@ -683,7 +757,7 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     const reader = new FrameReader();
     let conn: Conn | null = null;
     /** Between the host's hello and its proof: what it claimed, and the nonce it must answer. */
-    let pending: { appPath: string; appName: string; nonce: string } | null = null;
+    let pending: { appPath: string; appName: string; startedAt: number; nonce: string } | null = null;
     const hello = setTimeout(() => socket.destroy(), 5000);
     hello.unref?.();
     socket.on('data', (chunk: Buffer) => {
@@ -724,6 +798,7 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
           pending = {
             appPath: h.appPath,
             appName: typeof h.appName === 'string' && h.appName ? h.appName : 'Browser',
+            startedAt: typeof h.startedAt === 'number' && Number.isFinite(h.startedAt) && h.startedAt > 0 ? h.startedAt : 0,
             nonce: newNonce()
           };
           socket.write(encodeFrame({ type: 'server-hello', nonce: pending.nonce, proof: handshakeProof(config.token, 'stem', h.nonce) }));
@@ -737,11 +812,11 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
             return;
           }
           clearTimeout(hello);
-          const { appPath, appName } = pending;
+          const { appPath, appName, startedAt } = pending;
           pending = null;
           // Which profile this is arrives with the extension's own hello,
           // right behind (the native host replays it on every connection).
-          conn = { socket, key: null, appPath, appName, pending: new Map() };
+          conn = { socket, key: null, appPath, appName, startedAt, pending: new Map() };
           continue;
         }
         if (conn) onFrame(conn, message as FromExtension);
@@ -856,13 +931,14 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
     return new Promise<ExtensionResult>((resolve) => {
       const timer = setTimeout(() => {
         conn.pending.delete(request.requestId);
-        resolve({
-          ok: false,
-          error:
-            `${conn.appName} did not finish the action in time. It may or may not have happened: check the page ` +
-            '(snapshot) before repeating it.'
+        log('browser-host', 'an action ran out of time', {
+          browser: conn.appName,
+          profile: profileTag(conn.key),
+          action: action.kind,
+          lastHeardS: conn.heardAt ? Math.round((Date.now() - conn.heardAt) / 1000) : null
         });
-      }, actionTimeoutMs(action));
+        void timedOut(conn).then((error) => resolve({ ok: false, error }));
+      }, deps.actionTimeoutMs ?? actionTimeoutMs(action));
       conn.pending.set(request.requestId, (r) => {
         clearTimeout(timer);
         resolve(r);
@@ -874,6 +950,89 @@ export function createBrowserHost(deps: BrowserHostDeps): BrowserHost {
         resolve({ ok: false, error: 'The action is too large to hand to the browser (over 1 MB); shorten it.' });
       }
     });
+  }
+
+  /**
+   * An action ran out of time. A slow or stuck page is the usual reason, and
+   * the model checks the page and carries on. But when the extension does not
+   * even answer a peek, its worker is wedged: every action in that profile,
+   * a bare `tabs` included, would time out the same way (2026-11-03, a jbrow
+   * profile went quiet after twelve idle minutes and the model handed the
+   * form back to the user). Stem restarts the extension then, and says
+   * whether it came back.
+   */
+  async function timedOut(conn: Conn): Promise<string> {
+    const slow =
+      `${conn.appName} did not finish the action in time. It may or may not have happened: check the page ` +
+      '(snapshot) before repeating it.';
+    const key = conn.key;
+    if (!key || conn.replaced || conns.get(key) !== conn) return slow;
+    const pending = restarting.get(conn);
+    if (pending) return pending;
+    if (await answers(conn, aliveProbeMs)) {
+      log('browser-host', 'the extension still answers; the action itself was slow', { browser: conn.appName, profile: profileTag(key) });
+      return slow;
+    }
+    if (conns.get(key) !== conn) return slow;
+    const restart = restartStuck(conn, key);
+    restarting.set(conn, restart);
+    return restart;
+  }
+
+  /** Whether the extension answers a peek (whatever it says) within `ms`. */
+  function answers(conn: Conn, ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const id = `alive-${randomUUID()}`;
+      const timer = setTimeout(() => {
+        conn.pending.delete(id);
+        resolve(false);
+      }, ms);
+      conn.pending.set(id, () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+      if (!send(conn, { type: 'peek', id })) {
+        clearTimeout(timer);
+        conn.pending.delete(id);
+        resolve(false);
+      }
+    });
+  }
+
+  async function restartStuck(conn: Conn, key: string): Promise<string> {
+    log('browser-host', 'the extension stopped answering; restarting it', { browser: conn.appName });
+    const back = new Promise<boolean>((resolve) => {
+      const wake = (): void => {
+        const c = conns.get(key);
+        if (!c || c === conn) return;
+        cleanup();
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, restartWaitMs);
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        connectWaiters.delete(wake);
+      };
+      connectWaiters.add(wake);
+    });
+    send(conn, { type: 'reload' });
+    if (await back) {
+      log('browser-host', 'the restarted extension is back', { browser: conn.appName });
+      return (
+        `${conn.appName}'s Stem extension had stopped answering (nothing the user did), so Stem restarted it, and it ` +
+        'is connected again. The action did not finish: take a new snapshot of the tab (tab ids stay the same) and ' +
+        'carry on yourself.'
+      );
+    }
+    log('browser-host', 'the restarted extension did not come back', { browser: conn.appName });
+    return (
+      `${conn.appName}'s Stem extension stopped answering and did not come back after Stem restarted it. Try once ` +
+      'more. If it fails again and another browser profile is open, a page that needs no sign-in can be done ' +
+      `there; otherwise ask the user to quit and reopen ${conn.appName}.`
+    );
   }
 
   function peekConn(conn: Conn): Promise<{ url: string; title: string } | null> {

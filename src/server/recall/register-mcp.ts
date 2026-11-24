@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 /** Reserved name; filtered out of the user-facing MCP list (see pi/mcp.ts). */
 export const RECALL_MCP_NAME = 'stem-recall';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
 /**
  * Absolute path to the standalone server script. The server is bundled by
@@ -21,5 +21,5 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
  * other ELECTRON_RUN_AS_NODE child — stays spawnable as a real file.
  */
 export function recallMcpServerPath(): string {
-  return join(__dirname, 'recall-mcp-server.js');
+  return join(moduleDir, 'recall-mcp-server.js');
 }

@@ -35,7 +35,7 @@ import { createQuickChat } from '../../src/desktop/quickchat';
 
 const settings: QuickChatSettings = {
   shortcut: null, windowShortcut: null, defaultModel: null, defaultEffort: 'medium', defaultServiceTier: null,
-  showOnAllDisplays: true, newThreadTimeoutMs: 300000, followAcrossSpaces: true, finishSound: true
+  showOnAllDisplays: true, newThreadTimeoutMs: 300000, followAcrossSpaces: true, stayWithWindow: false, finishSound: true
 };
 beforeEach(() => {
   mock.hud.visible = false;

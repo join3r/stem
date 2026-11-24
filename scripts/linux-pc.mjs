@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Run Stem on a real Linux PC over SSH: the working tree is copied over, so
-// uncommitted work is what gets tested, the way scripts/linux-test.mjs does it
-// with a container. The PC needs Node 24, rsync and GNOME (mutter); the host
-// comes from STEM_LINUX_HOST, e.g. `STEM_LINUX_HOST=join3r@192.168.1.164`.
+// Run Stem on a real Linux PC over SSH: the working tree is copied over with
+// git (scripts/remote-snapshot.mjs), so uncommitted work is what gets tested,
+// the way scripts/linux-test.mjs does it with a container. The PC needs Node 24, git and GNOME (mutter); the host
+// comes from STEM_LINUX_HOST, e.g. `STEM_LINUX_HOST=join3r@192.168.1.164`, and
+// STEM_LINUX_JUMP=infra reaches it through a jump host when away from home.
 //
 //   node scripts/linux-pc.mjs test [vitest args]        unit tests
 //   node scripts/linux-pc.mjs e2e [playwright args]     the E2E suite on a headless Wayland desktop
@@ -24,6 +25,7 @@
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BARE, PUBLIC_REPO, push, shQuote, snapshot } from './remote-snapshot.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const host = process.env.STEM_LINUX_HOST;
@@ -32,7 +34,10 @@ if (!host) {
   process.exit(2);
 }
 const DIR = 'stem';
-const SSH = ['-o', 'BatchMode=yes', '-o', 'VisualHostKey=no'];
+// STEM_LINUX_JUMP: optional jump host(s) for ssh -J, e.g. `infra` when away
+// from the PC's network (comma-separate a chain).
+const jump = process.env.STEM_LINUX_JUMP;
+const SSH = ['-o', 'BatchMode=yes', '-o', 'VisualHostKey=no', ...(jump ? ['-J', jump] : [])];
 const [mode = 'test', ...rest] = process.argv.slice(2);
 
 function run(cmd, args, opts = {}) {
@@ -41,21 +46,25 @@ function run(cmd, args, opts = {}) {
 }
 const quote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
-run('rsync', [
-  '-az', '--delete',
-  '--filter=:- .gitignore', '--exclude=.git', '--exclude=.worktrees',
-  // node_modules and dist are the PC's own (Linux native modules), never the Mac's.
-  '--filter=P node_modules/', '--filter=P dist/', '--filter=P out/',
-  '-e', `ssh ${SSH.join(' ')}`,
-  `${repo}/`, `${host}:${DIR}/`
-]);
+// The PC fetches the public main from GitHub; only this checkout's own
+// commits and uncommitted work go over SSH (scripts/remote-snapshot.mjs).
+// node_modules, dist and out are ignored by git, so they stay the PC's own
+// (Linux native modules), never the Mac's.
+run('ssh', [...SSH, host, `bash -c ${quote(`test -d ~/${BARE} || git init -q --bare ~/${BARE}
+git -C ~/${BARE} fetch -q ${PUBLIC_REPO} +refs/heads/main:refs/heads/main || echo "linux-pc: could not fetch main from GitHub; sending everything"`)}`]);
+push(repo, snapshot(repo), { sshCommand: ['ssh', ...SSH].map(shQuote).join(' '), remote: `${host}:${BARE}` });
 
 // Runs on the PC. `headless` starts a private mutter on a virtual monitor and
 // points Wayland apps at it; the trap takes it down with the session.
 const prelude = `
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH" XDG_RUNTIME_DIR=/run/user/$(id -u)
+mkdir -p ~/${DIR}
 cd ~/${DIR}
+[ -d .git ] || git init -q
+git fetch -q ~/${BARE} snapshot
+git reset -q --hard FETCH_HEAD
+git clean -fdq
 want=$(sha256sum package-lock.json | cut -d' ' -f1)
 if [ "$(cat node_modules/.stem-lock 2>/dev/null)" != "$want" ]; then
   echo "linux-pc: npm ci (lockfile changed)"

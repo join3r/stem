@@ -26,12 +26,13 @@ import {
   startTransport,
   type TransportEndpoint
 } from '../../src/server/startup/transport';
-import { createServerProxy, type ServerProxy } from '../../src/desktop/proxy';
+import { createServerProxy, stageAttachment, type ServerProxy } from '../../src/desktop/proxy';
 import { clientCredentials } from '../../src/desktop/server-endpoint';
 import { PillTurns } from '../../src/desktop/quickchat/pill-turns';
 import { noteTurnEvent } from '../../src/server/live-turns';
+import { createConversation, setMailRead } from '../../src/server/workspace/mail';
 import { emptyInboxState } from '../../src/shared/inbox';
-import type { AppSettings, BackendEventEnvelope, ChatListResult, QuickChatSettings } from '../../src/shared/types';
+import type { AppSettings, BackendEventEnvelope, ChatListResult, MailListResult, QuickChatSettings } from '../../src/shared/types';
 
 let endpoint: TransportEndpoint;
 /**
@@ -82,6 +83,10 @@ beforeAll(async () => {
   // which is the only thing the remote-upload rewrite is about.
   registerServer('backend:startTurn', (_e, input) => input);
   registerServer('files:add', (_e, paths, subdir) => [paths, subdir]);
+  // An answer big enough to go out gzipped, the size of a real mail:list.
+  registerServer('mail:list', () => ({ items: Array.from({ length: 4000 }, (_, i) => ({ id: `m-${i}`, body: 'ž'.repeat(200) })) }));
+  // The real store's mutator, so the answer carries what the write touched.
+  registerServer('mail:setRead', (_e, ids, read) => setMailRead(ids as string[], read as boolean));
 
   endpoint = await startTransport({ devUrl: null });
   if (!endpoint.url) throw new Error('the transport published no URL to talk to');
@@ -155,6 +160,42 @@ describe('POST /rpc', () => {
     await expect(proxy.invoke('nope:notAThing', [])).rejects.toThrow(
       'Rejected local call to nope:notAThing: no handler registered.'
     );
+  });
+
+  it('asks for gzip and reads a big answer back whole', async () => {
+    const res = await fetch(`${serverUrl}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${(await clientCredentials(serverUrl, { external: false })).token}`, 'accept-encoding': 'gzip' },
+      body: JSON.stringify({ channel: 'mail:list', args: [] })
+    });
+    expect(res.headers.get('content-encoding')).toBe('gzip');
+    const list = (await proxy.invoke('mail:list', [])) as { items: { id: string; body: string }[] };
+    expect(list.items).toHaveLength(4000);
+    expect(list.items[3999]).toEqual({ id: 'm-3999', body: 'ž'.repeat(200) });
+  });
+
+  it('cuts a mail answer to the conversations the write touched, only for a client that asks', async () => {
+    const a = await createConversation('a', ['normal']);
+    const b = await createConversation('b', ['normal']);
+    const token = (await clientCredentials(serverUrl, { external: false })).token;
+    const call = async (headers: Record<string, string>) => {
+      const res = await fetch(`${serverUrl}/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...headers },
+        body: JSON.stringify({ channel: 'mail:setRead', args: [[a.id], true] })
+      });
+      return ((await res.json()) as { result: MailListResult }).result;
+    };
+    // An older client (no header) still gets the whole list, unmarked.
+    const whole = await call({});
+    expect(whole.delta).toBeUndefined();
+    expect(whole.conversations.map((c) => c.id)).toEqual(expect.arrayContaining([a.id, b.id]));
+    const cut = await call({ 'x-stem-mail': 'delta' });
+    expect(cut.delta).toEqual({ conversationIds: [a.id] });
+    expect(cut.conversations.map((c) => c.id)).toEqual([a.id]);
+    // The desktop's proxy asks on its own.
+    const viaProxy = (await proxy.invoke('mail:setRead', [[b.id], true])) as MailListResult;
+    expect(viaProxy.delta).toEqual({ conversationIds: [b.id] });
   });
 
   it('surfaces a handler failure as the handler wrote it', async () => {
@@ -306,6 +347,25 @@ describe('when the server is somewhere else', () => {
       { input: 'look', attachments: [{ name: 'shot.png', mime: 'image/png', dataBase64: 'aGk=' }] }
     ])) as { attachments: { dataBase64: string; path?: string }[] };
     expect(result.attachments[0]).toEqual({ name: 'shot.png', mime: 'image/png', dataBase64: 'aGk=' });
+  });
+
+  it('stages a mail draft\'s files ahead of Send, pasted bytes included', async () => {
+    const creds = await clientCredentials(serverUrl, { external: false });
+    const fromDisk = await stageAttachment(creds, { name: 'note.txt', path: localFile });
+    expect(isUploadHandle(fromDisk.path!)).toBe(true);
+    expect(readFileSync((await resolveUploadHandle(fromDisk.path!))!, 'utf8')).toBe('the contents of a file on the client');
+
+    // A pasted screenshot goes up too: nothing heavy should ride with Send.
+    const pasted = await stageAttachment(creds, { name: 'shot.png', mime: 'image/png', dataBase64: 'aGk=' });
+    expect(pasted).toEqual({ name: 'shot.png', mime: 'image/png', path: pasted.path });
+    expect(readFileSync((await resolveUploadHandle(pasted.path!))!, 'utf8')).toBe('hi');
+
+    // Staging a staged file is a no-op, and so is sending one: the handle rides as is.
+    expect(await stageAttachment(creds, pasted)).toBe(pasted);
+    const result = (await far.invoke('backend:startTurn', [{ input: 'look', attachments: [pasted] }])) as {
+      attachments: unknown[];
+    };
+    expect(result.attachments[0]).toEqual(pasted);
   });
 
   it('uploads a drop onto the Files panel the same way', async () => {

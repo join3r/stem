@@ -1,6 +1,6 @@
 import { Component, StrictMode, useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Flag, Lock } from 'lucide-react';
+import { Flag, Lock, Mail } from 'lucide-react';
 import { ShareView } from '../renderer/share/ShareView';
 import type { ShareSnapshot } from '../shared/share';
 import { NewerShareError, openShare } from './decrypt';
@@ -12,7 +12,9 @@ import './viewer.css';
 
 type State =
   | { kind: 'loading'; got?: number; total?: number }
-  | { kind: 'ready'; snap: ShareSnapshot }
+  | { kind: 'ready'; snap: ShareSnapshot; locked?: boolean }
+  /** Shared with chosen people: the masked addresses a code can go to. */
+  | { kind: 'locked'; recipients: string[] }
   | { kind: 'error'; title: string; detail: string };
 
 const ID_RE = /^\/s\/([A-Za-z0-9_-]{22})\/?$/;
@@ -52,7 +54,8 @@ const mb = (bytes: number) => (bytes / (1 << 20)).toFixed(1);
 async function load(id: string, key: string, onProgress: (got: number, total: number) => void): Promise<State> {
   let res: Response;
   try {
-    res = await fetch(`/v1/shares/${id}`, { credentials: 'omit', referrerPolicy: 'no-referrer' });
+    // same-origin: a locked share opens with the cookie a mailed code set.
+    res = await fetch(`/v1/shares/${id}`, { credentials: 'same-origin', referrerPolicy: 'no-referrer' });
   } catch {
     return { kind: 'error', title: 'Could not load this page', detail: 'Check your connection and reload.' };
   }
@@ -61,6 +64,11 @@ async function load(id: string, key: string, onProgress: (got: number, total: nu
     return why === 'taken_down'
       ? { kind: 'error', title: 'This link was removed', detail: 'It was taken down after a report.' }
       : { kind: 'error', title: 'This link was turned off', detail: 'The person who shared it revoked it.' };
+  }
+  if (res.status === 401) {
+    const body = (await res.json().catch(() => ({}))) as { recipients?: unknown };
+    const recipients = Array.isArray(body.recipients) ? body.recipients.filter((r): r is string => typeof r === 'string') : [];
+    if (recipients.length) return { kind: 'locked', recipients };
   }
   if (res.status === 404) {
     return { kind: 'error', title: 'Nothing here', detail: 'The link is wrong, or it expired.' };
@@ -75,7 +83,7 @@ async function load(id: string, key: string, onProgress: (got: number, total: nu
   try {
     const snap = await openShare(blob, key);
     document.title = `${snap.title} · Stem`;
-    return { kind: 'ready', snap };
+    return { kind: 'ready', snap, locked: res.headers.get('Cache-Control')?.includes('no-store') ?? false };
   } catch (e) {
     if (e instanceof NewerShareError) {
       return { kind: 'error', title: 'Made by a newer Stem', detail: 'This page can’t show it yet. Try again later.' };
@@ -86,6 +94,119 @@ async function load(id: string, key: string, onProgress: (got: number, total: nu
       detail: 'The part after # is the key that unlocks the page. Copy the whole link and try again.'
     };
   }
+}
+
+async function postJSON(url: string, body: unknown): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body)
+    });
+    if (res.ok) return { ok: true };
+    const err = ((await res.json().catch(() => ({}))) as { error?: string }).error;
+    return { ok: false, error: err ?? `http_${res.status}` };
+  } catch {
+    return { ok: false, error: 'network' };
+  }
+}
+
+function lockError(code?: string): string {
+  switch (code) {
+    case 'rate_limited':
+      return 'Too many tries. Wait a little, then try again.';
+    case 'bad_code':
+      return 'That code is wrong or expired. Check the newest email, or ask for a new code.';
+    case 'gone':
+      return 'The person who shared it revoked it.';
+    case 'network':
+      return 'Could not reach the server. Check your connection.';
+    default:
+      return 'Something went wrong. Try again in a moment.';
+  }
+}
+
+/** A locked share: prove the address with a mailed code, then open. */
+function LockedView({ id, recipients, onUnlocked }: { id: string; recipients: string[]; onUnlocked: () => void }) {
+  const [picked, setPicked] = useState<number | null>(null);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const sendCode = async (r: number) => {
+    setBusy(true);
+    setError(null);
+    const res = await postJSON(`/v1/shares/${id}/code`, { r });
+    setBusy(false);
+    if (res.ok) {
+      setPicked(r);
+      setCode('');
+    } else setError(lockError(res.error));
+  };
+
+  const unlock = async () => {
+    if (picked === null) return;
+    setBusy(true);
+    setError(null);
+    const res = await postJSON(`/v1/shares/${id}/unlock`, { r: picked, code: code.replace(/\s+/g, '') });
+    setBusy(false);
+    if (res.ok) onUnlocked();
+    else setError(lockError(res.error));
+  };
+
+  return (
+    <div className="viewer-message viewer-lock">
+      <h1>
+        <Lock size={20} /> Shared with chosen people
+      </h1>
+      {picked === null ? (
+        <>
+          <p className="muted">
+            To open this page, confirm your email address. We send you a code; the page stays locked without it.
+          </p>
+          <div className="viewer-lock-choices">
+            {recipients.map((r, i) => (
+              <button key={i} type="button" className="push" disabled={busy} onClick={() => void sendCode(i)}>
+                <Mail size={13} /> Send a code to {r}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void unlock();
+          }}
+        >
+          <p className="muted">
+            We sent a code to {recipients[picked]}. It works for 15 minutes.
+          </p>
+          <input
+            className="vfield viewer-code"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={12}
+            placeholder="123456"
+            aria-label="Code"
+            value={code}
+            autoFocus
+            onChange={(e) => setCode(e.target.value)}
+          />
+          <div className="viewer-lock-choices">
+            <button type="submit" className="push default" disabled={busy || code.replace(/\s+/g, '').length < 6}>
+              Open
+            </button>
+            <button type="button" className="viewer-link" disabled={busy} onClick={() => setPicked(null)}>
+              Send a new code
+            </button>
+          </div>
+        </form>
+      )}
+      {error && <p className="task-failed">{error}</p>}
+    </div>
+  );
 }
 
 const REASONS: { id: string; label: string }[] = [
@@ -187,6 +308,8 @@ function Viewer() {
   const [loc] = useState(parseLocation);
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [reporting, setReporting] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [locked, setLocked] = useState(false);
 
   useEffect(() => {
     if (!loc) {
@@ -197,8 +320,11 @@ function Viewer() {
     const progress = (got: number, total: number) => {
       if (total >= 512 << 10) setState((s) => (s.kind === 'loading' ? { kind: 'loading', got, total } : s));
     };
-    void load(loc.id, loc.key, progress).then(setState);
-  }, [loc]);
+    void load(loc.id, loc.key, progress).then((s) => {
+      if (s.kind === 'locked' || (s.kind === 'ready' && s.locked)) setLocked(true);
+      setState(s);
+    });
+  }, [loc, attempt]);
 
   return (
     <div className="viewer">
@@ -214,6 +340,16 @@ function Viewer() {
           ) : (
             <p className="muted viewer-message">Unlocking…</p>
           ))}
+        {state.kind === 'locked' && loc && (
+          <LockedView
+            id={loc.id}
+            recipients={state.recipients}
+            onUnlocked={() => {
+              setState({ kind: 'loading' });
+              setAttempt((n) => n + 1);
+            }}
+          />
+        )}
         {state.kind === 'error' && (
           <div className="viewer-message">
             <h1>{state.title}</h1>
@@ -229,7 +365,8 @@ function Viewer() {
       </main>
       <footer className="viewer-foot">
         <span>
-          <Lock size={12} /> Encrypted. Only people with the link can read it.
+          <Lock size={12} />{' '}
+          {locked ? 'Encrypted. Only the people it was shared with can read it.' : 'Encrypted. Only people with the link can read it.'}
         </span>
         <span className="viewer-foot-links">
           <a href="https://heystem.app" rel="noopener">

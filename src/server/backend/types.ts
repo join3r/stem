@@ -14,6 +14,7 @@ import type {
   ModelSummary,
   RuntimeStatus,
   ScheduleTaskRequest,
+  UpdateTaskRequest,
   ScheduledTask,
   StartTurnInput,
   ChatFormat,
@@ -59,6 +60,8 @@ export interface ExecRequest {
   computerAnyDevice?: boolean;
   /** The originating conversation (null when no turn is live — shouldn't happen in practice). */
   threadId: string | null;
+  /** The live turn: a short reply earns one early approval card per turn (ExecService). */
+  turnId?: string;
   /** True for autonomous scheduled runs — manual approvals are rejected there. */
   isScheduled: boolean;
   /**
@@ -319,6 +322,16 @@ export interface MailBridge {
   readNotes(ids: string[], ctx: MailBridgeContext): Promise<MailBridgeResult>;
 }
 
+/**
+ * Which tasks a task-tool call reaches. `thread` is the caller's; `anyThread`
+ * only for a chat the user is typing in — an unattended run or mail delivery
+ * reads unvetted content, so it keeps to its own thread's tasks.
+ */
+export interface TaskScope {
+  thread: string;
+  anyThread: boolean;
+}
+
 export interface TaskBridge {
   /** Create a task bound to `threadId` from the assistant's schedule_task tool. */
   schedule(
@@ -327,8 +340,19 @@ export interface TaskBridge {
   ): Promise<{ ok: true; task: ScheduledTask } | { ok: false; error: string }>;
   /** Tasks bound to `threadId` (so the assistant can list/cancel its own). */
   listForThread(threadId: string): Promise<ScheduledTask[]>;
-  /** Cancel a task the assistant created. */
-  cancel(taskId: string): Promise<{ ok: boolean; error?: string }>;
+  /**
+   * The tasks `scope` may reach: its own thread's, plus — when `anyThread` —
+   * every other task except those from a private chat or private mail.
+   */
+  listReachable(scope: TaskScope): Promise<ScheduledTask[]>;
+  /** Cancel a task `scope` can reach. */
+  cancel(taskId: string, scope: TaskScope): Promise<{ ok: boolean; error?: string }>;
+  /** Edit the prompt, schedule or paused state of a task `scope` can reach. */
+  update(
+    taskId: string,
+    patch: UpdateTaskRequest,
+    scope: TaskScope
+  ): Promise<{ ok: true; task: ScheduledTask } | { ok: false; error: string }>;
   /** Surface a prominent in-app alert (the agent decided this run is worth showing). */
   notify(payload: { title?: string; message: string }, threadId: string): Promise<void>;
   /**

@@ -7,6 +7,15 @@ export default [
   { ignores: ['dist/**', 'release/**', 'node_modules/**', 'scripts/**', '.recall-build/**', '.skills-build/**'] },
   js.configs.recommended,
   {
+    rules: {
+      // New in ESLint 10's recommended set. Every hit here was the
+      // `let x = fallback; try { x = ... } catch { return }` shape, never a lost
+      // value; rewriting them only trades the initializer for TS
+      // definite-assignment friction.
+      'no-useless-assignment': 'off'
+    }
+  },
+  {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
       parser: tsparser,
@@ -18,7 +27,11 @@ export default [
     },
     rules: {
       ...tseslint.configs.recommended.rules,
-      ...reactHooks.configs.recommended.rules,
+      // react-hooks 7's recommended set adds the React Compiler rules (refs,
+      // set-state-in-effect, purity, ...). Stem does not run the compiler, so
+      // only the two classic hook rules apply, as under react-hooks 5.
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
       // TypeScript already checks for undefined identifiers; no-undef is noisy
       // and wrong for type-only globals (HTMLDivElement, etc.).
       'no-undef': 'off',

@@ -95,6 +95,9 @@ Deleting a task keeps its mail in the Inbox; the hidden threads its runs left be
 are removed. A failure's reason is also in the log (`stem.log` in Stem’s state
 folder), which is where to look if the task is gone.
 
-To replace the instruction or timing, edit the task here, or ask Stem in the chat
-that created it to cancel the task and create a new one. Deleting that chat leaves
-the task in place.
+To change the instruction or timing, edit the task here, or ask Stem in any chat
+("sign the Monday report as Stem", "move the backup check to 7:00", "pause the
+weekly film search"). Stem sees all your tasks from any chat, whichever chat
+scheduled them, except the tasks of private chats and private mail. It changes the
+task in place; the **Prompt** tab then says *Edited by Stem in a chat* with **Revert
+to the original**. Deleting the chat a task came from leaves the task in place.

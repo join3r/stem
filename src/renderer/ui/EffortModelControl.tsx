@@ -7,7 +7,7 @@ import { ModelPicker } from './ModelPicker';
 
 /**
  * The composer's effort + model control: a slider whose stops are the model's
- * reasoning levels, next to a label reading "High · Claude Opus". Clicking the
+ * reasoning levels, next to a label naming the model. Clicking the
  * label opens the same searchable model picker Settings uses — this is how the
  * model is changed mid-chat, replacing the trip to Settings.
  *
@@ -51,6 +51,8 @@ export function EffortModelControl({
   const idx = shown ? efforts.indexOf(shown) : -1;
   const fillPct = efforts.length > 1 && idx >= 0 ? (idx / (efforts.length - 1)) * 100 : 100;
 
+  // The slider shows the level; the label stays the model name alone so the row
+  // fits a narrow window, and the level is spelled out in the tooltip.
   const effortText = shown ? EFFORT_LABELS[shown] ?? shown : null;
 
   return (
@@ -85,14 +87,10 @@ export function EffortModelControl({
         ariaLabel="Model for this chat"
         disabled={disabled}
         triggerClassName="eff-model"
-        triggerTitle="Model for this chat — click to change"
+        triggerTitle={`${effortText ? `${effortText} effort · ` : ''}${model?.displayName ?? 'Model'} — click to change the model`}
         triggerContent={
           <>
-            {effortText && <span className="eff-model-effort">{effortText}</span>}
-            <span className="eff-model-name">
-              {effortText && '· '}
-              {model?.displayName ?? 'Model'}
-            </span>
+            <span className="eff-model-name">{model?.displayName ?? 'Model'}</span>
             <ChevronDown size={12} className="eff-model-chevron" />
           </>
         }

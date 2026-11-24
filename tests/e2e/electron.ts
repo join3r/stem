@@ -105,7 +105,7 @@ export interface LaunchedApp {
 }
 
 /** The Quick Chat fields a machine owns — see ClientSettings in shared/types.ts. */
-const CLIENT_QUICK_CHAT_KEYS = ['shortcut', 'windowShortcut', 'showOnAllDisplays', 'followAcrossSpaces'];
+const CLIENT_QUICK_CHAT_KEYS = ['shortcut', 'windowShortcut', 'showOnAllDisplays', 'followAcrossSpaces', 'stayWithWindow'];
 
 /**
  * Sort a seed into the file that will actually be read for each key. Mirrors

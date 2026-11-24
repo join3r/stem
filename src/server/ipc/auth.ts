@@ -4,13 +4,15 @@ import { markOnboardingCompleted, readSettings, updateDefaultModel, updateLocalP
 import { localProviderHealth, probeLocalProvider, probeLocalProviderOn, syncModelsConfig } from '../pi/models-config';
 import { parseModelOverrides } from '../pi/model-overrides';
 import { relayCallback } from '../pi/oauth-courier';
+import { planUsage } from '../voice/realtime';
 import { isCustomProviderId, isLocalProviderId } from '../../shared/providers';
 import type {
   ApiKeyProviderId,
   AuthProviderId,
   LocalProviderApi,
   LocalProviderId,
-  LocalProviderPatch
+  LocalProviderPatch,
+  PlanUsage
 } from '../../shared/types';
 
 /** The user code the E2E fake shows for the device-code flow (asserted by the wizard spec). */
@@ -18,9 +20,13 @@ const E2E_DEVICE_CODE = 'STEM-E2E1';
 /** How long that fake keeps the device-code step on screen before completing. */
 const E2E_DEVICE_CODE_HOLD_MS = 750;
 
+const USAGE_CACHE_MS = 60_000;
+let usageCache: { at: number; value: PlanUsage } | null = null;
+
 /** Provider sign-in (onboarding wizard) + local providers (Ollama / LM Studio / custom). */
 export function registerAuthIpc(deps: IpcDeps): void {
   registerServer('auth:providerLogin', async (_e, provider: AuthProviderId) => {
+    usageCache = null;
     if (deps.e2e) {
       // Scripted fake: surface the URL step, then complete, so the wizard's
       // whole state machine is exercised without a browser or network. The
@@ -96,6 +102,21 @@ export function registerAuthIpc(deps: IpcDeps): void {
     }
   );
   registerServer('providers:localHealth', () => localProviderHealth());
+  // The ChatGPT plan's 5-hour and weekly windows for the provider tile. Cached
+  // briefly: Settings re-reads it on every visit, and the numbers move slowly.
+  registerServer('providers:chatgptUsage', async (): Promise<PlanUsage> => {
+    if (deps.e2e) return { ok: false, reason: 'No plan usage in tests.' };
+    if (usageCache && Date.now() - usageCache.at < USAGE_CACHE_MS) return usageCache.value;
+    const token = await deps
+      .providerAuth()
+      ?.accessToken('openai-codex')
+      // quiet: a failed refresh reads as signed out, which the answer says.
+      .catch(() => undefined);
+    if (!token) return { ok: false, reason: 'Not signed in to ChatGPT.' };
+    const value = await planUsage(token);
+    usageCache = { at: Date.now(), value };
+    return value;
+  });
   // "Check again" in Settings: the same sync the 30s refresh runs, now, and the
   // restart that makes pi see a changed list (deferred while a turn streams).
   registerServer('providers:refreshLocal', async () => {
@@ -142,6 +163,7 @@ export function registerAuthIpc(deps: IpcDeps): void {
     return { ok: true, status: await deps.onAuthenticated() };
   });
   registerServer('providers:disconnect', async (_e, providerId: string) => {
+    usageCache = null;
     if (deps.e2e) return { ok: true, status: await deps.runtime().status() };
     try {
       await deps.providerAuth()!.removeProvider(providerId);

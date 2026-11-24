@@ -9,7 +9,17 @@ import { join } from 'node:path';
 const skillsDir = join(tmpdir(), `stem-skills-${process.pid}`);
 process.env.STEM_SKILLS_DIR = skillsDir;
 
-import { checkSplit, clampCurate, curateSkills, parseCurate, parseSplit, retireBudget, splitCandidate } from '../../src/server/skills/curate';
+import {
+  checkSplit,
+  clampCurate,
+  curateSkills,
+  parseCurate,
+  parseEstimates,
+  parseSplit,
+  retireBudget,
+  splitCandidate
+} from '../../src/server/skills/curate';
+import { readSkillRecord } from '../../src/server/skills/store';
 import type { EmbeddingsClient } from '../../src/server/recall/embeddings';
 import { readUsage, recordUses } from '../../src/server/skills/usage';
 import type { LlmClient } from '../../src/server/recall/llm';
@@ -27,14 +37,15 @@ function sameSpace(): EmbeddingsClient {
   } as unknown as EmbeddingsClient;
 }
 
-/** Records every prompt and answers split reviews and merge groups separately. */
-function routedLlm(answers: { split?: string[]; merge?: string }): LlmClient & { prompts: string[] } {
+/** Records every prompt and answers split reviews, merge groups and estimates separately. */
+function routedLlm(answers: { split?: string[]; merge?: string; estimate?: string }): LlmClient & { prompts: string[] } {
   const splits = [...(answers.split ?? [])];
   const prompts: string[] = [];
   return {
     prompts,
     complete: async (prompt: string) => {
       prompts.push(prompt);
+      if (prompt.startsWith('You estimate')) return answers.estimate ?? '{"recurs":{}}';
       if (prompt.startsWith('You check a small group')) return answers.merge ?? '{"merge":[],"archive":[]}';
       return splits.shift() ?? '{"verdict":"one"}';
     }
@@ -85,7 +96,16 @@ The cup is full and the kettle is empty.`;
 
 function writeSkill(
   slug: string,
-  opts: { source?: 'agent' | 'user'; version?: number; body?: string; description?: string; origin?: string }
+  opts: {
+    source?: 'agent' | 'user';
+    version?: number;
+    body?: string;
+    description?: string;
+    origin?: string;
+    /** `null` writes no estimate, which is what the estimate step looks for. */
+    recurs?: string | null;
+    tools?: string[];
+  }
 ): void {
   const src = opts.source ?? 'agent';
   const fm = [
@@ -99,6 +119,10 @@ function writeSkill(
     `    version: ${opts.version ?? 1}`,
     '    created: "2026-01-01T00:00:00.000Z"',
     '    updated: "2026-01-01T00:00:00.000Z"',
+    ...(opts.tools ? [`    tools: ${JSON.stringify(opts.tools)}`] : []),
+    // An estimate by default, so a test about splits or merges is not also a
+    // test of the estimate call.
+    ...(opts.recurs === null ? [] : [`    recurs: ${opts.recurs ?? 'occasional'}`]),
     '---'
   ].join('\n');
   mkdirSync(join(skillsDir, slug), { recursive: true });
@@ -213,7 +237,11 @@ describe('curateSkills', () => {
     // Drift guard on the one-job posture (2026-10-10): merges are for the same job
     // written twice, never for "related" skills — the umbrella posture this replaced
     // produced descriptions that could not say what was inside them.
-    expect(seen).toContain('ONLY two or more write-ups of the SAME job');
+    // A family (one procedure written once per target) is the same job too, since
+    // 2026-11-17; sharing a tool or a service still is not.
+    expect(seen).toContain('Two or more write-ups of the SAME job');
+    expect(seen).toContain('One procedure written once per target');
+    expect(seen).toContain('Sharing a tool, a service, a server, or a domain is NOT a reason to merge');
     expect(seen).not.toContain('labeled subsections?');
     expect(seen).toContain('archive — DEFAULT TO KEEP');
     expect(seen).toContain('Usage has been tracked since');
@@ -335,6 +363,143 @@ describe('curateSkills', () => {
     expect(existsSync(join(skillsDir, 'agent-coffee', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(skillsDir, 'other-coffee', '.disabled'))).toBe(true);
     expect(existsSync(join(skillsDir, 'recorded-coffee', '.disabled'))).toBe(false);
+  });
+});
+
+describe('family merges', () => {
+  const FAMILY_BODY = `## When to use
+When an app's MCP server has to be connected to Stem.
+
+## Steps
+1. Install the server package for the app.
+2. Add it to Stem with the app's command.
+
+Known targets:
+- BusyCal: \`npx busycal-mcp\`
+- Things: \`npx things-mcp\`
+
+## Verification
+The server lists its tools.`;
+
+  it('saves a family under its general name and retires every member', async () => {
+    writeSkill('install-busycal-mcp', { recurs: 'occasional', tools: ['busycal.*'] });
+    writeSkill('connect-things-mcp', { recurs: 'yearly', tools: ['things.add_todo', 'run_command'] });
+    writeSkill('unrelated', {});
+    recordUses(['install-busycal-mcp'], new Date('2026-06-01T00:00:00.000Z'));
+    recordUses(['connect-things-mcp'], new Date('2026-07-01T00:00:00.000Z'));
+
+    const llm = routedLlm({
+      merge: JSON.stringify({
+        merge: [
+          {
+            slugs: ['install-busycal-mcp', 'connect-things-mcp'],
+            name: 'connect-app-mcp-server',
+            description: "Use when an app's MCP server has to be installed and connected to Stem.",
+            content: FAMILY_BODY
+          }
+        ],
+        archive: []
+      })
+    });
+    const res = await curateSkills(llm, { force: true, embeddings: sameSpace() });
+    expect(res.merged).toBe(1);
+    expect(existsSync(join(skillsDir, 'install-busycal-mcp'))).toBe(false);
+    expect(existsSync(join(skillsDir, 'connect-things-mcp'))).toBe(false);
+    expect(existsSync(join(skillsDir, 'unrelated', 'SKILL.md'))).toBe(true);
+    const merged = readSkillRecord('connect-app-mcp-server');
+    expect(merged?.body).toContain('Known targets');
+    expect(merged?.origin).toBe('approved');
+    // The slowest rhythm among the members, and every tool that held a call
+    // (never a general one, which holds none).
+    expect(merged?.recurs).toBe('yearly');
+    expect(merged?.tools).toEqual(['busycal.*', 'things.add_todo']);
+    expect(merged?.change).toBe('Merged from install-busycal-mcp, connect-things-mcp');
+    expect(readUsage().skills['connect-app-mcp-server']).toEqual({ count: 2, lastUsedAt: '2026-07-01T00:00:00.000Z' });
+    // Both members can be put back by hand from the backup.
+    const run = readdirSync(join(skillsDir, '.curator-history'))[0];
+    expect(readdirSync(join(skillsDir, '.curator-history', run)).sort()).toEqual(['connect-things-mcp.md', 'install-busycal-mcp.md']);
+  });
+
+  it('keeps the first member\'s name when the new name is taken', async () => {
+    writeSkill('install-busycal-mcp', {});
+    writeSkill('connect-things-mcp', {});
+    writeSkill('unrelated', {});
+    const llm = routedLlm({
+      merge: JSON.stringify({
+        merge: [{ slugs: ['install-busycal-mcp', 'connect-things-mcp'], name: 'unrelated', description: 'Use when an app needs its MCP server connected.', content: FAMILY_BODY }],
+        archive: []
+      })
+    });
+    const res = await curateSkills(llm, { force: true, embeddings: sameSpace() });
+    expect(res.merged).toBe(1);
+    expect(readSkillRecord('install-busycal-mcp')?.body).toContain('Known targets');
+    expect(existsSync(join(skillsDir, 'connect-things-mcp'))).toBe(false);
+    expect(readSkillRecord('unrelated')?.body).toBe('Step 1 for unrelated.');
+  });
+
+  it('looks once at close neighbours that earlier passes already reviewed', async () => {
+    writeSkill('install-busycal-mcp', {});
+    writeSkill('connect-things-mcp', {});
+    writeSkill('unrelated', {});
+    // A pass with nothing to rank with: every skill counts as reviewed, and no
+    // group was ever shown to the model.
+    const blind = routedLlm({});
+    await curateSkills(blind, { embeddings: null });
+    expect(blind.prompts).toHaveLength(0);
+
+    const look = routedLlm({});
+    await curateSkills(look, { embeddings: sameSpace() });
+    expect(look.prompts.length).toBeGreaterThan(0);
+    expect(look.prompts.every((p) => p.startsWith('You check a small group'))).toBe(true);
+
+    const after = routedLlm({});
+    await curateSkills(after, { embeddings: sameSpace() });
+    expect(after.prompts).toHaveLength(0);
+  });
+});
+
+describe('recurrence estimates', () => {
+  it('reads estimates and drops values outside the list', () => {
+    expect(parseEstimates('{"recurs":{"a":"monthly","b":"sometimes","c":"Yearly"}}')).toEqual(
+      new Map([
+        ['a', 'monthly'],
+        ['c', 'yearly']
+      ])
+    );
+    expect(parseEstimates('{"merge":[]}')).toEqual(new Map());
+    expect(parseEstimates('I think monthly.')).toBeNull();
+  });
+
+  it('estimates only skills without one, and changes nothing else in the file', async () => {
+    writeSkill('send-monthly-invoice', { recurs: null, origin: 'user-requested' });
+    writeSkill('file-tax-return', { recurs: null });
+    writeSkill('fix-the-printer', { recurs: null });
+    writeSkill('already-known', { recurs: 'weekly' });
+    const llm = routedLlm({ estimate: '{"recurs":{"send-monthly-invoice":"monthly","file-tax-return":"yearly","already-known":"yearly"}}' });
+    await curateSkills(llm, { embeddings: null });
+
+    const estimate = llm.prompts.filter((p) => p.startsWith('You estimate'));
+    expect(estimate).toHaveLength(1);
+    expect(estimate[0]).toContain('- send-monthly-invoice: Use when the user needs send-monthly-invoice. (created 2026-01-01, never used)');
+    expect(estimate[0]).not.toContain('already-known');
+    // The user's own skill gets an estimate too: it is bookkeeping, not its text.
+    expect(readSkillRecord('send-monthly-invoice')).toMatchObject({ recurs: 'monthly', version: 1, updated: '2026-01-01T00:00:00.000Z', origin: 'user-requested' });
+    expect(readSkillRecord('file-tax-return')?.recurs).toBe('yearly');
+    // Not answered for: the window it already had, so it is not asked about every night.
+    expect(readSkillRecord('fix-the-printer')?.recurs).toBe('occasional');
+    expect(readSkillRecord('already-known')?.recurs).toBe('weekly');
+
+    const second = routedLlm({});
+    await curateSkills(second, { embeddings: null });
+    expect(second.prompts).toHaveLength(0);
+  });
+
+  it('leaves skills without an estimate when the reply is not the JSON shape', async () => {
+    writeSkill('a-skill', { recurs: null });
+    writeSkill('b-skill', { recurs: null });
+    writeSkill('c-skill', { recurs: null });
+    await curateSkills(routedLlm({ estimate: 'Most of these look monthly.' }), { embeddings: null });
+    expect(readSkillRecord('a-skill')?.recurs).toBeUndefined();
   });
 });
 

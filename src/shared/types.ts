@@ -116,6 +116,8 @@ export interface ActivityItem {
   startedAt?: number;
   /** A generate_image row that finished: the picture it made (no bytes). */
   image?: GeneratedImageRef;
+  /** A share_audio row that finished: the sound it put in the chat (no bytes). */
+  audio?: ChatAudioRef;
   /**
    * A coding_agent call that asked for a brand-new agent conversation
    * (`fresh_session`) — shown on the row so a wrong new-vs-continue call is
@@ -140,6 +142,23 @@ export interface GeneratedImageRef {
   /** The prompt the assistant wrote, and the one OpenAI actually used. */
   prompt?: string;
   revisedPrompt?: string;
+}
+
+/**
+ * A sound the assistant put in a chat with `share_audio` (a clip it cut, a
+ * recording it made). The bytes live in Stem's private audio store under
+ * `threadId` (files/chat-audio.ts), never in the session file or the event
+ * stream; clients fetch them on demand with `chats:audio`.
+ */
+export interface ChatAudioRef {
+  /** `aud_` + 10 hex; unique within its thread. */
+  id: string;
+  threadId: string;
+  mime: string;
+  /** What the card shows as its name ("Datacentrá · 03:50–07:30"). */
+  title?: string;
+  /** The file's size in bytes. */
+  bytes?: number;
 }
 
 /** A web source the model consulted, parsed out of a web_search result. */
@@ -204,6 +223,8 @@ export interface ChatMessage {
   sources?: SourceRef[];
   /** Assistant messages only: pictures generate_image made this turn (refs; bytes via `chats:image`). */
   images?: GeneratedImageRef[];
+  /** Assistant messages only: sounds share_audio put in the chat this turn (refs; bytes via `chats:audio`). */
+  audio?: ChatAudioRef[];
   /**
    * ISO timestamp the message was authored. Surfaced as a hover-revealed label on
    * user bubbles (mirroring the assistant model/timing reveal). Read from the pi
@@ -767,6 +788,8 @@ export interface BackendItem {
   startedAt?: number;
   /** A finished generate_image call: the picture it made (a ref, never bytes). */
   image?: GeneratedImageRef;
+  /** A finished share_audio call: the sound it put in the chat (a ref, never bytes). */
+  audio?: ChatAudioRef;
   /** A coding_agent call on `item/started` that asked for a new agent conversation. */
   freshSession?: true;
 }
@@ -863,6 +886,41 @@ export interface SkillSummary {
   failCount?: number;
   /** The most recent such report. */
   lastFailure?: { at: string; reason: string };
+  /** Tools whose first call in a turn hands this skill over (`server.tool`, `server.*`, or a tool name). */
+  tools?: string[];
+  /**
+   * How the recorded uses ended (server/skills/cases.ts): accepted, and went
+   * wrong (corrected, asked again, or reported). Absent with no graded use.
+   */
+  outcomes?: { accepted: number; failed: number };
+  /** Earlier versions kept, which Manage can restore. */
+  versions?: number;
+  /** Why the current version was written, when the writer said. */
+  change?: string;
+  /**
+   * How often the task is expected to come up again: the writer's estimate, or
+   * the user's own from Manage. Absent when nobody has said.
+   */
+  recurs?: SkillRecurrence;
+  /**
+   * Days without use after which Stem switches this skill off by itself, which
+   * follows from `recurs`. Absent for a skill Stem never switches off (the
+   * user's own file).
+   */
+  retiresAfterDays?: number;
+}
+
+/** How often a skill's task is expected to come up again (server/skills/contract.ts). */
+export type SkillRecurrence = 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'occasional';
+
+/** One kept earlier version of a skill (server/skills/store.ts). */
+export interface SkillVersionSummary {
+  version: number;
+  /** ISO timestamp when that version was written. */
+  updated: string;
+  description: string;
+  /** Why that version was written, when the writer said. */
+  change?: string;
 }
 
 // ---- Files (the persistent drop-place the assistant can read) ----
@@ -1179,7 +1237,7 @@ export interface ScheduledTask {
   /**
    * The conversation this task was scheduled FROM — a chat, or a mail persona's
    * hidden session when a persona scheduled it. Used only for the clock badge
-   * on that chat's row and to scope `list_tasks`/`cancel_task` called there.
+   * on that chat's row and to keep an unattended run's task tools to its own thread.
    * No run ever writes to it: each firing gets a thread of its own.
    */
   threadId: string;
@@ -1209,8 +1267,14 @@ export interface ScheduledTask {
    * firing vanished with the row stuck on "running".
    */
   inFlight?: { at: string; threadId?: string };
-  /** Short human label derived from the prompt, for the list + chat badge. */
+  /**
+   * Short human label for the list, the chat badge and the task's mail subject:
+   * the prompt's first line until a small model has written a name for it
+   * (scheduler/title.ts), then that name.
+   */
   title: string;
+  /** The title is a written name for the current prompt; cleared whenever the prompt changes. */
+  titleWritten?: boolean;
   /** Who and what this task's runs execute as (see {@link TaskRunsAs}). */
   runsAs: TaskRunsAs;
   /**
@@ -1219,7 +1283,12 @@ export interface ScheduledTask {
    * and a blind run needs everything spelled out. `original` is the prompt as
    * it stood, for Revert; cleared by Revert or by the user's own prompt edit.
    */
-  rewritten?: { at: string; original: string };
+  rewritten?: {
+    at: string;
+    original: string;
+    /** 'edit': the assistant's update_task changed it in a chat; absent: the stand-alone rewrite pass. */
+    kind?: 'edit';
+  };
   /**
    * The last few firings, newest first (at most TASK_RECENT_RUNS). The run
    * thread itself is deleted when it sent no mail, so this is the only trace a
@@ -1265,6 +1334,14 @@ export interface ScheduleTaskRequest {
   at?: string;
   /** Run the task as this persona (validated to exist when the task is created). */
   personaId?: string;
+}
+
+/** The assistant's update_task edit: any subset, at most one of cron/at. */
+export interface UpdateTaskRequest {
+  prompt?: string;
+  cron?: string;
+  at?: string;
+  enabled?: boolean;
 }
 
 /** Editable fields when updating a task's schedule from the Tasks tab. */
@@ -1415,6 +1492,16 @@ export interface McpServerDetails {
 
 /** Stands in for a stored secret in McpServerDetails; see there. */
 export const MCP_SECRET_MASK = '••••••••';
+
+/**
+ * Whether a stored MCP env var or header holds a credential, by its name: a
+ * value cannot say what it is, and a name that says "token" is the one
+ * convention every MCP server's README follows. Values under other names
+ * (NODE_OPTIONS, PATH, a URL) are shown, because they change what runs.
+ */
+export function looksLikeMcpSecret(key: string): boolean {
+  return /token|secret|passw|credential|api[_-]?key|private|authorization|cookie|bearer/i.test(key);
+}
 
 export interface McpLoginResult {
   ok: boolean;
@@ -2473,11 +2560,38 @@ export interface McpHostLocalState {
 export interface McpAdminProposal {
   id: number | string;
   threadId: string;
-  action: 'add' | 'remove';
+  action: 'add' | 'remove' | 'edit';
   /** Present for `add`: the server the assistant wants to configure. */
   input?: McpServerInput;
-  /** Present for `remove` (and as a label for `add`): the server name. */
+  /** The server name: what to remove or edit, and the label for an add. */
   name?: string;
+  /** Present for `edit`: only what changes. Everything it leaves out stays as stored. */
+  patch?: McpServerPatch;
+  /** Present for `edit`: how the server is reached now, so the card can show old → new. */
+  before?: {
+    command?: string;
+    args?: string[];
+    url?: string;
+    /** Names of stored env vars / headers (and the OAuth client secret) the edit keeps. */
+    keptKeys?: string[];
+  };
+}
+
+/**
+ * A change to one existing MCP server, made by the assistant's `edit_mcp_server`.
+ * An add replaces the whole entry, and the assistant cannot read a stored token
+ * back, so before this it could not change a command without wiping the token
+ * beside it. Omitted fields keep their stored values; `env` / `headers` set only
+ * the keys they name, and `removeEnv` / `removeHeaders` drop keys.
+ */
+export interface McpServerPatch {
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  removeEnv?: string[];
+  removeHeaders?: string[];
 }
 
 /**
@@ -2909,7 +3023,9 @@ export type ActivityKind =
   | 'memory.relationSweepBackfill'
   | 'memory.adjudicate'
   | 'memory.consolidate'
+  | 'memory.groups'
   | 'memory.profile'
+  | 'memory.people'
   | 'memory.deepCheck'
   | 'memory.episodicEmbed'
   | 'memory.factEmbed'
@@ -2976,6 +3092,8 @@ export interface ActiveFacts {
     disputed?: boolean;
   }>;
   tier: FactTier;
+  /** Parent memories (broader memories over related facts) chosen with the facts; draft preview only. */
+  parents?: Array<{ text: string; sensitive: boolean }>;
 }
 
 /** Outcome of saving a composer quick note (`/note` / `//`) as a durable fact. */
@@ -3093,6 +3211,49 @@ export interface PersonaBrowserPin {
    * every profile, including ones added later.
    */
   profiles?: string[];
+}
+
+/**
+ * Someone in the user's life Stem should know about (Manage → People). Facts
+ * belong to a person by name: a fact whose text names them (name, alias, email
+ * or Stem address) is theirs — see server/recall/people-match.ts.
+ */
+export interface Person {
+  id: string;
+  name: string;
+  /** Other names the user uses for them: a nickname, first name only. */
+  aliases: string[];
+  /** Who they are to the user: "colleague at Awantech", "sister". */
+  relation: string;
+  /** Their Stem address, when they have one (inter-Stem mail). Empty when none. */
+  stemAddress: string;
+  emails: string[];
+  /** Other places to reach them, free-form: "Slack: @peter", "+421 900 …". */
+  handles: string[];
+  /** The user's own notes, shown to the assistant whenever this person comes up. */
+  notes: string;
+  /** 'suggested': proposed from memory, not used until the user accepts it. */
+  status: 'active' | 'suggested';
+  /** Why it was suggested (suggested people only). */
+  reason?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A fact that names a person, as the People editor lists it. */
+export interface PersonFact {
+  id: number;
+  text: string;
+  source: string;
+  sensitivity: FactSensitivity;
+  pinned: boolean;
+}
+
+/** What a People "Suggest" pass did. */
+export interface PeopleSuggestResult {
+  /** New suggestions added. */
+  added: number;
+  people: Person[];
 }
 
 export interface Persona {
@@ -3598,6 +3759,11 @@ export interface MailConversation {
 }
 
 /** The whole mail payload: conversations + items + per-conversation triage state. */
+/** mail:changed's payload: which conversations changed. Older servers send none. */
+export interface MailChange {
+  conversationIds?: string[];
+}
+
 export interface MailListResult {
   conversations: MailConversation[];
   items: MailItem[];
@@ -3609,6 +3775,12 @@ export interface MailListResult {
   inbox: InboxState;
   /** The version of the system serving this list — what items' `sys` compare against. */
   sys?: SystemVersion;
+  /**
+   * Present on a partial answer: the conversations it speaks for. Their
+   * conversation and items replace the client's; a named id with no
+   * conversation here was deleted. Absent = the full list. See shared/mail-delta.ts.
+   */
+  delta?: { conversationIds: string[] };
 }
 
 /** What the compose surface sends. */
@@ -3845,6 +4017,13 @@ export interface QuickChatSettings {
    * stays visible. Hidden again when the main window regains focus.
    */
   followAcrossSpaces: boolean;
+  /**
+   * "Ask about this window" panels keep to their window (macOS): stacked just
+   * above it instead of over everything, and hidden while it is minimised,
+   * hidden or on another Space. Off: the panel floats on top and only follows
+   * the window's position.
+   */
+  stayWithWindow: boolean;
   /** Play a macOS chime when a turn finishes while the progress pill is visible. */
   finishSound: boolean;
 }
@@ -3874,7 +4053,9 @@ export type ManageIntent =
   /** MCP: a new server filled in from the official-server catalog (mcp-app-catalog.ts). */
   | { kind: 'mcp-connect'; entryId: string }
   /** Settings → Features → Browser control. */
-  | { kind: 'browser-control' };
+  | { kind: 'browser-control' }
+  /** Settings, opened on purpose: put the focus in its search field. */
+  | { kind: 'settings-search' };
 
 export interface QuickChatShortcutStatus {
   accelerator: string | null;
@@ -3899,7 +4080,7 @@ export interface QuickChatShortcutStatus {
  */
 export type ClientQuickChatSettings = Pick<
   QuickChatSettings,
-  'shortcut' | 'windowShortcut' | 'showOnAllDisplays' | 'followAcrossSpaces'
+  'shortcut' | 'windowShortcut' | 'showOnAllDisplays' | 'followAcrossSpaces' | 'stayWithWindow'
 >;
 
 /**
@@ -4141,6 +4322,21 @@ export interface HarnessSettings {
 
 /** Whether a voice call may start or go on; `reason` is shown to the user. */
 export type VoiceAllowance = { ok: true } | { ok: false; reason: string };
+
+/** One usage window of a ChatGPT plan (the 5-hour one, the weekly one). */
+export interface PlanUsageWindow {
+  /** Window length in seconds, when ChatGPT says (18000 = 5 h, 604800 = a week). */
+  windowSeconds: number | null;
+  /** 0–100, how much of the window is spent. */
+  usedPercent: number;
+  /** When the window resets, epoch ms; null when not given. */
+  resetsAt: number | null;
+}
+
+/** How much of the ChatGPT plan's usage windows is left (Settings → Models). */
+export type PlanUsage =
+  | { ok: true; plan: string | null; limitReached: boolean; windows: PlanUsageWindow[] }
+  | { ok: false; reason: string };
 
 /**
  * Coding agents and computer control in chats that run as NO persona
@@ -4878,6 +5074,45 @@ export interface QuickChatFocus {
   window?: QuickChatWindow;
 }
 
+/** One conversation about a window: a tab in that window's panel. */
+export interface QuickChatTab {
+  id: string;
+  /** The first question asked in it; null while nothing has been asked. */
+  label: string | null;
+  /** The tab whose window is on screen. */
+  active: boolean;
+  /** An answer is being written. */
+  running: boolean;
+  /** An answer finished while the tab was out of sight. */
+  unread: boolean;
+}
+
+/**
+ * Main → overlay: the tabs of the window panel this overlay belongs to, sent
+ * whenever one opens, closes, switches, starts or finishes an answer. The plain
+ * Quick Chat panel never gets one.
+ */
+export interface QuickChatTabs {
+  tabs: QuickChatTab[];
+  /** Which of `tabs` the receiving overlay is. */
+  self: string;
+  /** Another tab may still be opened (a window has a few at most). */
+  canAdd: boolean;
+}
+
+/**
+ * Main → overlay: a window panel shrunk to a small pill beside its window
+ * (null: back to the full panel). The pill shows the answer's progress.
+ */
+export interface QuickChatMini {
+  /** The answer's progress; null when no answer runs or waits to be read. */
+  status: QuickChatStatus | null;
+  /** The app the window belongs to, shown when there is no status. */
+  app: string;
+  /** How many conversations its window has open. */
+  tabs: number;
+}
+
 /** The window "Ask about this window" captured, as the overlay shows it. */
 export interface QuickChatWindow {
   /** The window server's id, which main keys the window's text by. */
@@ -5171,6 +5406,12 @@ export interface StemApi {
    * file manager.
    */
   removeSkill(slug: string): Promise<SkillSummary[]>;
+  /** Say how often a skill's task comes up, which sets how long it is kept unused. */
+  setSkillRecurrence(slug: string, recurs: SkillRecurrence): Promise<SkillSummary[]>;
+  /** The earlier versions of one skill that are kept, newest first. */
+  listSkillVersions(slug: string): Promise<SkillVersionSummary[]>;
+  /** Put an earlier version back, as a new version. Rejects with the reason when it cannot. */
+  restoreSkillVersion(slug: string, version: number): Promise<SkillSummary[]>;
   /**
    * `/learn [focus]` — save a skill from the turn that just finished on this
    * thread. Bypasses the automatic gate (the user asked), but still respects the
@@ -5216,6 +5457,14 @@ export interface StemApi {
    * and show it there. Answers with where it landed.
    */
   downloadFile(rel: string): Promise<string>;
+  /**
+   * Fetch one file out of the Files folder into a temporary folder on this
+   * machine and open it there, or only show it when it is not a document
+   * (desktop/open-link.ts). For `files/…` links in replies.
+   */
+  openFilesItem?(rel: string): Promise<void>;
+  /** The same for a file in a chat's scratch folder (a `scratch/…` link in a reply). */
+  openScratchItem?(threadId: string, rel: string): Promise<void>;
   /** Read an on-disk image → `data:` URL for a bubble thumbnail (null if not an image). */
   previewImage(path: string): Promise<string | null>;
   /**
@@ -5322,10 +5571,17 @@ export interface StemApi {
 
   // Mail. Mutations return the fresh MailListResult, like the inbox mutators.
   listMail(): Promise<MailListResult>;
+  /** Just these conversations, as a delta (shared/mail-delta.ts). Throws on a server older than it. */
+  listMailConversations(conversationIds: string[]): Promise<MailListResult>;
   getMailWork(conversationId: string): Promise<MailWorkResult>;
   onMailWorkChanged(listener: (event: { conversationId: string }) => void): () => void;
   /** Compose a new mail conversation and deliver it to its driver persona. */
   composeMail(input: MailComposeInput): Promise<MailListResult>;
+  /**
+   * Upload a draft's attachment to a remote server now (its `path` comes back as
+   * an upload handle); unchanged when the server shares this disk.
+   */
+  stageAttachment(att: TurnAttachment): Promise<TurnAttachment>;
   /** Reply into a conversation (resumes the driver persona with full context). */
   replyMail(
     conversationId: string,
@@ -5334,6 +5590,8 @@ export interface StemApi {
   ): Promise<MailListResult>;
   /** Pull another persona into an existing conversation's participant set. */
   addMailParticipant(conversationId: string, personaId: string): Promise<MailListResult>;
+  /** Replace the conversation's personas; the first leads. */
+  setMailParticipants(conversationId: string, personaIds: string[]): Promise<MailListResult>;
   /** Stop a conversation's in-flight deliveries (queued dropped, turns interrupted). */
   stopMail(conversationId: string): Promise<{ stopped: boolean }>;
   /** Allow or deny a parked run's command (an approval item in a conversation). */
@@ -5372,9 +5630,23 @@ export interface StemApi {
   /** Delete a conversation, its items, and its hidden persona threads. */
   deleteMailConversation(conversationId: string): Promise<MailListResult>;
   /** Fired whenever mail changes server-side (a delivery landed, a reply arrived). */
-  onMailChanged(listener: () => void): () => void;
+  /** `change` names the conversations a write touched; absent = re-read the whole list. */
+  onMailChanged(listener: (change?: MailChange) => void): () => void;
   /** Fired after any persona is saved or deleted, on every connected client. */
   onPersonasChanged(listener: () => void): () => void;
+
+  // People (Manage → People). Mutations return the fresh list.
+  listPeople(): Promise<Person[]>;
+  /** Create or update a person (upsert by id; accepting a suggestion is a save with status 'active'). */
+  savePerson(person: Person): Promise<Person[]>;
+  /** Delete a person; a deleted suggestion is not suggested again. */
+  deletePerson(id: string): Promise<Person[]>;
+  /** The live facts that name this person. */
+  personFacts(id: string): Promise<PersonFact[]>;
+  /** Ask the model for people named in memory who are not in the list yet. */
+  suggestPeople(): Promise<PeopleSuggestResult>;
+  /** Fired after any person is saved, deleted or suggested, on every connected client. */
+  onPeopleChanged(listener: () => void): () => void;
 
   listMcpServers(): Promise<McpServerSummary[]>;
   /** Live per-server connection status (keyed by name) from the running app-server. */
@@ -5574,10 +5846,20 @@ export interface StemApi {
   openChat(threadId: string): Promise<ChatHistory>;
   /** Refresh a transcript without opening/prewarming its backend session. */
   readChatHistory(threadId: string): Promise<ChatHistory>;
+  /**
+   * This machine's cached copy of a transcript (remote installs only), flagged
+   * `offline`, or null. Answered locally without touching the network, so a
+   * chat opens at once and the server's answer replaces it when it lands.
+   */
+  cachedChat?(threadId: string): Promise<ChatHistory | null>;
   /** One image a thread holds (see GeneratedImageRef), as a data URL; null when gone. */
   getChatImage(threadId: string, imageId: string): Promise<{ dataUrl: string; mime: string } | null>;
+  /** One sound a thread holds (see ChatAudioRef), as a data URL; null when gone. */
+  getChatAudio(threadId: string, audioId: string): Promise<{ dataUrl: string; mime: string } | null>;
   /** Desktop only: write an image (data URL) straight into Downloads; answers the path. */
   saveImageToDownloads(dataUrl: string, name: string): Promise<string>;
+  /** Desktop only: write a sound (data URL) straight into Downloads; answers the path. */
+  saveAudioToDownloads(dataUrl: string, name: string): Promise<string>;
   /** Desktop only: put an image (data URL) on the clipboard. */
   copyImage(dataUrl: string): Promise<void>;
   /** Drop the given turn and every later turn from the thread (retry/edit re-run). */
@@ -5590,6 +5872,8 @@ export interface StemApi {
   voiceConnect(offerSdp: string): Promise<{ sdp: string }>;
   /** Voice chat: is a call still allowed (switch, sign-in, plan usage left)? Polled during a call. */
   voiceCheck(): Promise<VoiceAllowance>;
+  /** The ChatGPT subscription's 5-hour and weekly usage windows (Settings → Models). */
+  chatgptPlanUsage(): Promise<PlanUsage>;
   listPins(threadId: string): Promise<ChatPin[]>;
   addPin(threadId: string, input: ChatPinInput): Promise<ChatPin[]>;
   updatePin(threadId: string, pinId: string, patch: ChatPinPatch): Promise<ChatPin[]>;
@@ -5934,6 +6218,22 @@ export interface StemApi {
   /** Shrink the visible overlay to the compact bar (its session just emptied). */
   /** `chip`: the bar is showing an "Ask about this window" chip. */
   compactQuickChat(chip?: boolean): Promise<void>;
+  /** Window panel: a new tab with a fresh capture of the same window. */
+  newQuickChatTab(): Promise<void>;
+  /** Window panel: bring another of this window's tabs forward. */
+  switchQuickChatTab(id: string): Promise<void>;
+  /** Window panel: close a tab. The tab itself stops its answer first (see onQuickChatCloseTab). */
+  closeQuickChatTab(id: string): Promise<void>;
+  /** Window panel: the tab list changed. */
+  onQuickChatTabs(listener: (tabs: QuickChatTabs) => void): () => void;
+  /** Window panel: shrink to a small pill beside its window (⌘M). */
+  minimizeQuickChat(): Promise<void>;
+  /** Window panel: grow the pill back to the full panel. */
+  expandQuickChat(): Promise<void>;
+  /** Window panel: it became a pill (with what the pill shows), or the full panel again (null). */
+  onQuickChatMini(listener: (mini: QuickChatMini | null) => void): () => void;
+  /** Window panel: this tab is being closed; stop its answer, then call closeQuickChatTab(own id). */
+  onQuickChatCloseTab(listener: (request: { id: string }) => void): () => void;
   /** Overlay: fired each time the overlay is summoned; `reset` => fresh session. */
   onQuickChatFocus(listener: (focus: QuickChatFocus) => void): () => void;
   /** HUD: fired with the current one-line status while the overlay is hidden. */

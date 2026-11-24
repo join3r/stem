@@ -52,6 +52,7 @@ import type {
 import { recallStore } from '../recall/store';
 import * as activity from '../activity';
 import { getFactRerankStatus } from '../recall/retrieval';
+import { usesGteMemory } from '../../shared/recall-recommended';
 const { getAutoResolvedConflicts, getEpisodicStats, getActiveFactIds, getFactsByIds, getFactDetails, getMemoryConflicts, setFactPinned: storeSetFactPinned, confirmFact: storeConfirmFact, resolveMemoryConflict: storeResolveMemoryConflict, restoreSupersededFact: storeRestoreSupersededFact } = recallStore;
 
 /** The Memory tab's surface: facts, episodic store, rebuild, and retrieval status. */
@@ -139,7 +140,7 @@ export function registerMemoryIpc(deps: IpcDeps): void {
   registerServer('reranker:localStatus', async (): Promise<LocalRerankStatus> => {
     // Same panel-open kick as embeddings:localStatus, for the reranker model.
     const retrieval = (await readSettings()).retrieval;
-    if (!deps.e2e && retrieval.reranker.mode === 'local') {
+    if (!deps.e2e && retrieval.reranker.mode === 'local' && !usesGteMemory(retrieval)) {
       deps.embedManager()?.ensureRerank(resolveRerankSpec(retrieval));
     }
     return deps.embedManager()?.rerankStatus() ?? { model: DEFAULT_LOCAL_RERANK_MODEL, state: 'idle' };
@@ -223,7 +224,7 @@ export function registerMemoryIpc(deps: IpcDeps): void {
     return { facts, tier: rec.tier };
   });
   registerServer('memory:previewFacts', async (_e, text: string): Promise<ActiveFacts> => {
-    const { facts, tier } = await previewFacts(text ?? '');
+    const { facts, tier, parents } = await previewFacts(text ?? '');
     return { facts: facts.map((f) => ({
       id: f.id,
       text: f.text,
@@ -231,7 +232,7 @@ export function registerMemoryIpc(deps: IpcDeps): void {
       sensitivity: f.sensitivity,
       reason: f.selectionReason,
       ...(f.disputed ? { disputed: true } : {})
-    })), tier };
+    })), tier, parents: parents.map((p) => ({ text: p.text, sensitive: p.sensitive })) };
   });
   registerServer('memory:setEpisodicLimit', (_e, bytes: number) => setEpisodicLimit(bytes));
   registerServer('memory:setTidyThreshold', (_e, n: number) => setTidyUpThreshold(n));
@@ -258,6 +259,6 @@ export function registerMemoryIpc(deps: IpcDeps): void {
       worked: r.updated,
       detail: r.updated ? 'Rewrote the summary' : 'Summary unchanged'
     }));
-    return { profile: getUserProfile(), updated: result.updated, ...(result.reason ? { reason: result.reason } : {}) };
+    return { profile: await getUserProfile(), updated: result.updated, ...(result.reason ? { reason: result.reason } : {}) };
   });
 }

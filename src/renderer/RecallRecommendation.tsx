@@ -14,7 +14,7 @@ import { recallSetupStatus, recommendedRetrievalPatch } from '../shared/recall-r
 
 /** Human name for the stages a setup is running, for the "you have X" line. */
 function describe(retrieval: RetrievalSettings): string {
-  const { embedOk, rerankOk, factOk } = recallSetupStatus(retrieval);
+  const { embedOk, rerankOk } = recallSetupStatus(retrieval);
   const parts: string[] = [];
   if (!embedOk) {
     const e = retrieval.embeddings;
@@ -23,8 +23,6 @@ function describe(retrieval: RetrievalSettings): string {
   if (!rerankOk) {
     const r = retrieval.reranker;
     parts.push(r.mode === 'off' ? 'no reranker' : `the ${r.localModel} reranker`);
-  } else if (!factOk) {
-    parts.push('the Qwen3 reranker alone');
   }
   return parts.join(' and ');
 }
@@ -41,11 +39,9 @@ export function RecallRecommendation({
   const [error, setError] = useState<string | null>(null);
   const patch = recommendedRetrievalPatch(retrieval);
   if (!patch) return null;
-  const { rerankOk, factOk } = recallSetupStatus(retrieval);
-  // One download per stage the patch moves: the embedder (and a re-index), the
-  // Qwen3 reranker, and GTE on top of it.
+  // One download per stage the patch moves: the embedder (and a re-index) and GTE.
   const embedChanges = Boolean(patch.embeddings);
-  const downloads = (embedChanges ? 1 : 0) + (!rerankOk ? 1 : 0) + (!factOk ? 1 : 0);
+  const downloads = (embedChanges ? 1 : 0) + (patch.reranker ? 1 : 0);
 
   async function apply() {
     if (!patch) return;

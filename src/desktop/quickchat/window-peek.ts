@@ -119,11 +119,36 @@ export async function readWindowText(windowId: number): Promise<string | null> {
   }
 }
 
-/** Where the window is now, or null once it has closed. */
-export async function windowBounds(windowId: number): Promise<Rect | null> {
+/**
+ * Where the window is now and whether it is on screen (false while minimised,
+ * its app hidden, or on another Space; helpers that cannot tell say nothing and
+ * count as on screen). Null once it has closed — or, on helpers that report
+ * minimised windows as gone, while minimised.
+ */
+export interface WindowState {
+  bounds: Rect;
+  onScreen: boolean;
+  /** Its app is the one in front. Null when the helper cannot tell (older helper). */
+  frontmost: boolean | null;
+}
+
+export async function windowState(windowId: number): Promise<WindowState | null> {
   if (!helper?.alive) return null;
-  const reply = (await helper.call('window-bounds', { windowId }, 2_000)) as unknown as { ok: boolean; bounds?: unknown };
-  return reply.ok ? asRect(reply.bounds) : null;
+  const reply = (await helper.call('window-bounds', { windowId }, 2_000)) as unknown as {
+    ok: boolean;
+    bounds?: unknown;
+    onScreen?: unknown;
+    frontmost?: unknown;
+  };
+  const bounds = reply.ok ? asRect(reply.bounds) : null;
+  if (!bounds) return null;
+  return { bounds, onScreen: reply.onScreen !== false, frontmost: typeof reply.frontmost === 'boolean' ? reply.frontmost : null };
+}
+
+/** Give the keyboard back to the app that owns `windowId` (macOS). Best effort. */
+export async function focusWindowApp(windowId: number): Promise<void> {
+  if (!helper?.alive) return;
+  await helper.call('focus-app', { windowId }, 2_000).catch(() => undefined);
 }
 
 export function stopWindowPeek(): void {

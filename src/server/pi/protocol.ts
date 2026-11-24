@@ -26,7 +26,7 @@ import type { PiEvent } from './rpc';
  * raw-event shapes, hook timing, and extension APIs are all unversioned and
  * have broken on pi minor bumps before.
  */
-export const TESTED_PI_VERSION = '1.1.0';
+export const TESTED_PI_VERSION = '1.6.0';
 
 // ---- extension_ui_request sentinel titles ----
 
@@ -41,7 +41,7 @@ export const INSTRUCTIONS_APPROVAL_TITLE = 'stem-instructions-approval';
 
 /**
  * Scheduled-task tool round-trip (`input`): schedule_task / notify_user /
- * list_tasks / cancel_task. The op payload rides in `placeholder`; PiRuntime
+ * list_tasks / update_task / cancel_task. The op payload rides in `placeholder`; PiRuntime
  * answers with a JSON result string.
  */
 export const TASK_BRIDGE_TITLE = 'stem-task-bridge';
@@ -67,6 +67,23 @@ export const EXEC_BRIDGE_TITLE = 'stem-exec-bridge';
  * thread and answers with a JSON result string.
  */
 export const SAVE_BRIDGE_TITLE = 'stem-save-bridge';
+
+/**
+ * share_audio tool round-trip (`input`): `{ from, title? }` rides in
+ * `placeholder`; PiRuntime copies the sound into the chat's audio store
+ * (files/chat-audio.ts) for the live turn's thread and answers
+ * `{ ok, audio, text }` or `{ ok: false, error }`.
+ */
+export const AUDIO_BRIDGE_TITLE = 'stem-audio-bridge';
+
+/**
+ * generate_image file-reference round-trip (`input`): `{ refs: string[] }`
+ * rides in `placeholder` — the references the session itself could not
+ * resolve (files, or `img_…` ids mailed in from another thread). PiRuntime
+ * reads them (files/image-refs.ts) for the live turn's thread and answers
+ * `{ ok, images: [{ ref, mimeType, data }] }` or `{ ok: false, error }`.
+ */
+export const IMAGE_REF_BRIDGE_TITLE = 'stem-image-ref-bridge';
 
 /**
  * Device-located MCP round-trip (`input`): `{ op: 'tools' | 'call', server, tool?,
@@ -142,6 +159,19 @@ export const SERVICE_TIER_GATE_FILE = 'service-tier.json';
  * propose by reply instead of raising a card nobody is watching.
  */
 export const TURN_CONTEXT_GATE_FILE = 'turn-context.json';
+/**
+ * `{ turnId, skills: [{ slug, tools, text }] }` — skills to hand over when this
+ * turn first calls a tool they govern (skills/inject.ts toolSkillsForTurn).
+ * Rewritten before every prompt, empty when there are none.
+ */
+export const TOOL_SKILLS_GATE_FILE = 'tool-skills.json';
+/**
+ * Opening tag of a skill handed over at a tool call (the held-back call's
+ * result). The `trigger` attribute names the skill by slug: settle credits it
+ * from the trace (skills/inject.ts toolSkillsHandedOver), and normalize.ts
+ * shows the held call as a skill hold rather than a failure.
+ */
+export const TOOL_SKILL_MARKER = '<stem_skills version="1" trigger="';
 /** `{ roots: string[] }` — absolute roots of read-only connected folders. */
 export const PROTECTED_ROOTS_FILE = 'protected-roots.json';
 /** OAuth tokens for remote MCP servers, keyed by server name. */
@@ -162,6 +192,10 @@ export const SKILLS_REV_FILE = '.skills-rev';
 export const ENV_MCP_CONFIG = 'STEM_MCP_CONFIG';
 export const ENV_MCP_OAUTH = 'STEM_PI_MCP_OAUTH';
 export const ENV_SKILLS_DIR = 'STEM_SKILLS_DIR';
+/** Where add_mcp_server tells the model to install a server it built (workspace/paths.ts mcpInstallRoot). */
+export const ENV_MCP_INSTALL_ROOT = 'STEM_MCP_INSTALL_ROOT';
+/** JSON [{ root, kind }]: folders a server may not live in (pi/mcp-install-paths.mjs). */
+export const ENV_MCP_SHORT_LIVED_ROOTS = 'STEM_MCP_SHORT_LIVED_ROOTS';
 /**
  * Directory this process's PER-TURN gate files live in (native-search.json /
  * service-tier.json, plus the active-tools.json diagnostic). Each worker of the

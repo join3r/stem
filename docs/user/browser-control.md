@@ -75,6 +75,11 @@ The same two places as computer control, and a conversation gets it from exactly
   that bar ends the run.
 - There are no approvals per action. Leave the switch off if this Stem server is not
   yours alone.
+- Stem never types passwords, one-time codes, PINs or card details; it tells you and
+  waits. A bank account number (IBAN) is not a secret: it fills one in when you ask.
+  On a form it picks the details that fit, private email and phone for a private
+  matter and work ones for work, and asks when it can't tell. Computer control
+  follows the same rules for passwords, codes, card details and IBANs.
 
 Web pages can contain text written to mislead an assistant. Stem is told never to
 follow instructions found on a page and to act only on what you asked, but a page is

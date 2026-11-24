@@ -48,10 +48,9 @@ FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-# patches/ and scripts/ensure-electron.mjs are named by `postinstall`, so they
-# have to exist before `npm ci` rather than with the rest of the source.
+# scripts/ensure-electron.mjs is named by `postinstall`, so it has to exist
+# before `npm ci` rather than with the rest of the source.
 COPY package.json package-lock.json ./
-COPY patches ./patches
 COPY scripts/ensure-electron.mjs ./scripts/ensure-electron.mjs
 RUN npm ci --no-audit --no-fund
 COPY tsconfig.json electron.vite.config.ts ./
@@ -80,16 +79,9 @@ FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 COPY package.json package-lock.json ./
-COPY patches ./patches
-COPY scripts/ensure-electron.mjs ./scripts/ensure-electron.mjs
-# `postinstall` runs patch-package, which is a devDependency and so is not
-# installed by --omit=dev — the bare `npm ci` dies with `patch-package: not
-# found`. Skip scripts and apply the patches with a fetched patch-package
-# instead: pi-web-access is a production dependency and must ship patched.
-# (ensure-electron.mjs is the other postinstall step; it exits 0 immediately
-# when electron is absent, which with --omit=dev it always is.)
-RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts \
-  && npx --yes patch-package@8.0.1
+# No install scripts: `postinstall` is only ensure-electron.mjs, which has
+# nothing to do without electron, and --omit=dev never installs it.
+RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts
 
 # ---- stage 3: what actually ships --------------------------------------------
 FROM ${UV_IMAGE} AS uv

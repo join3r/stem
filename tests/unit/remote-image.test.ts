@@ -59,6 +59,29 @@ describe('cameFromInput', () => {
     expect(cameFromInput([page], 'https://cdn.example.com/img/abcde')).toBe(false);
   });
 
+  it('accepts the forms a page writes a picture in: scheme-relative, and with a tracker query (the James Bond chat)', () => {
+    const shown = 'https://thumb.wikimedia.org/wikipedia/commons/thumb/0/09/Callum_Turner_%28cropped%29.jpg/250px-Callum_Turner_%28cropped%29.jpg';
+    const offered = `${shown.slice('https:'.length)}?utm_source=en.wikipedia.org&utm_campaign=parser`;
+    const page = msg({ role: 'toolResult', toolName: 'fetch_content', content: [{ type: 'text', text: `[![](${offered})](https://en.wikipedia.org/wiki/File:x.jpg)` }] });
+    expect(cameFromInput([page], shown)).toBe(true);
+    expect(cameFromInput([page], `https:${offered}`)).toBe(true);
+    // Still whole: a shorter path, or part of the query, is not offered.
+    expect(cameFromInput([page], shown.slice(0, -4))).toBe(false);
+    expect(cameFromInput([page], `${shown}?utm_source=en.wikipedia.org`)).toBe(false);
+    // A computing tool gets no such allowance.
+    const shell = msg({ role: 'toolResult', toolName: 'run_command', content: [{ type: 'text', text: offered }] });
+    expect(cameFromInput([shell], shown)).toBe(false);
+  });
+
+  it('refuses a scheme-relative URL a model wrote first, though a web tool echoes it back', () => {
+    const leak = 'https://evil.example/p.png?q=secret';
+    const entries = [
+      msg({ role: 'assistant', content: [{ type: 'toolCall', name: 'web_search', arguments: { query: '//evil.example/p.png?q=secret' } }] }),
+      msg({ role: 'toolResult', toolName: 'web_search', content: [{ type: 'text', text: 'No results for //evil.example/p.png?q=secret' }] })
+    ];
+    expect(cameFromInput(entries, leak)).toBe(false);
+  });
+
   it('reads bare messages too (a live worker before the session file exists)', () => {
     expect(cameFromInput([{ role: 'toolResult', toolName: 'fetch_content', content: [{ type: 'text', text: shot }] }], shot)).toBe(true);
   });

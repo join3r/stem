@@ -24,7 +24,8 @@ export async function startCapture(onBlock: (samples: Float32Array) => void): Pr
         ? 'No microphone is connected to this computer.'
         : name === 'NotAllowedError'
           ? 'Stem is not allowed to use the microphone. Allow it in the system’s privacy settings.'
-          : `The microphone could not be opened: ${e instanceof Error ? e.message : String(e)}`
+          : `The microphone could not be opened: ${e instanceof Error ? e.message : String(e)}`,
+      { cause: e }
     );
   }
   context = new AudioContext({ sampleRate: SAMPLE_RATE });

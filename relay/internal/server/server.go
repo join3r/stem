@@ -248,6 +248,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/shares/{id}", s.wrap(0, s.getShare))
 	mux.HandleFunc("DELETE /v1/shares/{id}", s.wrap(0, s.deleteShare))
 	mux.HandleFunc("POST /v1/shares/{id}/report", s.wrap(small, s.reportShare))
+	mux.HandleFunc("POST /v1/shares/{id}/code", s.wrap(small, s.shareCode))
+	mux.HandleFunc("POST /v1/shares/{id}/unlock", s.wrap(small, s.shareUnlock))
 	mux.HandleFunc("GET /s/{id}", s.wrap(0, s.sharePage))
 	mux.HandleFunc("GET /assets/", s.viewerAsset)
 	mux.HandleFunc("GET /og.png", s.viewerAsset)
@@ -450,7 +452,7 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request, _ []byte) error {
 	l := s.cfg.Limits
 	limits := map[string]any{"maxMailBytes": l.MaxMailBytes, "powBits": l.PowBits, "holdDays": l.HoldDays}
 	if s.cfg.Share.Enabled {
-		features = append(features, "share")
+		features = append(features, "share", "share-to")
 		limits["maxShareBytes"] = s.cfg.Share.MaxBytes
 		limits["maxShareTtlDays"] = s.cfg.Share.MaxTTLDays
 	}

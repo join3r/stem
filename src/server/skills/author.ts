@@ -1,6 +1,8 @@
 import type { LlmClient } from '../recall/llm';
 import type { TraceEntry } from '../pi/normalize';
-import { SKILL_CONTRACT_TEXT, formatViolations, validateSkill, type SkillDraft, type SkillViolation } from './contract';
+import { SKILL_CONTRACT_TEXT, formatViolations, parseRecurrence, validateSkill, type SkillDraft, type SkillViolation } from './contract';
+import type { SkillCase } from './cases';
+import { renderCase } from './review';
 
 // One-shot skill authoring: given what the assistant actually did in a turn, decide
 // whether any of it is worth keeping and, if so, write the SKILL.md.
@@ -71,6 +73,15 @@ export interface AuthorInput {
   earlier?: AuthorTurn[];
   /** The user asked for this skill (`/learn`): what to save, not whether. */
   requested?: boolean;
+  /** The turn wrote a message for the user to send (settle.ts `wroteMessageDraft`). */
+  writing?: boolean;
+  /**
+   * Preferences memory just learned from this conversation (distilled facts in
+   * the `preference` category), in its own words. Set by the convention pass
+   * (startup/skills.ts `learnConventions`): the user corrected or stated how
+   * they want something done, and the question is which skill should carry it.
+   */
+  conventions?: string[];
   /**
    * Patch path only: what the assistant reported as wrong with `existing` in
    * its reply this turn (the `Skill issue [...]:` line the skills block asks
@@ -78,6 +89,26 @@ export interface AuthorInput {
    * model has already named it.
    */
   issue?: string;
+  /**
+   * Patch path only: what the user said was wrong with the result of a turn
+   * that followed `existing`, as the distill pass read it off their next
+   * message (skills/cases.ts). The strongest evidence a skill gets: the person
+   * the work was for said how it should have been done.
+   */
+  correction?: string;
+  /**
+   * Patch and rewrite paths: the recorded uses of `existing`, oldest first, with
+   * how each one ended. Shown so a fix for today's case keeps what the earlier
+   * accepted uses relied on.
+   */
+  cases?: readonly SkillCase[];
+  /**
+   * The rewrite path (skills/rewrite.ts): no single turn is the evidence. The
+   * skill went wrong several times, `diagnosis` says why, and the author
+   * rewrites it from all of its `cases` at once.
+   */
+  rewrite?: boolean;
+  diagnosis?: string;
   /**
    * Which machine this turn ran on, in a sentence (`whereSkillsRun()` in
    * workspace/bootstrap.ts). Passed in rather than read here so this module stays
@@ -129,17 +160,23 @@ Save a skill only when ALL of these hold:
 - The procedure is general enough to run again with different particulars. If the steps only make sense for this exact person, this exact file, or this exact date, it is not a skill.
 
 Do NOT save:
-- Facts about the user, their preferences, or their data. Those are remembered separately and a skill file is the wrong place for them.
+- Lone facts about the user or their data (an address, an account number, a birthday). Those are remembered separately and a skill file is the wrong place for them.
 - A retelling of what happened. Nobody will read a transcript. If you find yourself writing "then I searched for", stop and write the instruction instead.
 - Anything the assistant already knows how to do without notes. Reading a file is not a skill.
 - The obvious restatement of a single tool call.
+
+One kind of preference IS a skill: how the user wants a recurring kind of work done for them. Drafting their email replies, writing their invoices, posting their status updates: the conventions they stated or corrected (the signature and who it is signed as, the tone, the language, which address it goes out from, what to always include or leave out) plus the tool steps that produce it. That is a procedure Stem will follow again, and nothing else carries it from one chat to the next. Name it after the kind of work, not the one recipient.
+
+"tools" is optional. Use it when the skill decides how a particular tool's action is done for the user, typically their conventions for it: list those tools as "server.tool" (the server and tool names invoke_tool takes), "server.*" for a whole server, or a built-in tool's own name. Stem then hands the skill over whenever a turn is about to call one of them, even when the request's wording would not have brought the skill up. Never list a general tool such as run_command, read, write, fetch_content, web_search, invoke_tool, browser, computer, spawn_agent or coding_agent: they serve any kind of work, so the skill would interrupt unrelated turns. Leave it out for a procedure that merely calls tools along the way; listing a tool the skill does not govern interrupts every unrelated call to it. On an update, leave it out to keep the skill's current tools.
+
+"recurs" is your estimate of how often this task will come up again. Stem keeps an unused skill for several of those periods before it switches the skill off, so the estimate decides whether a slow task survives until its next run. One of "weekly" (every week or more often), "monthly", "quarterly" (a few times a year), "yearly" (tied to the calendar: a tax return, an annual renewal, a yearly report) or "occasional" (no rhythm: it comes up when something breaks or the need arises). Go by what the evidence shows: the user saying how often, a period named in the work itself (an invoice for one month, a quarterly statement), a scheduled task. Answer "occasional" when nothing shows a rhythm; a longer period is not the safe guess. On an update, leave it out to keep the skill's current estimate, unless this turn showed the rhythm.
 
 Declining is the normal answer. Most turns contain nothing durable, and a library full of near-misses is worse than a small one: every skill costs context on every turn, and a bad skill will be followed. Decline freely and without justifying yourself at length.
 
 If you do save one, write it from the evidence — the actual arguments that worked, the actual error text that sent you down a different path — not from the assistant's summary of its own work. The summary is where the detail was already lost.
 
 Reply with ONLY a JSON object, no prose and no markdown fences:
-{"skill": {"name": "...", "description": "...", "body": "..."}}
+{"skill": {"name": "...", "description": "...", "body": "...", "tools": ["..."], "recurs": "..."}}
 or, to decline:
 {"skill": null, "reason": "<one short clause>"}`;
 
@@ -167,12 +204,14 @@ If the procedure you would write belongs in one of them — the same job, or the
 
 You will then be shown that skill in full and asked to fold this turn into it, so you do not have to write the merged version now.
 
+The same procedure for a different target is the same job. If a skill already installs, connects, queries or diagnoses one app, server, account or site, and this turn did those steps for another one, name that skill: the steps are written once and what differs per target is listed in it. A second skill that repeats the steps under another product's name is the same failure as a duplicate.
+
 Two write-ups of one procedure is the failure this question exists to catch: nothing merges them afterwards, retrieval has to choose between them, and whichever loses takes its detail with it. But a procedure that merely happens nearby is not the same procedure — a skill that grows a subsection every time something adjacent happens stops being followable. Same job: name it. Neighbouring job: write the new one. Neither: decline.`;
 
 /** Framing for the second shot, once the author's own named target has been loaded. */
 export const SKILL_TARGET_PATCH_INSTRUCTIONS = `You named the skill below as where this turn's procedure belongs. Here it is in full.
 
-Return the FULL skill under the SAME name, with this turn folded in: the step that was missing, the argument that turned out to matter, the dead end worth a warning. Keep what is already there unless the evidence shows it wrong, and do not restructure it to make room. Return null if, now that you can read it, the skill already covers what happened — that is an honest answer and it costs nothing.`;
+Return the FULL skill under the SAME name, with this turn folded in: the step that was missing, the argument that turned out to matter, the dead end worth a warning. Keep what is already there unless the evidence shows it wrong, and do not restructure it to make room. The one exception: when this turn was the same procedure for a different target (another app, server, account or site), make the steps take the target as their input and list what differs per target (exact commands, package names, ids, paths, traps) under the steps, and widen the description to the general job if it names only the first target. Return null if, now that you can read it, the skill already covers what happened — that is an honest answer and it costs nothing.`;
 
 /**
  * Extra framing for `/learn`, which is the user asking rather than Stem guessing.
@@ -188,6 +227,70 @@ export const SKILL_LEARN_INSTRUCTIONS = `The user asked for this one. They sent 
 The evidence below is the whole conversation, oldest turn first, not a single turn. A procedure is often spread across several turns: a first attempt, a correction from the user, a fix. Write the version that ended up working, with every correction the user made folded into the steps rather than told as history.
 
 A task the user repeats with their own particulars (the same client, the same folder, the same template, a monthly date) is exactly what they mean, whatever the rules above say about one person's particulars. Keep what stays the same from run to run, and write the parts that change (a date, a count, the next number in a sequence) as things the steps work out or ask for.`;
+
+/**
+ * Extra framing when the turn wrote a message for the user to send (settle.ts
+ * `wroteMessageDraft`). Those turns fire below the tool gate, so most of them
+ * are one-off errands and the author has to be told what makes one worth keeping.
+ */
+export const SKILL_WRITING_INSTRUCTIONS = `This turn wrote a message for the user to send: an email draft, a chat message, a reply. Drafting for the user recurs by nature, so the question is whether this turn shows how THEY want such messages written.
+
+Save or update a writing skill when the user stated or corrected a convention (a sign-off, a signature line, writing on their behalf, a tone, a language, the address to send from), or when getting the draft into their outbox took steps worth not rediscovering (which tool, which identity, reply versus new). Write the conventions as steps, quoted exactly where wording matters, for example the signature lines verbatim, and list the tool that puts the draft in their outbox in "tools". If a skill for this kind of message is already in the library, name it so this turn is folded in rather than written beside it.
+
+Decline when the turn only wrote one message with nothing the user would want the same next time. The content of a single message (this appointment, this invoice number) is never the skill.`;
+
+/**
+ * Extra framing for the convention pass: memory recorded a preference from this
+ * conversation, and the author decides whether it is how the user wants a
+ * recurring kind of work done (a skill's business) or something else (taste, a
+ * purchase, a one-off), which memory already keeps.
+ *
+ * Why this exists: corrections like "sign it as Stem, on behalf of me" or "no
+ * kros.sk mentions on invoices any more" were already caught, but only as facts.
+ * A fact reaches the model as background data, and only when recall happens to
+ * rank it; the 2026-11-06 VPS store held 169 active preference facts, the mail
+ * one injected 0 times. In the skill for that work the convention is a step that
+ * gets followed (100 judged turns: fitting skills followed 13 of 14).
+ */
+export const SKILL_CONVENTION_INSTRUCTIONS = `Memory just recorded, from the conversation below, how the user wants something done. Those preferences are listed as "What memory recorded". The question is whether any of them is a convention for a recurring kind of work Stem does for them, and if so, which skill should carry it.
+
+A convention belongs in a skill when it changes how Stem carries out a task it will do again: how their mail is drafted and signed, how invoices are made, where scanned documents are filed, what a report must include, which calendar entries get which prefix, what to ask before acting. Fold it into the skill for that kind of work as a step (quote exact wording where wording matters), next to the tool steps the conversation used to do that work.
+
+It does not belong in a skill when it is a taste or a fact rather than a way of working: what they like to buy, which product they chose, where they live, a one-off decision about one case. Memory already keeps those; decline.
+
+If a skill for that kind of work is already in the library, name it so the convention is folded in rather than written beside it. When the convention governs one particular action (creating the draft, the calendar event, the invoice file), list that tool in "tools", so the skill is in front of the assistant at the moment of the action even when the request is worded nothing like it. Write a new skill only when the conversation also shows how that work is done; a skill with a preference and no procedure is not followable. The evidence is the whole conversation, oldest turn first.`;
+
+/**
+ * Extra framing on the patch path when the user corrected the result of a turn
+ * that followed the skill (skills/cases.ts). The evidence is the whole
+ * conversation: the turn that used the skill, the correction, and what the
+ * assistant did after it.
+ */
+export const SKILL_CORRECTION_INSTRUCTIONS = `The user corrected the result of a turn that followed the skill shown below. Their correction is under "What the user said was wrong with the result", and the conversation shows the turn, the correction, and what the assistant did after it.
+
+Decide whether the correction is about how this kind of work is done. If it is, return the FULL skill under the same name with the correction folded in as a step, quoted exactly where wording matters, and keep every other step as it is. When the assistant's work after the correction succeeded, write the steps the way that work went.
+
+Return null when the correction is about this one case only (this recipient, this date, this file), about the taste of one reply, or about something the skill does not cover. A skill that collects one-off fixes stops being followable.`;
+
+/**
+ * The rewrite path (skills/rewrite.ts): the skill went wrong several times, and
+ * a separate diagnosis call has said why. Diagnosis apart from the rewrite, and
+ * from all cases at once rather than one turn, is what the published methods
+ * that improve skills reliably have in common (arXiv 2606.11435).
+ */
+export const SKILL_REWRITE_INSTRUCTIONS = `You rewrite a saved skill that went wrong several times. A skill is a procedure an assistant follows for one kind of work. Below are the skill, its recorded uses with how each one ended, and a diagnosis of the uses that went wrong.
+
+Rewrite the skill so that it avoids every problem in the diagnosis, and keep every step that the accepted uses relied on. Keep its job and its name: do not widen it to other work, and do not narrow it to one case with names, dates or numbers that will be different next time. Write instructions, not a history of what happened.
+
+Return null when the diagnosis shows that the skill did not cause the failures.
+
+Reply with ONLY a JSON object, no prose and no markdown fences:
+{"skill": {"name": "...", "description": "...", "body": "...", "tools": ["..."]}}
+or, to leave the skill as it is:
+{"skill": null, "reason": "<one short clause>"}`;
+
+/** Recorded uses shown to the author, newest kept. */
+const AUTHOR_CASES = 8;
 
 const MAX_ATTEMPTS = 2;
 
@@ -218,6 +321,7 @@ function renderTraceEntry(entry: TraceEntry, index: number): string {
 export function renderEvidence(input: AuthorInput): string {
   const parts: string[] = [];
   if (input.focus?.trim()) parts.push(`What the user asked to be captured:\n${input.focus.trim()}`);
+  if (input.conventions?.length) parts.push(`What memory recorded:\n${input.conventions.map((c) => `- ${c}`).join('\n')}`);
   // Ahead of the evidence, because it colours how every line of it reads — but
   // behind the /learn focus, which is the user talking and still leads.
   if (input.machine?.trim()) parts.push(`Where this turn ran:\n${input.machine.trim()}`);
@@ -225,14 +329,21 @@ export function renderEvidence(input: AuthorInput): string {
     input.earlier.forEach((turn, i) => parts.push(`--- Turn ${i + 1} ---`, renderTurn(turn)));
     parts.push('--- Latest turn ---');
   }
-  parts.push(renderTurn(input));
+  // A rewrite has no single turn behind it: its evidence is the cases below.
+  if (!input.rewrite) parts.push(renderTurn(input));
   if (input.existing) {
-    const heading = input.chosenTarget ? 'The skill you named' : 'The skill this turn used';
+    const heading = input.rewrite ? 'The skill' : input.chosenTarget ? 'The skill you named' : 'The skill this turn used';
     parts.push(
       `${heading}:\nname: ${input.existing.name}\ndescription: ${input.existing.description}\n\n${input.existing.body}`
     );
     if (input.issue?.trim()) parts.push(`What the assistant reported as wrong with it this turn:\n${input.issue.trim()}`);
+    if (input.correction?.trim()) parts.push(`What the user said was wrong with the result:\n${input.correction.trim()}`);
   }
+  const cases = (input.cases ?? []).filter((c) => c.outcome !== 'pending' && c.outcome !== 'expired').slice(-AUTHOR_CASES);
+  if (input.existing && cases.length > 0) {
+    parts.push(`Recorded uses of this skill, oldest first:\n${cases.map((c, i) => renderCase(c, i + 1)).join('\n\n')}`);
+  }
+  if (input.diagnosis?.trim()) parts.push(`Diagnosis of the uses that went wrong:\n${input.diagnosis.trim()}`);
   // The library, when the author is being asked to choose. Bodies first: those
   // are the ones it can judge properly, and a name-and-description line is a
   // weaker claim to be weighed against a body it can read.
@@ -254,9 +365,17 @@ export function renderEvidence(input: AuthorInput): string {
 }
 
 export function buildAuthorPrompt(input: AuthorInput): string {
+  // A rewrite is its own question: not "is there a skill in this turn" but "fix
+  // this skill from everything it did".
+  if (input.rewrite && input.existing) return [SKILL_REWRITE_INSTRUCTIONS, SKILL_CONTRACT_TEXT, '---', renderEvidence(input)].join('\n\n');
   const parts = [SKILL_AUTHORING_INSTRUCTIONS];
   if (input.requested) parts.push(SKILL_LEARN_INSTRUCTIONS);
-  if (input.existing) parts.push(input.chosenTarget ? SKILL_TARGET_PATCH_INSTRUCTIONS : SKILL_PATCH_INSTRUCTIONS);
+  if (input.writing) parts.push(SKILL_WRITING_INSTRUCTIONS);
+  if (input.conventions?.length) parts.push(SKILL_CONVENTION_INSTRUCTIONS);
+  if (input.existing) {
+    parts.push(input.chosenTarget ? SKILL_TARGET_PATCH_INSTRUCTIONS : SKILL_PATCH_INSTRUCTIONS);
+    if (input.correction?.trim()) parts.push(SKILL_CORRECTION_INSTRUCTIONS);
+  }
   // Only when there is actually a library to read: an empty list under "read what
   // is already there" invites a target the author cannot have seen.
   else if (input.candidates?.length || input.libraryIndex?.length) parts.push(SKILL_LIBRARY_INSTRUCTIONS);
@@ -299,12 +418,19 @@ export function parseAuthorReply(output: string): ParsedReply {
     return { kind: 'declined', reason: typeof reason === 'string' && reason.trim() ? reason.trim() : 'nothing reusable in this turn' };
   }
   if (typeof skill !== 'object') return { kind: 'unparseable' };
-  const { name, description, content, body } = skill as Record<string, unknown>;
+  const { name, description, content, body, tools, recurs } = skill as Record<string, unknown>;
   // `content` is what manage_skill has always called the body; accept either so a
   // model primed on that tool's schema isn't punished for consistency.
   const text = typeof body === 'string' ? body : typeof content === 'string' ? content : '';
   if (typeof name !== 'string' || typeof description !== 'string' || !text) return { kind: 'unparseable' };
-  return { kind: 'skill', draft: { name: name.trim(), description: description.trim(), body: text.trim() } };
+  const draft: SkillDraft = { name: name.trim(), description: description.trim(), body: text.trim() };
+  // Only a list counts; anything else is read as "not said", which keeps a
+  // patched skill's tools (store.ts saveSkill).
+  if (Array.isArray(tools)) draft.tools = tools.filter((t): t is string => typeof t === 'string').map((t) => t.trim()).filter(Boolean);
+  // A value outside the list is "not said" too: an estimate is never worth a retry.
+  const estimate = parseRecurrence(recurs);
+  if (estimate) draft.recurs = estimate;
+  return { kind: 'skill', draft };
 }
 
 /** The retry prompt: the original, the rejected draft, and exactly what was wrong. */

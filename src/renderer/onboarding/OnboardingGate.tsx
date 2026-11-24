@@ -291,11 +291,12 @@ export function OnboardingGate({
         {state.step === 'welcome' && (
           <>
             <h1>Welcome to Stem</h1>
-            <p>A private AI assistant that lives on your {DEVICE}.</p>
+            <p>An AI assistant on your {DEVICE} that uses your own AI account.</p>
             <p className="gate-sub">
-              Stem brings your own AI account: sign in with a ChatGPT or Claude subscription, use an API
-              key (Anthropic, OpenAI, OpenRouter), or run local models with Ollama or LM Studio. Your
-              chats, files, and memory stay on this {DEVICE}.
+              Sign in with a ChatGPT or Grok subscription, use an API key (Anthropic, OpenAI,
+              OpenRouter), or run local models with Ollama or LM Studio. Stem stores your chats, files,
+              and memory on this {DEVICE}, not on a Stem cloud. What you send to a cloud model goes to
+              that provider; with a local model, nothing leaves the {DEVICE}.
             </p>
             <button className="primary" onClick={() => dispatch({ type: 'continue' })}>
               Get started
@@ -325,16 +326,20 @@ export function OnboardingGate({
               <span className="gate-hint">
                 ChatGPT Plus or Pro subscription <span className="gate-rec">Recommended</span>
               </span>
-              <button
-                className={deepLink === 'anthropic' ? 'primary' : 'push'}
-                onClick={() => void startOAuth('anthropic')}
-              >
-                {deepLink === 'anthropic' ? 'Reconnect Claude' : 'Continue with Claude'}
-              </button>
-              <span className="gate-hint">
-                Claude Pro or Max subscription. Heads up: using a Claude subscription in a
-                third-party app like Stem can draw on extra usage on top of your plan.
-              </span>
+              {/* Claude plans don't cover third-party apps (Anthropic bills them from
+                  extra usage), so new users aren't offered it; an existing Claude
+                  sign-in that expired can still reconnect. */}
+              {deepLink === 'anthropic' && (
+                <>
+                  <button className="primary" onClick={() => void startOAuth('anthropic')}>
+                    Reconnect Claude
+                  </button>
+                  <span className="gate-hint">
+                    Claude plans don't cover third-party apps like Stem: Anthropic bills this from
+                    extra usage. An Anthropic API key is the supported way to use Claude.
+                  </span>
+                </>
+              )}
               <button
                 className={deepLink === 'xai' ? 'primary' : 'push'}
                 onClick={() => void startOAuth('xai')}

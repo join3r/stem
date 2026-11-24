@@ -19,6 +19,7 @@ import { filesRoot } from '../workspace/paths';
 import { clampTimeout, execEnv, resolveLoginPath, runCommand, timedOutLine } from './executor';
 import { gitBashPathEnv, resolveHostShellTarget, type HostShellTarget } from './git-bash';
 import { SafetyJudge } from './judge';
+import { isShortReply } from './judge-context';
 import { scriptsForJudge, scriptsUnchanged, type JudgedScript } from './judge-scripts';
 import { classify, deviceShellLabel, drivesGui, type Classification } from './policy';
 import { execReadRoots, scanCommandAgainstRoots, scanProtected } from './protected';
@@ -82,7 +83,7 @@ export const PARKED_ERROR =
   'now: do not reply, retry or work around it — Stem resumes you with their answer.';
 
 /** Concurrent command cap; further tool calls queue rather than forking shells. */
-const MAX_CONCURRENT = 2;
+const MAX_CONCURRENT = 8;
 
 export interface ExecServiceDeps {
   runtime: () => ChatBackend;
@@ -145,6 +146,8 @@ export class ExecService implements ExecBridge {
   private readonly blocks = new Map<string, { streak: number; total: number }>();
   /** Per thread: exactly what the user allowed on a parked run (command, folder, machine), each good for one run. */
   private readonly grants = new Map<string, Grant[]>();
+  /** Per thread: the turn that already spent its early card (see answersReply). */
+  private readonly replyCards = new Map<string, string>();
 
   constructor(deps: ExecServiceDeps) {
     this.deps = deps;
@@ -299,7 +302,7 @@ export class ExecService implements ExecBridge {
     // Assisted mode refuses back to the agent until the escalation point. A
     // judge that could not run says nothing about the command, so that one
     // goes straight to the user, as it always has.
-    if (judged && judged.verdict !== 'failed' && !this.escalates(threadId)) {
+    if (judged && judged.verdict !== 'failed' && !this.escalates(threadId) && !this.answersReply(threadId, req)) {
       record('blocked');
       return { run: false, result: { ok: false, error: blockedError(judged.reason), blocked: true } };
     }
@@ -362,6 +365,21 @@ export class ExecService implements ExecBridge {
     count.total += 1;
     this.blocks.set(threadId, count);
     return count.streak >= (this.deps.blockStreak ?? BLOCK_STREAK) || count.total >= BLOCK_TOTAL;
+  }
+
+  /**
+   * The first block in a turn the user started with a short reply goes to the
+   * user rather than back to the agent. The judge reads only the user's words,
+   * never the question a "yes" answers, so it refuses what the user just
+   * agreed to — and the agent can only ask them to retype the request. A card
+   * shows the exact command, so the user still decides; one per turn, so a
+   * Deny is not followed by another card for the same reply.
+   */
+  private answersReply(threadId: string, req: ExecRequest): boolean {
+    if (!req.turnId || !isShortReply(req.judgeContext?.reply)) return false;
+    if (this.replyCards.get(threadId) === req.turnId) return false;
+    this.replyCards.set(threadId, req.turnId);
+    return true;
   }
 
   /** A command ran without the user: the refusals are no longer in a row. */
@@ -783,9 +801,9 @@ async function bulkyNote(sinceMs: number): Promise<string | null> {
   if (found.length === 0) return null;
   const list = found.map((f) => `files/${f.rel} (${f.kind})`).join(', ');
   return (
-    `Note: this command put tooling into the user's Files place: ${list}. Files is for finished ` +
-    'deliverables and is never cleared. Move that work into your scratch folder (or delete it if ' +
-    'it is not needed), and keep only the finished result in files/.'
+    `Note: this command put tooling into the user's Files place: ${list}. Files is the user's own ` +
+    'folder and is never cleared. Move that work into your scratch folder (or delete it if it is ' +
+    'not needed); write to files/ only what the user asked to save there.'
   );
 }
 

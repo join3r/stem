@@ -11,6 +11,7 @@
 // session-manager): the active branch only, and after a compaction only the
 // entries from the compaction's firstKeptEntryId onward. A skill that was
 // summarised away is no longer in front of the model and may load again.
+import { TOOL_SKILL_MARKER } from '../pi/protocol';
 
 const SKILLS_OPEN = '<stem_skills';
 const SKILLS_CLOSE = '</stem_skills>';
@@ -78,9 +79,46 @@ export function loadedSkillNames(snapshot: unknown): Set<string> {
     } else if (entry.type === 'message') {
       const message = record(entry.message);
       if (message?.role === 'user') inlinedNames(messageText(message), names);
+      // A skill handed over at a tool call (inject.ts toolSkillsForTurn) is the
+      // held call's error result, opening with the marker. Only that shape
+      // counts: any tool can return text, and one that quoted a skills block
+      // would otherwise keep a skill from loading for the rest of the chat.
+      else if (message?.role === 'toolResult' && message.isError === true) {
+        const text = messageText(message);
+        if (text.startsWith(TOOL_SKILL_MARKER)) inlinedNames(text, names);
+      }
     }
     if (keepUntil !== null && id === keepUntil) break;
     id = entry.parentId;
   }
   return names;
+}
+
+/**
+ * The name-only index lines the chat already holds, exactly as formatSkillsBlock
+ * wrote them ("- name — description"). `liveUserTexts` is the chat's live user
+ * messages (pi/context-dedupe.ts follows the same projection as above), so a
+ * line that a compaction summarised away is not in the set and may be listed
+ * again.
+ *
+ * Every "- " line of a skills block is taken, a bullet in a loaded skill's steps
+ * included: the caller asks only whether one exact line is there, and a step
+ * that is letter for letter another skill's name and description does not exist.
+ * An empty set is the safe answer to any doubt. It lists the index in full, which
+ * is what every turn did before this existed.
+ */
+export function listedSkillLines(liveUserTexts: readonly string[]): Set<string> {
+  const lines = new Set<string>();
+  for (const text of liveUserTexts) {
+    let from = 0;
+    for (;;) {
+      const open = text.indexOf(SKILLS_OPEN, from);
+      if (open < 0) break;
+      const close = text.indexOf(SKILLS_CLOSE, open);
+      if (close < 0) break;
+      for (const line of text.slice(open, close).split('\n')) if (line.startsWith('- ')) lines.add(line);
+      from = close + SKILLS_CLOSE.length;
+    }
+  }
+  return lines;
 }

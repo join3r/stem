@@ -18,7 +18,6 @@ import {
   Forward,
   Lock,
   Paperclip,
-  Plus,
   RotateCcw,
   Send,
   Share2,
@@ -33,8 +32,11 @@ import {
   UserCheck,
   UserX,
   UserPlus,
-  Sparkles
+  Sparkles,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
+import { stageInBackground, useStageStates } from './staged-uploads';
 import { PERSON_MAIL_BETA_TITLE } from '../chats/ChatList';
 import { isExternalAddress } from '../../shared/types';
 import type {
@@ -71,7 +73,7 @@ import {
 } from './mail-drafts';
 import { useMailWork } from './useMailWork';
 import { MailWork } from './MailWork';
-import { GeneratedImages } from '../chat/GeneratedImage';
+import { GeneratedImages, ZoomableImage } from '../chat/GeneratedImage';
 import { DictateButton, useDictation } from '../chat/dictation';
 import { plainLine } from '../../shared/plain-text';
 import { useInterStem } from './useInterStem';
@@ -240,6 +242,12 @@ function useAttachmentDraft(initial?: TurnAttachment[]) {
     if (more.length) setAttachments((prev) => [...prev, ...more]);
   }, []);
 
+  // Upload each file as soon as it is attached, while the user is still
+  // writing — Send then carries only the text and the handles.
+  useEffect(() => {
+    stageInBackground(attachments);
+  }, [attachments]);
+
   return { attachments, addFiles, pickFiles, onPaste, onDrop, remove, clear, add };
 }
 
@@ -270,12 +278,29 @@ function AttachmentChips({
   attachments: TurnAttachment[];
   onRemove: (idx: number) => void;
 }) {
+  const stages = useStageStates(attachments);
   if (!attachments.length) return null;
   return (
     <div className="composer-attachments mail-attachments-draft">
       {attachments.map((att, i) => (
-        <span className="attachment-chip" key={`${att.name}-${i}`}>
-          <File size={13} />
+        <span
+          className={`attachment-chip${stages[i]?.state === 'failed' ? ' failed' : ''}`}
+          key={`${att.name}-${i}`}
+          title={
+            stages[i]?.state === 'uploading'
+              ? 'Uploading…'
+              : stages[i]?.state === 'failed'
+                ? `${stages[i]?.error ?? 'Upload failed'} — tried again when you send`
+                : undefined
+          }
+        >
+          {stages[i]?.state === 'uploading' ? (
+            <Loader2 size={13} className="attachment-uploading" />
+          ) : stages[i]?.state === 'failed' ? (
+            <AlertCircle size={13} />
+          ) : (
+            <File size={13} />
+          )}
           <span className="attachment-name">{att.name}</span>
           <button type="button" className="attachment-remove" title="Remove" onClick={() => onRemove(i)}>
             <X size={13} />
@@ -304,8 +329,11 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   pending: PendingSend[];
   onRetrySend: (id: string) => void;
   onDropSend: (id: string) => void;
-  /** Resolves once the persona is in; rejection shows its message inline. */
-  onAddParticipant: (personaId: string) => Promise<void>;
+  /**
+   * Replace the conversation's personas (the reply's To: field); the first
+   * leads. Resolves once the server has them; rejection shows inline.
+   */
+  onSetParticipants: (to: string[]) => Promise<void>;
   /** Stop the working personas: queued deliveries dropped, running turns interrupted. */
   onStop: () => void;
   /** Open the compose form forwarding one of this conversation's mails. */
@@ -327,7 +355,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
     pending,
     onRetrySend,
     onDropSend,
-    onAddParticipant,
+    onSetParticipants,
     onStop,
     onForward,
     onShare,
@@ -345,8 +373,6 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   useImperativeHandle(ref, () => ({
     addAttachments: (dropped) => void files.addFiles(dropped)
   }));
-  const [addingTo, setAddingTo] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
   // Mails the user opened or folded, flipping their default (see layoutThread).
   const [flipped, setFlipped] = useState<Set<string>>(new Set());
   // Mails whose folded-in persona exchange is shown.
@@ -359,10 +385,26 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   );
   const work = useMailWork(conversation.id);
   const layout = useMemo(() => layoutThread(mails, work.groups), [mails, work.groups]);
-  const addable = useMemo(
-    () => personas.filter((p) => !conversation.participants.includes(p.id)),
-    [personas, conversation.participants]
-  );
+  // The To: field's edit while the server takes it in, so tokens, the header
+  // and the reply's addressee move at once. Cleared when the newest edit
+  // settles (the list then carries it) or fails (and shows why).
+  const [pendingTo, setPendingTo] = useState<string[] | null>(null);
+  const [toError, setToError] = useState<string | null>(null);
+  const toSeq = useRef(0);
+  const participants = pendingTo ?? conversation.participants;
+  const setTo = (next: string[]) => {
+    if (!next.length) return;
+    const seq = ++toSeq.current;
+    setToError(null);
+    setPendingTo(next);
+    onSetParticipants(next)
+      .catch((err) =>
+        setToError(err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(err))
+      )
+      .finally(() => {
+        if (seq === toSeq.current) setPendingTo(null);
+      });
+  };
   // Inter-Stem: the conversation is with another Stem's owner; replies go to
   // them, and personas only ever draft.
   const ext = conversation.external;
@@ -371,7 +413,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
   const name = (id: string) =>
     id === 'user' ? 'You' : isExternalAddress(id) ? interStem.contact(id)?.name ?? id : personaName(personas, id);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const lead = ext ? ext.address : conversation.participants[0];
+  const lead = ext ? ext.address : participants[0];
   // A run parked on the user's Allow/Deny takes the next mail instead of the lead.
   const parkedBy = ext ? undefined : layout.entries.find((e) => e.item.approval?.status === 'pending')?.item.from;
   const recipient = parkedBy ?? lead;
@@ -727,7 +769,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
             <div className="message-attachments">
               {m.attachments.map((att, i) => (
                 <Fragment key={i}>
-                  {att.kind === 'image' && att.dataUrl && <img className="message-image" src={att.dataUrl} alt={att.name ?? 'attachment'} />}
+                  {att.kind === 'image' && att.dataUrl && <ZoomableImage className="message-image" src={att.dataUrl} alt={att.name ?? 'attachment'} />}
                   {att.fileId ? (
                     // A file in mail with another person: kept on the server, saved to Downloads on click.
                     <button
@@ -785,7 +827,7 @@ export const MailConversationView = forwardRef<MailViewHandle, {
     []
   );
   const newestFromThem = [...mails].reverse().find((m) => m.from !== 'user')?.id;
-  const showOthers = ext ? [] : conversation.participants.filter((p) => p !== recipient);
+  const showOthers = ext ? [] : participants.filter((p) => p !== recipient);
 
   return (
     <MdxActionContext.Provider value={mdxActions}>
@@ -848,8 +890,8 @@ export const MailConversationView = forwardRef<MailViewHandle, {
             ) : (
               <span>
                 <strong>{name(lead)}</strong>
-                {conversation.participants.length > 1 && ' leads'}
-                {conversation.participants.slice(1).map((p) => ` · ${name(p)}`)}
+                {participants.length > 1 && ' leads'}
+                {participants.slice(1).map((p) => ` · ${name(p)}`)}
                 {conversation.outside && (
                   <span
                     className="muted"
@@ -888,17 +930,6 @@ export const MailConversationView = forwardRef<MailViewHandle, {
             <Sparkles size={12} /> Auto-draft
           </button>
         )}
-        {!ext && addable.length > 0 && (
-          <button
-            className="icon-action mail-add-toggle"
-            onClick={() => setAddingTo((v) => !v)}
-            title="Add a persona to this conversation"
-            aria-label="Add a persona to this conversation"
-            aria-expanded={addingTo}
-          >
-            <Plus size={14} />
-          </button>
-        )}
       </header>
       {ext && counterpart?.state === 'request' && (
         <div className="mail-ext-banner" role="note">
@@ -924,28 +955,6 @@ export const MailConversationView = forwardRef<MailViewHandle, {
       )}
       {ext && <CollabCard collab={conversation.collab} turn={turnOf(mails, ext.address)} who={name(ext.address)} />}
       {actionError && <p className="task-failed">{actionError}</p>}
-      {!ext && addingTo && addable.length > 0 && (
-        <div className="mail-add-row">
-          <div className="mail-to-chips mail-add-chips" role="group" aria-label="Personas to add">
-            {addable.map((p) => (
-              <button
-                key={p.id}
-                className="mail-to-chip"
-                onClick={() => {
-                  setAddError(null);
-                  onAddParticipant(p.id)
-                    .then(() => setAddingTo(false))
-                    .catch((err) => setAddError(err instanceof Error ? err.message : String(err)));
-                }}
-                title={`Add ${p.name} — the personas here can then mail it, and your replies reach it too`}
-              >
-                {p.name}
-              </button>
-            ))}
-          </div>
-          {addError && <p className="task-failed">{addError}</p>}
-        </div>
-      )}
       <div className="mail-items" ref={scrollRef}>
         <ReplyBox
           key={conversation.id}
@@ -955,6 +964,9 @@ export const MailConversationView = forwardRef<MailViewHandle, {
           recipient={name(recipient)}
           others={showOthers.map(name)}
           parked={!!parkedBy}
+          toField={
+            ext || conversation.owner ? undefined : { personas, to: participants, onChange: setTo, error: toError }
+          }
           working={working}
           onSend={send}
           focusRef={replyFocus}
@@ -1028,7 +1040,8 @@ function ReplyBox({
   working,
   onSend,
   focusRef,
-  canAttach = true
+  canAttach = true,
+  toField
 }: {
   draft: string;
   setDraft: (text: string) => void;
@@ -1041,6 +1054,12 @@ function ReplyBox({
   /** Filled with a function that puts the caret at the end of the reply. */
   focusRef?: React.MutableRefObject<() => void>;
   canAttach?: boolean;
+  /**
+   * New mail's To: field, editing this conversation's personas: add, remove,
+   * or crown another to lead (it gets this reply). Absent where personas
+   * can't change (another person's conversation, Stem's own).
+   */
+  toField?: { personas: Persona[]; to: string[]; onChange: (to: string[]) => void; error: string | null };
 }) {
   const [focused, setFocused] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -1064,6 +1083,10 @@ function ReplyBox({
     <div
       ref={boxRef}
       className={`mail-reply${expanded ? ' expanded' : ''}`}
+      // Focusable, so a click on the box's plain text (the To row's names, its
+      // label, the padding) moves focus to the box instead of nowhere — which
+      // read as leaving it and folded an empty reply away under the click.
+      tabIndex={-1}
       onDragOver={(e) => e.preventDefault()}
       onDrop={files.onDrop}
       onFocus={() => setFocused(true)}
@@ -1075,22 +1098,36 @@ function ReplyBox({
       {expanded && (
         <div className="mail-reply-to">
           <span>To</span>
-          <span className="mail-reply-recipient">{recipient}</span>
+          {toField && !parked ? (
+            <MailToField
+              personas={toField.personas}
+              to={toField.to}
+              onChange={toField.onChange}
+              keepOne
+              addPlaceholder="Add a persona"
+              className="mail-reply-to-field"
+            />
+          ) : (
+            <span className="mail-reply-recipient">{recipient}</span>
+          )}
           {parked ? (
             <span>instead of answering its Allow or Deny.</span>
           ) : (
+            !toField &&
             others.length > 0 && (
               <span>
                 {others.join(', ')} {others.length === 1 ? 'hears' : 'hear'} this only if {recipient} asks.
               </span>
             )
           )}
+          {toField?.error && <span className="task-failed">{toField.error}</span>}
         </div>
       )}
-      {expanded && working && (
+      {expanded && working && !parked && (
         <p className="mail-reply-note">
           <Clock size={13} />
-          {recipient} reads this when its current run ends. If that run answers your earlier mail, it’s marked so.
+          Still working. Ask how it’s going and {recipient} answers right away without stopping the work; anything
+          else waits until its current run ends.
         </p>
       )}
       <textarea
@@ -1398,112 +1435,121 @@ export const MailComposeView = forwardRef<MailViewHandle, {
           <Lock size={12} /> Private: nothing here is saved to memory or read from it. Fixed once sent.
         </p>
       )}
-      <div className="mail-compose-form">
-        {writingOut ? (
-          <>
-            {ownAddresses.length > 1 && (
-              <label className="mail-field">
-                <span>From</span>
-                <select value={outFrom ?? ownAddresses[0]} onChange={(e) => setOutFrom(e.target.value)} aria-label="Send from">
-                  {ownAddresses.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <div className="mail-field mail-field-to">
-              <span>To</span>
-              <PersonToField value={outTo} onChange={setOutTo} contacts={interStem.status?.contacts ?? []} onReach={setReach} />
-            </div>
-          </>
-        ) : (
-          <div className="mail-field mail-field-to">
-            <span>To</span>
-            <MailToField personas={personas} to={to} onChange={setTo} />
-          </div>
-        )}
-        <label className="mail-field">
-          <span>Subject</span>
-          <input
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            placeholder={writingOut ? 'Optional' : 'Optional — Stem names it after the first reply'}
-          />
-        </label>
-        <textarea
-          className="mail-compose-body"
-          value={body}
-          onChange={(e) => {
-            dictation.freeze();
-            setBody(e.target.value);
-          }}
-          aria-label="Mail"
-          placeholder={
-            forward
-              ? 'Add a note for the personas (optional) — the forwarded mail follows below.'
-              : writingOut
-                ? 'Write your mail. Only you send it; it is end-to-end encrypted.'
-                : 'Write the task. The personas work it unattended and the reply lands in your Inbox.'
-          }
-          rows={forward ? 4 : 10}
-          autoFocus
-          onPaste={(e) => void files.onPaste(e)}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={files.onDrop}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        {forward && (
-          <pre className="mail-forward-quote" aria-label="The forwarded mail">
-            {forward.quote}
-          </pre>
-        )}
-        <AttachmentChips attachments={files.attachments} onRemove={files.remove} />
-        {error && <p className="task-failed">{error}</p>}
-        <div className="mail-compose-actions">
-          <button
-            type="button"
-            className="composer-attach"
-            title={writingOut ? 'Attach — sealed with the mail, 17 MB in all' : 'Attach'}
-            aria-label="Attach"
-            onClick={() => void files.pickFiles()}
-          >
-            <Paperclip size={15} />
-          </button>
-          <DictateButton dictation={dictation} size={15} />
-          {confirmDiscard ? (
-            <span className="mail-discard-confirm" role="group" aria-label="Discard this draft?">
-              Discard this draft?
-              <button type="button" className="push default danger" onClick={discard}>
-                Discard
-              </button>
-              <button type="button" className="push" onClick={() => setConfirmDiscard(false)}>
-                Keep
-              </button>
-            </span>
+      <div className="mail-compose-scroll">
+        <div className="mail-letter">
+          {writingOut ? (
+            <>
+              {ownAddresses.length > 1 && (
+                <label className="mail-line">
+                  <span className="mail-line-label">From</span>
+                  <select value={outFrom ?? ownAddresses[0]} onChange={(e) => setOutFrom(e.target.value)} aria-label="Send from">
+                    {ownAddresses.map((a) => (
+                      <option key={a} value={a}>
+                        {a}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <div className="mail-line mail-line-to">
+                <span className="mail-line-label">To</span>
+                <PersonToField value={outTo} onChange={setOutTo} contacts={interStem.status?.contacts ?? []} onReach={setReach} />
+              </div>
+            </>
           ) : (
-            !forward && (
-              <button type="button" className="mail-discard" onClick={() => setConfirmDiscard(true)} disabled={!hasDraft}>
-                Discard…
-              </button>
-            )
+            <div className="mail-line mail-line-to">
+              <span className="mail-line-label">To</span>
+              <MailToField personas={personas} to={to} onChange={setTo} />
+            </div>
           )}
-          <span className="mail-compose-spacer" />
-          <span className="mail-kbd">⌘↵</span>
-          <button
-            className="mail-send"
-            onClick={() => void send()}
-            disabled={sending || (writingOut ? !outReady : empty || to.length === 0)}
-          >
-            <Send size={14} />{' '}
-            {sending ? 'Sending…' : writingOut ? 'Send' : leadName ? `Send to ${leadName}` : 'Send'}
-          </button>
+          <label className="mail-line mail-line-subject">
+            <span className="mail-line-label">Subject</span>
+            <input
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              placeholder={writingOut ? 'Optional' : 'Optional — Stem names it after the first reply'}
+            />
+          </label>
+          <textarea
+            className="mail-compose-body"
+            value={body}
+            onChange={(e) => {
+              dictation.freeze();
+              setBody(e.target.value);
+            }}
+            aria-label="Mail"
+            placeholder={
+              forward
+                ? 'Add a note for the personas (optional) — the forwarded mail follows below.'
+                : writingOut
+                  ? 'Write your mail. Only you send it; it is end-to-end encrypted.'
+                  : 'Write the task. The personas work it unattended and the reply lands in your Inbox.'
+            }
+            autoFocus
+            onPaste={(e) => void files.onPaste(e)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={files.onDrop}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          {forward && (
+            <pre className="mail-forward-quote" aria-label="The forwarded mail">
+              {forward.quote}
+            </pre>
+          )}
+          <AttachmentChips attachments={files.attachments} onRemove={files.remove} />
+          {error && <p className="task-failed mail-letter-error">{error}</p>}
+          <div className="mail-letter-foot">
+            <button
+              type="button"
+              className="composer-attach"
+              title={writingOut ? 'Attach — sealed with the mail, 17 MB in all' : 'Attach'}
+              aria-label="Attach"
+              onClick={() => void files.pickFiles()}
+            >
+              <Paperclip size={15} />
+            </button>
+            <DictateButton dictation={dictation} size={15} />
+            <span className="mail-compose-spacer" />
+            {confirmDiscard ? (
+              <span className="mail-discard-confirm" role="group" aria-label="Discard this draft?">
+                Discard this draft?
+                <button type="button" className="push default danger" onClick={discard}>
+                  Discard
+                </button>
+                <button type="button" className="push" onClick={() => setConfirmDiscard(false)}>
+                  Keep
+                </button>
+              </span>
+            ) : (
+              !forward &&
+              hasDraft && (
+                <button
+                  type="button"
+                  className="composer-attach"
+                  onClick={() => setConfirmDiscard(true)}
+                  title="Discard this draft"
+                  aria-label="Discard this draft"
+                >
+                  <Trash2 size={15} />
+                </button>
+              )
+            )}
+            <button
+              className="mail-send"
+              onClick={() => void send()}
+              disabled={sending || (writingOut ? !outReady : empty || to.length === 0)}
+              title="Send (⌘↵)"
+            >
+              <Send size={14} />
+              {sending ? 'Sending…' : writingOut ? 'Send' : leadName ? `Send to ${leadName}` : 'Send'}
+              <kbd className="mail-send-kbd" aria-hidden="true">⌘↵</kbd>
+            </button>
+          </div>
         </div>
       </div>
     </div>

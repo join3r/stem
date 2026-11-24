@@ -9,6 +9,35 @@ export interface ShareImage {
   mime: string;
   dataUrl: string;
   alt?: string;
+  /** A picture a model made: the viewer draws it as the app's image card, else as an attachment thumbnail. */
+  generated?: boolean;
+  width?: number;
+  height?: number;
+}
+
+/**
+ * A picture an answer shows from the web (`![…](https://…)`). The app fetches
+ * it through the server; a share page has no server, so the bytes are taken
+ * when the link is made, and only for pictures the app itself would show.
+ */
+export interface ShareWebImage {
+  url: string;
+  dataUrl: string;
+}
+
+/** A sound the answer shared (share_audio), with its bytes. */
+export interface ShareAudio {
+  title?: string;
+  mime: string;
+  dataUrl: string;
+}
+
+/** A web source the answer cites, with the site's icon when the server could get one. */
+export interface ShareSourceLink {
+  url: string;
+  title?: string;
+  /** The site's icon as a data URL. */
+  icon?: string;
 }
 
 export interface ShareMessage {
@@ -19,11 +48,15 @@ export interface ShareMessage {
   text: string;
   /** ISO timestamp. */
   createdAt?: string;
-  /** Assistant only, when the sharer kept it: the model id. */
+  /** Assistant only, when the sharer kept it: the model's name as the app shows it. */
   model?: string;
   /** Generated pictures (assistant) or attached ones (user, opt-in). */
   images?: ShareImage[];
-  sources?: { url: string; title?: string }[];
+  /** Assistant only: the web pictures its text shows (see ShareWebImage). */
+  webImages?: ShareWebImage[];
+  /** Assistant only: sounds it shared. */
+  audio?: ShareAudio[];
+  sources?: ShareSourceLink[];
 }
 
 export interface ShareSnapshot {
@@ -49,6 +82,14 @@ export const SHARE_MAX_TTL_DAYS = 30;
 export const SHARE_TTL_CHOICES = [30, 7, 1] as const;
 /** Live links per address, enforced by the relay. */
 export const SHARE_MAX_LINKS = 100;
+/** Most people one locked link names, enforced by the relay. */
+export const SHARE_MAX_RECIPIENTS = 20;
+
+/** A plausible email address, lowercased and trimmed; null when it is not one. */
+export function normalizeRecipient(raw: string): string | null {
+  const a = raw.trim().toLowerCase();
+  return /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/.test(a) && a.length <= 254 ? a : null;
+}
 
 /**
  * The link preview chat apps show when the link is pasted (og: tags). Unlike
@@ -104,6 +145,26 @@ export interface ShareOptions {
   ttlDays?: number;
   /** The link preview to publish; absent or null = none (a generic card). */
   card?: ShareCard | null;
+  /**
+   * Only these addresses may open the link: a visitor must enter a code the
+   * relay mails to one of them. Absent or empty = anyone with the link.
+   */
+  recipients?: string[];
+  /**
+   * The preview the user looked over (SharePreview.draftId): "Create link"
+   * publishes exactly that snapshot, never a fresh build.
+   */
+  draftId?: string;
+}
+
+/** One recipient's openings of a locked link. */
+export interface ShareOpen {
+  address: string;
+  /** Unix ms. */
+  firstAt: number;
+  /** Unix ms. */
+  lastAt: number;
+  count: number;
 }
 
 /** A link this Stem published, as listed in Settings. */
@@ -120,6 +181,10 @@ export interface SharedLink {
   /** Unix ms. */
   expiresAt: number;
   size: number;
+  /** A locked link: the only addresses that may open it. */
+  recipients?: string[];
+  /** A locked link: who opened it, as the relay last reported. */
+  opens?: ShareOpen[];
 }
 
 /** What the preview shows next to the rendered snapshot. */
@@ -131,6 +196,8 @@ export interface SharePreview {
   omittedAttachments: number;
   /** The link preview this snapshot suggests (the dialog lets the user edit it). */
   card: ShareCard;
+  /** Pass back as ShareOptions.draftId to publish this snapshot. Absent from older servers. */
+  draftId?: string;
 }
 
 /** Whether this Stem can publish, and under which address. */

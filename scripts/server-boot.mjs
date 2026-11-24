@@ -191,7 +191,7 @@ function runServerCommand(args, commandEnv) {
 // runtime as ERR_MODULE_NOT_FOUND for a file nobody wrote, on a path the e2e
 // suite never walks, so it is asserted here where the build output is in hand.
 const distMain = join(appDir, 'dist', 'main');
-for (const rel of ['embed-worker.js', 'scan-worker.js', 'recall-mcp-server.js', 'pi/pi-node-shim.mjs', 'pi/stem-mcp-extension.mjs', 'pi/image-gen.mjs', 'pi/mcp-discovery.mjs']) {
+for (const rel of ['embed-worker.js', 'scan-worker.js', 'recall-mcp-server.js', 'pi/pi-node-shim.mjs', 'pi/stem-mcp-extension.mjs', 'pi/image-gen.mjs', 'pi/mcp-discovery.mjs', 'pi/mcp-install-paths.mjs']) {
   check(`${rel} sits where its sibling join expects it`, existsSync(join(distMain, rel)));
 }
 check(

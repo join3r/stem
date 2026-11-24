@@ -85,6 +85,15 @@ describe('parseAuthorReply', () => {
   });
 });
 
+describe('parseAuthorReply: how often the task recurs', () => {
+  it('reads the estimate, and reads a value outside the list as not said', () => {
+    const said = parseAuthorReply('{"skill":{"name":"a-b","description":"d","body":"x","recurs":"Monthly"}}');
+    expect(said.kind === 'skill' && said.draft.recurs).toBe('monthly');
+    const garbled = parseAuthorReply('{"skill":{"name":"a-b","description":"d","body":"x","recurs":"every fortnight"}}');
+    expect(garbled.kind === 'skill' && 'recurs' in garbled.draft).toBe(false);
+  });
+});
+
 describe('renderEvidence', () => {
   it('shows the arguments and the failures, not a summary', () => {
     const text = renderEvidence(input());

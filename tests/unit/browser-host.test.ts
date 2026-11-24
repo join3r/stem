@@ -9,14 +9,14 @@ import { createConnection, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createBrowserHost, type BrowserHost } from '../../src/desktop/browser-host';
+import { createBrowserHost, profileTag, type BrowserHost } from '../../src/desktop/browser-host';
 import { parseArcTabs, type ArcSidebarTab } from '../../src/desktop/browser-host/arc-tabs';
 import { browserInstallPaths, ensureHostConfig } from '../../src/desktop/browser-host/install';
 import { relayKey } from '../../src/desktop/browser-host/relay';
 import { writeBrowserHostEnabled } from '../../src/desktop/browser-host/store';
 import { encodeFrame, FrameReader, type ServerHello, type ToExtension } from '../../src/shared/browser-native';
 import { handshakeProof, newNonce, proofMatches } from '../../src/desktop/browser-host/handshake';
-import { serverProved } from '../../src/desktop/browser-host/native-host-main';
+import { isReplaced, serverProved } from '../../src/desktop/browser-host/native-host-main';
 import type { DeviceBrowserRequest } from '../../src/shared/types';
 
 interface Peer {
@@ -97,6 +97,13 @@ describe('the native host', () => {
     expect(serverProved(token, nonce, hello(handshakeProof(token, 'stem', newNonce())))).toBe(false);
     expect(serverProved(token, nonce, hello(handshakeProof(token, 'host', nonce)))).toBe(false);
     expect(serverProved(token, nonce, Buffer.from('{"type":"request"}'))).toBe(false);
+  });
+
+  it('knows Stem’s word that a newer host has its profile, and nothing else', () => {
+    expect(isReplaced(Buffer.from('{"type":"replaced"}'))).toBe(true);
+    expect(isReplaced(Buffer.from('{"type":"host","connected":false}'))).toBe(false);
+    expect(isReplaced(Buffer.from('{"type":"request","id":"replaced"}'))).toBe(false);
+    expect(isReplaced(Buffer.from('not json'))).toBe(false);
   });
 });
 
@@ -344,6 +351,71 @@ describe('createBrowserHost', () => {
     expect(result('r1')?.error).toContain('may or may not have happened');
   });
 
+  describe('an action that runs out of time', () => {
+    const quick = () =>
+      createBrowserHost({
+        invoke: async (channel, args) => {
+          invoked.push({ channel, args });
+          return undefined;
+        },
+        uploadFile: async () => 'x',
+        downloadOutbox: async () => 'x',
+        installSource: () => ({ extensionSource: extSource, hostScript: '/dev/null', nodeCommand: '/bin/false' }),
+        home: join(root, 'home'),
+        launch: async () => undefined,
+        openWith: async () => undefined,
+        paths: browserInstallPaths(root),
+        platform: 'darwin',
+        launchWaitMs: 300,
+        actionTimeoutMs: 100,
+        aliveProbeMs: 100,
+        restartWaitMs: 1_000
+      });
+
+    beforeEach(async () => {
+      host.close();
+      host = quick();
+      await host.start();
+      await writeBrowserHostEnabled(true);
+    });
+
+    it('blames the page, without a restart, while the extension still answers', async () => {
+      const peer = await connectPeer(socketPath, arc());
+      peers.push(peer);
+      host.onRequest(request('r1', { kind: 'snapshot' }));
+      await peer.next('request');
+      const probe = (await peer.next('peek')) as { id: string };
+      peer.send({ type: 'result', id: probe.id, result: { ok: true } });
+      await until(() => !!result('r1'));
+      expect(result('r1')?.error).toContain('did not finish the action in time');
+      expect(peer.received.filter((m) => m.type === 'reload')).toEqual([]);
+    });
+
+    it('restarts an extension that stopped answering and says it is back', async () => {
+      const peer = await connectPeer(socketPath, arc());
+      host.onRequest(request('r1', { kind: 'snapshot' }));
+      await peer.next('request');
+      await peer.next('peek');
+      expect(await peer.next('reload')).toEqual({ type: 'reload' });
+      peer.socket.destroy();
+      await peer.closed;
+      const again = await connectPeer(socketPath, arc());
+      peers.push(again);
+      await until(() => !!result('r1'));
+      expect(result('r1')?.error).toContain('Stem restarted it, and it is connected again');
+    });
+
+    it('says so when the restarted extension does not come back', async () => {
+      const peer = await connectPeer(socketPath, arc());
+      peers.push(peer);
+      host.onRequest(request('r1', { kind: 'tabs' }));
+      await peer.next('request');
+      await peer.next('reload');
+      await new Promise((r) => setTimeout(r, 1_200));
+      expect(result('r1')?.error).toContain('did not come back');
+    });
+  });
+
   it('reloads each browser once when the extension files change, never on every hello', async () => {
     const peer = await connectPeer(socketPath, arc());
     await until(() => invoked.some((c) => JSON.stringify(c.args).includes('"connected":true')));
@@ -415,6 +487,54 @@ describe('createBrowserHost', () => {
     peer.send({ type: 'result', id: 'r2', result: { ok: true, text: '0 open tabs.', urls: [] } });
     await until(() => !!result('r2'));
     expect(result('r2')!.text).toBe('0 open tabs.\n\nmacOS did not let Stem read Arc’s sidebar.');
+  });
+
+  describe('two native hosts claiming one profile', () => {
+    const PROFILE = 'cccccccc-3333-4333-8333-333333333333';
+    const ext = { ...LEGACY_HELLO, profileId: PROFILE };
+    const hostAt = (startedAt?: number) => ({ ...arc(), ...(startedAt ? { startedAt } : {}) });
+    const connected = () =>
+      (invoked.filter((c) => c.channel === 'browserHost:announce').at(-1)?.args[0] as
+        | { browsers: Array<{ connected: boolean }> }
+        | undefined)?.browsers.filter((b) => b.connected).length ?? 0;
+
+    // 2026-11-02: jbrow restarted the extension's worker but left its old
+    // native host running. The old host replayed its hello every two seconds,
+    // each hello threw the live connection off, and an action in flight failed
+    // as "jbrow disconnected" though the user had done nothing.
+    it('lets the newer host take over, tells the old one to quit, and keeps refusing it', async () => {
+      await writeBrowserHostEnabled(true);
+      const old = await connectPeer(socketPath, hostAt(1_000), ext);
+      peers.push(old);
+      await until(() => connected() === 1);
+      host.onRequest(request('r1', { kind: 'click', ref: 'e2' }));
+      await old.next('request');
+
+      const fresh = await connectPeer(socketPath, hostAt(2_000), ext);
+      peers.push(fresh);
+      await old.next('replaced');
+      await old.closed;
+      await until(() => !!result('r1'));
+      expect(result('r1')?.error).toContain('nothing the user did');
+
+      // The old host retries, as one from before 0.8.0 would: refused, and the newer one stays.
+      const retry = await connectPeer(socketPath, hostAt(1_000), ext);
+      peers.push(retry);
+      await retry.next('replaced');
+      await retry.closed;
+      const legacy = await connectPeer(socketPath, hostAt(), ext);
+      peers.push(legacy);
+      await legacy.next('replaced');
+      await legacy.closed;
+      expect(fresh.socket.destroyed).toBe(false);
+      expect(fresh.received.some((m) => m.type === 'replaced')).toBe(false);
+
+      host.onRequest(request('r2', { kind: 'click', ref: 'e2' }));
+      const req = (await fresh.next('request')) as Extract<ToExtension, { type: 'request' }>;
+      fresh.send({ type: 'result', id: req.id, result: { ok: true, text: 'clicked' } });
+      await until(() => !!result('r2'));
+      expect(result('r2')).toMatchObject({ ok: true, text: 'clicked' });
+    });
   });
 
   describe('several profiles of one browser', () => {
@@ -834,5 +954,13 @@ describe.skipIf(!relayRuns)('createBrowserHost with a Snap browser, through the 
       expect(proofMatches(key, 'stem', nonce, proof)).toBe(true);
     }
     expect(JSON.stringify(invoked)).not.toContain('evil');
+  });
+});
+
+describe('profileTag', () => {
+  it('shortens the profile id of a connection key for the log', () => {
+    expect(profileTag('/Applications/jbrow.app#0f3c2a91-77aa-4c1e-9d0b-5a1e2f3d4c5b')).toBe('0f3c2a91');
+    expect(profileTag('/Applications/Google Chrome.app')).toBe('none');
+    expect(profileTag(null)).toBeNull();
   });
 });

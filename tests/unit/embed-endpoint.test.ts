@@ -8,6 +8,8 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { getEmbedEndpointToken, startEmbedEndpoint } from '../../src/server/recall/embed-endpoint';
 import type { EmbeddingsClient } from '../../src/server/recall/embeddings';
+import type { FactRerankClient } from '../../src/server/recall/retrieval';
+import { recallStore as store } from '../../src/server/recall/store';
 
 // A named pipe on Windows, as embedSocketPath() gives the real endpoint there.
 const SOCK =
@@ -36,10 +38,46 @@ const goodClient: EmbeddingsClient = {
 };
 
 let client: EmbeddingsClient | null = goodClient;
-const endpoint = startEmbedEndpoint({ socketPath: SOCK, getClient: () => client });
+/** Scores a fact by the number in its text ("score 3"); floor 0. */
+const gate: FactRerankClient = {
+  available: async () => true,
+  factGateScore: async () => 0,
+  rerank: async (_q, docs) => docs.map((doc, index) => ({ index, score: Number(/score (-?\d+)/.exec(doc)?.[1] ?? -9) }))
+};
+let factGate: FactRerankClient | null = gate;
+const endpoint = startEmbedEndpoint({ socketPath: SOCK, getClient: () => client, getFactGate: async () => factGate });
 
 afterAll(async () => {
   await endpoint.close();
+});
+
+describe('fact gate op (search_facts)', () => {
+  it('returns the ids that clear the floor, sensitive ones only past the margin, in search order', async () => {
+    store.resetFacts();
+    const high = store.upsertFact('The user owns a bike, score 3', 'explicit')!;
+    const low = store.upsertFact('The user likes jazz, score -1', 'explicit')!;
+    const sensLow = store.upsertFact('The user has asthma, score 1', 'explicit', { sensitivity: 'sensitive' })!;
+    const sensHigh = store.upsertFact('The user lives in Brno, score 4', 'explicit', { sensitivity: 'sensitive' })!;
+    const token = getEmbedEndpointToken();
+    const res = await request({ id: 4, op: 'factGate', query: 'q', ids: [sensHigh, low, high, sensLow], token });
+    expect(res).toEqual({ id: 4, ok: true, pass: [sensHigh, high] });
+  });
+
+  it('says it cannot gate when there is no calibrated fact reranker, and refuses bad requests', async () => {
+    const token = getEmbedEndpointToken();
+    factGate = { ...gate, factGateScore: async () => null };
+    expect(await request({ id: 1, op: 'factGate', query: 'q', ids: [1], token })).toMatchObject({ ok: false, error: 'fact gate unavailable' });
+    factGate = null;
+    expect(await request({ id: 2, op: 'factGate', query: 'q', ids: [1], token })).toMatchObject({ ok: false });
+    factGate = gate;
+    for (const bad of [
+      { id: 3, op: 'factGate', query: '', ids: [1], token },
+      { id: 4, op: 'factGate', query: 'q', ids: Array.from({ length: 31 }, (_, i) => i), token },
+      { id: 5, op: 'factGate', query: 'q', ids: ['1'], token }
+    ]) {
+      expect(await request(bad)).toMatchObject({ ok: false, error: 'bad request' });
+    }
+  });
 });
 
 describe('embed endpoint', () => {

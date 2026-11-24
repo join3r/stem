@@ -949,6 +949,59 @@ describe('assistant MCP administration', () => {
   });
 });
 
+describe('edit_mcp_server', () => {
+  async function editTool(servers: Record<string, unknown>) {
+    const root = await mkdtemp(join(tmpdir(), 'stem-mcp-edit-'));
+    cleanup.push(root);
+    const configPath = join(root, 'mcp.json');
+    const initial = JSON.stringify({ servers }, null, 2);
+    await writeFile(configPath, initial);
+    process.env.STEM_MCP_CONFIG = configPath;
+    type RegisteredTool = { name?: string; execute?: (...args: unknown[]) => Promise<unknown> };
+    const registered: RegisteredTool[] = [];
+    await stemMcpBridge({
+      registerTool: (tool: RegisteredTool) => registered.push(tool),
+      on: () => {},
+      getActiveTools: () => [] as string[],
+      setActiveTools: () => {}
+    });
+    const confirm = vi.fn(async (..._args: unknown[]) => true);
+    const tool = registered.find((t) => t.name === 'edit_mcp_server')!;
+    const run = async (params: Record<string, unknown>) =>
+      (await tool.execute!('edit-id', params, undefined, undefined, { ui: { confirm } })) as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+    return { run, confirm, configPath, initial };
+  }
+
+  it('proposes only the change, with the current command for the card, and never writes config itself', async () => {
+    const { run, confirm, configPath, initial } = await editTool({
+      fio: { command: '/usr/local/bin/node', args: ['launch.mjs'], env: { FIO_API_TOKEN: 'bank' }, trusted: true }
+    });
+    const result = await run({ name: 'fio', command: '/opt/fio-node' });
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(String(confirm.mock.calls[0]?.[1]))).toEqual({
+      action: 'edit',
+      name: 'fio',
+      patch: { command: '/opt/fio-node' },
+      before: { command: '/usr/local/bin/node', args: ['launch.mjs'], keptKeys: ['FIO_API_TOKEN'] }
+    });
+    expect(await readFile(configPath, 'utf8')).toBe(initial);
+  });
+
+  it('refuses an unknown server, an empty change and fields of the other transport without asking', async () => {
+    const { run, confirm } = await editTool({ remote: { url: 'https://mcp.example', trusted: true } });
+    expect((await run({ name: 'missing', url: 'https://x' })).isError).toBe(true);
+    expect((await run({ name: 'remote' })).isError).toBe(true);
+    const wrong = await run({ name: 'remote', command: 'node' });
+    expect(wrong.isError).toBe(true);
+    expect(wrong.content[0]?.text).toContain('remote (http)');
+    expect((await run({ name: 'stem-recall', command: 'x' })).isError).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+});
+
 describe('service tier ("Fast") payload injection', () => {
   const codexBody = { input: [{ role: 'user' }], instructions: 'You are…', model: 'gpt-5.2-codex' };
   const grokResponsesBody = { input: [{ role: 'user' }], model: 'grok-4.5' };

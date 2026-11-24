@@ -23,10 +23,12 @@ import type {
   CompactChatResult,
   ChatSummary,
   GeneratedImageRef,
+  ChatAudioRef,
   InstructionsProposal,
   McpAdminProposal,
   McpLoginResult,
   McpServerInput,
+  McpServerPatch,
   MessageAttachment,
   MessageMeta,
   ModelServiceTier,
@@ -37,6 +39,7 @@ import type {
   StartTurnInput,
   StartTurnResult
 } from '../../shared/types';
+import { looksLikeMcpSecret } from '../../shared/types';
 import {
   API_KEY_PROVIDER_IDS,
   AUTH_PROVIDER_IDS,
@@ -55,13 +58,13 @@ import {
   computerControlInstructions,
   stemAssistantInstructions
 } from '../workspace/bootstrap';
-import { memoryRunOf, readSettings } from '../workspace/settings';
+import { backgroundRunOf, memoryRunOf, readSettings } from '../workspace/settings';
 import { resolveBrowserGrant, resolveCodingGrant, resolveComputerGrant } from '../harness/chat-grants';
 import { browserChoicesText, codingChoicesText, computerChoicesText } from '../harness/chat-hosts';
 import { resolveLoginPath } from '../exec/executor';
 import { resolveHostShell } from '../exec/git-bash';
 import { ensureThreadScratch } from '../exec/scratch';
-import { capActions, capUserWords, parseJudgeSession, type JudgeAction, type JudgeContext } from '../exec/judge-context';
+import { capActions, capUserWords, parseJudgeSession, savedFilesAction, type JudgeAction, type JudgeContext } from '../exec/judge-context';
 import { mailedImageThread, readMail } from '../workspace/mail';
 import { formatPastChat, pastChatLink } from './past-chat';
 import { clampPinnedCwd } from '../harness/pin';
@@ -71,7 +74,9 @@ import { autoTitle, nameThread, nameThreadIfDue as nameIfDue, type SubjectDeps }
 import { noteRename } from '../workspace/inbox';
 import { getChatFormat, isChatPrivate, markTurnTainted, setChatFormat, setChatPrivate, setNaming, taintedTurns } from '../workspace/chats';
 import { captureMemoryFromUserInput, isRecallEnabled } from '../workspace/memory';
-import { buildRecallContext, type RecallTimings } from '../recall/inject';
+import { buildRecallContext, RECALL_RULES, type RecallTimings } from '../recall/inject';
+import { memoryTopicsContext } from '../recall/fact-groups';
+import { newWorkerTimings, withWorkerTimings } from '../recall/worker-timings';
 import { userProfileContext } from '../recall/profile';
 import { buildPinsContext } from '../pins/context';
 import { getFactRerankClient } from '../recall/retrieval';
@@ -110,12 +115,16 @@ import {
   saveOAuthTokenIfServerMatches,
   writeNativeSearchGate,
   writeServiceTierGate,
+  writeSystemPromptFile,
+  writeToolSkillsGate,
   writeTurnContextGate
 } from './mcp-config';
 import { authorizeMcp } from './oauth';
 import { runDeviceMcpBridgeOp } from '../mcp-device/pi-bridge';
 import { execDeviceRouter } from '../exec-device/router';
 import { saveFiles, type SaveItem } from '../files/save-file';
+import { deleteChatAudio, shareAudio } from '../files/chat-audio';
+import { resolveImageRefs } from '../files/image-refs';
 import { providerIsSpawnable, syncModelsConfig } from './models-config';
 import {
   buildWebSearchContext,
@@ -124,16 +133,17 @@ import {
   webAccessVersion,
   writeWebSearchConfig
 } from './web-search';
-import { piMcpConfigPath, skillsRoot } from '../workspace/paths';
+import { mcpInstallRoot, piMcpConfigPath, skillsRoot, workspaceRoot as stemWorkspaceRoot } from '../workspace/paths';
 import { readUsage, recordGrades, recordInjections, recordUses } from '../skills/usage';
-import { formatSkillsBlock, selectSkills, type SkillUsageStat } from '../skills/inject';
-import { loadedSkillNames } from '../skills/thread-history';
+import { completionSkillPicker, SKILL_PICK_DEADLINE_MS, type SkillPicker } from '../skills/pick';
+import { formatSkillsBlock, selectSkills, SKILL_RULES, toolSkillsForTurn, toolSkillsHandedOver, type SkillUsageStat } from '../skills/inject';
+import { listedSkillLines, loadedSkillNames } from '../skills/thread-history';
 import { AmbientBlocks, liveUserTexts } from './context-dedupe';
 import { formatPracticeBlock } from '../skills/record';
 import { formatWindowBlock, isBrowserWindow } from './window-context';
-import { mcpServersForAppName, windowSuggestionFor } from './mcp';
+import { mcpServersForAppName, shortLivedRoots, windowSuggestionFor } from './mcp';
 import { readDevices } from '../transport/auth';
-import { listSkillRecords } from '../skills/store';
+import { listSkillRecords, readSkillRecord } from '../skills/store';
 import { gradeSkillUse, reportedSkillIssues } from '../skills/grade';
 import { parseThreadEvidence, type LearnTurn } from '../skills/thread-evidence';
 import { resolvePi, type PiInvocation } from './locate';
@@ -149,6 +159,7 @@ import {
   spawnReadyCompleteChild
 } from './complete-worker';
 import {
+  chatAudioRef,
   generatedImageRef,
   newTurnContext,
   normalizePiEvent,
@@ -178,9 +189,13 @@ import {
   ENV_MCP_OAUTH,
   ENV_SECRET_KEY,
   ENV_SKILLS_DIR,
+  ENV_MCP_INSTALL_ROOT,
+  ENV_MCP_SHORT_LIVED_ROOTS,
   EXEC_BRIDGE_TITLE,
   FILE_BRIDGE_TITLE,
   SAVE_BRIDGE_TITLE,
+  AUDIO_BRIDGE_TITLE,
+  IMAGE_REF_BRIDGE_TITLE,
   BROWSER_BRIDGE_TITLE,
   CHAT_BRIDGE_TITLE,
   COMPUTER_BRIDGE_TITLE,
@@ -190,6 +205,7 @@ import {
   SKILL_BRIDGE_TITLE,
   SKILLS_REV_FILE,
   TASK_BRIDGE_TITLE,
+  TOOL_SKILLS_GATE_FILE,
   toolArgsOf
 } from './protocol';
 import { recallStore, type Fact, type FactTier, type InjectedDocRef } from '../recall/store';
@@ -197,11 +213,14 @@ const { getTurnActivitiesByThread, getTurnTimingsByThread, getTurnSystemsByThrea
 
 // Default provider/model. openai-codex is the user's working ChatGPT subscription
 // (verified streaming in the Phase-0 spike); Anthropic/Claude Max is selectable
-// but currently gated behind claude.ai "extra usage". gpt-6.1-sol matches pi's
-// own openai-codex default; gpt-5.3-codex-spark, the spike's model, is refused
-// for ChatGPT sign-ins since Sep 2026.
+// but currently gated behind claude.ai "extra usage". gpt-6.2-sol matches pi's
+// own openai-codex default (since pi 1.6.0; same price, context window and
+// thinking levels as gpt-6.1-sol); gpt-5.3-codex-spark, the spike's model, is
+// refused for ChatGPT sign-ins since Sep 2026.
 const DEFAULT_PROVIDER = 'openai-codex';
-const DEFAULT_MODEL = 'gpt-6.1-sol';
+const DEFAULT_MODEL = 'gpt-6.2-sol';
+/** In pi-home: present once Stem has moved the profile's transport off its old "sse" seed. */
+const STEM_PI_DEFAULTS_MARKER = 'stem-transport-auto.json';
 
 // No provider capability set for web search any more: it is served by the vendored
 // pi-web-access extension (see ./web-search), so every model has it.
@@ -929,6 +948,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       if (idle.length) {
         const unbound = idle.filter((w) => ![...this.threadWorkers.values()].includes(w));
         const chosen = unbound[0] ?? idle.sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
+        // The evicted thread really loses its binding. Left in place, rule 1
+        // would queue that thread's next send behind THIS turn — another chat's,
+        // possibly many minutes long — while the pool had room to spare.
+        for (const [id, w] of this.threadWorkers) if (w === chosen && id !== threadId) this.threadWorkers.delete(id);
         if (threadId) this.bindThread(threadId, chosen);
         return reserve(chosen);
       }
@@ -1329,6 +1352,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       turn.startedAt = startedAt;
       turn.ensureMs = ensureMs;
       turn.recall = {};
+      turn.workerTimings = newWorkerTimings();
       // Autonomous scheduled run: run_command's manual-approval tier is rejected
       // (nobody is present to answer the card) — see handleExecBridgeRequest.
       // Mail deliveries inherit the same nobody-is-watching semantics, with one
@@ -2024,8 +2048,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         for (const tid of Object.values(conversation.sessions)) await readSession(tid, { words: false, actions: true });
       }
     };
+    let reply: string | undefined;
     if (input.mail) {
       await conversationWords(input.mail.conversationId, true);
+      // The delivery is the user's own mail: the newest of theirs is it.
+      if (input.mail.from === 'user') reply = words.at(-1);
     } else if (input.scheduled) {
       const origin = this.taskBridge?.originThread(input.scheduled.taskId) ?? null;
       if (origin) {
@@ -2039,8 +2066,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     } else {
       await readSession(threadId, { words: true, actions: true });
       words.push(input.input);
+      reply = input.input;
     }
-    return { userWords: capUserWords(words), actions: capActions(actions) };
+    return { userWords: capUserWords(words), actions: capActions(actions), ...(reply ? { reply } : {}) };
   }
 
   async learnEvidence(threadId: string): Promise<LearnTurn[] | null> {
@@ -2061,6 +2089,33 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       privateFolderLabels: labels,
       taintedTurnIds: tainted
     });
+  }
+
+  /**
+   * The skill picker for a turn (skills/pick.ts): one short call on the
+   * quick-tasks model, ahead of the memory passes in the complete queue. The
+   * deadline counts the wait for a slot too; past it the cross-encoder cut
+   * stands alone.
+   */
+  private skillPicker(): SkillPicker {
+    return completionSkillPicker(
+      async (prompt) => {
+        let timer: NodeJS.Timeout | undefined;
+        const deadline = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`no answer within ${SKILL_PICK_DEADLINE_MS} ms`)), SKILL_PICK_DEADLINE_MS);
+        });
+        try {
+          const run = await backgroundRunOf('skillPick', () => ({ model: null, effort: null }));
+          return await Promise.race([
+            this.complete(prompt, { ...run, timeoutMs: SKILL_PICK_DEADLINE_MS, priority: true }),
+            deadline
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+      (error) => degrade('skills.pick', 'chose skills with the cross-encoder alone', error)
+    );
   }
 
   /**
@@ -2353,7 +2408,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Only lines naming the URL are worth parsing — the others can be megabytes.
     const entries: unknown[] = [];
     for (const line of text.split('\n')) {
-      if (!line.includes(needle) && !line.includes(url)) continue;
+      if (!line.includes(needle)) continue;
       try {
         entries.push(JSON.parse(line));
       } catch {
@@ -2404,12 +2459,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // details; the bytes stay in this file) and how many a bubble already has.
     let turnImages: GeneratedImageRef[] = [];
     let placedImages = 0;
+    // Sounds share_audio put in the chat, the same way (bytes in the audio store).
+    let turnAudio: ChatAudioRef[] = [];
+    let placedAudio = 0;
+    const turnMedia = () => ({
+      ...(turnImages.length ? { images: [...turnImages] } : {}),
+      ...(turnAudio.length ? { audio: [...turnAudio] } : {})
+    });
     // A turn that ended right after an image (stopped, or no closing words)
     // still shows it: onto the turn's bubble, or a bubble of its own.
     const flushTurnImages = () => {
-      if (turnImages.length <= placedImages) return;
+      if (turnImages.length <= placedImages && turnAudio.length <= placedAudio) return;
       if (aggregateIndex >= 0) {
-        messages[aggregateIndex] = { ...messages[aggregateIndex], images: [...turnImages] };
+        messages[aggregateIndex] = { ...messages[aggregateIndex], ...turnMedia() };
       } else {
         const turnId = runtimeTurnId ?? lastUserId;
         messages.push({
@@ -2418,10 +2480,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           content: '',
           turnId: lastUserId,
           ...(runtimeTurnId ? { runtimeTurnId } : {}),
-          images: [...turnImages]
+          ...turnMedia()
         });
       }
       placedImages = turnImages.length;
+      placedAudio = turnAudio.length;
     };
     // Which model/effort produced each reply (the hover label next to "Stem").
     // Assistant entries persist provider+model directly; effort comes from the
@@ -2506,6 +2569,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           turnImages.push(made);
           if (hit) hit.image = made;
         }
+        const sound = entry.message.isError === true ? null : chatAudioRef(entry.message.details, threadId);
+        if (sound) {
+          turnAudio.push(sound);
+          if (hit) hit.audio = sound;
+        }
         continue;
       }
       const { text: content, images, scheduled } = this.contentToParts(entry.message.content);
@@ -2513,6 +2581,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         flushTurnImages();
         turnImages = [];
         placedImages = 0;
+        turnAudio = [];
+        placedAudio = 0;
         if (pendingFailure) messages.push(pendingFailure);
         pendingFailure = undefined;
         lastUserId = entry.id ?? lastUserId;
@@ -2547,7 +2617,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             pendingActivity.push(item);
           }
         }
-        if (content.trim() || turnImages.length > placedImages) {
+        if (content.trim() || turnImages.length > placedImages || turnAudio.length > placedAudio) {
           const turnKey = lastUserId || entry.id;
           const timing = turnKey ? timings.get(turnKey) : undefined;
           const usage = toTurnUsage(entry.message.usage);
@@ -2583,9 +2653,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             ...(entry.timestamp ? { createdAt: entry.timestamp } : {}),
             ...(activity ? { activity } : {}),
             ...(sources ? { sources } : {}),
-            ...(turnImages.length ? { images: [...turnImages] } : {})
+            ...turnMedia()
           };
           placedImages = turnImages.length;
+          placedAudio = turnAudio.length;
           if (runtimeTurnId) {
             answer.content = committedText && content.trim() ? `${committedText}\n\n${content}` : committedText || content;
             if (entry.message.stopReason !== 'error' && entry.message.stopReason !== 'aborted') committedText = answer.content;
@@ -2599,7 +2670,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                 ...answer,
                 activity: answer.activity ?? previous.activity,
                 sources: answer.sources ?? previous.sources,
-                images: answer.images ?? previous.images
+                images: answer.images ?? previous.images,
+                audio: answer.audio ?? previous.audio
               };
             }
           } else {
@@ -2742,6 +2814,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // messages still on disk, which is the part they meant to be rid of.
         degrade('pi.sessions', 'left a deleted chat on disk, where the next list finds it again', e)
       );
+      await deleteChatAudio(threadId).catch((e) => degrade('chat-audio', 'left a deleted chat\'s sounds on disk', e));
     });
   }
 
@@ -3200,6 +3273,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             turn?.computerGrant?.kind === 'pin' ? turn.computerGrant.device : (turn?.computerGrant?.device ?? null),
           computerAnyDevice: turn?.computerGrant?.kind === 'chat' && turn.computerGrant.device === null,
           threadId: turn?.threadId ?? null,
+          turnId: turn?.turnId,
           isScheduled: turn?.isScheduled === true,
           userText: turn?.userText,
           judgeContext: turn?.judge,
@@ -3209,12 +3283,63 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // see an agent retrying a blocked step another way.
         if (turn?.judge && req.command) {
           turn.judge = {
-            userWords: turn.judge.userWords,
+            ...turn.judge,
             actions: capActions([...turn.judge.actions, { command: req.command, refused: !result.ok }])
           };
         }
         if (this.parkTurn(worker, turn, result)) return respond(result);
         respond(result);
+      } catch (e) {
+        respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+  }
+
+  /** An image in the thread, or one another persona made and mailed here (bytes in the sender's thread). */
+  private async findThreadOrMailedImage(threadId: string, imageId: string): Promise<{ mimeType: string; data: string } | null> {
+    const own = await this.findThreadImage(threadId, imageId);
+    if (own) return own;
+    const origin = await mailedImageThread(threadId, imageId);
+    return origin ? this.findThreadImage(origin, imageId) : null;
+  }
+
+  /**
+   * Handle generate_image's file-reference round-trip (sentinel
+   * IMAGE_REF_BRIDGE_TITLE): read the named pictures for the live turn's
+   * thread, from the same places save_file and browser uploads read.
+   */
+  private handleImageRefBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    const requestProcess = worker.proc;
+    const respond = (value: unknown): void => {
+      if (worker.proc !== requestProcess) return;
+      requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    };
+    const turn = worker.currentTurn;
+    void (async () => {
+      try {
+        if (turn?.external) return respond({ ok: false, error: EXTERNAL_TOOL_REFUSAL });
+        if (!turn?.threadId) return respond({ ok: false, error: 'File references are unavailable outside a conversation.' });
+        const req = JSON.parse(payload ?? '{}') as { refs?: unknown };
+        const refs = Array.isArray(req.refs) ? req.refs.filter((r): r is string => typeof r === 'string') : [];
+        const res = await resolveImageRefs(turn.threadId, refs, {
+          findThreadImage: (threadId, imageId) => this.findThreadOrMailedImage(threadId, imageId)
+        });
+        // A picture read from a memorize:false folder taints the turn, exactly as
+        // a `read` of it would: the new image is drawn from it.
+        if (res.ok && !turn.memoryTainted && turn.privateRoots?.length) {
+          const scratch = await ensureThreadScratch(turn.threadId);
+          const roots = turn.privateRoots;
+          // Relative names resolve as resolveImageRefs resolves them: Stem's
+          // workspace (where `files/` is), then this chat's scratch.
+          const ws = stemWorkspaceRoot();
+          const hit = refs.some((r) => {
+            const ref = r.trim();
+            if (!ref || /^img_[0-9a-f]{6,32}$/.test(ref)) return false;
+            return pathInsideAny(ref, roots, ws) || pathInsideAny(ref, roots, scratch);
+          });
+          if (hit) this.taintTurn(turn);
+        }
+        respond(res);
       } catch (e) {
         respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
       }
@@ -3238,16 +3363,8 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         if (turn?.external) return respond({ ok: false, error: EXTERNAL_TOOL_REFUSAL });
         if (!turn?.threadId) return respond({ ok: false, error: 'Saving files is unavailable outside a conversation.' });
         const req = JSON.parse(payload ?? '{}') as { files?: SaveItem[] };
-        respond(
-          await saveFiles(turn.threadId, Array.isArray(req.files) ? req.files : [], {
-            findThreadImage: async (threadId, imageId) => {
-              const own = await this.findThreadImage(threadId, imageId);
-              if (own) return own;
-              // A picture another persona made and mailed here: the bytes are
-              // in the sender's thread (same lookup as a browser upload).
-              const origin = await mailedImageThread(threadId, imageId);
-              return origin ? this.findThreadImage(origin, imageId) : null;
-            },
+        const result = await saveFiles(turn.threadId, Array.isArray(req.files) ? req.files : [], {
+            findThreadImage: (threadId, imageId) => this.findThreadOrMailedImage(threadId, imageId),
             folders: listConnectedFolders,
             devices: {
               hostFor: (deviceId) => execDeviceRouter().hostFor(deviceId),
@@ -3257,8 +3374,47 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                 (await readDevices().catch(() => [])).find((d) => d.id === deviceId)?.label ?? 'its computer',
               save: (deviceId, request) => execDeviceRouter().save(deviceId, request)
             }
-          })
-        );
+          });
+        // The judge reads what this turn wrote, so it can let the agent delete
+        // its own files later in the same turn.
+        const saved = result.ok ? savedFilesAction(result.written) : undefined;
+        if (saved && turn.judge) turn.judge = { ...turn.judge, actions: capActions([...turn.judge.actions, saved]) };
+        respond(result);
+      } catch (e) {
+        respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+  }
+
+  /**
+   * Handle the share_audio tool's ctx.ui.input round-trip (sentinel
+   * AUDIO_BRIDGE_TITLE). The sound goes into the live turn's thread, never the
+   * payload's. A sound from a memorize:false folder taints the turn, as a
+   * `read` of it would.
+   */
+  private handleAudioBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
+    const requestProcess = worker.proc;
+    const respond = (value: unknown): void => {
+      if (worker.proc !== requestProcess) return;
+      requestProcess?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
+    };
+    const turn = worker.currentTurn;
+    void (async () => {
+      try {
+        if (turn?.external) return respond({ ok: false, error: EXTERNAL_TOOL_REFUSAL });
+        if (!turn?.threadId) return respond({ ok: false, error: 'Sharing a sound is unavailable outside a conversation.' });
+        const req = JSON.parse(payload ?? '{}') as { from?: unknown; title?: unknown };
+        const res = await shareAudio(turn.threadId, req, {
+          findThreadImage: (threadId, imageId) => this.findThreadOrMailedImage(threadId, imageId)
+        });
+        if (res.ok && !turn.memoryTainted && turn.privateRoots?.length && typeof req.from === 'string') {
+          const scratch = await ensureThreadScratch(turn.threadId);
+          const ref = req.from.trim();
+          if (pathInsideAny(ref, turn.privateRoots, stemWorkspaceRoot()) || pathInsideAny(ref, turn.privateRoots, scratch)) {
+            this.taintTurn(turn);
+          }
+        }
+        respond(res);
       } catch (e) {
         respond({ ok: false, error: e instanceof Error ? e.message : String(e) });
       }
@@ -3641,7 +3797,23 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         const bridge = this.skillBridge;
         if (!bridge) return respond({ ok: false, text: 'Saving skills is unavailable right now.' });
         const req = JSON.parse(payload ?? '{}') as Record<string, unknown>;
-        const op = req.op === 'remove' ? 'remove' : 'save';
+        const op = req.op === 'remove' ? 'remove' : req.op === 'view' ? 'view' : 'save';
+        if (op === 'view') {
+          const result = await bridge.handleRequest({ op: 'view', name: String(req.name ?? '') }, { isScheduled, isMail, threadId });
+          // A skill the model loaded itself counts as injected into this turn,
+          // so settle grades it, routes a patch to it, and reads a "Skill issue"
+          // report about it the same as for one the ranking inlined.
+          const turn = worker.currentTurn;
+          if (result.loaded && turn && turn.threadId === threadId) {
+            const already = turn.skillsInjected ?? [];
+            if (!already.some((s) => s.slug === result.loaded!.slug)) {
+              turn.skillsInjected = [...already, result.loaded];
+              recordInjections([result.loaded.slug]);
+            }
+          }
+          log('skills', 'skill loaded by the model', { threadId, skill: String(req.name ?? ''), ok: result.ok });
+          return respond({ ok: result.ok, text: result.text });
+        }
         const result = await bridge.handleRequest(
           op === 'remove'
             ? { op: 'remove', name: String(req.name ?? '') }
@@ -3657,7 +3829,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
                 name: String(req.name ?? ''),
                 description: String(req.description ?? ''),
                 body: String(req.content ?? req.body ?? ''),
-                expectExisting: req.expect_existing === true
+                expectExisting: req.expect_existing === true,
+                ...(Array.isArray(req.tools) ? { tools: req.tools.map((t) => String(t)) } : {}),
+                ...(typeof req.recurs === 'string' ? { recurs: req.recurs } : {})
               },
           { isScheduled, isMail, threadId }
         );
@@ -3807,17 +3981,24 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
   private handleTaskBridgeRequest(worker: PiWorker, id: string, payload: string | undefined): void {
     const respond = (value: unknown): void =>
       worker.proc?.send({ type: 'extension_ui_response', id, value: JSON.stringify(value) });
-    const threadId = worker.currentTurn?.threadId;
+    const turn = worker.currentTurn;
+    const threadId = turn?.threadId;
+    // Only a chat the user is typing in reaches tasks scheduled elsewhere. A
+    // scheduled run or mail delivery reads content nobody vetted (mail, web
+    // pages), so it keeps to the tasks of its own thread.
+    const anyThread = !!turn && !turn.isScheduled && !turn.external;
     void (async () => {
       try {
         const bridge = this.taskBridge;
         if (!bridge) return respond({ ok: false, error: 'Scheduled tasks are unavailable.' });
         if (!threadId) return respond({ ok: false, error: 'No active conversation to attach the task to.' });
+        const scope = { thread: threadId, anyThread };
         const req = JSON.parse(payload ?? '{}') as {
           op?: string;
           prompt?: string;
           cron?: string;
           at?: string;
+          enabled?: boolean;
           personaId?: string;
           taskId?: string;
           title?: string;
@@ -3832,12 +4013,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
             return respond(res);
           }
           case 'list': {
-            const tasks = await bridge.listForThread(threadId);
-            return respond({ ok: true, tasks });
+            const tasks = await bridge.listReachable(scope);
+            return respond({ ok: true, tasks: tasks.map((t) => ({ ...t, here: t.threadId === threadId })) });
           }
           case 'cancel': {
-            const res = await bridge.cancel(req.taskId ?? '');
+            const res = await bridge.cancel(req.taskId ?? '', scope);
             return respond(res);
+          }
+          case 'update': {
+            const patch = {
+              ...(typeof req.prompt === 'string' ? { prompt: req.prompt } : {}),
+              ...(typeof req.cron === 'string' ? { cron: req.cron } : {}),
+              ...(typeof req.at === 'string' ? { at: req.at } : {}),
+              ...(typeof req.enabled === 'boolean' ? { enabled: req.enabled } : {})
+            };
+            return respond(await bridge.update(req.taskId ?? '', patch, scope));
           }
           case 'notify': {
             await bridge.notify({ title: req.title, message: req.message ?? '' }, threadId);
@@ -3872,6 +4062,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // pendingSkillReload, since pi ignores non-skill files.
     if (turn.skillsSettled) return;
     turn.skillsSettled = true;
+    // A skill handed over at a tool call (the bridge held the call back once with
+    // its text) went into this turn as surely as an inlined one: count, grade and
+    // route it the same way.
+    const offered = new Set(turn.toolSkillsOffered ?? []);
+    for (const slug of toolSkillsHandedOver(turn.trace).filter((s) => offered.has(s))) {
+      const already = turn.skillsInjected ?? [];
+      const record = already.some((s) => s.slug === slug) ? null : readSkillRecord(slug);
+      if (!record) continue;
+      turn.skillsInjected = [...already, { slug: record.slug, name: record.name, description: record.description, body: record.body, origin: record.origin }];
+      recordInjections([slug]);
+    }
     const injected = turn.skillsInjected ?? [];
     if (injected.length > 0) {
       // The model's own verdict first: a skill it reported as wrong is not one
@@ -3879,7 +4080,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // graded set before that set is recorded or routed on.
       const reported = reportedSkillIssues(turn.assistantText, injected);
       const failedSlugs = new Set(reported.map((i) => i.slug));
-      const used = gradeSkillUse(injected, turn.trace).filter((slug) => !failedSlugs.has(slug));
+      const used = gradeSkillUse(injected, turn.trace, turn.assistantText).filter((slug) => !failedSlugs.has(slug));
       // The same verdicts route authoring: `snapshotTurnTrace` in settleTurn
       // reads these off the turn, so the settle pass gets the graded set
       // without a second pass over the trace. They must be assigned to `turn`
@@ -3987,6 +4188,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // before the child reads it; seed the search gate open so a worker that has
     // not run a turn yet matches the bridge's own default.
     await mkdir(worker.gateDir, { recursive: true });
+    // Built per spawn: it names the machine the assistant is running on, and
+    // carries the MDX syntax card only on an MDX worker. A
+    // persona worker appends its role prompt here — spawn-time state, which
+    // is why a persona owns a whole worker rather than a per-turn block.
+    const systemPromptPath = await writeSystemPromptFile(
+      worker.personaPrompt
+        ? `${stemAssistantInstructions(worker.format)}\n\n${worker.personaPrompt}`
+        : stemAssistantInstructions(worker.format),
+      worker.gateDir
+    );
     this.ensureMcpStatusWatcher();
     // Refresh the local-provider catalog (models.json) before the spawn: pi's RPC
     // mode reads the file once at startup and never again.
@@ -4051,13 +4262,9 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         '--model',
         modelId,
         '--append-system-prompt',
-        // Built per spawn: it names the machine the assistant is running on, and
-        // carries the MDX syntax card only on an MDX worker. A
-        // persona worker appends its role prompt here — spawn-time state, which
-        // is why a persona owns a whole worker rather than a per-turn block.
-        worker.personaPrompt
-          ? `${stemAssistantInstructions(worker.format)}\n\n${worker.personaPrompt}`
-          : stemAssistantInstructions(worker.format)
+        // A file path, never the text: argv is readable by anyone on a Linux
+        // host (see writeSystemPromptFile).
+        systemPromptPath
       ]
     });
     worker.spawnedPersonaPrompt = worker.personaPrompt;
@@ -4141,6 +4348,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // The save_file tool round-trip: the copy happens here (files/save-file.ts).
       if (ev.method === 'input' && ev.title === SAVE_BRIDGE_TITLE) {
         this.handleSaveBridgeRequest(worker, id, ev.placeholder as string | undefined);
+        return;
+      }
+      // The share_audio tool round-trip: the copy happens here (files/chat-audio.ts).
+      if (ev.method === 'input' && ev.title === AUDIO_BRIDGE_TITLE) {
+        this.handleAudioBridgeRequest(worker, id, ev.placeholder as string | undefined);
+        return;
+      }
+      // generate_image references that are files: read here (files/image-refs.ts).
+      if (ev.method === 'input' && ev.title === IMAGE_REF_BRIDGE_TITLE) {
+        this.handleImageRefBridgeRequest(worker, id, ev.placeholder as string | undefined);
         return;
       }
       // The coding_agent tool round-trip: the whole harness turn runs in main
@@ -4488,6 +4705,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         rerank: r.rerank ?? null,
         search: r.search ?? null
       },
+      skillsMs: turn.skillsMs ?? null,
+      worker: turn.workerTimings?.requests
+        ? { waitMs: turn.workerTimings.waitMs, runMs: turn.workerTimings.runMs, sharedMs: turn.workerTimings.sharedMs }
+        : null,
       thinkingMs: turn.thinkingMs,
       toolMs: turn.toolMs,
       answerMs: turn.answerMs,
@@ -4504,8 +4725,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         ? ''
         : ` recall=${fmt(r.total ?? null)}[facts=${fmt(r.facts ?? null)} embed=${fmt(r.embed ?? null)}` +
           ` rerank=${fmt(r.rerank ?? null)} search=${fmt(r.search ?? null)}]`;
+    const w = breakdown.worker;
+    // The local worker's side of recall and skills: time its runs took (summed),
+    // how much of that ran beside another run in its process, and the wall time
+    // the turn had a request out with none of its own runs going (worker-timings.ts).
+    const workerStr = w ? ` worker[run=${w.runMs}ms shared=${w.sharedMs}ms wait=${w.waitMs}ms]` : '';
     const line =
-      `build=${fmt(breakdown.buildMs)}${recallStr} ` +
+      `build=${fmt(breakdown.buildMs)}${recallStr} skills=${fmt(breakdown.skillsMs)}${workerStr} ` +
       `think=${fmt(breakdown.thinkingMs)} tools=${fmt(breakdown.toolMs)} answer=${fmt(breakdown.answerMs)} ` +
       `send→first=${fmt(breakdown.sendToFirstTokenMs)} ` +
       `first→end=${fmt(breakdown.firstTokenToEndMs)} total=${fmt(breakdown.totalMs)}` +
@@ -4551,7 +4777,17 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           buildMs: b.buildMs,
           recallMs: b.recall.total,
           outputTokens: b.outputTokens,
-          generationMs: b.generationMs
+          generationMs: b.generationMs,
+          stages: {
+            recallFactsMs: b.recall.facts,
+            recallEmbedMs: b.recall.embed,
+            recallRerankMs: b.recall.rerank,
+            recallSearchMs: b.recall.search,
+            skillsMs: b.skillsMs,
+            workerWaitMs: b.worker?.waitMs ?? null,
+            workerRunMs: b.worker?.runMs ?? null,
+            workerSharedMs: b.worker?.sharedMs ?? null
+          }
         });
       }
       // Persist the turn's tool activity + web sources next to the timing (same
@@ -4642,7 +4878,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * resolveAdminApproval answers it once the user decides (or a timeout declines).
    */
   private handleAdminApproval(worker: PiWorker, id: string, message: string | undefined): void {
-    let proposal: { action?: string; name?: string; input?: McpServerInput } | null = null;
+    let proposal: {
+      action?: string;
+      name?: string;
+      input?: McpServerInput;
+      patch?: McpServerPatch;
+      before?: McpAdminProposal['before'];
+    } | null = null;
     try {
       proposal = JSON.parse(message ?? '{}');
     } catch (e) {
@@ -4650,7 +4892,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // told — indistinguishable from the user having refused the change.
       degrade('pi.mcpAdmin', 'declined an MCP change whose proposal did not parse', e);
     }
-    if (!proposal || (proposal.action !== 'add' && proposal.action !== 'remove')) {
+    if (!proposal || (proposal.action !== 'add' && proposal.action !== 'remove' && proposal.action !== 'edit')) {
       worker.proc?.send({ type: 'extension_ui_response', id, confirmed: false });
       return;
     }
@@ -4660,12 +4902,19 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       threadId: worker.currentTurn?.threadId ?? '',
       action: proposal.action,
       input: proposal.input,
-      name: proposal.name
+      name: proposal.name,
+      ...(proposal.action === 'edit' ? { patch: proposal.patch, before: proposal.before } : {})
     };
     // Keep the full mutation (including credentials) only in main-memory for the
     // accepted writer. Renderer approval cards need presence/keys, never values.
     const requestProcess = worker.proc;
     this.adminApprovalProposals.set(id, { proposal: card, process: requestProcess });
+    // Mask only what is named like a credential. Anything else is shown, because
+    // NODE_OPTIONS or PATH change what the approved command actually runs.
+    const masked = (values: Record<string, string> | undefined) =>
+      values
+        ? Object.fromEntries(Object.entries(values).map(([key, v]) => [key, looksLikeMcpSecret(key) ? '********' : v]))
+        : undefined;
     const displayInput = card.input
       ? {
           ...card.input,
@@ -4673,12 +4922,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           ...(card.input.headers
             ? { headers: Object.fromEntries(Object.keys(card.input.headers).map((key) => [key, '********'])) }
             : {}),
-          ...(card.input.env
-            ? { env: Object.fromEntries(Object.keys(card.input.env).map((key) => [key, '********'])) }
-            : {})
+          ...(card.input.env ? { env: masked(card.input.env) } : {})
         }
       : undefined;
-    this.emitEvent('mcp/admin/approvalRequest', { ...card, input: displayInput });
+    const displayPatch = card.patch
+      ? {
+          ...card.patch,
+          ...(card.patch.env ? { env: masked(card.patch.env) } : {}),
+          ...(card.patch.headers ? { headers: masked(card.patch.headers) } : {})
+        }
+      : undefined;
+    this.emitEvent('mcp/admin/approvalRequest', {
+      ...card,
+      input: displayInput,
+      ...(displayPatch ? { patch: displayPatch } : {})
+    });
     setTimeout(() => {
       if (this.settleAdminApproval(id)) {
         requestProcess?.send({ type: 'extension_ui_response', id, confirmed: false });
@@ -4741,13 +4999,47 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     return id;
   }
 
+  /**
+   * A thread pre-created by createThread (Quick Chat) whose worker moved to
+   * another session before its first prompt. pi writes nothing until the first
+   * message, so the session is gone from pi — and minting a new one ran the
+   * turn under an id the client had never seen: its events went nowhere, the
+   * window assistant's chat said Working… forever, and the sidebar showed the
+   * question twice. Write the header pi would have written at the path it
+   * reported, so switch_session brings back the very id the client holds.
+   */
+  private async restorePreCreatedSession(threadId: string): Promise<string | null> {
+    const planned = this.unnamedThreads.has(threadId) ? this.sessionFiles.get(threadId) : undefined;
+    if (!planned) return null;
+    // A worker still showing the unwritten session would later try to create
+    // the same file and fail; make it load the restored one instead.
+    for (const w of this.workers) if (w.activeThreadId === threadId) w.activeThreadId = null;
+    const header = {
+      type: 'session',
+      version: 3,
+      id: threadId,
+      timestamp: new Date().toISOString(),
+      cwd: this.options.workspaceRoot
+    };
+    try {
+      await mkdir(dirname(planned), { recursive: true });
+      await writeFile(planned, `${JSON.stringify(header)}\n`, { flag: 'wx' });
+    } catch (e) {
+      // Already there: pi (or an earlier start) wrote it — switching to it is right.
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') {
+        degrade('pi.session', 'could not restore a pre-created chat; its first turn runs under a new id', e);
+        return null;
+      }
+    }
+    return planned;
+  }
+
   /** Make `threadId` the worker's active session, switching to its file if needed. */
   private async ensureActive(worker: PiWorker, threadId: string): Promise<string> {
     if (worker.activeThreadId === threadId) return threadId;
-    const file = await this.resolveSessionFile(threadId);
+    const file = (await this.resolveSessionFile(threadId)) ?? (await this.restorePreCreatedSession(threadId));
     if (!file) {
-      // Unknown/empty thread (e.g. pre-created, no messages yet): start fresh and
-      // adopt the id the caller expects by treating the new session as active.
+      // Unknown thread: start fresh. The caller gets a different id back.
       const id = await this.newSession(worker);
       return id;
     }
@@ -4916,22 +5208,57 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     }
     const previousUserMessages =
       historySnapshot !== undefined && !input.scheduled && !input.mail ? previousFactUserMessages(historySnapshot) : [];
+    // What the model already has in front of it. Text that is there verbatim is
+    // not sent a second time (context-dedupe.ts): a long thread, and above all a
+    // mail thread where every delivery is a turn, used to carry one full copy
+    // per message. That holds for the ambient blocks at the end of this
+    // function, and for the rules of the memory and skills blocks, which are
+    // constant text and used to follow their block on every turn.
+    const liveTexts = historySnapshot === undefined ? [] : liveUserTexts(historySnapshot);
+    const ambient = new AmbientBlocks(liveTexts);
+    // Skill selection starts now and runs beside recall: the model picker
+    // (skills/pick.ts) is a model call (luna p50 2.2 s), and recall's own wait
+    // (p50 1.9 s) hides most of it.
+    // Awaited where the skills block goes, below.
+    const skillsStart = Date.now();
+    const skillRecords = listSkillRecords();
+    const skillsAlreadyLoaded = loadedSkillNames(historySnapshot);
+    const skillSelection = withWorkerTimings(turn?.workerTimings, () => selectSkills(input.input, skillRecords, {
+      usage: skillUsageLookup(),
+      previousUserMessages,
+      alreadyLoaded: skillsAlreadyLoaded,
+      // A skill the chat lists already is not listed again.
+      alreadyListed: listedSkillLines(liveTexts),
+      pick: this.skillPicker()
+    })).then(
+      (selection) => ({ selection, error: null as unknown }),
+      (error: unknown) => ({ selection: null, error })
+    );
     // A persona with recall off sees none of the user's memory: no facts, no
     // episodic history, no indexed folder excerpts. The block is skipped
     // outright rather than emptied, so nothing about the user rides along
     // with the material (Persona.recall explains why Critic needs this).
     let userSummary: string | null = null;
+    let memoryTopics: string | null = null;
     if (isRecallEnabled() && input.persona?.recall !== false && !turn?.isPrivate) {
       try {
-        userSummary = userProfileContext();
+        // Its "Current situation" may hold health and whereabouts: not for mail with another person.
+        userSummary = userProfileContext({ situation: !input.mail?.external });
       } catch (error) {
         degrade('pi.profile', "sent the turn without the user's summary", error);
       }
+      try {
+        // Not in mail with another person: what the user's memory covers is
+        // not that conversation's business, even as labels.
+        memoryTopics = input.mail?.external ? null : memoryTopicsContext();
+      } catch (error) {
+        degrade('pi.recall', 'sent the turn without the list of memory topics', error);
+      }
       const factReranker = await getFactRerankClient();
-      const chosen: { facts: Fact[]; tier: FactTier } = { facts: [], tier: 'all' };
+      const chosen: { facts: Fact[]; tier: FactTier; gateModel?: string | null } = { facts: [], tier: 'all' };
       const flags: { privateDocsInjected?: boolean } = {};
       const injectedDocs: InjectedDocRef[] = [];
-      const recall = await buildRecallContext(input.input, {
+      const recall = await withWorkerTimings(turn?.workerTimings, () => buildRecallContext(input.input, {
         currentThreadId: threadId,
         // Mail with another person: what Stem learned from them joins the user's memory here, and only here.
         contact: input.mail?.external?.address ?? null,
@@ -4940,9 +5267,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         flags,
         injectedDocs,
         factReranker,
-        previousUserMessages: factReranker?.factQuery ? previousUserMessages : []
-      });
-      if (recall) blocks.push(recall);
+        previousUserMessages: factReranker?.factQuery ? previousUserMessages : [],
+        earlierUserMessages: previousUserMessages
+      }));
+      if (recall) {
+        blocks.push(recall);
+        ambient.add(RECALL_RULES, 'the rules for the memory block');
+      }
       // Documents from a memorize:false folder were injected: taint the turn the
       // same way reading such a folder does, so the reply stays out of Recall.
       if (flags.privateDocsInjected && turn?.threadId === threadId) {
@@ -4960,7 +5291,11 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         // signal behind usage-aware fact ranking. The captured user/assistant
         // messages carry the same turnId, which is the join key.
         if (turnId && chosen.facts.length > 0) {
-          recordTurnInjectedFacts(threadId, turnId, chosen.facts.map((f) => f.id));
+          recordTurnInjectedFacts(threadId, turnId, chosen.facts.map((f) => f.id), {
+            tier: chosen.tier,
+            gateModel: chosen.gateModel ?? null,
+            facts: chosen.facts.map((f) => ({ id: f.id, reason: f.selectionReason, margin: f.gateMargin }))
+          });
         }
         // Same log for learn-eligible folder-doc excerpts (learn-on-use): the
         // distill pass folds them into its transcript as citable evidence.
@@ -4978,12 +5313,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     // Ranked against this message, top bodies inlined, the rest listed by name.
     // Sits after recall and before files so the model reads "what I remember" and
     // "how I do this" together, ahead of the ambient context blocks.
+    let toolSkills: ReturnType<typeof toolSkillsForTurn> = [];
     try {
-      const selection = await selectSkills(input.input, listSkillRecords(), {
-        usage: skillUsageLookup(),
-        previousUserMessages,
-        alreadyLoaded: loadedSkillNames(historySnapshot)
-      });
+      const { selection, error } = await skillSelection;
+      if (!selection) throw error;
+      if (turn?.threadId === threadId) turn.skillsMs = Date.now() - skillsStart;
+      toolSkills = toolSkillsForTurn(skillRecords, selection.inlined.map((s) => s.slug), skillsAlreadyLoaded);
+      if (turn?.threadId === threadId) turn.toolSkillsOffered = toolSkills.map((s) => s.slug);
       // Log the cut on EVERY turn, including — especially — the turns that
       // inline nothing. The regression this replaced was invisible precisely
       // because a stage returning nothing and a stage with nothing to say
@@ -4999,6 +5335,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       const skillsBlock = formatSkillsBlock(selection);
       if (skillsBlock) {
         blocks.push(skillsBlock);
+        ambient.add(SKILL_RULES, 'the rules for saved skills');
         // The denominator of the usage loop. Only inlined skills count: a skill
         // listed by name was never given its steps, so it had no chance to be
         // followed and grading it either way would be noise.
@@ -5014,6 +5351,16 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // be ranked.
       log('pi', 'skill selection failed; sending the turn without skills', {
         error: error instanceof Error ? error.message : String(error)
+      });
+    }
+    // Every turn, empty included: the file is this worker's, and a stale one
+    // would hold a call back for the previous turn's skill.
+    if (worker) {
+      const gateDir = worker.gateDir;
+      await writeToolSkillsGate({ turnId: turnId ?? '', skills: toolSkills }, gateDir).catch((error) => {
+        degrade('pi.gates', 'sent the turn without handing skills over at tool calls', error);
+        // quiet: the degrade above is the signal; a missing file holds nothing back.
+        return unlink(join(gateDir, TOOL_SKILLS_GATE_FILE)).catch(() => undefined);
       });
     }
     // A practice run of a recorded draft (the draft card's "Practice run"):
@@ -5058,14 +5405,13 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       blocks.push(formatWindowBlock(w, servers, computer, browser, { browserOff, offer }));
     }
 
-    // The ambient blocks below go out only when the live context does not
-    // already hold them verbatim (context-dedupe.ts): a long thread, and above
-    // all a mail thread where every delivery is a turn, used to carry one full
-    // copy per message.
-    const ambient = new AmbientBlocks(historySnapshot === undefined ? [] : liveUserTexts(historySnapshot));
+    // The ambient blocks: each goes out only when the live context does not
+    // already hold it verbatim (`ambient` is made above, next to the snapshot).
     // The user summary: the whole picture once per chat context, where recall
     // above carries only the facts this message calls for.
     if (userSummary) ambient.add(userSummary, 'the summary of what you know about the user');
+    // What memory holds, so the model knows when search_facts would find something.
+    if (memoryTopics) ambient.add(memoryTopics, 'the topics in memory');
     const files = await buildFilesContext();
     if (files) ambient.add(files, 'the workspace files list');
     const connected = await buildConnectedFoldersContext();
@@ -5357,11 +5703,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     let committedText = '';
     let aggregateIndex = -1;
     let turnImages: GeneratedImageRef[] = [];
+    let turnAudio: ChatAudioRef[] = [];
     const threadId = worker.activeThreadId ?? '';
     for (const m of raw) {
       if (m.role === 'toolResult') {
         const made = stemImageOf(m) ? generatedImageRef((m as { details?: unknown }).details, threadId) : null;
         if (made) turnImages.push(made);
+        const sound = (m as { isError?: boolean }).isError === true ? null : chatAudioRef((m as { details?: unknown }).details, threadId);
+        if (sound) turnAudio.push(sound);
         continue;
       }
       const { text: content, images, scheduled } = this.contentToParts(m.content);
@@ -5373,6 +5722,7 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
         committedText = '';
         aggregateIndex = -1;
         turnImages = [];
+        turnAudio = [];
         messages.push({
           id: `user-${messages.length}`,
           role: 'user',
@@ -5390,14 +5740,15 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
           model || worker.currentThinking
             ? { ...(model ? { model } : {}), ...(worker.currentThinking ? { effort: worker.currentThinking } : {}) }
             : undefined;
-        if (content.trim() || turnImages.length) {
+        if (content.trim() || turnImages.length || turnAudio.length) {
           const answer: ChatMessage = {
             id: `assistant-${runtimeTurnId ?? messages.length}`,
             role: 'assistant',
             content,
             ...(meta ? { meta } : {}),
             ...(runtimeTurnId ? { runtimeTurnId } : {}),
-            ...(turnImages.length ? { images: [...turnImages] } : {})
+            ...(turnImages.length ? { images: [...turnImages] } : {}),
+            ...(turnAudio.length ? { audio: [...turnAudio] } : {})
           };
           if (runtimeTurnId) {
             answer.content = committedText && content.trim() ? `${committedText}\n\n${content}` : committedText || content;
@@ -5620,13 +5971,14 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       // migration that did not run.
       degrade('pi.mcpConfig', 'left pre-identity OAuth tokens unstamped', e)
     );
-    // Prefer pi's SSE transport over its default WebSocket-first "auto", and give
-    // auto-compaction enough headroom for Stem's heavy turns.
+    // Pin pi's WebSocket-first "auto" transport (and move profiles off the "sse"
+    // Stem used to seed), and give auto-compaction enough headroom for Stem's
+    // heavy turns.
     await this.ensurePiSettingsDefaults().catch((e) =>
       // Same loss the parse failure inside reports, by the other route — the
-      // write. pi then spawns WebSocket-first, so a mid-stream drop hard-fails a
-      // turn whose side effects already committed, and the compaction reserve is
-      // pi's rather than the one the scheduled-run guard is sized against.
+      // write. The compaction reserve is then pi's rather than the one the
+      // scheduled-run guard is sized against, and a profile still on "sse"
+      // stays there.
       degrade('pi.settings', 'spawned the backend without the transport and compaction defaults', e)
     );
   }
@@ -5636,13 +5988,21 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * no-hot-reload note). Each key is only seeded when unset — an explicit value in
    * the file wins — and hand-authored settings are never clobbered.
    *
-   * `transport: "sse"`: pi's codex/ChatGPT transport is WebSocket-first, but a
-   * WebSocket that drops MID-stream cannot be retried (replaying would re-run
-   * tools it already executed — openai-codex-responses throws once websocketStarted),
-   * so a transient disconnect hard-fails the whole turn even though its side effects
-   * (e.g. a scheduled reminder) already committed. The SSE fetch path instead retries
-   * transient errors with backoff and is sturdier through network filters (Little
-   * Snitch).
+   * `transport: "auto"` (WebSocket first, SSE fallback). Measured on pi 1.4.0
+   * with gpt-5.6-sol against a ~40-turn history (2026-11-19): on a live socket pi
+   * sends only the new items with `previous_response_id` instead of the whole
+   * history, so the reply after a tool result starts ~1.5 s sooner (median) and
+   * the next prompt in an active chat ~0.5 s sooner. Changing the active tools
+   * between turns does not break that (pi appends tool changes to the
+   * transcript). The cost is the first request on a new socket (new chat, or
+   * after 5 min idle): ~1.4 s slower than SSE.
+   * Stem seeded "sse" from July 2026 because pi then hard-failed a turn on a
+   * mid-stream drop. pi 1.4.0 no longer does: a drop before the stream starts
+   * falls back to SSE, and a drop mid-stream is a retryable error, so pi's
+   * session auto-retry re-sends the request (over SSE) without re-running tools
+   * already executed — verified with a deliberately dropped socket.
+   * Profiles that still carry the old seeded "sse" are moved to "auto" once;
+   * the marker file then records that, so a later hand-set "sse" is kept.
    *
    * `compaction.reserveTokens`: pi's default reserve (16384) only leaves that much
    * room between the compaction threshold and the model's context window, and the
@@ -5655,6 +6015,12 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
    * GLOBAL (pi cannot scale it per model). Scheduled runs need no guard of
    * their own: each starts in an empty thread, so only a single run's own
    * growth can overflow it.
+   *
+   * `cacheWarming: "streaming"`: pi 1.5.0 changed the default to "idle", which
+   * keeps sending refresh requests for up to 30 minutes after a run ends when
+   * pi guesses a refresh pays for itself. Stem keeps workers alive in a pool and
+   * runs on subscriptions whose quota is the scarce thing, so background
+   * refreshes nobody asked for would spend it. "streaming" is pi 1.4's behaviour.
    */
   /**
    * Locate the vendored pi-web-access entry point once per process, warning if the
@@ -5713,15 +6079,23 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
       }
     }
     let changed = false;
-    if (!('transport' in settings)) {
-      settings.transport = 'sse';
+    const marker = join(this.options.piHome, STEM_PI_DEFAULTS_MARKER);
+    const transportMigrated = await this.fileExists(marker);
+    if (!('transport' in settings) || (!transportMigrated && settings.transport === 'sse')) {
+      settings.transport = 'auto';
       changed = true;
     }
     if (!('compaction' in settings)) {
       settings.compaction = { reserveTokens: 65536 };
       changed = true;
     }
+    if (!('cacheWarming' in settings)) {
+      settings.cacheWarming = 'streaming';
+      changed = true;
+    }
     if (changed) await writeFile(file, JSON.stringify(settings, null, 2) + '\n');
+    // Written after settings.json, so a failed write retries the move next spawn.
+    if (!transportMigrated) await writeFile(marker, JSON.stringify({ transport: 'auto' }) + '\n');
   }
 
   private async fileExists(path: string): Promise<boolean> {
@@ -5771,6 +6145,10 @@ export class PiRuntime extends EventEmitter implements ChatBackend {
     if (secretKey) env[ENV_SECRET_KEY] = secretKey;
     // Tell the bridge extension where the assistant's self-authored skills live.
     env[ENV_SKILLS_DIR] = skillsRoot();
+    // Where add_mcp_server sends a server the assistant built, and the folders it
+    // refuses (chat scratch, Files): both go away while a server must not.
+    env[ENV_MCP_INSTALL_ROOT] = mcpInstallRoot();
+    env[ENV_MCP_SHORT_LIVED_ROOTS] = JSON.stringify(shortLivedRoots());
     return env;
   }
 }

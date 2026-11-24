@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Sparkles, SquarePen, PanelRight, Globe, NotebookPen, Check, Zap, X, Plug, PlugZap, AppWindow } from 'lucide-react';
-import type { ModelSummary, QuickChatSettings, QuickChatWindow, TurnAttachment, WindowMcpSuggestion } from '../../shared/types';
+import { Sparkles, SquarePen, PanelRight, Globe, NotebookPen, Check, Zap, X, Plug, PlugZap, AppWindow, Plus, Minus, ShieldAlert } from 'lucide-react';
+import type { ModelSummary, QuickChatMini, QuickChatSettings, QuickChatTabs, QuickChatWindow, TurnAttachment, WindowMcpSuggestion } from '../../shared/types';
 import { ChatView } from '../chat/ChatView';
 import { EffortModelControl } from '../ui/EffortModelControl';
 import { McpApprovalCard } from '../manage/McpApprovalCard';
@@ -9,7 +9,7 @@ import { SkillApprovalCard } from '../manage/SkillApprovalCard';
 import { ApprovalCard, MissedApprovalDialog } from '../manage/ApprovalCard';
 import { approvalKey, approvalsElsewhere, approvalsForThread } from '../manage/approvalQueue';
 import { useApprovals } from '../manage/approvalStore';
-import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, useNoteMode } from '../noteMode';
+import { NOTE_CONFIRM_MS, NOTE_FLASH_TEXT, detectNoteTrigger, pasteLandsInCommand, useNoteMode } from '../noteMode';
 import { EMPTY_STATE, appendSystemMessage, type ThreadState } from '../chatState';
 import {
   attachBackendEvents,
@@ -54,6 +54,14 @@ export function QuickChat() {
   const chatState = useThreadStates(core.store)[QC_KEY] ?? EMPTY_STATE;
   const [threadId, setThreadId] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
+  // "Ask about this window" panels hold several conversations about the same
+  // window as tabs; this overlay is one of them. Null for the plain panel.
+  const [tabs, setTabs] = useState<QuickChatTabs | null>(null);
+  useEffect(() => window.stem.onQuickChatTabs(setTabs), []);
+  // A window panel shrunk to a pill beside its window. The panel stays mounted
+  // under the pill, so the draft, the scroll position and the stream survive.
+  const [mini, setMini] = useState<QuickChatMini | null>(null);
+  useEffect(() => window.stem.onQuickChatMini(setMini), []);
 
   // Permission asks. This thread's own ride inside the expanded ChatView like in
   // the main window; an ask from any other thread has no chat here to sit in and
@@ -109,6 +117,10 @@ export function QuickChat() {
   // `/note` / `//` quick-note capture in the compact bar (the expanded panel gets
   // its own instance inside ChatView).
   const { noteMode, flash: noteFlash, enterNoteMode, exitNoteMode, toggleNoteMode, saveNote } = useNoteMode();
+  // Pasted `//…` or `/note …` is text, not a switch into note mode (same rule
+  // as the Composer): the flag lasts while the input still starts with `/`.
+  const pasteRef = useRef(false);
+  const literalRef = useRef(false);
 
   // Ref so the event subscription (registered once) reads the current thread id.
   const threadIdRef = useRef(threadId);
@@ -258,6 +270,8 @@ export function QuickChat() {
       } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
         e.preventDefault();
         void newThreadRef.current();
+      } else if (tabKeyRef.current(e)) {
+        e.preventDefault();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -497,6 +511,46 @@ export function QuickChat() {
   const newThreadRef = useRef(newThread);
   newThreadRef.current = newThread;
 
+  // Closing this tab: stop its answer first (only this overlay holds the
+  // turn's ids), then main lets the tab go once the turn has wound down.
+  async function closeSelf() {
+    if (!tabs) return;
+    if (running) await onInterrupt();
+    await window.stem.closeQuickChatTab(tabs.self);
+  }
+  const closeSelfRef = useRef(closeSelf);
+  closeSelfRef.current = closeSelf;
+  useEffect(() => window.stem.onQuickChatCloseTab(() => void closeSelfRef.current()), []);
+
+  function closeTab(id: string) {
+    if (tabs && id === tabs.self) void closeSelf();
+    else void window.stem.closeQuickChatTab(id);
+  }
+
+  // ⌘T new tab, ⌘W close this one, ⌘⇧[ / ⌘⇧] the tab before / after. True when the key was one of them.
+  function tabKey(e: KeyboardEvent): boolean {
+    if (!tabs || !(e.metaKey || e.ctrlKey) || e.altKey) return false;
+    const key = e.key.toLowerCase();
+    if (!e.shiftKey && key === 't') {
+      if (tabs.canAdd) void window.stem.newQuickChatTab();
+      return true;
+    }
+    if (!e.shiftKey && key === 'w') {
+      void closeSelf();
+      return true;
+    }
+    if (e.shiftKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
+      const list = tabs.tabs;
+      const at = list.findIndex((t) => t.id === tabs.self);
+      const next = list[(at + (e.code === 'BracketRight' ? 1 : -1) + list.length) % list.length];
+      if (next && next.id !== tabs.self) void window.stem.switchQuickChatTab(next.id);
+      return true;
+    }
+    return false;
+  }
+  const tabKeyRef = useRef(tabKey);
+  tabKeyRef.current = tabKey;
+
   async function openInStem() {
     if (!threadId) return;
     try {
@@ -578,11 +632,17 @@ export function QuickChat() {
   // Expanded conversation panel once the session has any messages.
   if (messages.length > 0) {
     return (
-      <div className="qc-root">
+      <div className={`qc-root${mini ? ' qc-mini-on' : ''}`}>
+        {mini && <MiniPill mini={mini} />}
         <div className="qc-card qc-panel">
           <div className="qc-head">
             <Sparkles className="qc-mark" size={18} />
-            <span className="qc-spacer" />
+            {tabs ? <TabStrip tabs={tabs} onClose={closeTab} /> : <span className="qc-spacer" />}
+            {tabs && (
+              <button className="qc-act" title="Shrink to a pill beside the window (⌘M)" aria-label="Shrink" onClick={() => void window.stem.minimizeQuickChat()}>
+                <Minus size={15} />
+              </button>
+            )}
             <button className="qc-act" title="New thread (⌘N)" onClick={() => void newThread()} disabled={resetting}>
               <SquarePen size={15} />
             </button>
@@ -650,6 +710,11 @@ export function QuickChat() {
   return (
     <div className="qc-root">
       <div className="qc-card">
+        {tabs && tabs.tabs.length > 1 && (
+          <div className="qc-head qc-tabrow">
+            <TabStrip tabs={tabs} onClose={closeTab} />
+          </div>
+        )}
         {windowChip && (
           <WindowChip
             chip={windowChip}
@@ -673,13 +738,21 @@ export function QuickChat() {
             placeholder={noteMode ? 'Save a note to memory…' : windowChip ? `Ask about this ${windowChip.app} window…` : 'Ask Stem anything…'}
             onChange={(e) => {
               const value = e.target.value;
-              const trigger = noteMode ? null : detectNoteTrigger(value);
+              const pasted = pasteRef.current;
+              pasteRef.current = false;
+              // Checked against the previous input too, so a cleared input never keeps a stale flag.
+              literalRef.current = (pasted || (literalRef.current && input.startsWith('/'))) && value.startsWith('/');
+              const trigger = noteMode || literalRef.current ? null : detectNoteTrigger(value);
               if (trigger) {
                 enterNoteMode();
                 setInput(trigger.body);
               } else {
                 setInput(value);
               }
+            }}
+            onPaste={(e) => {
+              const el = e.currentTarget;
+              pasteRef.current = pasteLandsInCommand(el.value, el.selectionStart ?? 0);
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -754,6 +827,99 @@ export function QuickChat() {
         />
       )}
       <MissedApprovalDialog />
+    </div>
+  );
+}
+
+/**
+ * The conversations open about one window, and a + that opens another with a
+ * fresh picture of it. A single conversation shows only the +.
+ */
+/** The window panel shrunk beside its window: the answer's progress; a click opens the panel again. */
+function MiniPill({ mini }: { mini: QuickChatMini }) {
+  const { status } = mini;
+  const finished = status?.phase === 'finished';
+  const waiting = status?.phase === 'waiting';
+  return (
+    <div className="qc-mini">
+      <button
+        type="button"
+        className={`qc-mini-pill${finished ? ' finished' : ''}${waiting ? ' waiting' : ''}`}
+        title="Open the panel"
+        onClick={() => void window.stem.expandQuickChat()}
+      >
+        {finished ? (
+          <span className="hud-check" aria-hidden="true">
+            <Check size={13} />
+          </span>
+        ) : waiting ? (
+          <span className="hud-wait" aria-hidden="true">
+            <ShieldAlert size={13} />
+          </span>
+        ) : status ? (
+          <span className="activity-dots" aria-hidden="true">
+            <span className="activity-dot" />
+            <span className="activity-dot" />
+            <span className="activity-dot" />
+          </span>
+        ) : (
+          <Sparkles className="qc-mark" size={14} aria-hidden="true" />
+        )}
+        <span className="hud-label">{status?.label ?? mini.app}</span>
+        {mini.tabs > 1 && <span className="hud-hint">{mini.tabs} tabs</span>}
+      </button>
+    </div>
+  );
+}
+
+function TabStrip({ tabs, onClose }: { tabs: QuickChatTabs; onClose(id: string): void }) {
+  const several = tabs.tabs.length > 1;
+  return (
+    <div className="qc-tabs" role="tablist" aria-label="Conversations about this window">
+      {several &&
+        tabs.tabs.map((tab) => {
+          const label = tab.label ?? 'New question';
+          return (
+            <div
+              key={tab.id}
+              role="tab"
+              aria-selected={tab.active}
+              className={`qc-tab${tab.active ? ' active' : ''}`}
+              title={label}
+              onClick={() => !tab.active && void window.stem.switchQuickChatTab(tab.id)}
+              onAuxClick={(e) => e.button === 1 && onClose(tab.id)}
+            >
+              {tab.running ? (
+                <span className="qc-tab-dot running" aria-label="Answering" />
+              ) : tab.unread ? (
+                <span className="qc-tab-dot" aria-label="New answer" />
+              ) : null}
+              <span className="qc-tab-label">{label}</span>
+              <button
+                type="button"
+                className="qc-tab-close"
+                title={tab.running ? 'Stop and close (⌘W)' : 'Close (⌘W)'}
+                aria-label="Close tab"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose(tab.id);
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          );
+        })}
+      <button
+        type="button"
+        className="qc-act"
+        title={tabs.canAdd ? 'New tab about this window (⌘T)' : 'This window has as many tabs as it can hold'}
+        aria-label="New tab"
+        disabled={!tabs.canAdd}
+        onClick={() => void window.stem.newQuickChatTab()}
+      >
+        <Plus size={15} />
+      </button>
     </div>
   );
 }

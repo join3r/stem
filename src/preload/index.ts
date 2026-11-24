@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { startCapture, stopCapture } from './dictation-capture';
 import type {
+  MailChange,
   FolderSettings,
   ServerUpgradeStatus,
   ActivitySnapshot,
@@ -56,8 +57,11 @@ import type {
   QuickChatSettings,
   QuickChatSessionStarted,
   QuickChatStatus,
+  QuickChatTabs,
+  QuickChatMini,
   MailComposeInput,
   Persona,
+  Person,
   ScheduledTask,
   SkillProposal,
   SkillsMode,
@@ -130,6 +134,9 @@ const api: StemApi = {
   listSkills: () => ipcRenderer.invoke('skills:list'),
   setSkillEnabled: (slug: string, enabled: boolean) => ipcRenderer.invoke('skills:setEnabled', slug, enabled),
   removeSkill: (slug: string) => ipcRenderer.invoke('skills:remove', slug),
+  setSkillRecurrence: (slug: string, recurs: string) => ipcRenderer.invoke('skills:setRecurrence', slug, recurs),
+  listSkillVersions: (slug: string) => ipcRenderer.invoke('skills:versions', slug),
+  restoreSkillVersion: (slug: string, version: number) => ipcRenderer.invoke('skills:restore', slug, version),
   curateSkills: () => ipcRenderer.invoke('skills:curate'),
   learnFromChat: (threadId: string, focus?: string) => ipcRenderer.invoke('skills:learn', threadId, focus),
   skillsResetStatus: () => ipcRenderer.invoke('skills:resetStatus'),
@@ -147,6 +154,8 @@ const api: StemApi = {
   removeFilesSubdir: (name: string) => ipcRenderer.invoke('files:rmdir', name),
   revealFiles: (rel?: string) => ipcRenderer.invoke('files:reveal', rel),
   downloadFile: (rel: string) => ipcRenderer.invoke('files:download', rel),
+  openFilesItem: (rel: string) => ipcRenderer.invoke('files:open', rel),
+  openScratchItem: (threadId: string, rel: string) => ipcRenderer.invoke('scratch:open', threadId, rel),
   previewImage: (path: string) => ipcRenderer.invoke('files:preview', path),
   previewImageData: (dataBase64: string, mime?: string, name?: string) =>
     ipcRenderer.invoke('files:previewData', dataBase64, mime, name),
@@ -463,7 +472,10 @@ const api: StemApi = {
   searchChats: (query: string) => ipcRenderer.invoke('chats:search', query),
   openChat: (threadId: string) => ipcRenderer.invoke('chats:open', threadId),
   readChatHistory: (threadId: string) => ipcRenderer.invoke('chats:history', threadId),
+  cachedChat: (threadId: string) => ipcRenderer.invoke('chats:cached', threadId),
   getChatImage: (threadId: string, imageId: string) => ipcRenderer.invoke('chats:image', threadId, imageId),
+  getChatAudio: (threadId: string, audioId: string) => ipcRenderer.invoke('chats:audio', threadId, audioId),
+  saveAudioToDownloads: (dataUrl: string, name: string) => ipcRenderer.invoke('audio:saveToDownloads', dataUrl, name),
   saveImageToDownloads: (dataUrl: string, name: string) => ipcRenderer.invoke('image:saveToDownloads', dataUrl, name),
   copyImage: (dataUrl: string) => ipcRenderer.invoke('image:copy', dataUrl),
   rollbackToTurn: (threadId: string, turnId: string) =>
@@ -472,6 +484,7 @@ const api: StemApi = {
   compactChat: (threadId: string, instructions?: string) => ipcRenderer.invoke('chats:compact', threadId, instructions),
   voiceConnect: (offerSdp: string) => ipcRenderer.invoke('voice:connect', offerSdp),
   voiceCheck: () => ipcRenderer.invoke('voice:check'),
+  chatgptPlanUsage: () => ipcRenderer.invoke('providers:chatgptUsage'),
   listPins: (threadId: string) => ipcRenderer.invoke('pins:list', threadId),
   addPin: (threadId: string, input: ChatPinInput) => ipcRenderer.invoke('pins:add', threadId, input),
   updatePin: (threadId: string, pinId: string, patch: ChatPinPatch) =>
@@ -511,7 +524,19 @@ const api: StemApi = {
   consolidatePersonaNotes: (personaId: string) =>
     ipcRenderer.invoke('personas:notes:consolidate', personaId),
 
+  listPeople: () => ipcRenderer.invoke('people:list'),
+  savePerson: (person: Person) => ipcRenderer.invoke('people:save', person),
+  deletePerson: (id: string) => ipcRenderer.invoke('people:delete', id),
+  personFacts: (id: string) => ipcRenderer.invoke('people:facts', id),
+  suggestPeople: () => ipcRenderer.invoke('people:suggest'),
+  onPeopleChanged: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on('people:changed', handler);
+    return () => ipcRenderer.removeListener('people:changed', handler);
+  },
+
   listMail: () => ipcRenderer.invoke('mail:list'),
+  listMailConversations: (conversationIds: string[]) => ipcRenderer.invoke('mail:conversations', conversationIds),
   getMailWork: (conversationId: string) => ipcRenderer.invoke('mail:work', conversationId),
   onMailWorkChanged: (listener: (event: { conversationId: string }) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, value: { conversationId: string }) => listener(value);
@@ -519,6 +544,7 @@ const api: StemApi = {
     return () => ipcRenderer.removeListener('mail:workChanged', handler);
   },
   composeMail: (input: MailComposeInput) => ipcRenderer.invoke('mail:compose', input),
+  stageAttachment: (att: TurnAttachment) => ipcRenderer.invoke('attachments:stage', att),
   // The third argument rides only when there is something in it: a server
   // predating it rejects a 3-arg call outright, and a plain reply must keep
   // working across that skew.
@@ -528,6 +554,8 @@ const api: StemApi = {
       : ipcRenderer.invoke('mail:reply', conversationId, body),
   addMailParticipant: (conversationId: string, personaId: string) =>
     ipcRenderer.invoke('mail:addParticipant', conversationId, personaId),
+  setMailParticipants: (conversationId: string, personaIds: string[]) =>
+    ipcRenderer.invoke('mail:setParticipants', conversationId, personaIds),
   stopMail: (conversationId: string) => ipcRenderer.invoke('mail:stop', conversationId),
   // The edited draft body rides only for a send draft (older servers reject a 3rd arg).
   resolveMailApproval: (itemId: string, decision: 'allow' | 'deny', body?: string) =>
@@ -581,8 +609,8 @@ const api: StemApi = {
     ipcRenderer.on('personas:changed', handler);
     return () => ipcRenderer.removeListener('personas:changed', handler);
   },
-  onMailChanged: (listener: () => void) => {
-    const handler = () => listener();
+  onMailChanged: (listener: (change?: MailChange) => void) => {
+    const handler = (_e: unknown, change?: MailChange) => listener(change ?? undefined);
     ipcRenderer.on('mail:changed', handler);
     return () => ipcRenderer.removeListener('mail:changed', handler);
   },
@@ -732,6 +760,26 @@ const api: StemApi = {
   openQuickChatPrivacy: (which: 'screen' | 'accessibility') => ipcRenderer.invoke('quickchat:openPrivacy', which),
   openManageFromQuickChat: (tab: ManageTabId, intent?: ManageIntent) => ipcRenderer.invoke('quickchat:openManage', tab, intent),
   compactQuickChat: (chip?: boolean) => ipcRenderer.invoke('quickchat:compact', chip === true),
+  newQuickChatTab: () => ipcRenderer.invoke('quickchat:newTab'),
+  switchQuickChatTab: (id: string) => ipcRenderer.invoke('quickchat:switchTab', id),
+  closeQuickChatTab: (id: string) => ipcRenderer.invoke('quickchat:closeTab', id),
+  onQuickChatTabs: (listener: (tabs: QuickChatTabs) => void) => {
+    const handler = (_e: unknown, tabs: QuickChatTabs) => listener(tabs);
+    ipcRenderer.on('quickchat:tabs', handler);
+    return () => ipcRenderer.removeListener('quickchat:tabs', handler);
+  },
+  minimizeQuickChat: () => ipcRenderer.invoke('quickchat:minimize'),
+  expandQuickChat: () => ipcRenderer.invoke('quickchat:expand'),
+  onQuickChatMini: (listener: (mini: QuickChatMini | null) => void) => {
+    const handler = (_e: unknown, mini: QuickChatMini | null) => listener(mini);
+    ipcRenderer.on('quickchat:mini', handler);
+    return () => ipcRenderer.removeListener('quickchat:mini', handler);
+  },
+  onQuickChatCloseTab: (listener: (request: { id: string }) => void) => {
+    const handler = (_e: unknown, request: { id: string }) => listener(request);
+    ipcRenderer.on('quickchat:closeTabRequest', handler);
+    return () => ipcRenderer.removeListener('quickchat:closeTabRequest', handler);
+  },
   onQuickChatFocus: (listener: (focus: QuickChatFocus) => void) => {
     const handler = (_e: unknown, focus: QuickChatFocus) => listener(focus);
     ipcRenderer.on('quickchat:focus', handler);

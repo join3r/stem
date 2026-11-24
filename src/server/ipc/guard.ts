@@ -79,6 +79,9 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'backend:createThread': [a.optional(a.nullish(a.string)), a.optional(a.nullish(a.oneOf(['md', 'mdx'])))],
   'skills:setEnabled': [a.string, a.boolean],
   'skills:remove': [a.string],
+  'skills:setRecurrence': [a.string, a.oneOf(['weekly', 'monthly', 'quarterly', 'yearly', 'occasional'])],
+  'skills:versions': [a.string],
+  'skills:restore': [a.string, a.number],
   'files:add': [a.stringArray, a.optional(a.nullish(a.string))],
   'files:remove': [a.string],
   'files:mkdir': [a.string],
@@ -190,6 +193,7 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'chats:open': [a.string],
   'chats:history': [a.string],
   'chats:image': [a.string, a.string],
+  'chats:audio': [a.string, a.string],
   'chats:rollbackToTurn': [a.string, a.string],
   'chats:forkThread': [a.string, a.string],
   'chats:compact': [a.string, a.nullish(a.string)],
@@ -216,14 +220,20 @@ const IPC_ARGS: Record<string, ArgSpec[]> = {
   'personas:notes:save': [a.string, a.object],
   'personas:notes:delete': [a.string, a.string],
   'personas:notes:consolidate': [a.string],
+  // People: save takes the whole person (reshaped in workspace/people.ts coercePerson).
+  'people:save': [a.object],
+  'people:delete': [a.string],
+  'people:facts': [a.string],
   // Mail: compose is reshaped where it lands (mail/router.ts). The triage
   // mutators take conversation-id lists, the inbox-mutator shape.
   // ('mail:list' and 'mail:summary' take no arguments, so they are absent.)
   'mail:open': [a.string],
+  'mail:conversations': [a.stringArray],
   'mail:compose': [a.object],
   'mail:work': [a.string],
   'mail:reply': [a.string, a.string, a.optional(a.nullish(a.objectArray))],
   'mail:addParticipant': [a.string, a.string],
+  'mail:setParticipants': [a.string, a.stringArray],
   'mail:stop': [a.string],
   'mail:resolveApproval': [a.string, a.oneOf(['allow', 'deny']), a.optional(a.nullish(a.string))],
   // Inter-Stem mail (ipc/interstem.ts).

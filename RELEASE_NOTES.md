@@ -12,6 +12,69 @@ Maintainer notes:
   date, tag.
 -->
 
+## 0.8.0 — 2026-11-23
+
+### Added
+
+- **People.** Memory learns about the people in your life. See them under Personas & people →
+  People.
+- **Skills learn how you like things done**, such as how to sign your mail drafts, and get better
+  each time you correct them.
+- **Skill history.** Restore an earlier version of a skill, and set how often its task comes up.
+- **Tabs in Ask about this window.** ⌘T opens another conversation; ⌘M shrinks the panel to a pill.
+- **Keep with its window** (Mac setting) keeps the Ask panel with its window.
+- **Share links for chosen people.** Only the people you pick can open them, and you see who did.
+- **Stem's own file viewer.** Files linked in replies open in a safe Stem window.
+- **Change who's in a mail conversation** from the reply's To row, and pick who leads.
+- **Stem can edit your scheduled tasks** from any chat, and you can undo its edits.
+- **Pictures from your files** can be the starting point for a generated image.
+- **Stem can change an MCP server** without losing its sign-in.
+- **Current situation** at the top of your summary, such as a hospital stay or a trip.
+- **Search in Settings.**
+- **ChatGPT usage left**, shown in Settings → Models.
+- **GPT-6.2 Astra and Sol** in the model list.
+- **Zoom** with ⌘+, ⌘- and ⌘0.
+- **Diff view** for code changes, **sounds** in replies, and the **Cotton Candy** theme.
+- **Demo on the iPhone**, from the pair screen.
+
+### Changed
+
+- **Faster replies with ChatGPT.** Stem now talks to ChatGPT over WebSocket, so replies after a
+  tool call start about 1.5 s sooner.
+- **Mail sends fast** and closes after sending. Attachments upload while you write.
+- **New mail is simpler**: one card on the desktop, one page on the iPhone.
+- **Chats open faster**, and memory lookups before a reply are faster.
+- **Better recall.** Stem also remembers short overviews of related facts.
+- **Stem GTE Memory** no longer needs the Qwen3 reranker: one download fewer.
+- **Shared links show what the chat shows**, including pictures and sounds.
+- **Scheduled tasks get short names** instead of the first line of their prompt.
+- **Up to eight commands** run at once, instead of two.
+- **Skills save automatically** by default.
+- **New installs start on GPT-6.2 Sol.**
+- **More room for chats**: the composer fits on one row and messages use the full width.
+- **Dropping files on the window** shows your folders as tiles that always fit.
+- **Your own mail always gets a reply**, even if just a short one.
+- **A short "yes"** to a blocked command now gets you an approval card instead of a refusal.
+- **Welcome screen** says where your data goes. New users aren't offered Claude sign-in.
+
+### Fixed
+
+- **A new chat no longer vanishes** while a big file uploads.
+- **Chats no longer get stuck on Working**, including in Ask about this window.
+- **Browser control stays connected** when the browser restarts the extension.
+- **Charts and tables the model left open** no longer turn the reply into plain text.
+- **Skills no longer get in the way** of unrelated browser or computer-control work.
+- **Share links** publish exactly the preview you saw.
+- **New mail on the iPhone** is no longer lost while photos upload.
+- **MCP servers Stem installs** no longer break when a chat is deleted.
+- **Archiving the open chat** now closes it and opens the next one.
+- **Copy message** copies clean text, on the desktop and the iPhone.
+- **Pasted text** starting with / is no longer taken as a command.
+- **Web pictures from some sites** now show.
+- **Numbered lists** keep their numbers.
+- **Popups** are no longer hidden behind the composer.
+- **Quitting Stem** no longer hangs.
+
 ## 0.7.5 — 2026-10-30
 
 ### Added

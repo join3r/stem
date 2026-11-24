@@ -1,8 +1,12 @@
-import { clipboard, dialog, nativeImage, shell, type BrowserWindow } from 'electron';
-import { stat } from 'node:fs/promises';
+import { clipboard, ClipboardItem, dialog, nativeImage, shell, type BrowserWindow } from 'electron';
+import { execFile } from 'node:child_process';
+import { mkdtemp, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setServerFileActions } from '../context-menu';
 import { handleLocal } from '../ipc-bridge';
-import { openLink } from '../open-link';
+import { openFilesItem, openLink } from '../open-link';
+import { filesPlaceRel, isSafeRel, SCRATCH_PREFIX } from '../../shared/files-links';
 import { ensureFilesRoot, filePathWithin } from '../../server/files/store';
 import { imagePreviewDataUrl, imagePreviewFromBytes } from '../../server/pi/attachments';
 import { connectedFolderPath } from '../../server/workspace/connected-folders';
@@ -12,8 +16,9 @@ import { exportState } from '../../server/workspace/state-transfer';
 import { readClientIdentity, storedServerUrl } from '../client-store';
 import { cancelDictation, dictationAudio, dictationLanguages, startDictation, stopDictation } from '../dictation';
 import { downloadFile } from '../file-transfer';
+import { stageAttachment } from '../proxy';
 import { markReleaseNotesRead, releaseNotesSnapshot } from '../release-notes';
-import { downloadsDir, saveImageToDownloads } from '../save-image';
+import { downloadsDir, saveAudioToDownloads, saveImageToDownloads } from '../save-image';
 import { pairWithServer, useBuiltInServer, type ServerCredentials } from '../server-endpoint';
 import { updateClientReleaseNotes, updateClientTheme, updateClientUpdates, withClientSettings } from '../settings';
 import { currentThemeState, ensureThemesDir, listThemes } from '../themes';
@@ -36,6 +41,7 @@ import type {
   StateExportReport,
   ThemeSettings,
   ThemeState,
+  TurnAttachment,
   UpdatesSettings
 } from '../../shared/types';
 
@@ -113,6 +119,8 @@ export interface LocalIpcDeps {
   claudeExport: ClaudeExportHost;
   /** The theme changed: push the new state to all three windows at once. */
   themeChanged(state: ThemeState): void;
+  /** The offline cache's copy of a transcript (see ServerProxy.cachedThread). */
+  cachedThread(threadId: string): unknown;
 }
 
 export function registerLocalIpc(deps: LocalIpcDeps): void {
@@ -139,6 +147,12 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
   // Deliberately client-owned, and obviously so: a server cannot be asked
   // whether it can be reached.
   handleLocal('client:connection', () => ({ reachable: deps.reachable() }));
+
+  // The offline cache's copy of one transcript, read off this disk. The sidebar
+  // shows it the moment a chat is clicked while the server's own answer is on
+  // its way — on a slow link, or one busy streaming two running chats, that
+  // round trip is seconds the person used to stare at the previous chat for.
+  handleLocal('chats:cached', (_e, threadId: string) => deps.cachedThread(threadId) ?? null);
 
   // Settings → Server. Pairing is the whole act: the address and the credential
   // are written together, because a token means nothing to a server that never
@@ -391,7 +405,14 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
    * go, then show it there — the two halves of what "Download" means on a desktop.
    * Answers with the path it landed at, so the renderer can name it if it wants.
    */
-  handleLocal('files:download', async (_e, rel: string): Promise<string> => {
+  handleLocal('files:download', (_e, rel: string): Promise<string> => downloadAndReveal(rel));
+  // The mail composer's background upload: a file attached to a draft goes up
+  // to a remote server at once, so Send carries only its handle. Against the
+  // built-in server the server reads the path itself and nothing is copied.
+  handleLocal('attachments:stage', (_e, att: TurnAttachment): Promise<TurnAttachment> | TurnAttachment =>
+    deps.connection().remote ? stageAttachment(deps.credentials(), att) : att
+  );
+  async function downloadAndReveal(rel: string): Promise<string> {
     const saved = await downloadFile(deps.credentials(), rel, downloadsDir());
     // Opening a Finder window is the one part of this a test run must not do:
     // STEM_BACKGROUND is set for exactly the runs that are forbidden to take
@@ -399,15 +420,56 @@ export function registerLocalIpc(deps: LocalIpcDeps): void {
     // skipped under the same kind of flag for the same kind of reason).
     if (!process.env.STEM_BACKGROUND) shell.showItemInFolder(saved);
     return saved;
+  }
+
+  /**
+   * A `files/…` link in a reply (shared/files-links.ts): fetch the file from the
+   * server's Files folder into a fresh temporary folder, then treat it as a
+   * clicked file: link, so a document opens and anything else is only shown.
+   * A temporary folder, not Downloads: a link clicked twice must not leave two
+   * copies where the user keeps their own files.
+   */
+  handleLocal('files:open', async (_e, rel: string): Promise<void> => {
+    // The renderer checked it too; this side is the one that has to hold.
+    const checked = filesPlaceRel(`files/${encodeURI(rel)}`);
+    if (!checked || checked !== rel) throw new Error('That is not a file in your Files folder.');
+    await fetchAndOpen(rel);
+  });
+  /** A `scratch/…` link: the same, from one chat's scratch folder (server/exec/scratch.ts scratchDownload). */
+  handleLocal('scratch:open', async (_e, threadId: string, rel: string): Promise<void> => {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(threadId) || !isSafeRel(rel)) throw new Error('That is not a file in this chat.');
+    await fetchAndOpen(`${SCRATCH_PREFIX}${threadId}/${rel}`);
+  });
+  async function fetchAndOpen(rel: string): Promise<void> {
+    const saved = await downloadFile(deps.credentials(), rel, await mkdtemp(join(tmpdir(), 'stem-files-')));
+    // Mark it as downloaded, as a browser would, so macOS applies its usual
+    // checks to whatever opens it. quiet: without xattr the file still opens
+    // under the document allowlist below.
+    if (process.platform === 'darwin') {
+      const flags = `0081;${Math.floor(Date.now() / 1000).toString(16)};Stem;`;
+      await new Promise<void>((done) => execFile('/usr/bin/xattr', ['-w', 'com.apple.quarantine', flags, saved], () => done()));
+    }
+    // Test runs must not open apps (see files:download).
+    if (!process.env.STEM_BACKGROUND) openFilesItem(shell, saved);
+  }
+
+  // The right-click menu on a `files/…` or `scratch/…` link (desktop/context-menu.ts).
+  setServerFileActions({
+    open: fetchAndOpen,
+    reveal: async (rel) => void (await downloadAndReveal(rel))
   });
 
   /** Save a chat image (the data URL the renderer is already showing) straight into Downloads. */
   handleLocal('image:saveToDownloads', (_e, dataUrl: string, name: string) => saveImageToDownloads(dataUrl, name));
+  handleLocal('audio:saveToDownloads', (_e, dataUrl: string, name: string) => saveAudioToDownloads(dataUrl, name));
 
-  handleLocal('image:copy', (_e, dataUrl: string) => {
+  handleLocal('image:copy', async (_e, dataUrl: string) => {
     const img = nativeImage.createFromDataURL(dataUrl);
     if (img.isEmpty()) throw new Error('Not an image.');
-    clipboard.writeImage(img);
+    // Electron 44 dropped clipboard.writeImage for the W3C-shaped write().
+    // Re-encoded as PNG so a JPEG/WebP data URL lands as an image every app pastes.
+    const png = new Blob([new Uint8Array(img.toPNG())], { type: 'image/png' });
+    await clipboard.write([new ClipboardItem({ 'image/png': png })]);
   });
 
   /**

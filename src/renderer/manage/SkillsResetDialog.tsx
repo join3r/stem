@@ -33,7 +33,7 @@ export function SkillsResetDialog() {
   // current and answers `needed: false` without asking anything.
   const [count, setCount] = useState<number | null>(null);
   const [exportFirst, setExportFirst] = useState(true);
-  const [mode, setMode] = useState<SkillsMode>('ask');
+  const [mode, setMode] = useState<SkillsMode>('auto');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<SkillsResetResult | null>(null);
   const [error, setError] = useState<string | null>(null);

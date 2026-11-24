@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
+import { useSearchHarvest } from '../../../ui/searchHarvest';
 
 /**
  * The settings-row idioms the Chat and App tabs are built from, and the
@@ -78,7 +79,9 @@ export function DisclosureRow({
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(!!defaultOpen);
+  const [openState, setOpen] = useState(!!defaultOpen);
+  // The settings search's hidden copy opens every row so it can read the rows inside.
+  const open = useSearchHarvest() || openState;
   return (
     <>
       <button type="button" className="set-vrow" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
@@ -116,7 +119,8 @@ export function SettingSection({
   children: ReactNode;
 }) {
   const [openState, setOpenState] = useState(!!defaultOpen);
-  const open = openProp ?? openState;
+  const harvest = useSearchHarvest();
+  const open = harvest || (openProp ?? openState);
   const setOpen = (next: (v: boolean) => boolean) => {
     const value = next(open);
     setOpenState(value);

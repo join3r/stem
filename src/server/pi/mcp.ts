@@ -1,9 +1,11 @@
 import { cleanAppList, mcpServersForApp, windowMcpSuggestion } from './app-match';
 import {
   MCP_SECRET_MASK,
+  looksLikeMcpSecret,
   type McpServerDetails,
   type McpServerInput,
   type McpServerLocation,
+  type McpServerPatch,
   type McpServerSummary,
   type WindowMcpSuggestion
 } from '../../shared/types';
@@ -23,6 +25,44 @@ import { deviceMcpRouter, deviceSpecFor } from '../mcp-device/router';
 import { mcpSpecFingerprint } from '../../shared/mcp-fingerprint';
 import { RECALL_MCP_NAME } from '../recall/register-mcp';
 import { ADMIN_MCP_NAME } from '../admin/register-mcp';
+import { execWorkspaceDir, filesRoot, mcpInstallRoot, workspaceRoot } from '../workspace/paths';
+import { shortLivedServerMessage, shortLivedServerPath, type ShortLivedRoot } from './mcp-install-paths.mjs';
+
+/** Folders an MCP server may not live in: chat scratch and the Files place (mcp-install-paths.mjs). */
+export function shortLivedRoots(): ShortLivedRoot[] {
+  return [
+    { root: execWorkspaceDir(), kind: 'scratch' },
+    { root: filesRoot(), kind: 'files' }
+  ];
+}
+
+/**
+ * Refuse an assistant-proposed stdio server whose command or args point into
+ * chat scratch or Files. The bridge checks this before the card; this is the
+ * same rule at apply time, for a bridge older than main. Servers pinned to a
+ * device are judged by nothing here: their paths are on that computer.
+ */
+export function assertDurableServerPaths(
+  name: string,
+  spec: { command?: string; args?: readonly string[]; url?: string },
+  pinned: boolean
+): void {
+  if (pinned || spec.url) return;
+  const hit = shortLivedServerPath(spec.command, spec.args, shortLivedRoots(), workspaceRoot());
+  if (hit) throw new Error(shortLivedServerMessage(hit, mcpInstallRoot(), name));
+}
+
+/** assertDurableServerPaths for an edit: judged only when it moves the command or args. */
+export async function assertDurableEdit(name: string, patch: McpServerPatch): Promise<void> {
+  if (patch.command === undefined && patch.args === undefined) return;
+  const current = (await readMcpConfig()).servers[name];
+  if (!current) return;
+  assertDurableServerPaths(
+    name,
+    { command: patch.command ?? current.command, args: patch.args ?? (Array.isArray(current.args) ? current.args : []), url: current.url },
+    Boolean(current.location)
+  );
+}
 
 // User-facing MCP add/remove/list for the pi backend, operating on mcp.json. The
 // bridge extension (stem-mcp-extension.mjs) reads this file on (re)start; the
@@ -258,14 +298,7 @@ export async function addMcpServer(input: McpServerInput): Promise<McpServerSumm
   });
 }
 
-/**
- * Whether a stored value under this name is one to keep off the wire. Names,
- * not values, because a value cannot say what it is — and a name that says
- * "token" is the one convention every MCP server's README follows.
- */
-function looksSecret(key: string): boolean {
-  return /token|secret|passw|credential|api[_-]?key|private|authorization|cookie|bearer/i.test(key);
-}
+const looksSecret = looksLikeMcpSecret;
 
 function masked(values: Record<string, string> | undefined): Record<string, string> {
   return Object.fromEntries(
@@ -351,6 +384,44 @@ export async function updateMcpServer(input: McpServerInput): Promise<McpServerS
     };
     if (mcpServerAuthIdentity(previous) !== mcpServerAuthIdentity(next)) await deleteOAuthToken(name);
     config.servers[name] = next;
+  });
+}
+
+/**
+ * Apply the assistant's `edit_mcp_server` patch (see McpServerPatch). Built on
+ * updateMcpServer so an edit keeps exactly what the panel's Edit keeps: name,
+ * location, apps, disabled, trust, and the OAuth token unless the URL, headers or
+ * OAuth client changed. Every stored env/header value the patch does not name is
+ * sent as MCP_SECRET_MASK, which updateMcpServer swaps for the stored value
+ * inside its config lock — so a token written between the card and the approval
+ * is the one kept, not a stale copy.
+ */
+export async function editMcpServer(name: string, patch: McpServerPatch): Promise<McpServerSummary[]> {
+  const current = (await readMcpConfig()).servers[name];
+  if (!current) throw new Error(`No MCP server named "${name}".`);
+  const kept = (
+    stored: Record<string, string> | undefined,
+    set: Record<string, string> | undefined,
+    remove: string[] | undefined
+  ): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const key of Object.keys(stored ?? {})) out[key] = MCP_SECRET_MASK;
+    Object.assign(out, set ?? {});
+    for (const key of remove ?? []) delete out[key];
+    return out;
+  };
+  const transport = current.url ? 'http' : 'stdio';
+  return updateMcpServer({
+    name,
+    transport,
+    command: patch.command ?? current.command,
+    args: patch.args ?? (Array.isArray(current.args) ? current.args : []),
+    url: patch.url ?? current.url,
+    env: kept(current.env, patch.env, patch.removeEnv),
+    headers: kept(current.headers, patch.headers, patch.removeHeaders),
+    oauthClientId: current.oauthClientId,
+    oauthClientSecret: current.oauthClientSecret ? MCP_SECRET_MASK : undefined,
+    oauthScope: current.oauthScope
   });
 }
 

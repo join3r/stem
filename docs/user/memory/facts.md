@@ -33,6 +33,8 @@ answer** when two facts disagree, then the facts themselves. **History** and
   itself is only ever shown to you, in the fact's details; the assistant sees the text.
 
 The source appears on each fact. One-off completed task details are normally skipped.
+Facts can be about the people in your life as well as about you; see
+[People](README.md#people).
 
 ## Review stored facts
 
@@ -89,8 +91,23 @@ it as uncertain rather than forgetting both.
 
 Selected facts go to the model used for that chat—local or cloud.
 
+Next to the facts, Stem can send a few **broader memories**. In the background it
+files related facts into groups ("knee surgery and recovery", "the Northwind
+contract") and writes each group a short summary from its facts. When a group is
+close to your message, its summary goes along with the facts, so the answer sees
+the wider picture and not one detail alone. A summary is sent only while it still
+matches its facts: forgetting a fact clears the summaries of its groups, and
+erasing facts erases them all. A group built from a sensitive fact needs a much
+stronger match.
+
+Each chat that can see your memory is also told which topics your memory holds,
+one short label per group, so the assistant knows when searching its memory will
+find something and searches before asking you. A topic that holds a sensitive fact
+shows only as its category ("Private: health"), and the list is left out of mail
+with other people.
+
 Use **Preview draft** (the eye button above the list) to see which facts the current
-message would use.
+message would use, and which broader memories would go with them.
 
 ## When two facts disagree
 

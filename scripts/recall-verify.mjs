@@ -9,7 +9,7 @@
 //     src/server/recall/vector.ts \
 //     src/server/recall/capture.ts src/server/recall/distill.ts src/server/recall/consolidate.ts \
 //     --outDir .recall-build \
-//     --module commonjs --moduleResolution node --target es2022 --skipLibCheck \
+//     --module commonjs --moduleResolution node --ignoreConfig --ignoreDeprecations 6.0 --target es2022 --skipLibCheck \
 //     --esModuleInterop --rootDir src --noCheck
 //   printf '{"type":"commonjs"}' > .recall-build/package.json
 //   STEM_RECALL_DB="$PWD/.recall-build/verify.sqlite" ELECTRON_RUN_AS_NODE=1 \

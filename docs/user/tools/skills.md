@@ -15,6 +15,16 @@ Skills are reusable procedures: when to use a workflow, its steps, and how to ve
 the result. Not memories. They provide no accounts, tools, or permissions by
 themselves.
 
+A skill can also hold how you want a recurring job done for you. Tell Stem "sign my
+email drafts as Stem, on behalf of me" or "write to my doctors formally, from my Gmail
+address", and it saves that in a skill for drafting your mail rather than in your
+custom instructions. Every chat and scheduled task that drafts mail then follows it,
+and later corrections update the same skill. Stem also proposes one on its own after
+it drafts a message for you, under the **Saving skills** setting. When Memory learns
+how you want a kind of work done ("always put the invoice number in the subject"),
+Stem folds that into the skill for that work too; a mere taste or a one-off stays a
+fact.
+
 Open **Tools → Skills**.
 
 <!-- TODO(screenshot): Skills list showing the four demo skills, an auto label, usage details, and enabled switches. -->
@@ -25,12 +35,29 @@ Open **Tools → Skills**.
 - Click a skill to select it, then the trash button under the list deletes it for
   good — it asks first. This works on skills you wrote yourself too: on a server
   install the skills folder is on the server, so this is the only way to reach it.
+- The history button under the list shows the earlier versions of the selected
+  skill, each with the reason it changed. Pick one and press **Restore** to put it
+  back. The current text is kept as an earlier version, so a restore can be undone.
+  Stem keeps the last ten versions of each skill.
+- **Needed** appears under the list for a selected skill that Stem wrote. It says
+  how often the task comes up: every week, every month, a few times a year, once
+  a year, or now and then. Stem estimates it when it writes the skill, and you can
+  change it. Stem switches a skill off by itself only after several of those
+  periods without use (60 days for a weekly task, 150 for a monthly one, 400 for
+  a few times a year, 800 for a yearly one, 90 for one with no rhythm), so a
+  yearly task is still there the next year. A skill switched off this way stays
+  on disk and can be switched back on.
 - **Tidy up** keeps one skill per job: it splits a skill that grew to cover several
-  unrelated jobs, merges two write-ups of the same job, and archives ones untouched
-  for 90 days. Archiving is the same reversible switch as above, so an archived
-  skill can be switched back on. Anything it rewrites is backed up first.
-- **Saving skills** decides how much Stem may save on its own. Asking it to save
-  one always works, whichever you pick.
+  unrelated jobs, merges two write-ups of the same job, and merges skills that are
+  one procedure written once per app, server or account into a single skill that
+  lists what differs for each. It also switches off skills unused for longer than
+  their **Needed** answer allows. Archiving is the same reversible switch as
+  above, so an archived skill can be switched back on. Anything it rewrites is
+  backed up first. Stem runs the same pass by itself once a day.
+- **Saving skills** decides how much Stem may save on its own: **Only when I ask**,
+  **Ask first** (each proposal comes as a card you approve) or **Save automatically**
+  (Stem saves what it learns and the Skills list shows it), which is the default.
+  Asking it to save one always works, whichever you pick.
 - **Skills model** does the model-driven skills work: writing, `/learn`, tidy-up.
   It is also under **Settings → Models → Judgment work**.
 
@@ -38,17 +65,42 @@ An **auto** label marks a skill Stem created. Usage details show whether it is s
 useful. Stem reshapes only skills that were its own idea, including ones you accepted
 from a proposal card; it may change or split those without asking. Skills you asked it
 to save, skills you imported or added yourself, `/learn` skills and recorded skills are
-never rewritten by tidy-up, and Stem changes them only when you ask.
+never rewritten by tidy-up or by the rewrite below. Stem changes them only when you ask,
+or when you correct a result that followed one. Imported skills never change that way.
 
 A cloud curator receives relevant chat excerpts during collection and auto-skill text
 during upkeep. It may use provider quota.
 
 Keep skills narrow and verifiable. Disable an auto skill to stop Stem using it.
 
+## How skills improve
+
+Each time a skill is used, Stem keeps a short record of that use: your request, what
+Stem did, and how you took the result in your next message. It reads that from your
+next message in the background, with the memory pass that already reads it, so this
+costs no extra model call per message.
+
+- When you correct a result ("no, sign it as Stem"), Stem changes the skill that
+  produced it, with your correction as a step.
+- When three uses of a skill went wrong, Stem looks at all of its records at once,
+  works out which steps caused the trouble, and rewrites the skill. This applies only
+  to skills that were Stem's own idea.
+- Before Stem saves any change it made on its own, a separate check compares the new
+  text with the old one and with the records. A change that would break what worked
+  before, or that only fits one case, is not saved.
+
+The Skills list shows the result as "5 accepted · 1 needed a fix". The **Saving
+skills** setting applies to all of this: **Only when I ask** stops it, and **Ask
+first** shows each change as a card.
+
+The records need Memory on. Private chats, scheduled runs and personas without memory
+leave no record, and deleting a chat deletes its records.
+
 ## Recording a skill
 
 Recording is in **Alpha**. On the Mac app, press **Record** under the message box
-(or type `/record`, or ⌃⌥R) and do the task in your own apps as usual; press **Stop** when done. Stem
+(or type `/record`, or ⌃⌥R; in a narrow window the button gives way and only these
+remain) and do the task in your own apps as usual; press **Stop** when done. Stem
 notes what you click, type and switch to, plus the settings of any dialog you
 confirm, and writes a draft skill card in the chat. It may ask up to three
 questions in the card; answer in a sentence. **Save skill** adds it to your library.
@@ -79,6 +131,13 @@ is not. A skill already used earlier in the same chat is not loaded again.
 
 The **used N×** figure on the Skills list is a different, stricter count: it credits a skill only
 when the turn ran something the skill's steps name.
+
+A skill can also belong to a tool, such as your mail-drafting skill to the tool that
+writes drafts. Then Stem reads it just before it uses that tool, however your request
+was worded, so how you want that action done is followed even when the message
+looked unrelated. The Skills list shows this under the skill's name: *Read before
+fastmail · draft_email*, or *Read before any busycal tool*. A skill that does not fit
+the job at hand is ignored.
 
 ## Skills and the machine they run on
 

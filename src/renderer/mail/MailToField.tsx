@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { Crown, X } from 'lucide-react';
 import type { Persona } from '../../shared/types';
 
@@ -14,46 +14,161 @@ function roleHint(p: Persona): string {
   return line.length > 64 ? `${line.slice(0, 63).trimEnd()}…` : line;
 }
 
-export function MailToField({
-  personas,
-  to,
-  onChange
+/**
+ * The type-to-add half of a To: field: an input plus the persona list under it.
+ * Renders as siblings, so it sits inside a `.mail-to-box` next to the tokens and
+ * the list anchors to the surrounding `.mail-to-field`.
+ */
+function PersonaPicker({
+  candidates,
+  onPick,
+  onBackspaceEmpty,
+  placeholder,
+  hint,
+  inputRef,
+  openRef
 }: {
-  personas: Persona[];
-  to: string[];
-  onChange: (to: string[]) => void;
+  /** Personas that can still be added. */
+  candidates: Persona[];
+  onPick: (id: string) => void;
+  /** Backspace in an empty input (drop the last token, where that is allowed). */
+  onBackspaceEmpty?: () => void;
+  placeholder?: string;
+  hint: string;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  /** Filled with "focus the input and show the list" (a click anywhere on the field). */
+  openRef: React.RefObject<() => void>;
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  // A click must show the list even when the input already has focus (right
+  // after a pick, say), so opening can't hang on the focus event alone.
+  openRef.current = () => {
+    inputRef.current?.focus();
+    setOpen(true);
+  };
   const [active, setActive] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const name = (id: string) => personas.find((p) => p.id === id)?.name ?? 'Deleted persona';
+  const listId = useId();
 
   const options = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return personas.filter((p) => !to.includes(p.id) && (!q || p.name.toLowerCase().includes(q)));
-  }, [personas, to, query]);
+    return candidates.filter((p) => !q || p.name.toLowerCase().includes(q));
+  }, [candidates, query]);
   const highlighted = Math.min(active, Math.max(0, options.length - 1));
 
-  const add = (id: string) => {
-    onChange([...to, id]);
+  const pick = (id: string) => {
+    onPick(id);
     setQuery('');
     setActive(0);
     // Close so the list doesn't cover the form; typing or ↓ opens it again.
     setOpen(false);
     inputRef.current?.focus();
   };
-  const remove = (id: string) => onChange(to.filter((t) => t !== id));
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        className="mail-to-input"
+        value={query}
+        aria-label="Add a persona"
+        role="combobox"
+        aria-expanded={open && options.length > 0}
+        aria-controls={listId}
+        placeholder={placeholder}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setActive(0);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onClick={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setOpen(true);
+            setActive((a) => Math.min(a + 1, options.length - 1));
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActive((a) => Math.max(a - 1, 0));
+          } else if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
+            if (open && options[highlighted]) {
+              e.preventDefault();
+              pick(options[highlighted].id);
+            }
+          } else if (e.key === 'Backspace' && !query) {
+            onBackspaceEmpty?.();
+          } else if (e.key === 'Escape' && open) {
+            e.stopPropagation();
+            setOpen(false);
+          }
+        }}
+      />
+      {open && options.length > 0 && (
+        <div className="mail-to-options" id={listId} role="listbox" aria-label="Personas">
+          {options.map((p, i) => (
+            <button
+              key={p.id}
+              type="button"
+              role="option"
+              aria-selected={i === highlighted}
+              className={`mail-to-option${i === highlighted ? ' active' : ''}`}
+              // Keep focus in the input so the list stays open for the next pick.
+              onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => pick(p.id)}
+            >
+              <strong>{p.name}</strong>
+              {roleHint(p) && <span>{roleHint(p)}</span>}
+            </button>
+          ))}
+          <div className="mail-to-options-hint">{hint}</div>
+        </div>
+      )}
+    </>
+  );
+}
+
+export function MailToField({
+  personas,
+  to,
+  onChange,
+  keepOne = false,
+  addPlaceholder = '',
+  className
+}: {
+  personas: Persona[];
+  to: string[];
+  onChange: (to: string[]) => void;
+  /** The last name can't be removed (an existing conversation always has someone). */
+  keepOne?: boolean;
+  /** The input's placeholder once names are in. */
+  addPlaceholder?: string;
+  className?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const openRef = useRef<() => void>(() => inputRef.current?.focus());
+  const name = (id: string) => personas.find((p) => p.id === id)?.name ?? 'Deleted persona';
+  const candidates = useMemo(() => personas.filter((p) => !to.includes(p.id)), [personas, to]);
+
+  const canRemove = !keepOne || to.length > 1;
+  const remove = (id: string) => {
+    if (canRemove) onChange(to.filter((t) => t !== id));
+  };
   const makeLead = (id: string) => onChange([id, ...to.filter((t) => t !== id)]);
 
   const lead = to[0];
   const others = to.slice(1).map(name);
 
   return (
-    <div className="mail-to-field">
-      <div className="mail-to-box" onClick={() => inputRef.current?.focus()}>
+    <div className={`mail-to-field${className ? ` ${className}` : ''}`}>
+      <div className="mail-to-box" onClick={() => openRef.current()}>
         {to.map((id, i) => (
-          <span key={id} className={`mail-to-token${i === 0 ? ' lead' : ''}`}>
+          <span
+            key={id}
+            className={`mail-to-token${i === 0 ? ' lead' : ''}${i === 0 && !canRemove ? ' bare' : ''}`}
+          >
             {name(id)}
             {i === 0 && to.length > 1 && <em className="mail-to-lead">leads</em>}
             {i > 0 && (
@@ -70,79 +185,32 @@ export function MailToField({
                 <Crown size={11} />
               </button>
             )}
-            <button
-              type="button"
-              className="mail-to-token-btn"
-              title={`Remove ${name(id)}`}
-              aria-label={`Remove ${name(id)}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                remove(id);
-              }}
-            >
-              <X size={11} />
-            </button>
+            {canRemove && (
+              <button
+                type="button"
+                className="mail-to-token-btn"
+                title={`Remove ${name(id)}`}
+                aria-label={`Remove ${name(id)}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  remove(id);
+                }}
+              >
+                <X size={11} />
+              </button>
+            )}
           </span>
         ))}
-        <input
-          ref={inputRef}
-          className="mail-to-input"
-          value={query}
-          aria-label="Add a persona"
-          role="combobox"
-          aria-expanded={open && options.length > 0}
-          aria-controls="mail-to-options"
-          placeholder={to.length ? '' : 'Type a persona’s name'}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setActive(0);
-            setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-          onBlur={() => setOpen(false)}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              setOpen(true);
-              setActive((a) => Math.min(a + 1, options.length - 1));
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setActive((a) => Math.max(a - 1, 0));
-            } else if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
-              if (open && options[highlighted]) {
-                e.preventDefault();
-                add(options[highlighted].id);
-              }
-            } else if (e.key === 'Backspace' && !query && to.length) {
-              remove(to[to.length - 1]);
-            } else if (e.key === 'Escape' && open) {
-              e.stopPropagation();
-              setOpen(false);
-            }
-          }}
+        <PersonaPicker
+          candidates={candidates}
+          onPick={(id) => onChange([...to, id])}
+          onBackspaceEmpty={() => to.length && remove(to[to.length - 1])}
+          placeholder={to.length ? addPlaceholder : 'Type a persona’s name'}
+          hint="↑↓ to pick · ↵ to add · the crown makes a name lead"
+          inputRef={inputRef}
+          openRef={openRef}
         />
       </div>
-      {open && options.length > 0 && (
-        <div className="mail-to-options" id="mail-to-options" role="listbox" aria-label="Personas">
-          {options.map((p, i) => (
-            <button
-              key={p.id}
-              type="button"
-              role="option"
-              aria-selected={i === highlighted}
-              className={`mail-to-option${i === highlighted ? ' active' : ''}`}
-              // Keep focus in the input so the list stays open for the next pick.
-              onMouseDown={(e) => e.preventDefault()}
-              onMouseEnter={() => setActive(i)}
-              onClick={() => add(p.id)}
-            >
-              <strong>{p.name}</strong>
-              {roleHint(p) && <span>{roleHint(p)}</span>}
-            </button>
-          ))}
-          <div className="mail-to-options-hint">↑↓ to pick · ↵ to add · the crown makes a name lead</div>
-        </div>
-      )}
       <p className="mail-to-hint">
         {lead
           ? `${name(lead)} gets your mail and answers you.${

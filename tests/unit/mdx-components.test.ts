@@ -162,3 +162,14 @@ describe('phone numbers', () => {
     expect(html('`+421 905 123 456`')).not.toContain('tel:');
   });
 });
+
+describe('ordered list start', () => {
+  const html = (md: string) => renderToStaticMarkup(createElement('div', null, renderMdx(md)));
+  it('keeps the first number of a list that does not start at 1', () => {
+    // A date range at the start of a bullet parses as a nested ordered list.
+    const out = html('- 4. – 9. septembra 2026\n- 25. septembra 2026');
+    expect(out).toContain('<ol start="4">');
+    expect(out).toContain('<ol start="25">');
+    expect(html('1. a\n2. b')).toContain('<ol>');
+  });
+});

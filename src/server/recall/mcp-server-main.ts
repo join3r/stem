@@ -152,6 +152,48 @@ function embedQueryViaSocket(query: string): Promise<QueryEmbedding | null> {
   });
 }
 
+/**
+ * The ids of `ids` that clear the per-turn fact gate for `query`, scored in
+ * main (embed-endpoint.ts op factGate), or null when main could not gate them:
+ * then the hits go back as they were.
+ */
+function gateFactsViaSocket(query: string, ids: number[]): Promise<number[] | null> {
+  if (!EMBED_SOCK || !EMBED_TOKEN || ids.length === 0) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v: number[] | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      socket.destroy();
+      resolve(v);
+    };
+    // Scoring waits behind a turn's own recall in the model worker.
+    const deadline = setTimeout(() => done(null), FACT_GATE_TIMEOUT_MS);
+    const socket = connect(EMBED_SOCK);
+    socket.on('error', () => done(null));
+    let buf = '';
+    socket.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      const nl = buf.indexOf('\n');
+      if (nl === -1) return;
+      try {
+        const res = JSON.parse(buf.slice(0, nl)) as { ok?: boolean; pass?: unknown };
+        done(res?.ok && Array.isArray(res.pass) ? res.pass.filter((v): v is number => Number.isInteger(v)) : null);
+      } catch {
+        // quiet: null keeps the ungated hits, the same answer as every other
+        // failure of this call; searchFacts reports that it went ungated.
+        done(null);
+      }
+    });
+    socket.on('connect', () => {
+      socket.write(`${JSON.stringify({ id: 1, op: 'factGate', query, ids, token: EMBED_TOKEN })}\n`);
+    });
+  });
+}
+
+const FACT_GATE_TIMEOUT_MS = 6_000;
+
 /** One-shot embed thunk for a single tool call (each call embeds at most once). */
 function embedOnce(query: string): () => Promise<QueryEmbedding | null> {
   let memo: Promise<QueryEmbedding | null> | null = null;
@@ -171,13 +213,49 @@ async function searchPastChats(query: string, limit: unknown): Promise<CoreSearc
   });
 }
 
-async function searchFacts(query: string, limit: unknown, contact: unknown): Promise<CoreFactHit[]> {
-  return hybridSearchFacts(open(), query, {
+/**
+ * What search_facts found: `hits` in search order, and of those the ones the
+ * fact gate called loose (`loose`, empty when the gate did not run).
+ */
+interface FactSearchResult {
+  hits: CoreFactHit[];
+  loose: ReadonlySet<number>;
+}
+
+/**
+ * Hybrid search, then the per-turn fact gate against the search query, used to
+ * ORDER the answer and never to shorten it: facts that clear the gate come
+ * first, the rest follow under a line that says they may be unrelated.
+ *
+ * Keyword and cosine matching pass nearly every fact at the semantic floor, so
+ * about four hits in five are unrelated (recall-bench/topic-list-20261113), and
+ * the gate tells the two apart well on that bench. It was first used to drop
+ * the loose ones, and that cost more than it saved: the bench itself lost a
+ * third to two thirds of the relevant facts search had found, and in the first
+ * real chat after the deploy (2026-11-13, the user in hospital after surgery)
+ * the model searched "operácia operacii surgery November …" and got one fact of
+ * six. The gate scored "The user plans knee surgery at Antolská …" at −5.6 for
+ * that query and +4.3 for the same question as an English phrase: it was
+ * trained on user messages, and a model's search query is a bag of keywords in
+ * two languages. A fact the model asked for and did not get reads to it as "the
+ * memory does not hold this"; an unrelated line in a tool result costs words.
+ * When main cannot gate (app down, no calibrated fact reranker), the hits go
+ * back in search order alone.
+ */
+async function searchFacts(query: string, limit: unknown, contact: unknown): Promise<FactSearchResult> {
+  const hits = await hybridSearchFacts(open(), query, {
     limit: clampLimit(limit, 10, 30),
     embedQuery: embedOnce(query),
     // Stamped by the bridge from the turn's gate (recallToolParams), never the model.
     contact: typeof contact === 'string' && contact.includes('@') ? contact : null
   });
+  const pass = await gateFactsViaSocket(query, hits.map((h) => h.id));
+  if (pass === null) {
+    if (hits.length > 0 && EMBED_SOCK) report('recall.mcp', 'returned search_facts hits without the relevance order', new Error('fact gate unavailable'));
+    return { hits, loose: new Set() };
+  }
+  const close = new Set(pass);
+  return { hits, loose: new Set(hits.filter((h) => !close.has(h.id)).map((h) => h.id)) };
 }
 
 async function searchSummaries(query: string, limit: unknown): Promise<CoreSummaryHit[]> {
@@ -314,9 +392,17 @@ function formatFolderDocs(rows: FolderDocHit[]): string {
     .join('\n\n');
 }
 
-function formatFacts(rows: CoreFactHit[]): string {
-  if (rows.length === 0) return 'No matching stored facts found.';
-  return rows.map((r) => `- ${r.text.replace(/\s+/g, ' ').trim()}`).join('\n');
+/** Shown above the hits the fact gate called loose; exported for the test. */
+export const LOOSE_FACTS_HEADING = 'Looser matches, which may not be about this query:';
+
+/** Every hit, the gate's close ones first; see searchFacts for why none is dropped. */
+export function formatFacts({ hits, loose }: FactSearchResult): string {
+  if (hits.length === 0) return 'No matching stored facts found.';
+  const line = (r: CoreFactHit): string => `- ${r.text.replace(/\s+/g, ' ').trim()}`;
+  const close = hits.filter((h) => !loose.has(h.id)).map(line);
+  const rest = hits.filter((h) => loose.has(h.id)).map(line);
+  if (rest.length === 0) return close.join('\n');
+  return [...close, LOOSE_FACTS_HEADING, ...rest].join('\n');
 }
 
 function isoDate(ts: number): string {
@@ -379,7 +465,7 @@ function replyError(id: number | string | undefined, code: number, message: stri
 const FACTS_TOOL = {
   name: 'search_facts',
   description:
-    'Search the durable facts Stem has learned about the user (family, vehicles, home, health, preferences, plans). Only the facts most relevant to the current message are pre-injected, so when a request depends on personal context that might not be in view — planning, purchases, recommendations, anything where family members, ages, vehicle, budget or preferences would change the answer — search here first. Matching is keyword plus semantic (multilingual); if a search misses, retry with the key terms in the other language (e.g. add English to a Slovak query).',
+    'Search the durable facts Stem has learned about the user and the people in their life (family, colleagues, clients, vehicles, home, health, preferences, plans). Only the facts most relevant to the current message are pre-injected, so when a request depends on personal context that might not be in view — planning, purchases, recommendations, writing to someone, anything where family members, colleagues, ages, vehicle, budget or preferences would change the answer — search here first. To learn about a person, search their name. Matching is keyword plus semantic (multilingual); if a search misses, retry with the key terms in the other language (e.g. add English to a Slovak query).',
   inputSchema: {
     type: 'object',
     properties: {
