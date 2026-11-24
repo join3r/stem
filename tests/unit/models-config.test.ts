@@ -201,6 +201,7 @@ describe('probeLocalProvider', () => {
         const path = new URL(String(url)).pathname;
         if (init?.method === 'OPTIONS') {
           if (path.endsWith('/v1/chat/completions')) return new Response(null, { status: 404 });
+          if (path.endsWith('/v1/responses')) return new Response(null, { status: 404 });
           if (path.endsWith('/v1/messages')) return new Response(null, { status: 405 });
         }
         return new Response(JSON.stringify({ data: [{ id: 'anthropic--claude-4.8-opus' }] }), { status: 200 });
@@ -210,20 +211,43 @@ describe('probeLocalProvider', () => {
       expect(res).toEqual({ ok: true, api: 'anthropic-messages', models: ['anthropic--claude-4.8-opus'] });
     });
 
-    it('prefers openai-completions when both chat routes exist (tie-break to pre-existing default)', async () => {
-      // Both 200 on OPTIONS — the ambiguous case. Auto-detect must not silently
-      // pick anthropic when the more common flavor also works.
-      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-        if (init?.method === 'OPTIONS') return new Response(null, { status: 200 });
+    it('picks openai-responses when only /v1/responses exists', async () => {
+      // A Responses-only gateway: the flavor a reasoning model needs. Nothing
+      // else resolves, so auto-detect commits to it with no prompt.
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        const path = new URL(String(url)).pathname;
+        if (init?.method === 'OPTIONS') {
+          return new Response(null, { status: path.endsWith('/v1/responses') ? 200 : 404 });
+        }
+        return new Response(JSON.stringify({ data: [{ id: 'gpt-6.1-sol' }] }), { status: 200 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const res = await probeLocalProvider('http://localhost:8080', 'sk-secret');
+      expect(res).toEqual({ ok: true, api: 'openai-responses', models: ['gpt-6.1-sol'] });
+    });
+
+    it('refuses to guess when a gateway serves both chat completions and responses', async () => {
+      // The HAI shape: one endpoint answers OPTIONS on /v1/chat/completions AND
+      // /v1/responses. gpt-6.1-sol only works through Responses, so a silent
+      // tie-break to completions mis-routes the turn. Auto-detect returns the
+      // candidates and lets the user pick instead.
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        const path = new URL(String(url)).pathname;
+        if (init?.method === 'OPTIONS') {
+          const present = path.endsWith('/v1/chat/completions') || path.endsWith('/v1/responses');
+          return new Response(null, { status: present ? 200 : 404 });
+        }
         return new Response(JSON.stringify({ data: [{ id: 'x' }] }), { status: 200 });
       });
       vi.stubGlobal('fetch', fetchMock);
       const res = await probeLocalProvider('http://localhost:8080', 'sk-secret');
-      expect(res.ok).toBe(true);
-      expect(res.api).toBe('openai-completions');
+      expect(res.ok).toBe(false);
+      expect(res.ambiguous).toEqual(['openai-completions', 'openai-responses']);
+      // No /v1/models listing was fetched — the probe stopped at classification.
+      expect(vi.mocked(fetch).mock.calls.every(([, init]) => (init as RequestInit)?.method === 'OPTIONS')).toBe(true);
     });
 
-    it('falls back to an openai-completions listing when both OPTIONS return 404', async () => {
+    it('falls back to an openai-completions listing when every OPTIONS returns 404', async () => {
       // Some servers refuse OPTIONS entirely (405) or 404 every unknown path;
       // the fallback keeps the pre-existing default so Ollama/LM Studio still
       // probe as before.
@@ -479,6 +503,30 @@ describe('syncModelsConfig', () => {
       apiKey: 'sk-secret',
       compat: {},
       models: [{ id: 'anthropic--claude-4.8-opus' }]
+    });
+  });
+
+  it('writes an openai-responses block with /v1 appended and an empty compat (no completions clamp)', async () => {
+    // The fix for gpt-6.1-sol: a Responses-flavor custom endpoint. baseUrl keeps
+    // /v1 (pi's OpenAI SDK appends /responses), and compat is EMPTY — the
+    // supportsReasoningEffort:false clamp is openai-completions-only, and keeping
+    // it here is exactly what forced the reasoning model onto chat/completions.
+    use({
+      custom: {
+        enabled: true,
+        baseUrl: 'http://localhost:6655/openai/v1',
+        api: 'openai-responses',
+        apiKey: 'sk-secret',
+        models: ['gpt-6.1-sol']
+      }
+    });
+    expect(await syncModelsConfig()).toBe(true);
+    expect(readConfig().providers.custom).toEqual({
+      baseUrl: 'http://localhost:6655/openai/v1',
+      api: 'openai-responses',
+      apiKey: 'sk-secret',
+      compat: {},
+      models: [{ id: 'gpt-6.1-sol' }]
     });
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ipcMain } from '../electron-stub';
-import { a, argsProblem, dispatchLocal, hasLocalHandler, registerServer, serverChannels } from '../../src/server/ipc';
+import { a, argsProblem, dispatchLocal, hasLocalHandler, ipcArgSpecs, registerServer, serverChannels } from '../../src/server/ipc';
 import { bindServerChannels, handleLocal, senderProblem } from '../../src/desktop/ipc-bridge';
 
 // The IPC guard, split across the two sides: src/server/ipc/guard.ts holds the
@@ -57,6 +57,23 @@ describe('argsProblem', () => {
     expect(argsProblem([a.string, a.optional(a.string)], ['just-one'])).toBeNull();
     // A required argument cannot simply be omitted.
     expect(argsProblem([a.string], [])).toBe('argument 1 must be a string');
+  });
+});
+
+describe('providers:testLocal', () => {
+  it('accepts every custom API flavor as argument 4', () => {
+    // The flavor set here must track LocalProviderApi. A flavor the UI can send
+    // but the guard rejects dies as "request failed" before it reaches the probe
+    // — which is exactly how openai-responses was blocked before this entry.
+    const specs = ipcArgSpecs('providers:testLocal');
+    for (const api of ['openai-completions', 'openai-responses', 'anthropic-messages']) {
+      expect(argsProblem(specs, ['custom', 'http://localhost:8080', 'key', api])).toBeNull();
+    }
+    // Auto-detect still sends no flavor, and a bogus one is still rejected.
+    expect(argsProblem(specs, ['custom', 'http://localhost:8080'])).toBeNull();
+    expect(argsProblem(specs, ['custom', 'http://localhost:8080', 'key', 'openai-bogus'])).toMatch(
+      /one of openai-completions\|openai-responses\|anthropic-messages/
+    );
   });
 });
 

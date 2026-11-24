@@ -1897,7 +1897,11 @@ function LocalServerAddForm({
   }
 
   const flavorLabel = (a: LocalProviderApi): string =>
-    a === 'anthropic-messages' ? 'Anthropic Messages' : 'OpenAI Chat Completions';
+    a === 'anthropic-messages'
+      ? 'Anthropic Messages'
+      : a === 'openai-responses'
+        ? 'OpenAI Responses'
+        : 'OpenAI Chat Completions';
   const testLabel = test
     ? test.ok
       ? `${test.models?.length ?? 0} model${(test.models?.length ?? 0) === 1 ? '' : 's'} found` +
@@ -1905,7 +1909,12 @@ function LocalServerAddForm({
         // When auto-detect classified the endpoint, name the flavor it picked so
         // the user can see (and re-confirm) the setting Enable will write.
         (custom && test.api ? ` — ${flavorLabel(test.api)}` : '')
-      : test.error ?? 'failed'
+      : test.ambiguous?.length
+        ? // Auto-detect found several APIs on one endpoint (a gateway serving both
+          // chat completions and responses). Name them and send the user to the
+          // flavor dropdown rather than guess and mis-route a reasoning model.
+          `Serves ${test.ambiguous.map(flavorLabel).join(' and ')}. Pick a flavor above and test again.`
+        : test.error ?? 'failed'
     : null;
 
   return (
@@ -1918,8 +1927,10 @@ function LocalServerAddForm({
           — LM Studio loads one on first use, so its first reply can take a while. <strong>Custom endpoint</strong> is
           any other URL: a gateway, a proxy, a server elsewhere on your network. Leave the flavor on{' '}
           <em>Auto-detect</em> and Test connection classifies which chat route the endpoint exposes
-          (<code>/v1/chat/completions</code> vs <code>/v1/messages</code>) before listing its models — or pick a
-          flavor by hand if the server is picky about that OPTIONS probe. Stem strips a trailing <code>/v1</code>
+          (<code>/v1/chat/completions</code>, <code>/v1/responses</code> or <code>/v1/messages</code>) before
+          listing its models — or pick a flavor by hand if the server is picky about that OPTIONS probe. An
+          endpoint that serves more than one of those routes asks you to pick, so a reasoning model that needs
+          <code>/v1/responses</code> is not routed to chat completions by accident. Stem strips a trailing <code>/v1</code>
           from your URL and lets the client add the versioned path itself. The key goes on the wire the way the
           target API expects (<code>Authorization: Bearer</code> for OpenAI-flavored servers, <code>X-Api-Key</code>
           for Anthropic). Leave the model IDs empty and Stem uses whatever the endpoint lists, re-checked every
@@ -1993,6 +2004,7 @@ function LocalServerAddForm({
           >
             <option value="">Auto-detect (Test to classify)</option>
             <option value="openai-completions">OpenAI Chat Completions</option>
+            <option value="openai-responses">OpenAI Responses</option>
             <option value="anthropic-messages">Anthropic Messages</option>
           </select>
           <input
