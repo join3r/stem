@@ -65,10 +65,16 @@ share.heystem.app {
 	}
 }
 
-# Homepage placeholder until the site exists.
+# Homepage: static site from stem/web (deploy.sh rsyncs to ~/services/heystem-web/public,
+# mounted into the caddy container at /srv/heystem).
 heystem.app {
+	import security_headers
 	import cloudflare_dns_heystem
-	redir https://github.com/join3r/stem 302
+	root * /srv/heystem
+	file_server
+	encode zstd gzip
+	@html path / *.html
+	header @html Cache-Control "no-cache"
 }
 
 www.heystem.app {
