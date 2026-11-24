@@ -160,6 +160,9 @@ describe('device side of the relay', () => {
     const req = (url: string): DeviceLlmRequest => ({ requestId: 'x', url, method: 'GET', headers: {} });
     expect(refusal(req('http://localhost:1234/v1/models'))).toBeNull();
     expect(refusal(req('http://localhost:11434/api/show'))).toBeNull();
+    // A reasoning model on a paired computer turns through /v1/responses; the
+    // host must relay it, or every turn 502s while /v1/models discovery passes.
+    expect(refusal(req('http://localhost:1234/v1/responses'))).toBeNull();
     expect(refusal(req('http://localhost:8080/admin'))).toMatch(/model API/);
     expect(refusal(req('http://localhost:8080/v1/admin/users'))).toMatch(/model API/);
     expect(refusal(req('http://localhost:1234/lmstudio/v1/chat/completions'))).toBeNull();

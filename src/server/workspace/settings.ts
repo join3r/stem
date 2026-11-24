@@ -638,7 +638,9 @@ function coerce(parsed: Partial<ServerSettings> | null): ServerSettings {
     // settings.json is self-describing and future debugging can tell an explicit
     // openai-completions pick from an absent field (= not yet configured).
     const api: LocalProviderApi | undefined =
-      custom && (r.api === 'anthropic-messages' || r.api === 'openai-completions') ? r.api : undefined;
+      custom && (r.api === 'anthropic-messages' || r.api === 'openai-completions' || r.api === 'openai-responses')
+        ? r.api
+        : undefined;
     // Per-model overrides: custom endpoints only, coerced only as far as their shape —
     // an entry that fails the deeper guard (pi/model-overrides.ts) is KEPT here
     // and dropped at sync time instead. Losing the text on read is the exact

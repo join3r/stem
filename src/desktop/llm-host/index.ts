@@ -21,6 +21,7 @@ const HEARTBEAT_MS = 10_000;
 const MODEL_API_PATHS = [
   '/v1/models',
   '/v1/chat/completions',
+  '/v1/responses',
   '/v1/completions',
   '/v1/messages',
   '/v1/messages/count_tokens',

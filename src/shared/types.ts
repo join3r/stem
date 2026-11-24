@@ -290,7 +290,7 @@ export type LocalProviderId = BuiltInLocalProviderId | CustomProviderId;
  * Anthropic's Messages API or a proxy that speaks it). Default (absent) is
  * `openai-completions` — matches the pre-existing single-flavor behavior.
  */
-export type LocalProviderApi = 'openai-completions' | 'anthropic-messages';
+export type LocalProviderApi = 'openai-completions' | 'openai-responses' | 'anthropic-messages';
 
 /**
  * What one model of a custom endpoint needs said about it that its `/v1/models`
@@ -410,6 +410,13 @@ export interface LocalProviderTestResult {
   skippedNoTools?: number;
   /** Human-readable failure, e.g. ECONNREFUSED (not ok only). */
   error?: string;
+  /**
+   * Set when auto-detect found more than one API this endpoint can speak (e.g. a
+   * gateway serving both /v1/chat/completions and /v1/responses). The probe
+   * refuses to guess: the renderer offers these flavors so the user picks one,
+   * then tests again with an explicit `api`. `ok` is false when this is set.
+   */
+  ambiguous?: LocalProviderApi[];
 }
 
 /**
